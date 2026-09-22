@@ -16,7 +16,7 @@ GET /api/roles/:roleId/message-endpoint-history?query=:query&match=any&includeAr
 GET /api/roles/:roleId/knowledge/search?query=:query&mode=keywords&limit=10
 ```
 
-路径和查询参数 URL 编码。消息 query 支持空格、英文逗号、中文逗号和顿号；match=all 要求全部命中。按已知目标增加 adapter、target、conversationKey、from、to。查群里已有答案时保留出站回复；只查用户原始群反馈时才加 kind=group，私聊反馈用 kind=private。核对 entries、coverage、消息时间、方向及回复链；空结果只说明已覆盖范围。知识与消息是两个独立索引，任一失败不取消另一个成功结果。需要进一步恢复上下文时读 [消息查询](../napcat-qq-gateway/references/message-query.md)。
+路径和查询参数 URL 编码。消息 query 支持空格、英文逗号、中文逗号和顿号；match=all 要求全部命中。按已知目标增加 adapter、target、conversationKey、from、to。用户说“最近一小时”“最近 N 小时/天”时，必须把自然语言换算为 Unix 秒 `from`（必要时传 `to`）；用户要求“所有消息”时省略 query，不用臆造关键词，也不能把 limit 当作完整覆盖证明。不得只传 includeArchives=1 扫描全部归档。查群里已有答案时保留出站回复；只查用户原始群反馈时才加 kind=group，私聊反馈用 kind=private。核对 entries、coverage、消息时间、方向及回复链；空结果只说明已覆盖范围。知识与消息是两个独立索引，任一失败不取消另一个成功结果。需要进一步恢复上下文时读 [消息查询](../napcat-qq-gateway/references/message-query.md)。
 
 ## 搜索顺序
 

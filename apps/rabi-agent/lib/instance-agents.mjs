@@ -56,7 +56,8 @@ export function registerManagedSession(config, agentId, sessionId) {
 export function resolveInstanceAgent(config, task) {
   const agents = instanceAgents(config);
   const agent = agents.find(agent => agent.agentId === (task.agentId || "default"));
-  if (!agent || !agent.enabled) throw new Error("The requested instance Agent is missing or disabled.");
+  // Automatic registration never overrides an explicit local stop.
+  if (!agent || agent.enabled === false) throw new Error("The requested instance Agent is missing or disabled.");
   if (task.targetAgent !== agent.provider) throw new Error("The requested provider does not match the bound Agent.");
   return agent;
 }

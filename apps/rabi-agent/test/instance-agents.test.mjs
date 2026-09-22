@@ -18,6 +18,16 @@ test("instance migration retains default identity; several Agents remain indepen
   assert.throws(() => resolveInstanceAgent(next, { agentId: second.agentId, targetAgent: "dsh" }), /provider/);
   assert.throws(() => configureInstanceAgent(next, { agentId: second.agentId, provider: "dsh" }), /new Agent/);
 });
+test("enrolled connector preserves explicit local disablement and exact identity", () => {
+  const localDisabled = configureInstanceAgent(config, { agentId: "default", enabled: false });
+  const managed = { ...localDisabled, nodeCredential: "test-only-node-credential" };
+  assert.throws(() => resolveInstanceAgent(managed, { agentId: "default", targetAgent: "codex-desktop" }), /disabled/);
+  const enabled = configureInstanceAgent(managed, { agentId: "default", enabled: true });
+  assert.equal(resolveInstanceAgent(enabled, { agentId: "default", targetAgent: "codex-desktop" }).sessionId, "task-a");
+  assert.throws(() => resolveInstanceAgent(managed, { agentId: "unknown", targetAgent: "codex-desktop" }), /missing/);
+  assert.throws(() => resolveInstanceAgent(enabled, { agentId: "default", targetAgent: "dsh" }), /provider/);
+});
+
 test("instance catalog excludes private DSH connection settings", () => {
   const next = configureInstanceAgent(config, { provider: "dsh", sessionId: "session-b", dshBaseUrl: "http://127.0.0.1:4510" });
   assert.equal(agentCatalog(next)[1].dsh, undefined);

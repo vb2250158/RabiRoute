@@ -261,7 +261,7 @@ test("knowledge page requests bounded plan pages and progressively renders plans
   assert.match(page, /v-if="planDetailsLoading\[plan\.id\]" class="knowledge-plan-detail-loading"/);
   assert.match(page, /v-else-if="!planDetailsLoaded\[plan\.id\]" class="knowledge-plan-detail-pending"/);
   assert.match(page, /v-if="planDetailsLoaded\[plan\.id\] && plan\.attachments\.length"/);
-  assert.match(page, /v-if="expandedPlans\[plan\.id\] \|\| feedbackFocusActive\(plan\)" class="knowledge-plan-details"/);
+  assert.match(page, /v-if="expandedPlans\[plan\.id\] \|\| feedbackFocusActive\(plan\)"[^>]* class="knowledge-plan-details"/);
   assert.match(page, /v-if="planFullDetailsLoaded\[plan\.id\] && plan\.steps\.length"/);
   assert.doesNotMatch(page, /knowledge-plan-detail-loading[\s\S]{0,600}<v-skeleton-loader/);
   assert.match(styles, /\.knowledge-plan-card\s*\{[\s\S]*?content-visibility:\s*auto/);
@@ -304,7 +304,8 @@ test("knowledge page requests bounded plan pages and progressively renders plans
   assert.doesNotMatch(page, /class="knowledge-plan-directory-working"/);
   assert.match(page, /class="knowledge-plan-directory-sort-label"/);
   assert.match(page, /class="knowledge-plan-agents"/);
-  assert.match(page, /会话任务 Agent 已丢失/);
+  assert.match(page, /missing: \["会话不存在", "Session is missing"\]/);
+  assert.match(page, /workspace_mismatch: \["会话工作目录不一致", "Session workspace does not match"\]/);
   assert.match(page, /openPlanAgent\(plan, agentRole\)/);
   assert.match(styles, /knowledge-plan-directory-marquee var\(--directory-marquee-duration\) linear/);
   assert.match(styles, /knowledge-plan-agent-spin \.9s linear infinite/);

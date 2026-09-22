@@ -7,6 +7,12 @@ export type LanAgentRequestAccess =
   | { kind: "denied"; status: 401 | 403; error: string }
   | { kind: "agent"; nodeId: string; agentId: string };
 
+/** Node-only connection diagnostics, never a business authorization grant. */
+export function isLanNodeMetadataRequest(request: IncomingMessage, authority: LanAgentAuthority): boolean {
+  const token = typeof request.headers.authorization === "string" ? request.headers.authorization.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() ?? "" : "";
+  return request.method === "GET" && request.url === "/meta" && Boolean(authority.authenticate(token));
+}
+
 /** Run before local/admin exemptions and independently authorized legacy routes. */
 export function evaluateLanAgentRequest(request: IncomingMessage, authority: LanAgentAuthority, enabled: boolean): LanAgentRequestAccess {
   const bearer = typeof request.headers.authorization === "string" ? request.headers.authorization.match(/^Bearer\s+(.+)$/i)?.[1] ?? "" : "";
@@ -21,7 +27,7 @@ export function evaluateLanAgentRequest(request: IncomingMessage, authority: Lan
   if (enabled && request.method === "GET" && target.startsWith("/api/lan-agent/releases/") && !/[\\\\%]/.test(target) && !target.split("/").includes("..")
     && agentHeader === undefined && legacyHeader === undefined && !url.search
     && authority.authenticate(bearer)) return { kind: "unrelated" };
-  if (enabled && request.method === "GET" && target === "/api/lan-agent/self"
+  if (enabled && request.method === "GET" && ["/api/lan-agent/self", "/meta"].includes(target)
     && agentHeader === undefined && legacyHeader === undefined && authority.authenticate(bearer)) return { kind: "unrelated" };
   if (!enabled || typeof agentHeader !== "string" || !agentHeader || !isLanAgentCredentialToken(bearer)
     || legacyHeader !== undefined || url.searchParams.has("webgui_token") || url.searchParams.has("token")) {

@@ -50,9 +50,16 @@ test("plan detail renderer is wired to summaries and expanded steps without hori
   const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
   const component = fs.readFileSync(path.join(root, "src", "components", "PlanStepDetail.vue"), "utf8");
 
-  assert.equal((page.match(/<PlanStepDetail /g) || []).length, 3);
-  assert.match(page, /<details v-if="step.detail && isApprovalStep\(plan, step\)"/);
-  assert.match(page, /<PlanStepDetail v-else-if="step.detail"/);
+  assert.equal((page.match(/<PlanStepDetail /g) || []).length, 2);
+  assert.match(page, /<details class="knowledge-step-disclosure">\s*<summary class="knowledge-step-header">/);
+  assert.match(page, /<PlanStepDetail v-if="step.detail"/);
+  assert.doesNotMatch(page, /<details[^>]*class="knowledge-step-disclosure"[^>]*\bopen[\s=>]/);
+  assert.match(page, /class="knowledge-resource-record"/);
+  assert.match(page, /class="knowledge-resource-heading"/);
+  assert.match(page, /class="knowledge-resource-hash"/);
+  const styles = fs.readFileSync(path.join(root, "src", "styles.css"), "utf8");
+  assert.match(styles, /\.knowledge-step \.knowledge-step-resources\s*\{[^}]*font-size:\s*11px/);
+  assert.match(styles, /\.knowledge-step-resources code\s*\{[^}]*font-size:\s*inherit/);
   assert.match(component, /white-space:\s*pre-wrap/);
   assert.match(component, /overflow-wrap:\s*anywhere/);
   assert.match(component, /word-break:\s*break-word/);

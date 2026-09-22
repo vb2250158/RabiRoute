@@ -19,7 +19,10 @@ test("LAN bootstrap includes current endpoint, trust pin, both hosts and automat
   assert.match(prompt, /30 分钟内有效，只能成功兑换一次/);
   assert.match(prompt, /成功兑换后立即失效/);
   assert.match(prompt, /保留原身份并用本提示词中的有效新票据完成重新接入/);
-  assert.match(prompt, /节点已接入，等待管理员允许 Manager API 与 skills/);
+  assert.match(prompt, /“是否启用Agent”默认勾选/);
+  assert.match(prompt, /启用后按本机 Agent 的方式使用/);
+  assert.match(prompt, /节点已接入，Agent 已停用/);
+  assert.doesNotMatch(prompt, /允许使用 Manager API 与 skills|新接入默认没有此授权|等待管理员允许/);
   assert.match(prompt, /无需用户手填 WebGUI 密钥/);
   assert.match(prompt, /不重复兑换/);
   assert.match(prompt, /\/api\/lan-agent\/self/);

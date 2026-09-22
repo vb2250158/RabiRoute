@@ -17,7 +17,7 @@ function enroll(authority: LanAgentAuthority, nodeId = "node-a") {
   return authority.enroll(authority.issueBootstrapTicket().ticket, nodeId);
 }
 
-test("credentials persist across restart; bootstrap tickets do not; agent grants default deny", t => {
+test("credentials persist across restart; tickets do not; unregistered Agent IDs remain denied", t => {
   const { authority, statePath } = fixture(t);
   const credential = enroll(authority);
   const pending = authority.issueBootstrapTicket();
@@ -405,6 +405,7 @@ test("receipt lifecycle bounds active entries and expires after 24h without chan
   let now = 1_000;
   const authority = new LanAgentAuthority({ statePath, now: () => now });
   enroll(authority);
+  authority.setAgentEnabled("node-a", "agent-a", false);
   const input = { nodeId: "node-a", agentId: "agent-a", enabled: false,
     expectedRevision: authority.getSnapshot().revision, idempotencyKey: "test-only-receipt-ttl" };
   authority.mutateAgentAuthorization(input);

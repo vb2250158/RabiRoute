@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { createBoundedPlanRefresh } from "../boundedPlanRefresh";
 import { usePlanDirectoryResize } from "../planDirectoryResize";
+import { embeddedPlanHost, visiblePlanAgentRoles } from "../embeddedPlanContext";
 import { userFacingError } from "../userFacingError";
 import { computed, markRaw, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from "vue";
 import { useRoute } from "vue-router";
@@ -54,6 +55,7 @@ import {
   loadRolePlanPage,
   loadRolePlanPreview,
   openPlanAgentTask,
+  openPlanHistoryAgent,
   submitPlanFeedback,
   ManagerRequestError,
   type PlanAgentBindingStatus,
@@ -310,6 +312,8 @@ const roleId = computed(() => String(store.selectedGateway?.agentRoleId || route
  * the same code the catalog uses.
  */
 const focusedPlanId = computed(() => String((route.params as Record<string, string | string[]>).planId || "").trim());
+const embeddedPlanView = computed(() => Boolean(focusedPlanId.value) && window.self !== window.top);
+const planHost = computed(() => embeddedPlanHost(embeddedPlanView.value, route.query.embedAgent, route.query.embedSession));
 watch(roleId, () => {
   feedbackRoleEpoch++;
   feedbackFocusOpen.value = false;
@@ -750,7 +754,7 @@ async function refreshPlanAgentStatuses(planIds: string[], force = false): Promi
   const generation = planAgentStatusGeneration;
   if (!selectedRoleId || !knowledgePageWorkAllowed()) return;
   const ids = [...new Set(planIds)]
-    .filter((planId) => plans.value.some((plan) => plan.id === planId))
+    .filter((planId) => plans.value.some((plan) => plan.id === planId && planAgentRoles(plan).length > 0))
     .filter((planId) => !pendingPlanAgentStatusIds.has(planId))
     .filter((planId) => force || !planAgentStatuses[planId]);
   if (!ids.length) return;
@@ -826,6 +830,11 @@ function planAgentWorkLabel(status: PlanAgentBindingStatus | undefined): string 
   return isEnglish.value ? "Not working" : "未工作";
 }
 
+function planAgentCompactLabel(status: PlanAgentBindingStatus | undefined): string {
+  if (status?.working || !status?.sessionStatus || status.sessionStatus === "unknown") return planAgentWorkLabel(status);
+  return planAgentSessionLabel(status.sessionStatus);
+}
+
 function planAgentSessionLabel(status: PlanAgentSessionStatus | undefined): string {
   const labels: Record<PlanAgentSessionStatus, [string, string]> = {
     active: ["会话任务正在运行", "Task is running"],
@@ -850,8 +859,7 @@ function planAgentStatusTone(status: PlanAgentBindingStatus | undefined): string
 }
 
 function planAgentRoles(plan: RolePlan): PlanAgentRole[] {
-  const status = planAgentStatuses[plan.id];
-  return status?.secretaryAgent || plan.secretaryBinding ? ["task", "secretary"] : ["task"];
+  return visiblePlanAgentRoles(plan, planHost.value);
 }
 
 function planAgentTitle(plan: RolePlan, role: PlanAgentRole): string {
@@ -1721,6 +1729,30 @@ function guidanceRecordsForDisplay(plan: RolePlan): RolePlanFeedback[] {
   return records
     .filter((feedback) => feedback.kind === "guidance" || feedback.kind === "guidance_response")
     .reverse();
+}
+
+const historyAgentPending = reactive<Record<string, boolean>>({});
+const historyAgentErrors = reactive<Record<string, string>>({});
+function historyActorLabel(record: RolePlanHistoryRecord): string {
+  const actor = record.actor;
+  if (!actor || actor.kind === "unknown") return isEnglish.value ? "Unknown source" : "来源未知";
+  const name = actor.kind === "user" ? (isEnglish.value ? "User" : "用户")
+    : actor.displayName || (actor.kind === "system" ? (isEnglish.value ? "System" : "系统") : actor.sessionId || "Agent");
+  const channel = actor.channel || actor.agentType;
+  return channel ? `${name} (${channel})` : name;
+}
+function historyActorCanOpen(record: RolePlanHistoryRecord): boolean {
+  return record.actor?.kind === "agent" && Boolean(record.actor.sessionId)
+    && ["codex", "dsh", "antigravity"].includes(record.actor.agentType || "");
+}
+async function openHistoryActor(plan: RolePlan, record: RolePlanHistoryRecord): Promise<void> {
+  const key = `${plan.id}/${record.id}`;
+  if (historyAgentPending[key]) return;
+  historyAgentPending[key] = true;
+  delete historyAgentErrors[key];
+  try { await openPlanHistoryAgent(roleId.value, plan.id, record.id); }
+  catch (error) { historyAgentErrors[key] = userFacingError(error); }
+  finally { historyAgentPending[key] = false; }
 }
 
 function planHistoryLabel(record: RolePlanHistoryRecord): string {
@@ -2999,7 +3031,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
       />
 
       <v-card class="app-card knowledge-browser" :class="{ 'knowledge-focus-layout': feedbackFocusOpen && showsPlanList, 'editor-expanded': feedbackFocusExpanded }" variant="flat">
-      <div ref="knowledgeToolbar" class="knowledge-toolbar">
+      <div v-if="!embeddedPlanView" ref="knowledgeToolbar" class="knowledge-toolbar">
         <!-- One plan has no views to switch between and nothing to search within. -->
         <v-btn-toggle v-if="!focusedPlanId" v-model="activeView" mandatory color="primary" density="comfortable" class="knowledge-tabs">
           <v-btn value="plans" prepend-icon="mdi-clipboard-play-outline"><span>{{ t("当前计划") }}</span><b>{{ knowledgeCountsReady || planListReady ? planPageCounts.plans : '—' }}</b></v-btn>
@@ -3092,7 +3124,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                 <h2 data-no-i18n>{{ plan.title }}</h2>
               </div>
               <div class="knowledge-plan-head-actions">
-                <v-chip class="knowledge-plan-activation" variant="outlined" size="small">{{ t('激活状态') }}：{{ t(plan.activationStatus || '进行中') }}</v-chip>
+                <span class="knowledge-plan-updated"><span>{{ t('更新时间') }}</span><b data-no-i18n>{{ formatDate(plan.updatedAt) }}</b></span>
                 <v-chip class="knowledge-plan-status" :title="planStatusDescription(plan)" :style="planStatusStyle(plan.presentation.palette)" variant="flat" size="small">{{ t('标记状态') }}：{{ planStatusLabel(plan) }}</v-chip>
                 <v-btn
                   v-if="planAgentBindingStatus(plan, 'task')?.canOpen && !planTaskAgentWorking(plan)"
@@ -3165,28 +3197,28 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
               />
             </section>
 
+            <div v-if="plan.keywords.length" class="knowledge-keywords">
+              <v-chip v-for="keyword in plan.keywords" :key="keyword" data-no-i18n size="x-small" variant="outlined">{{ keyword }}</v-chip>
+            </div>
+
             <div class="knowledge-plan-summary">
               <div class="knowledge-plan-current" :class="{ blocked: Boolean(blocker(plan)) }">
                 <v-icon size="19">{{ blocker(plan) ? "mdi-alert-circle-outline" : "mdi-progress-wrench" }}</v-icon>
                 <div class="knowledge-plan-current-copy">
                   <div class="knowledge-plan-current-heading">
                     <span>{{ blocker(plan) ? "当前阻塞" : "当前步骤" }}</span>
-                    <small v-if="planStepCount(plan)">{{ currentStepPosition(plan) || "—" }}/{{ planStepCount(plan) }} · {{ t("计划步骤") }}</small>
-                  </div>
                   <b
                     v-if="currentStep(plan)?.title || plan.currentStep"
                     data-no-i18n
                     :title="currentStep(plan)?.title || plan.currentStep"
                   >{{ currentStep(plan)?.title || plan.currentStep }}</b>
                   <b v-else>{{ t("暂无进行中的步骤") }}</b>
-                  <PlanStepDetail v-if="currentStep(plan)?.detail" class="knowledge-plan-current-detail" :text="currentStep(plan)?.detail || ''" />
+                    <small v-if="planStepCount(plan)">{{ currentStepPosition(plan) || "—" }}/{{ planStepCount(plan) }} · {{ t("计划步骤") }}</small>
+                  </div>
                 </div>
+                <PlanStepDetail v-if="currentStep(plan)?.detail" class="knowledge-plan-current-detail" :text="currentStep(plan)?.detail || ''" />
               </div>
-              <div class="knowledge-plan-timing">
-                <div class="knowledge-plan-timing-item">
-                  <span>更新时间</span>
-                  <b data-no-i18n>{{ formatDate(plan.updatedAt) }}</b>
-                </div>
+              <div v-if="plan.dueAt" class="knowledge-plan-timing">
                 <div v-if="plan.dueAt" class="knowledge-plan-timing-item">
                   <span>截止时间</span>
                   <b data-no-i18n>{{ formatDate(plan.dueAt) }}</b>
@@ -3198,29 +3230,18 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
               {{ blocker(plan) }}
             </v-alert>
 
-            <div v-if="planStepCount(plan)" class="knowledge-progress-row">
+            <button type="button" class="knowledge-progress-row" :aria-expanded="Boolean(expandedPlans[plan.id])"
+              :aria-label="t(expandedPlans[plan.id] ? '收起计划详情' : '查看计划详情')"
+              :aria-controls="`plan-details-${plan.id}`" @click="togglePlan(plan)">
               <div class="knowledge-progress-copy">
                 <span>{{ t("步骤进度") }}</span>
                 <b>{{ completedSteps(plan) }}/{{ planStepCount(plan) }}</b>
               </div>
               <v-progress-linear :model-value="progressValue(plan)" color="secondary" height="7" rounded />
-            </div>
-
-            <div v-if="plan.keywords.length" class="knowledge-keywords">
-              <v-chip v-for="keyword in plan.keywords" :key="keyword" data-no-i18n size="x-small" variant="outlined">{{ keyword }}</v-chip>
-            </div>
-
-            <button
-              class="knowledge-expand"
-              type="button"
-              :aria-expanded="Boolean(expandedPlans[plan.id])"
-              @click="togglePlan(plan)"
-            >
-              <span>{{ expandedPlans[plan.id] ? t("收起计划详情") : plan.presentation.approval.state === "ready" ? t("查看修改方案并审批") : plan.presentation.approval.state === "incomplete" ? t("查看方案还缺什么") : planAcceptsGuidance(plan) ? t("查看计划详情并引导") : planStepCount(plan) ? `${t("查看全部")} ${planStepCount(plan)} ${t("个步骤")}` : t("查看计划详情") }}</span>
               <v-icon size="18">{{ expandedPlans[plan.id] ? "mdi-chevron-up" : "mdi-chevron-down" }}</v-icon>
             </button>
 
-            <div v-if="expandedPlans[plan.id] || feedbackFocusActive(plan)" class="knowledge-plan-details">
+            <div v-if="expandedPlans[plan.id] || feedbackFocusActive(plan)" :id="`plan-details-${plan.id}`" class="knowledge-plan-details">
               <v-alert
                 v-if="planFullDetailsLoading[plan.id]"
                 type="info"
@@ -3230,11 +3251,10 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
               >
                 {{ t("正在加载计划详情…") }}
               </v-alert>
-              <section class="knowledge-plan-agents" :aria-label="t('计划关联 Agent')">
+              <section v-if="planAgentRoles(plan).length" class="knowledge-plan-agents" :aria-label="t('计划关联 Agent')">
                 <div class="knowledge-plan-agents-head">
                   <div>
                     <span><v-icon size="17">mdi-robot-outline</v-icon>{{ t("计划关联 Agent") }}</span>
-                    <small>{{ t("状态来自绑定 Agent 的对应会话") }}</small>
                   </div>
                   <v-btn
                     v-if="planAgentShouldRetry(plan)"
@@ -3270,28 +3290,20 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                         <v-icon size="20">{{ agentRole === "secretary" ? "mdi-account-tie-outline" : "mdi-robot-outline" }}</v-icon>
                       </span>
                       <span class="knowledge-plan-agent-copy">
-                        <small>{{ planAgentRoleLabel(agentRole) }}</small>
                         <b data-no-i18n :title="planAgentTitle(plan, agentRole)">{{ planAgentTitle(plan, agentRole) }}</b>
-                        <em v-if="planAgentBindingStatus(plan, agentRole)?.workspace" data-no-i18n :title="planAgentBindingStatus(plan, agentRole)?.workspace">
-                          {{ planAgentBindingStatus(plan, agentRole)?.workspace }}
-                        </em>
+                        <span class="knowledge-plan-agent-meta">
+                          <small>{{ planAgentRoleLabel(agentRole) }}</small>
+                          <em v-if="planAgentBindingStatus(plan, agentRole)?.workspace" data-no-i18n :title="planAgentBindingStatus(plan, agentRole)?.workspace">
+                            {{ planAgentBindingStatus(plan, agentRole)?.workspace }}
+                          </em>
+                        </span>
                       </span>
                     </span>
                     <span class="knowledge-plan-agent-states">
-                      <span class="knowledge-plan-agent-work-state">
+                      <span class="knowledge-plan-agent-work-state" :title="planAgentSessionLabel(planAgentBindingStatus(plan, agentRole)?.sessionStatus)">
                         <v-icon v-if="planAgentBindingStatus(plan, agentRole)?.working" class="knowledge-plan-agent-working-icon" size="14">mdi-loading</v-icon>
                         <v-icon v-else size="14">{{ planAgentBindingStatus(plan, agentRole)?.agentStatus === "idle" ? "mdi-pause-circle-outline" : "mdi-help-circle-outline" }}</v-icon>
-                        {{ planAgentWorkLabel(planAgentBindingStatus(plan, agentRole)) }}
-                      </span>
-                      <span class="knowledge-plan-agent-session-state">
-                        {{ planAgentSessionLabel(planAgentBindingStatus(plan, agentRole)?.sessionStatus) }}
-                      </span>
-                      <span
-                        v-if="planAgentBindingStatus(plan, agentRole)?.sessionStatus === 'missing'"
-                        class="knowledge-plan-agent-missing"
-                      >
-                        <v-icon size="14">mdi-alert-circle-outline</v-icon>
-                        {{ isEnglish ? "Task Agent session is missing" : "会话任务 Agent 已丢失" }}
+                        {{ planAgentCompactLabel(planAgentBindingStatus(plan, agentRole)) }}
                       </span>
                       <v-icon
                         v-if="planAgentBindingStatus(plan, agentRole)?.canOpen && !planAgentBindingStatus(plan, agentRole)?.working"
@@ -3313,7 +3325,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                 </div>
               </section>
 
-              <section v-if="planAcceptsGuidance(plan)" class="knowledge-approval-panel" data-state="guidance">
+              <section v-if="!planHost && planAcceptsGuidance(plan)" class="knowledge-approval-panel" data-state="guidance">
                 <div class="knowledge-approval-head">
                   <div>
                     <span>{{ t(feedbackQuestions(plan).length ? "补充信息" : "计划引导") }}</span>
@@ -3433,34 +3445,46 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                     'has-approval': isApprovalStep(plan, step)
                   }"
                 >
-                    <div class="knowledge-step-index">{{ index + 1 }}</div>
-                    <div class="knowledge-step-copy">
+                    <details class="knowledge-step-disclosure">
+                    <summary class="knowledge-step-header">
+                      <div class="knowledge-step-index">{{ index + 1 }}</div>
                       <div class="knowledge-step-title-row">
+                        <small v-if="step.id === plan.currentStepId && step.startedAt" class="knowledge-step-time" data-no-i18n><span class="knowledge-step-time-label">{{ t("开始时间") }}</span>{{ formatDate(step.startedAt) }}</small>
+                        <small v-else-if="step.completedAt" class="knowledge-step-time" data-no-i18n><span class="knowledge-step-time-label">{{ t("完成时间") }}</span>{{ formatDate(step.completedAt) }}</small>
                         <b data-no-i18n>{{ step.title }}</b>
-                        <span v-if="step.id === plan.currentStepId">{{ planStatusLabel(plan) }}</span>
                       </div>
-                      <details v-if="step.detail && isApprovalStep(plan, step)" class="knowledge-approval-disclosure">
-                        <summary>{{ t('步骤说明') }}</summary>
-                        <PlanStepDetail class="knowledge-step-detail" :text="step.detail" />
+                      <v-chip
+                        v-if="stepIsBlocked(plan, step) || step.id === plan.currentStepId || step.completedAt"
+                        :color="stepColor(plan, step)"
+                        size="x-small"
+                        variant="tonal"
+                      >{{ step.completedAt ? t("已完成") : planStatusLabel(plan) }}</v-chip>
+                    </summary>
+                    <div v-if="step.detail || step.resourceRecords?.length || step.waitingFor || (stepIsBlocked(plan, step) && step.blockedBy)" class="knowledge-step-copy">
+                      <PlanStepDetail v-if="step.detail" class="knowledge-step-detail" :text="step.detail" />
+                      <details v-if="step.resourceRecords?.length" class="knowledge-step-resources">
+                        <summary>{{ t('文件变动') }} · {{ step.resourceRecords.length }}</summary>
+                        <div v-for="record in step.resourceRecords" :key="record.id" class="knowledge-resource-record">
+                          <time :datetime="record.time" data-no-i18n>{{ formatDate(record.time) }}</time>
+                          <ul>
+                            <li v-for="resource in record.resources" :key="resource.path">
+                              <div class="knowledge-resource-heading">
+                                <span class="knowledge-resource-change">{{ isEnglish ? resource.change : ({ added: '新增', modified: '修改', deleted: '删除' }[resource.change] || resource.change) }}</span>
+                                <code data-no-i18n>{{ resource.path }}</code>
+                              </div>
+                              <p data-no-i18n>{{ resource.summary }}</p>
+                              <details v-if="resource.sha256" class="knowledge-resource-hash">
+                                <summary>SHA-256</summary>
+                                <code data-no-i18n>{{ resource.sha256 }}</code>
+                              </details>
+                            </li>
+                          </ul>
+                        </div>
                       </details>
-                      <PlanStepDetail v-else-if="step.detail" class="knowledge-step-detail" :text="step.detail" />
                       <small v-if="step.waitingFor" data-no-i18n>等待：{{ step.waitingFor }}</small>
                       <small v-if="stepIsBlocked(plan, step) && step.blockedBy" data-no-i18n>{{ step.blockedBy }}</small>
-                      <small v-if="step.id === plan.currentStepId && step.startedAt" class="knowledge-step-time">
-                        <span>{{ t("开始时间") }}</span>
-                        <b data-no-i18n>{{ formatDate(step.startedAt) }}</b>
-                      </small>
-                      <small v-else-if="step.completedAt" class="knowledge-step-time">
-                        <span>{{ t("完成时间") }}</span>
-                        <b data-no-i18n>{{ formatDate(step.completedAt) }}</b>
-                      </small>
                     </div>
-                    <v-chip
-                      v-if="stepIsBlocked(plan, step) || step.id === plan.currentStepId || step.completedAt"
-                      :color="stepColor(plan, step)"
-                      size="x-small"
-                      variant="tonal"
-                    >{{ step.completedAt ? t("已完成") : planStatusLabel(plan) }}</v-chip>
+                    </details>
                     <section v-if="isApprovalStep(plan, step)" class="knowledge-approval-panel" :data-state="plan.presentation.approval.state">
                   <div class="knowledge-approval-head">
                     <div>
@@ -3791,10 +3815,16 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                       <div v-else-if="planHistoryRecords[plan.id]?.length" class="knowledge-plan-history-records">
                         <details v-for="record in planHistoryRecords[plan.id]" :key="record.id" class="knowledge-plan-history-record">
                           <summary>
+                            <button v-if="historyActorCanOpen(record)" type="button" class="knowledge-history-actor" data-no-i18n
+                              :title="record.actor?.sessionId" :disabled="historyAgentPending[`${plan.id}/${record.id}`]"
+                              @click.stop.prevent="openHistoryActor(plan, record)">{{ historyActorLabel(record) }}</button>
+                            <span v-else class="knowledge-history-actor-label" data-no-i18n>{{ historyActorLabel(record) }}</span>
                             <span>{{ planHistoryLabel(record) }}</span>
                             <time data-no-i18n>{{ formatDate(record.recordedAt) }}</time>
+                            <span v-if="historyAgentErrors[`${plan.id}/${record.id}`]" class="knowledge-history-error" role="status" data-no-i18n>{{ historyAgentErrors[`${plan.id}/${record.id}`] }}</span>
                           </summary>
                           <div class="knowledge-plan-history-summary">
+                            <span v-if="record.actor?.sessionId" data-no-i18n>{{ record.actor.agentType }} · {{ record.actor.sessionId }}</span>
                             <span>{{ t("计划状态") }}：{{ record.after.status }}</span>
                             <span v-if="planHistoryCurrentStep(record)">{{ t("当前步骤") }}：{{ planHistoryCurrentStep(record)?.title }}</span>
                             <span v-if="record.before">{{ t("变更前") }}：{{ record.before.status }}</span>

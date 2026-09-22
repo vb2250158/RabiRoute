@@ -253,6 +253,33 @@ test("legacy raw logs migrate once while failed Outbox sends stay out of context
   }).map((item) => item.text), ["旧入站", "旧出站", "新入站"]);
 });
 
+test("history deduplicates before filtering and keeps the earliest compareRecords winner", () => {
+  const dir = temporaryDir("message-context-filter-order");
+  const archiveDir = path.join(dir, "conversation", "archive");
+  fs.mkdirSync(archiveDir, { recursive: true });
+  const archiveRecord = {
+    schemaVersion: 1, id: "same-record", sequence: 1, recordedAt: "2026-08-01T00:00:00.000Z",
+    time: 1_754_006_400, direction: "inbound", adapter: "napcat", channel: "napcat",
+    conversationKey: "napcat:group:100", kind: "group", text: "较早副本"
+  };
+  const currentRecord = { ...archiveRecord, sequence: 2, recordedAt: "2026-08-01T00:01:00.000Z", time: 1_754_006_460, text: "较晚副本 needle" };
+  fs.writeFileSync(path.join(archiveDir, "1~1.jsonl"), `${JSON.stringify(archiveRecord)}\n`, "utf8");
+  fs.writeFileSync(messageContextCurrentPath(dir), `${JSON.stringify(currentRecord)}\n`, "utf8");
+  fs.writeFileSync(messageContextArchiveIndexPath(dir), `${JSON.stringify({
+    schemaVersion: 1, nextSequence: 3, archives: [{
+      file: "1~1.jsonl", startedAt: archiveRecord.recordedAt, endedAt: archiveRecord.recordedAt,
+      entryCount: 1, firstSequence: 1, lastSequence: 1
+    }]
+  })}\n`, "utf8");
+
+  assert.deepEqual(recentMessageContextItems([dir], {
+    limit: 10, includeArchives: true, query: "needle"
+  }), []);
+  assert.deepEqual(recentMessageContextItems([dir], {
+    limit: 10, includeArchives: true
+  }).map(item => item.text), ["较早副本"]);
+});
+
 test("stable endpoint message ids deduplicate explicit sends and later self echoes", () => {
   const dir = temporaryDir("message-context-dedupe");
   const sent = messageContextFromOutboxEvent("reply_sent", "已发送", {

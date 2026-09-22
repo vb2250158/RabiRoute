@@ -3,7 +3,7 @@ import path from "node:path";
 import { createManagerClient } from "./manager-client.mjs";
 
 /** Installed beside private config; Hook callers send only their own registered session. */
-export async function requestInstanceHook(input, configPath, fetcher = fetch) {
+export async function requestInstanceHook(input, configPath, fetcher = fetch, { discover } = {}) {
   const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
   const sessionId = input.session_id || input.sessionId;
   if (typeof sessionId !== "string" || !sessionId.trim() || (input.session_id && input.sessionId && input.session_id !== input.sessionId)) return undefined;
@@ -11,9 +11,10 @@ export async function requestInstanceHook(input, configPath, fetcher = fetch) {
   const matches = agents.filter(agent => agent.sessionId === sessionId || agent.managedSessionIds?.includes(sessionId));
   if (matches.length !== 1) return undefined;
   const agent = matches[0];
-  if (agent.enabled === false) return { action: "none", additionalContext: "" };
+  // A local explicit stop cannot grant access or override Manager authorization.
+  if (agent.enabled === false) return undefined;
   if (!config.nodeCredential) throw new Error("Legacy shared credentials are not accepted; re-enroll this connector with a node credential.");
-  const client = createManagerClient({ managerUrl: config.managerUrl, credential: config.nodeCredential, agentId: agent.agentId, fetchImpl: fetcher, timeoutMs: 8000 });
+  const client = createManagerClient({ config, configPath, agentId: agent.agentId, fetchImpl: fetcher, discover, timeoutMs: 8000 });
   const receipt = await client.invoke("POST", `/api/lan-agent/instances/${encodeURIComponent(config.nodeId)}/agents/${encodeURIComponent(agent.agentId)}/context`, { body: input });
   if (receipt.uncertain || receipt.identityChanged) throw new Error("Instance Hook result is uncertain or Manager identity changed; do not retry automatically.");
   let body;

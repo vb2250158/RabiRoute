@@ -26,6 +26,18 @@ test("Agent credentials cannot downgrade to local admin or survive disabled gran
     const self = make("/api/lan-agent/self");
     delete self.headers["x-rabiroute-agent-id"];
     assert.equal(evaluateLanAgentRequest(self, authority, true).kind, "unrelated");
+    const nodeMeta = make("/meta");
+    delete nodeMeta.headers["x-rabiroute-agent-id"];
+    assert.equal(evaluateLanAgentRequest(nodeMeta, authority, true).kind, "unrelated");
+    for (const target of ["/meta?extra=1", "/meta/", "/api/unknown-business"]) {
+      nodeMeta.url = target;
+      assert.equal(evaluateLanAgentRequest(nodeMeta, authority, true).kind, "denied");
+    }
+    nodeMeta.url = "/meta";
+    nodeMeta.method = "POST";
+    assert.equal(evaluateLanAgentRequest(nodeMeta, authority, true).kind, "denied");
+    nodeMeta.method = "GET";
+    assert.equal(evaluateLanAgentRequest(nodeMeta, authority, false).kind, "denied");
     for (const target of ["/api/lan-agent/releases/../self", "/api/lan-agent/releases/%2e%2e/self", "/api/lan-agent/releases/manifest?token=fixture"]) {
       const request = make(target);
       delete request.headers["x-rabiroute-agent-id"];

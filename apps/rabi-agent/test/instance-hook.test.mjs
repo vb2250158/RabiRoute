@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { requestInstanceHook } from "../lib/instance-hook.mjs";
 
-const meta = { applicationGenerationId: "generation-fixture", managerInstanceId: "instance-fixture", health: { state: "healthy", requiredReady: true } };
+const meta = { applicationGenerationId: "generation-fixture", managerInstanceId: "instance-fixture", health: { live: true, state: "healthy", requiredReady: true } };
 async function fixture(run) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-instance-hook-"));
   const configPath = path.join(directory, "config.json");
@@ -52,7 +52,10 @@ test("Hook rejects disabled, shared-token, ambiguous and changing Manager identi
   fs.writeFileSync(configPath, JSON.stringify({ ...config, nodeCredential: undefined, lanLinkToken: "fixture-legacy" }));
   await assert.rejects(requestInstanceHook({ session_id: "session-b" }, configPath, fetcher), /re-enroll/);
   fs.writeFileSync(configPath, JSON.stringify({ ...config, agents: [{ ...config.agents[0], enabled: false }] }));
-  assert.deepEqual(await requestInstanceHook({ session_id: "session-b" }, configPath, fetcher), { action: "none", additionalContext: "" });
+  assert.equal(await requestInstanceHook({ session_id: "session-b" }, configPath, fetcher), undefined);
+  assert.equal(calls, 3);
+  fs.writeFileSync(configPath, JSON.stringify(config));
+  await assert.rejects(requestInstanceHook({ session_id: "session-b" }, configPath, async url => Response.json(String(url).endsWith("/meta") ? meta : { code: 403 }, { status: String(url).endsWith("/meta") ? 200 : 403 })), /Hook failed/);
   fs.writeFileSync(configPath, JSON.stringify({ ...config, agents: [...config.agents, { ...config.agents[0], agentId: "duplicate" }] }));
   assert.equal(await requestInstanceHook({ session_id: "session-b" }, configPath, fetcher), undefined);
   assert.equal(calls, 3);

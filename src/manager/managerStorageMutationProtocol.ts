@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizePlanHistoryActor } from "../shared/planHistoryActor.js";
 import type {
   PlanFeedbackDeliveryStatus,
   PlanFeedbackPostCommit,
@@ -132,6 +133,7 @@ export type ManagerStorageMutationRequest = Readonly<{
   fence: ManagerStorageMutationFence;
   expectedRevision: string | null;
   task: ManagerStorageMutationTask;
+  actor?: import("../shared/planHistoryActor.js").PlanHistoryActor;
 }>;
 
 export type ManagerStorageMutationResponse = Readonly<{
@@ -214,6 +216,9 @@ export function validateManagerStorageMutationRequest(
   if (!requiresPlan && planId) throw new Error(`Storage mutation ${request.task.type} must not carry a plan fence.`);
   if (request.task.type === "plan_create" && canonicalStorageMutationPlanId(request.task.input.id) !== planId) {
     throw new Error("Plan creation input id does not match its plan fence.");
+  }
+  if (request.actor !== undefined && !normalizePlanHistoryActor(request.actor)) {
+    throw new Error("Storage mutation actor is invalid.");
   }
   const task = request.task;
   if (task.type === "plan_status_update" || task.type === "plan_status_delete") {

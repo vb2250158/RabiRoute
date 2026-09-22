@@ -74,6 +74,7 @@ export type RolePlanCatalogRead = {
 };
 
 export type RolePlanPageReadInput = {
+  bindingScope?: import("../planWorkspaceQuery.js").PlanBindingScope;
   cursor: string;
   limit: number;
   view?: "current" | "plans" | "archived";

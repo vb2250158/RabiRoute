@@ -10,7 +10,7 @@ test("CLI uses registered identity, preserves stdin JSON and never exports crede
   const configPath = path.join(dir, "config.json");
   const config = { managerUrl: "http://manager.invalid", nodeCredential: "fixture-node-only", agents: [{ agentId: "worker", enabled: true }] };
   fs.writeFileSync(configPath, JSON.stringify(config));
-  const meta = { health: { state: "healthy", requiredReady: true }, applicationGenerationId: "g", managerInstanceId: "m" };
+  const meta = { health: { live: true, state: "healthy", requiredReady: true }, applicationGenerationId: "g", managerInstanceId: "m" };
   const calls = [];
   const fetchImpl = async (url, options) => {
     calls.push(options);
@@ -26,11 +26,18 @@ test("CLI uses registered identity, preserves stdin JSON and never exports crede
     await assert.rejects(runManagerCommand(["--api", "GET", "/meta"], configPath, { fetchImpl }), /registered Agent/);
     config.agents[0].enabled = false;
     fs.writeFileSync(configPath, JSON.stringify(config));
-    await assert.rejects(runManagerCommand(["--api", "GET", "/meta", "--agent", "worker"], configPath, { fetchImpl }), /disabled/);
+    const beforeDisabledRequest = calls.length;
+    await assert.rejects(runManagerCommand(["--api", "GET", "/meta", "--agent", "worker"], configPath, { fetchImpl }), /Agent is disabled/);
+    assert.equal(calls.length, beforeDisabledRequest);
+    // Automatic registration does not override an explicit local stop.
+    config.agents[0].enabled = true;
+    fs.writeFileSync(configPath, JSON.stringify(config));
+    const afterManagedRequest = calls.length;
+    assert.equal((await runManagerCommand(["--api", "GET", "/meta", "--agent", "worker"], configPath, { fetchImpl: async () => Response.json({ code: 403 }, { status: 403 }) })).ok, false);
     delete config.nodeCredential;
     config.lanLinkToken = "old-shared-fixture";
     fs.writeFileSync(configPath, JSON.stringify(config));
     await assert.rejects(runManagerCommand(["--api", "GET", "/meta", "--agent", "worker"], configPath, { fetchImpl }), /independent node credential/);
-    assert.equal(calls.length, 3);
+    assert.equal(calls.length, afterManagedRequest);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

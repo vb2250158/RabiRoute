@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import WebSocket from "ws";
 import { LanAgentRegistry } from "./lanAgentRegistry.js";
+import { LanAgentAuthority } from "./lanAgentAuthority.js";
 
 type ConnectedClient = {
   socket: WebSocket;
@@ -68,6 +69,58 @@ test("node credentials bind identity and Manager grants override remote enabled 
     credentialValid = false;
     client.socket.send(JSON.stringify({ type: "heartbeat" }));
     await closed;
+  } finally {
+    client?.socket.close(); registry.close(); await closeServer(server);
+    fs.rmSync(path.dirname(statePath), { recursive: true, force: true });
+  }
+});
+
+test("authenticated hello and catalog register bindings while disabled reconnects stay disabled", async () => {
+  const statePath = temporaryStatePath();
+  const authority = new LanAgentAuthority({ statePath: path.join(path.dirname(statePath), "authority.json") });
+  const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "alpha");
+  const registry = new LanAgentRegistry({ statePath,
+    authenticateNode: token => authority.authenticate(token),
+    registerAgentCatalog: (token, agents) => authority.registerAgentCatalog(token, agents),
+    isAgentEnabled: (nodeId, agentId) => authority.isAgentEnabled(nodeId, agentId)
+  });
+  const server = http.createServer();
+  registry.attach(server, { enabled: () => true, getToken: () => "unused-fixture" });
+  const port = await listen(server);
+  let client: ConnectedClient | undefined;
+  const agents = [{ agentId: "first", name: "Worker", provider: "dsh", sessionId: "session-a", enabled: true }];
+  try {
+    client = await connectNode(port, credential.token, "alpha", agents);
+    assert.equal(registry.listInstances()[1]?.agents[0]?.enabled, true);
+    assert.equal(authority.getApprovedAgentBinding("alpha", "first")?.sessionId, "session-a");
+    authority.setAgentEnabled("alpha", "first", false);
+    const closed = new Promise<void>(resolve => client!.socket.once("close", () => resolve()));
+    client.socket.close();
+    await closed;
+    client = await connectNode(port, credential.token, "alpha", agents);
+    assert.equal(registry.listInstances()[1]?.agents[0]?.enabled, false);
+    client.socket.send(JSON.stringify({ type: "agentCatalog", agents: [{ ...agents[0], sessionId: "session-b" }] }));
+    // RPC response is an event-driven barrier after the preceding catalog frame.
+    client.socket.send(JSON.stringify({ type: "not-supported" }));
+    await client.waitFor("error");
+    assert.equal(authority.getApprovedAgentBinding("alpha", "first")?.sessionId, "session-b");
+    assert.equal(authority.isAgentEnabled("alpha", "first"), false);
+    assert.equal(authority.isAgentEnabled("alpha", "unregistered"), false);
+    assert.throws(() => registry.assignTask({ nodeId: "alpha", agentId: "first", targetAgent: "dsh", message: "blocked-fixture" }), /not enabled/);
+    assert.throws(() => registry.manageAgent("alpha", "threads", { agentId: "first", action: "read" }), /not enabled/);
+    // An old connector's local false is not a hidden second Manager switch.
+    client.messages.length = 0;
+    client.socket.send(JSON.stringify({ type: "agentCatalog", agents: [{ ...agents[0], enabled: false }] }));
+    client.socket.send(JSON.stringify({ type: "not-supported" }));
+    await client.waitFor("error");
+    authority.setAgentEnabled("alpha", "first", true);
+    assert.equal(registry.listInstances()[1]?.agents[0]?.enabled, true);
+    const task = registry.assignTask({ nodeId: "alpha", agentId: "first", targetAgent: "dsh", message: "allowed-fixture" });
+    await client.waitFor("assignTask");
+    authority.setAgentEnabled("alpha", "first", false);
+    // Disable prevents new work but does not rewrite/kill already dispatched work.
+    assert.equal(registry.listTasks().find(item => item.taskId === task.taskId)?.status, "delivered");
+    assert.throws(() => registry.assignTask({ nodeId: "alpha", agentId: "first", targetAgent: "dsh", message: "new-blocked-fixture" }), /not enabled/);
   } finally {
     client?.socket.close(); registry.close(); await closeServer(server);
     fs.rmSync(path.dirname(statePath), { recursive: true, force: true });

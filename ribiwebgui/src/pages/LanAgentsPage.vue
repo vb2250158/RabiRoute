@@ -167,7 +167,7 @@ onMounted(() => { void refresh(); });
         <v-text-field v-model="managerUrl" label="目标电脑可访问的 RabiRoute 地址" hint="使用本机 RabiRoute 的局域网地址" density="compact" persistent-hint class="mb-2" />
         <v-btn prepend-icon="mdi-content-copy" color="primary" :loading="issuingTicket" :disabled="loading || issuingTicket || !connectionAvailable || !connectionToken || !releasePublicKeySha256" @click="copyInstallPrompt">复制接入提示词</v-btn>
         <p v-if="!connectionAvailable" class="text-caption mt-2">接入其他电脑前，请在设置中开启局域网访问，然后重启 RabiRoute。</p>
-        <p class="text-caption mt-2">提示词含一次性票据，30 分钟内有效，成功兑换后立即失效。只粘贴到目标电脑的私密智能体任务中，无需手填管理密钥。接入后，在下方勾选“允许使用 Manager API 与 skills”以授权接口与技能访问。</p>
+        <p class="text-caption mt-2">提示词含一次性票据，30 分钟内有效，成功兑换后立即失效。只粘贴到目标电脑的私密智能体任务中，无需手填管理密钥。</p>
         <v-alert v-if="copied" type="success" variant="tonal" density="compact" class="mt-2">已复制完整提示词（含 30 分钟一次性票据），有效期至 {{ formatTime(ticketExpiresAt) }}。请粘贴给目标电脑上的智能体，成功兑换后票据立即失效。</v-alert>
       </v-card-text>
       <v-card-actions><v-spacer /><v-btn @click="enrollmentOpen = false">关闭</v-btn></v-card-actions>

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import { once } from "node:events";
-import { Writable } from "node:stream";
+import { Readable, Writable } from "node:stream";
 import test from "node:test";
 import type { PlanItem } from "../roleKnowledge.js";
 import type { PlanAgentStatusService } from "./planAgentStatus.js";
@@ -40,6 +40,26 @@ function plan(id: string): PlanItem {
     keywords: []
   };
 }
+
+test("history open resolves only the server-owned record and rejects missing history", async () => {
+  const opened: string[] = [];
+  for (const historyId of ["saved", "missing"]) {
+    const request = Readable.from([JSON.stringify({ historyId, actor: { sessionId: "forged" } })]);
+    Object.assign(request, { method: "POST" });
+    const response = new MockResponse();
+    const finished = once(response, "finish");
+    handlePlanAgentStatusApi(request as http.IncomingMessage, new URL("http://localhost/api/roles/Rabi/plan-agents/plan-1/open"), response as unknown as http.ServerResponse, {
+      roleDir: () => "role-dir", getPlan: () => plan("plan-1"),
+      listPlanHistory: () => [{ id: "saved", planId: "plan-1", kind: "updated", recordedAt: "2026-08-07T00:00:00Z", after: plan("plan-1"), actor: { kind: "agent", agentType: "dsh", sessionId: "original" } }],
+      service: { inspectPlans: async () => [], openPlanAgent: async () => { throw new Error("must not use current binding"); },
+        openHistoryActor: async record => { opened.push(record.actor!.sessionId!); return { opened: true, agentType: "dsh", threadId: "original", threadTitle: "Original", workspace: "" }; }
+      }
+    });
+    await finished;
+    assert.equal(response.statusCode, historyId === "saved" ? 202 : 404);
+  }
+  assert.deepEqual(opened, ["original"]);
+});
 
 test("plan Agent status route batches only requested plan ids", async () => {
   const inspected: string[][] = [];

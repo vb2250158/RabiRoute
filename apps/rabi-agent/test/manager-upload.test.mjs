@@ -8,7 +8,7 @@ import { createManagerClient, MAX_UPLOAD_BYTES } from "../lib/manager-client.mjs
 import { runManagerCommand } from "../lib/manager-cli.mjs";
 
 const id = "12345678-1234-4234-8234-123456789abc";
-const meta = { health: { state: "healthy", requiredReady: true }, applicationGenerationId: "g-fixture", managerInstanceId: "m-fixture" };
+const meta = { health: { live: true, state: "healthy", requiredReady: true }, applicationGenerationId: "g-fixture", managerInstanceId: "m-fixture" };
 const settings = { managerUrl: "http://manager.invalid", credential: "fixture-upload-secret", agentId: "worker" };
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-upload-"));

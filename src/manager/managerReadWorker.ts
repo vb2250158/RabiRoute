@@ -88,6 +88,7 @@ export type ManagerReadWorkerTask =
     }
   | {
       type: "role_plan_page";
+      bindingScope?: import("../planWorkspaceQuery.js").PlanBindingScope;
       roleDir: string;
       fence: PlanReadFence;
       authoritative?: boolean;
@@ -312,6 +313,7 @@ async function execute(task: ManagerReadWorkerTask): Promise<unknown> {
         task.cursor,
         task.limit,
         {
+          bindingScope: task.bindingScope,
           view: task.view,
           query: task.query,
           sort: task.sort,

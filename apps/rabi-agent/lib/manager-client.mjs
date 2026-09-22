@@ -2,6 +2,7 @@ import { constants } from "node:fs";
 import fsPromises, { lstat, open } from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { businessReady, createEndpointSession, sameIdentity } from "./endpoint-session.mjs";
 
 // Keep aligned with the server skill ZIP archive ceiling (68 MiB).
 export const MAX_SKILL_DOWNLOAD_BYTES = 68 * 1024 * 1024;
@@ -44,6 +45,7 @@ export class SkillDownloadError extends Error {
     this.committed = committed === true;
   }
 }
+
 
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
@@ -132,13 +134,19 @@ async function boundedResponse(response) {
 }
 
 /** Transport only: Manager owns authorization, business state and mutation receipts. */
-export function createManagerClient({ managerUrl, credential, agentId, fetchImpl = fetch, timeoutMs = 30_000, uploadTimeoutMs = 30 * 60_000, downloadTimeoutMs = 120_000 }) {
-  const origin = managerOrigin(managerUrl);
+export function createManagerClient({ managerUrl, credential, agentId, config, configPath, endpointSession, discover, fetchImpl = fetch, timeoutMs = 30_000, uploadTimeoutMs = 30 * 60_000, downloadTimeoutMs = 120_000 }) {
+  let origin = managerOrigin(config?.managerUrl || managerUrl);
+  credential ||= config?.nodeCredential;
+  // Explicit legacy origins retain their existing contract; enrolled configs
+  // with a stable GUID (or injected discovery) use dynamic endpoint recovery.
+  const session = endpointSession || ((configPath && config?.managerGuid) || discover
+    ? createEndpointSession({ config: config || { managerUrl, nodeCredential: credential }, configPath, fetchImpl, discover, timeoutMs: Math.min(timeoutMs, 5000) })
+    : null);
   if (!credential || !agentId) throw new Error("A node credential and Agent identity are required.");
-  async function request(method, target, { body, headers = {} } = {}, upload) {
+  async function request(method, target, { body, headers = {} } = {}, upload, requestOrigin = origin) {
     method = String(method).toUpperCase();
     if (!["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"].includes(method)) throw new Error("Unsupported Manager method.");
-    const url = relativeTarget(origin, target);
+    const url = relativeTarget(requestOrigin, target);
     const outgoing = {
       authorization: `Bearer ${credential}`,
       "x-rabiroute-agent-id": agentId,
@@ -186,25 +194,33 @@ export function createManagerClient({ managerUrl, credential, agentId, fetchImpl
     }
   }
   async function verifiedRequest(method, target, options = {}, upload) {
-    const meta = await request("GET", "/meta");
-    if (!meta.ok) return meta;
-    let identity;
-    try { identity = JSON.parse(meta.body); } catch { throw new Error("Manager metadata is not valid JSON."); }
-    if (identity.health?.state !== "healthy" || identity.health?.requiredReady !== true || !identity.applicationGenerationId || !identity.managerInstanceId) {
-      throw new Error("Manager generation is not ready or has no identity.");
+    const diagnostic = target === "/meta" && String(method).toUpperCase() === "GET";
+    const read = ["GET", "HEAD"].includes(String(method).toUpperCase());
+    relativeTarget(origin, target);
+    let endpoint;
+    if (session) endpoint = await session.ensure({ diagnostic });
+    else {
+      const meta = await request("GET", "/meta");
+      if (!meta.ok) return meta;
+      let identity; try { identity = JSON.parse(meta.body); } catch { throw new Error("Manager metadata is not valid JSON."); }
+      if (!identity.applicationGenerationId || !identity.managerInstanceId) throw new Error("Manager generation is not ready or has no identity.");
+      if (!diagnostic && !businessReady(identity)) throw new Error("Manager generation is not ready or has no identity.");
+      endpoint = { managerUrl: origin, meta: identity, generation: identity.applicationGenerationId, instance: identity.managerInstanceId };
     }
-    if (target === "/meta" && String(method).toUpperCase() === "GET") return meta;
-    const result = await request(method, target, options, upload);
-    const after = await request("GET", "/meta");
-    let current;
-    try { current = JSON.parse(after.body); } catch { current = undefined; }
-    const identityChanged = !after.ok || current?.health?.state !== "healthy" || current?.health?.requiredReady !== true || current?.applicationGenerationId !== identity.applicationGenerationId || current?.managerInstanceId !== identity.managerInstanceId;
-    return {
-      ...result,
-      uncertain: result.uncertain || (identityChanged && !["GET", "HEAD"].includes(String(method).toUpperCase())),
-      identityChanged,
-      identity: { applicationGenerationId: identity.applicationGenerationId, managerInstanceId: identity.managerInstanceId }
-    };
+    for (let attempt = 0; ; attempt++) {
+      const requestOrigin = managerOrigin(endpoint.managerUrl);
+      const identity = endpoint.meta || {};
+      // Authenticated exact /meta remains an Agent authorization check; public preflight is credential-free.
+      const result = await request(method, target, options, upload, requestOrigin);
+      let current;
+      try { const response = await request("GET", "/meta", {}, undefined, requestOrigin); current = response.ok ? JSON.parse(response.body) : undefined; } catch { current = undefined; }
+      const identityChanged = !current || !sameIdentity(current, identity);
+      if (read && session && attempt === 0 && (identityChanged || result.statusCode === 0 || result.statusCode >= 500)) {
+        try { endpoint = await session.ensure({ diagnostic, forceDiscovery: true }); continue; } catch { /* Return the original failed read; never replay a mutation. */ }
+      }
+      return { ...result, uncertain: result.uncertain || (identityChanged && !read), identityChanged,
+        identity: { applicationGenerationId: identity.applicationGenerationId, managerInstanceId: identity.managerInstanceId } };
+    }
   }
   async function invoke(method, target, options = {}) {
     if (isSkillDownloadTarget(target)) throw new Error("Skill download requires the explicit download operation and local output path.");
@@ -244,6 +260,8 @@ export function createManagerClient({ managerUrl, credential, agentId, fetchImpl
     const temporaryPath = path.join(path.dirname(finalPath), `.rabi-download-${randomUUID()}.partial`);
     const signal = callerSignal ? AbortSignal.any([callerSignal, AbortSignal.timeout(downloadTimeoutMs)]) : AbortSignal.timeout(downloadTimeoutMs);
     const headers = { authorization: `Bearer ${credential}`, "x-rabiroute-agent-id": agentId };
+    let downloadOrigin = origin;
+    let verifiedEndpoint;
     let handle;
     let reader;
     let temporaryCreated = false;
@@ -269,7 +287,7 @@ export function createManagerClient({ managerUrl, credential, agentId, fetchImpl
     }
     async function metadata(requireReady) {
       failureCode = "TRANSPORT";
-      const response = await bounded(() => fetchImpl(relativeTarget(origin, "/meta"), { method: "GET", headers: { ...headers, accept: "application/json" }, redirect: "error", signal }));
+      const response = await bounded(() => fetchImpl(relativeTarget(downloadOrigin, "/meta"), { method: "GET", headers: { ...headers, accept: "application/json" }, redirect: "error", signal }));
       if (response.status !== 200) { response.body?.cancel().catch(() => {}); checkStatus(response); }
       failureCode = "METADATA_INVALID";
       if (response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json") {
@@ -283,9 +301,15 @@ export function createManagerClient({ managerUrl, credential, agentId, fetchImpl
     }
     try {
       try { await lstat(finalPath); throw failure("OUTPUT_EXISTS"); } catch (error) { if (error.code !== "ENOENT") throw error; }
+      if (session) {
+        failureCode = "TRANSPORT";
+        verifiedEndpoint = await bounded(() => session.ensure());
+        downloadOrigin = managerOrigin(verifiedEndpoint.managerUrl);
+      }
       const identity = await metadata(true);
+      if (verifiedEndpoint && !sameIdentity(identity, verifiedEndpoint.meta)) throw failure("IDENTITY_CHANGED");
       failureCode = "TRANSPORT";
-      const response = await bounded(() => fetchImpl(relativeTarget(origin, target), { method: "GET", headers: { ...headers, accept: "application/zip", "accept-encoding": "identity" }, redirect: "error", signal }));
+      const response = await bounded(() => fetchImpl(relativeTarget(downloadOrigin, target), { method: "GET", headers: { ...headers, accept: "application/zip", "accept-encoding": "identity" }, redirect: "error", signal }));
       reader = response.body?.getReader();
       checkStatus(response);
       const lengthHeader = response.headers.get("content-length");

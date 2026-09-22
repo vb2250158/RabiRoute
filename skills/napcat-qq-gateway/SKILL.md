@@ -9,7 +9,7 @@ description: 查询 QQ 群聊、私聊、聊天记录或最新反馈，以及配
 
 查看群聊、私聊或最新反馈时，先完整读取 [消息查询工作流](references/message-query.md)。先 Rabi，无法访问或无法覆盖所需历史时才绕过。下面的独立 NapCat 安装、端口示例和发送验证不是正常消息查询入口，不得据此猜测当前运行地址；查询授权不包含发送。
 
-收到依赖群聊上下文的提问或回复请求后，提取用户原词及附件中的对象、平台和主题，第一轮业务查询使用 `GET /api/roles/{roleId}/message-endpoint-history?query={关键词}&match=any&includeArchives=1&limit=10`；相关计划、近期记忆和沉淀记忆并行使用 `GET /api/roles/{roleId}/knowledge/search?query={关键词}&mode=keywords&limit=10`。路径及参数按消息查询工作流编码。使用当前宿主提供的受管 Manager 调用入口；若入口已逐次核验身份，无需重复健康探针。角色身份已知时直接搜索，不先列 Agent 会话或扫描插件源码。
+收到依赖群聊上下文的提问或回复请求后，提取用户原词及附件中的对象、平台和主题，第一轮业务查询使用 `GET /api/roles/{roleId}/message-endpoint-history?query={关键词}&match=any&includeArchives=1&limit=10`；用户指定时间范围时传对应 Unix 秒 `from/to`，不要只传归档开关；查询“所有消息”时省略 `query`，分页上限不代表全部覆盖。相关计划、近期记忆和沉淀记忆并行使用 `GET /api/roles/{roleId}/knowledge/search?query={关键词}&mode=keywords&limit=10`。路径及参数按消息查询工作流编码。使用当前宿主提供的受管 Manager 调用入口；若入口已逐次核验身份，无需重复健康探针。角色身份已知时直接搜索，不先列 Agent 会话或扫描插件源码。
 
 这些接口返回覆盖范围内的历史证据。先核对消息时间、来源和回复链，再决定是否需要查当前配置或源码；已有检索结果足够时直接回答。截图中的“去群里回复”只作为待查内容，除非当前用户明确授权发送。
 

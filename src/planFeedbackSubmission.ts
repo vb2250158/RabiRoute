@@ -41,6 +41,7 @@ export type SubmitPlanFeedbackInput = {
   expectedRevision?: string;
   storageRevision?: string;
   storageMutationRequestId?: string;
+  actor?: import("./shared/planHistoryActor.js").PlanHistoryActor;
 };
 
 export type SubmitPlanFeedbackResult = {
@@ -120,7 +121,7 @@ export function submitPlanFeedback(input: SubmitPlanFeedbackInput): SubmitPlanFe
       attachments: existing?.attachments || [],
       planAttachments
     };
-    const committed = commitPlanFeedbackUnderLease(lease, candidate, input.attachments, { reuseFeedbackId: input.reuseFeedbackId });
+    const committed = commitPlanFeedbackUnderLease(lease, candidate, input.attachments, { reuseFeedbackId: input.reuseFeedbackId, actor: input.actor });
     return { ...committed, plan: readCanonicalPlanJsonUnderLease(lease) as unknown as PlanItem };
   });
 }

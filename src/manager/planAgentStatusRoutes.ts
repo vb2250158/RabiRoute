@@ -1,6 +1,6 @@
 import { errorResponsePresentation } from "../shared/errorPresentation.js";
 import http from "node:http";
-import { getPlan, listPlans, type PlanItem } from "../roleKnowledge.js";
+import { getPlan, listPlans, listPlanHistory, type PlanItem } from "../roleKnowledge.js";
 import {
   planAgentStatusService,
   type PlanAgentRole,
@@ -12,6 +12,7 @@ type PlanAgentStatusRouteContext = {
   service?: PlanAgentStatusService;
   listPlans?: (roleDir: string) => PlanItem[];
   getPlan?: (roleDir: string, planId: string) => PlanItem | null;
+  listPlanHistory?: typeof listPlanHistory;
 };
 
 function jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void {
@@ -83,17 +84,27 @@ export function handlePlanAgentStatusApi(
     jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
     return true;
   }
-  void readJsonBody<{ role?: PlanAgentRole }>(request)
+  void readJsonBody<{ role?: PlanAgentRole; historyId?: string }>(request)
     .then(async (body) => {
       const role = body.role === "secretary" ? "secretary" : body.role === "task" ? "task" : null;
-      if (!role) throw new Error("role must be task or secretary.");
+      if (!role && !body.historyId) throw new Error("role or historyId is required.");
+      if (body.historyId && (typeof body.historyId !== "string" || body.historyId.length > 256 || body.role)) throw new Error("Provide only a valid historyId for history navigation.");
       const roleDir = context.roleDir(roleId);
       const plan = (context.getPlan ?? getPlan)(roleDir, planId);
       if (!plan) {
         jsonResponse(response, 404, { code: -1, message: `Plan not found: ${planId}` });
         return;
       }
-      const data = await (context.service ?? planAgentStatusService).openPlanAgent(plan, role);
+      const service = context.service ?? planAgentStatusService;
+      if (body.historyId) {
+        const record = (context.listPlanHistory ?? listPlanHistory)(roleDir, planId).find(item => item.id === body.historyId);
+        if (!record) { jsonResponse(response, 404, { code: -1, message: "Plan history record not found." }); return; }
+        if (!service.openHistoryActor) throw new Error("History Agent navigation is unavailable.");
+        const data = await service.openHistoryActor(record);
+        jsonResponse(response, 202, { code: 0, data });
+        return;
+      }
+      const data = await service.openPlanAgent(plan, role!);
       jsonResponse(response, 202, { code: 0, data });
     })
     .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));

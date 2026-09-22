@@ -6,6 +6,18 @@ English | <a href="./plan-and-memory-model.md">简体中文</a>
 
 # Plans and Memory Model
 
+## Reading step cards
+
+Plan headers show the update time and marker status; the current-step label and title share a row. Step bodies start collapsed and can be expanded by clicking the heading or using the keyboard. The current-step summary stays visible, and approval actions remain independent of body disclosure. Both body areas have 10px horizontal insets. File changes have their own disclosure, grouped by record time, with separate change types, wrapping paths, and descriptions at the same 11px size as body text. SHA-256 values start collapsed; ordinary records no longer use error colors.
+
+## Operation actor identity
+
+Plan history shows “actor (channel) — operation — date” and retains expandable status and approval details. New records save `actor` in the same transaction: kind, Agent host type, full session ID, display-name snapshot and channel. The current task binding is not the actor. Old records without identity show “Unknown source”; no inferred backfill occurs.
+
+Clicking an Agent name asks Manager to verify and open the original host/session stored in that record. It neither follows the current task binding nor creates or substitutes sessions. Missing, archived, unavailable or unsupported targets produce an error. Renaming a session does not rewrite historical display names.
+
+An explicit Agent `messageSource` resolved against its owner is display attribution, not unforgeable authentication, and cannot authorize actions or replace approval. Calls without a source remain unknown. Browser user entry points and internal system operations should record their respective kinds. `actor.agentType` denotes hosts such as `dsh` or `codex`, not an Agent responsibility label.
+
 ## Plan activation and marker status
 
 - `activationStatus` is fixed to `进行中` (active), `已完成` (completed), or `已归档` (archived). Pause is not an activation state. Archived records remain read-only.

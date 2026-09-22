@@ -36,17 +36,23 @@ test("headless instance configures two Agents and dispatches only to the stable 
     isAgentEnabled: (node, agent) => authority.isAgentEnabled(node, agent)
   });
   const manager = http.createServer((request, response) => {
+    if (request.url === "/.well-known/rabiroute-manager") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ code: 0, data: { protocolVersion: 1, guid: "headless-fixture-guid", applicationGenerationId: "headless-fixture-generation", managerInstanceId: "headless-fixture-manager" } }));
+      return;
+    }
     if (request.url === "/meta") {
       const access = evaluateLanAgentRequest(request, authority, true);
-      response.writeHead(access.kind === "agent" ? 200 : 403, { "content-type": "application/json" });
-      response.end(JSON.stringify(access.kind === "agent"
-        ? { applicationGenerationId: "headless-fixture-generation", managerInstanceId: "headless-fixture-manager", health: { live: true, requiredReady: true, state: "healthy" } }
+      const allowed = access.kind === "agent" || (access.kind === "unrelated" && request.headers.authorization === `Bearer ${credential.token}`);
+      response.writeHead(allowed ? 200 : 403, { "content-type": "application/json" });
+      response.end(JSON.stringify(allowed
+        ? { rabiGuid: "headless-fixture-guid", applicationGenerationId: "headless-fixture-generation", managerInstanceId: "headless-fixture-manager", health: { live: true, requiredReady: true, state: "healthy" } }
         : { code: -1 }));
       return;
     }
     if (!handleLanAgentApi(request, new URL(request.url!, "http://localhost"), response, {
       authority, enabled: () => true, registry, releases: {} as LanAgentReleaseStore, readJsonBody: read,
-      managerIdentity: () => ({ applicationGenerationId: "headless-fixture-generation", managerInstanceId: "headless-fixture-manager", health: { live: true, requiredReady: true, state: "healthy" } }),
+      managerIdentity: () => ({ guid: "headless-fixture-guid", applicationGenerationId: "headless-fixture-generation", managerInstanceId: "headless-fixture-manager", health: { live: true, requiredReady: true, state: "healthy" } }),
       isReleaseRequestAuthorized: () => false,
       isManagementRequestAuthorized: request => request.headers.authorization === "Bearer test-instance",
       jsonResponse: (response, code, body) => { response.writeHead(code, { "content-type": "application/json" }); response.end(JSON.stringify(body)); }
@@ -56,9 +62,9 @@ test("headless instance configures two Agents and dispatches only to the stable 
   const managerUrl = await listen(manager);
   const configPath = path.join(directory, "config.json");
   fs.writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, managerUrl, nodeCredential: credential.token, nodeId, releasePublicKeySha256: "a".repeat(64), agentType: "dsh", dsh: { baseUrl: dshUrl, sessionId: "session-11111111-1111-4111-8111-111111111111" }, defaultWorkspace: directory, allowedWorkspaces: [directory] }));
-  const worker = spawn(process.execPath, [path.resolve("apps/rabi-agent/rabi-agent.mjs"), "--run", "--config", configPath], { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
+  const worker = spawn(process.execPath, [path.resolve("apps/rabi-agent/rabi-agent.mjs"), "--run", "--config", configPath], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
   let workerDiagnostic = "";
-  worker.stderr.on("data", chunk => { workerDiagnostic = (workerDiagnostic + String(chunk)).slice(-4096).replaceAll(credential.token, "<redacted>"); });
+  for (const stream of [worker.stdout, worker.stderr]) stream.on("data", chunk => { workerDiagnostic = (workerDiagnostic + String(chunk)).slice(-4096).replaceAll(credential.token, "<redacted>"); });
   // Observe exit immediately; an early configuration failure must not leave
   // finally waiting for an event that already happened.
   const workerStopped = new Promise<void>(resolve => {

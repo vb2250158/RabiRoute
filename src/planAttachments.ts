@@ -177,15 +177,13 @@ export function preparePlanAttachments(
   bucket: PlanStorageBucket = "active"
 ): PreparedPlanAttachment[] {
   if (!Array.isArray(value)) throw new Error("Plan attachments must be an array.");
-  if (value.length > PLAN_MAX_ATTACHMENTS) {
-    throw new Error(`A plan supports at most ${PLAN_MAX_ATTACHMENTS} attachments.`);
-  }
 
   const existing = normalizeStoredPlanAttachments(existingValue);
   const existingById = new Map(existing.map((attachment) => [attachment.id, attachment]));
   const attachmentDir = planAttachmentDirectory(roleDir, planId, bucket);
   const usedIds = new Set<string>();
   let total = 0;
+  let uploads = 0;
   const prepared = value.map((item, index) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       throw new Error(`Plan attachment ${index + 1} is invalid.`);
@@ -198,11 +196,11 @@ export function preparePlanAttachments(
     if (prior && !hasBase64 && (!sourcePath || path.resolve(sourcePath) === path.resolve(prior.path))) {
       if (usedIds.has(prior.id)) throw new Error(`Plan attachment id is duplicated: ${prior.id}.`);
       usedIds.add(prior.id);
-      total += prior.size;
-      if (total > PLAN_ATTACHMENTS_MAX_BYTES) {
-        throw new Error(`Plan attachments exceed ${PLAN_ATTACHMENTS_MAX_BYTES} bytes in total.`);
-      }
       return { metadata: prior };
+    }
+    // Retained attachments do not consume this request's upload budget.
+    if (++uploads > PLAN_MAX_ATTACHMENTS) {
+      throw new Error(`A request supports at most ${PLAN_MAX_ATTACHMENTS} attachments with new content.`);
     }
     if (hasBase64 === Boolean(sourcePath)) {
       throw new Error(`Plan attachment ${index + 1} must provide exactly one of path or contentBase64.`);

@@ -521,6 +521,14 @@ export async function loadPlanAgentStatuses(
   };
 }
 
+export async function openPlanHistoryAgent(roleId: string, planId: string, historyId: string): Promise<{ opened: true }> {
+  return managerData(`/api/roles/${encodeURIComponent(roleId)}/plan-agents/${encodeURIComponent(planId)}/open`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ historyId })
+  });
+}
+
 export async function openPlanAgentTask(
   roleId: string,
   planId: string,

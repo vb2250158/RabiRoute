@@ -7,7 +7,7 @@
   "engines": {
     "node": ">=22.13.0"
   },
-  "dependencies": { "@openai/codex": "0.144.1" },
+  "dependencies": { "@openai/codex": "0.144.1", "bonjour-service": "1.4.4" },
   "scripts": {
     "start": "node rabi-agent.mjs --run",
     "bootstrap": "node rabi-agent.mjs --bootstrap",

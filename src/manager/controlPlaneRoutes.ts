@@ -398,6 +398,7 @@ import {
   type PlanQaTaskRequest
 } from "./planQaFeedback.js";
 import { handlePlanAgentStatusApi } from "./planAgentStatusRoutes.js";
+import { handlePlanAdvanceApi } from "./planAdvanceRoutes.js";
 import { parseRoleKnowledgeResourceRoute } from "./roleKnowledgeRoute.js";
 import { parseWearableHealthResourceRoute } from "./wearableHealthRoute.js";
 import { RabiGlobalConfigStore, type RabiLinkRelayGlobalConfig } from "./globalConfig.js";
@@ -405,7 +406,7 @@ import { LanAgentRegistry } from "./lanAgentRegistry.js";
 import { LanAgentReleaseStore } from "./lanAgentReleaseStore.js";
 import { handleLanAgentApi } from "./lanAgentRoutes.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
-import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
+import { evaluateLanAgentRequest, isLanNodeMetadataRequest } from "./lanAgentRequestAccess.js";
 import { AgentResourceCatalog } from "./agentResourceCatalog.js";
 import { assertLanAgentBodyAuthority, registerLanAgentBodyGuard, hasLanAgentBodyGuard, validateLanAgentRequestBody, setTrustedLanAgentSource, getTrustedLanAgentSource, type TrustedLanAgentSource } from "./lanAgentBodyAuthority.js";
 import { migrateLanAgentSharedCredential } from "./lanAgentCredentialMigration.js";
@@ -4254,6 +4255,33 @@ function singleRequestHeader(request: http.IncomingMessage, name: string): strin
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+async function planHistoryRequestContext(
+  request: http.IncomingMessage,
+  body: Record<string, unknown>,
+  context: RoleStorageCommandContext
+): Promise<RoleStorageCommandContext> {
+  const { resolvePlanHistoryActor } = await import("../shared/planHistoryActor.js");
+  const origin = singleRequestHeader(request, "origin");
+  let sameOrigin = false;
+  try { sameOrigin = Boolean(origin && new URL(origin).host === request.headers.host); } catch { /* Invalid Origin is not a user entry. */ }
+  try {
+    const actor = await resolvePlanHistoryActor(body.messageSource, {
+      verifiedUserEntry: sameOrigin && request.headers["sec-fetch-site"] === "same-origin" && !getTrustedLanAgentSource(request),
+      readAgent: async identity => {
+        const query: AgentThreadRequest = { action: "read", agentAdapter: identity.agentAdapter, threadId: identity.sessionId, cwd: identity.workspace };
+        const options = agentThreadRequestOptions(query);
+        const result = await handleAgentThreadRequest(query, options);
+        const thread = result.data.thread as { id: string; title: string; cwd?: string; archived?: boolean } | undefined;
+        if (result.statusCode !== 200 || !thread) throw new Error("Plan history messageSource owner could not be read.");
+        return { ...thread, ...(identity.agentAdapter === "dsh" && options.dshBaseUrl ? { baseUrl: options.dshBaseUrl } : {}) };
+      }
+    });
+    return { ...context, actor };
+  } catch (error) {
+    throw new RoleStorageApplicationError(error instanceof Error ? error.message : String(error), "invalid_request", 400);
+  }
+}
+
 function roleStorageRequestContext(
   request: http.IncomingMessage,
   response: http.ServerResponse
@@ -7956,7 +7984,7 @@ function handleRoleKnowledgeApi(
               notifyAgent: body.notifyAgent,
               planAttachmentIds: body.planAttachmentIds,
               attachments: body.attachments
-            }, context)
+            }, await planHistoryRequestContext(request, { messageSource: body.source === "webgui" && body.author !== "agent" ? { type: "user" } : undefined }, context))
           }))
           .then(({ body, committed }) => {
             const { record, created, plan: currentPlan } = committed.commit;
@@ -8040,6 +8068,14 @@ function handleRoleKnowledgeApi(
           code: -1,
           message: error instanceof Error ? error.message : String(error)
         }));
+      return true;
+    }
+    if (request.method === "POST" && resource === "plans" && itemId === "query") {
+      void readJsonBody<unknown>(request, 1024 * 1024)
+        .then(body => import("../planWorkspaceQuery.js").then(({ parseWorkspacePlanQuery }) => parseWorkspacePlanQuery(body)))
+        .then(input => managerKnowledgePageWorkerPool.queryRolePlanPage(roleDir, input))
+        .then(data => jsonResponse(response, 200, { code: 0, data }))
+        .catch(error => jsonResponse(response, error instanceof ManagerReadWorkerError ? 503 : 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
       return true;
     }
     if (request.method === "GET" && resource === "plans") {
@@ -8209,7 +8245,11 @@ function handleRoleKnowledgeApi(
     if (request.method === "POST" && resource === "plans" && !itemId) {
       const context = roleStorageRequestContext(request, response);
       void readRoleStorageJsonBody<Record<string, unknown>>(request, PLAN_ATTACHMENT_REQUEST_MAX_BYTES)
-        .then((body) => resolveRoleStorageApplication().commands.createPlan(roleId, body, context))
+        .then(async (body) => {
+          const actorContext = await planHistoryRequestContext(request, body, context);
+          const { messageSource: _messageSource, actor: _actor, ...input } = body;
+          return resolveRoleStorageApplication().commands.createPlan(roleId, input, actorContext);
+        })
         .then((committed) => respondRoleStorageCommit(
           response,
           201,
@@ -8223,7 +8263,11 @@ function handleRoleKnowledgeApi(
     if (request.method === "PATCH" && resource === "plans" && itemId) {
       const context = roleStorageRequestContext(request, response);
       void readRoleStorageJsonBody<Record<string, unknown>>(request, PLAN_ATTACHMENT_REQUEST_MAX_BYTES)
-        .then((body) => resolveRoleStorageApplication().commands.updatePlan(roleId, itemId, body, context))
+        .then(async (body) => {
+          const actorContext = await planHistoryRequestContext(request, body, context);
+          const { messageSource: _messageSource, actor: _actor, ...patch } = body;
+          return resolveRoleStorageApplication().commands.updatePlan(roleId, itemId, patch, actorContext);
+        })
         .then((committed) => respondRoleStorageCommit(
           response,
           200,
@@ -8893,6 +8937,7 @@ export function handlePersonaPluginApi(
   })) return true;
   if (handlePersonaDocumentApi(request, requestUrl, response, resolveRoleDir)) return true;
   if (handlePlanAgentStatusApi(request, requestUrl, response, { roleDir: resolveRoleDir })) return true;
+  if (handlePlanAdvanceApi(request, requestUrl, response, { roleDir: resolveRoleDir, send: body => handleAgentThreadRequest(body, agentThreadRequestOptions(body)) })) return true;
   if (handlePlanAttachmentApi(request, requestUrl.pathname, response, resolveRoleDir)) return true;
   if (handleRolePanelApi(request, requestUrl, response, activeRolesRoot)) return true;
   return handleRoleKnowledgeApi(
@@ -9171,6 +9216,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   const lanAgentRegistry = new LanAgentRegistry({
     statePath: path.join(rootDir, "data", ".runtime", "lan-agent-tasks.json"),
     authenticateNode: token => lanAgentAuthority.authenticate(token),
+    registerAgentCatalog: (token, agents) => lanAgentAuthority.registerAgentCatalog(token, agents),
     isAgentEnabled: (nodeId, agentId) => lanAgentAuthority.isAgentEnabled(nodeId, agentId)
   });
   instanceAgentSessions = binding => {
@@ -10119,7 +10165,8 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         return;
       }
       const enrollmentAccess = rabiGlobalConfig.read().webguiLan.enabled && (
-        (request.method === "POST" && pathname === "/api/lan-agent/enroll")
+        isLanNodeMetadataRequest(request, lanAgentAuthority)
+        || (request.method === "POST" && pathname === "/api/lan-agent/enroll")
         || (request.method === "GET" && (pathname.startsWith("/api/lan-agent/releases/") || pathname === "/api/lan-agent/self") && (() => {
           const token = headerValue(request.headers.authorization).match(/^Bearer\s+(.+)$/i)?.[1]?.trim() ?? "";
           return lanAgentAuthority.validateBootstrapTicket(token) || Boolean(lanAgentAuthority.authenticate(token));
@@ -10317,6 +10364,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         port: managerPort,
         applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
         managerInstanceId,
+        guid: rabiGlobalConfig.read().rabiGuid,
         onStatus: status => { managerLanDiscoveryStatus = status; }
       });
       managerRuntimeOwner.register("manager_lan_discovery", async () => {

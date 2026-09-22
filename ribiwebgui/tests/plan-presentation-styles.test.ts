@@ -257,7 +257,7 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   assert.match(page, /function planAcceptsGuidance[\s\S]*?plan\.presentation\.acceptsGuidance === true[\s\S]*?plan\.presentation\.approval\.state === "none"/);
   assert.doesNotMatch(page, /plan\.status ===/);
   assert.doesNotMatch(page, /t\(plan\.status\)/);
-  assert.match(page, /<section v-if="planAcceptsGuidance\(plan\)" class="knowledge-approval-panel" data-state="guidance">/);
+  assert.match(page, /<section v-if="!planHost && planAcceptsGuidance\(plan\)" class="knowledge-approval-panel" data-state="guidance">/);
   assert.match(page, /补充内容会交给原任务/);
   assert.match(page, /重新核对计划，再决定下一步/);
   assert.match(page, /:composer-id="`guidance-\$\{plan\.id\}`"[\s\S]*?@submit="sendPlanGuidance\(plan\)"/);
@@ -268,7 +268,7 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   assert.match(page, /restored\?\.planAttachments \?\? \[\]/);
   assert.match(page, /submittedApprovalAttachments\.set\(plan\.id, takeApprovalAttachments\(plan\.id\)\)/);
   assert.doesNotMatch(page, /guidance \? \[\] : await approvalAttachmentUploads/);
-  assert.match(page, /<section v-if="planAcceptsGuidance\(plan\)"[\s\S]*?<PlanFeedbackComposer[\s\S]*?:attachments="approvalAttachmentsFor\(plan\.id\)"[\s\S]*?@add-files="addApprovalFiles\(plan\.id, \$event\.files, \$event\.fromClipboard\)"/);
+  assert.match(page, /<section v-if="!planHost && planAcceptsGuidance\(plan\)"[\s\S]*?<PlanFeedbackComposer[\s\S]*?:attachments="approvalAttachmentsFor\(plan\.id\)"[\s\S]*?@add-files="addApprovalFiles\(plan\.id, \$event\.files, \$event\.fromClipboard\)"/);
   assert.match(page, /v-for="feedback in guidanceRecordsForDisplay\(plan\)"[\s\S]*?feedback\.attachments[\s\S]*?feedback\.planAttachments/);
   assert.match(client, /kind: input\.kind/);
   assert.match(page, /提交并投递/);

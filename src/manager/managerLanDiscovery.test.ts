@@ -88,6 +88,7 @@ test("Manager DNS-SD publisher advertises the actual listener port and destroys 
     port: 54321,
     applicationGenerationId: "generation-a",
     managerInstanceId: "manager-a",
+    guid: "guid-a",
     onStatus: status => statuses.push(status)
   }, factory);
   await new Promise(resolve => setImmediate(resolve));
@@ -97,7 +98,8 @@ test("Manager DNS-SD publisher advertises the actual listener port and destroys 
     protocol: "1",
     path: MANAGER_DISCOVERY_PATH,
     applicationGenerationId: "generation-a",
-    managerInstanceId: "manager-a"
+    managerInstanceId: "manager-a",
+    guid: "guid-a"
   });
   assert.equal(statuses.at(-1)?.state, "published");
   await publisher.stop();

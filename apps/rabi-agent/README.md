@@ -14,9 +14,9 @@ Rabi Agent 是一个没有界面的局域网工作进程，不是完整 RabiRout
 
 1. 在总控 WebGUI 的 **远端 Agent** 页面复制接入提示词，粘贴到目标电脑的私密 Codex/DSH 任务中。需要 Node.js 22.13+ 和已启动的目标宿主。
 2. 提示词使用默认 30 分钟有效的一次性票据下载已签名程序，并由 `--bootstrap` 兑换独立 `nodeCredential`。凭据存入当前用户私有配置；Manager 只保存密钥 hash 与授权，登录启动项不含凭据。票据不是共享 WebGUI Token，成功兑换后不可重用。
-3. 确认自身 `/api/lan-agent/self` 的 `nodeId` 与 `connected`。需要消息投递时，在路由的消息适配器选择 **远端Agent(<IP地址>)** 中的准确 Agent 并保存。需要 API 与 skills 时，在总控为该 Agent 打开 **允许使用 Manager API 与 skills**。
+3. 确认自身 `/api/lan-agent/self` 的 `nodeId` 与 `connected`。新接入的 **是否启用Agent** 默认勾选，启用后按本机 Agent 的方式使用，无需另开 API 或 skills 授权。需要消息投递时，在路由的消息适配器选择 **远端Agent(<IP地址>)** 中的准确 Agent 并保存。
 
-授权默认 `false`，由 Manager 持有；勾选后立即 PUT 生效，离线也可关闭。不需要等待远端执行配置保存。它与执行开关、任务、工作目录和模型不同；节点在线不等于获准访问 API。
+远端启用状态由 Manager 持有；开关修改后立即 PUT 生效，离线也可停用，不必保存执行参数。保存任务、工作目录和模型不会重新启用 Agent，已有绑定的旧关闭状态在重连后保持不变；旧版从未授权与主动停用无法区分时，也需管理员确认后开启。读取失败会显示错误，不假定已启用。连接器显式本地停用仍拒绝执行。本轮已通过源码构建，尚未部署或完成双机验收。
 
 完整安装步骤、私有目录、凭据迁移与排障见 [远端 Agent 接入与更新](../../docs/lan-rabi-agent-bootstrap.md)。安装使用统一提示词，不手工复制第二套模板：
 
@@ -42,7 +42,7 @@ node rabi-agent.mjs --api GET "/api/lan-agent/resources/read?id=docs%2Frabi-agen
 
 当前操作目录包含受控业务入口及别名，不是全部 Manager API，也不代表全部远端可用。管理员设置、任意 `file` 和宿主控制被拒绝；业务权限、Action Gate、来源身份和原有 loopback-only 限制仍生效。资源只允许公开文档、技能及其同包直接引用的受控文本，不开放任意文件系统。按需读取 Manager 当前发布的最新技能与合同，不复制计划、记忆或消息处理状态为第二份业务真源。
 
-总控授权的启用 PUT 正文为 `{ "enabled": true, "binding": { "provider": "<provider>", "sessionId": "<sessionId>", "managedSessionIds": [] } }`，`managedSessionIds` 可省略；授权明确冻结 UI 当前显示的绑定。关闭只传 `{ "enabled": false }`。PUT 必须携带稳定 `Idempotency-Key` 和从 GET instances 取得的强 `If-Match`。授权回执持久保留 24 小时；同键同正文返回原回执，不重写授权，异正文返回 409。超时先 GET instances 核对当前授权，不自动重试；回执过期后重新读取并确认意图，再用新键与新 ETag。节点不能给自己授权。
+管理端启停沿用兼容的 `authorization` 接口和 `enabledAgentIds` 状态投影，不是另一个 API 权限开关。并发版本、幂等与异常回读合同见 [接入文档的 API](../../docs/lan-rabi-agent-bootstrap.md#api)。
 
 跨 Agent 投递时，远端主会话来源按实例命名空间记录。目前只支持 `responsePolicy: "none"` 的单向投递；因缺少可信回传路由，`responsePolicy: "required"`、`inReplyToRequestId` 正式回复及远端到远端投递均明确拒绝，不能视为完整支持正式回复。远端上下文只走自身专用 `context` 入口，不开放通用 `codex-hook` 接口。
 

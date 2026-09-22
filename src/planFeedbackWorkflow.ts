@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { normalizePlanHistoryActor, type PlanHistoryActor } from "./shared/planHistoryActor.js";
 import { ensurePersonaPlanWorkflow } from "./personaPlanWorkflow.js";
 import { planActivationStatus, planMarkerStatus } from "./planState.js";
 import { readCanonicalPlanJsonUnderLease, readCanonicalPlanStoragePackageUnderLease,
@@ -9,7 +10,7 @@ import type { PlanFeedbackRecord } from "./planFeedback.js";
 
 /** The feedback store commits these operations together with its ledger row. */
 export function feedbackPlanTransition(lease: PlanStorageLease, feedback: PlanFeedbackRecord,
-  phase: "saved" | "delivered"): { record: PlanFeedbackRecord; operations: PlanStorageTransactionOperation[] } {
+  phase: "saved" | "delivered", actor?: PlanHistoryActor): { record: PlanFeedbackRecord; operations: PlanStorageTransactionOperation[] } {
   const unchanged = { record: feedback, operations: [] };
   if (feedback.kind !== "approval_suggestion" || feedback.author === "agent") return unchanged;
   const before = readCanonicalPlanJsonUnderLease(lease) as unknown as PlanItem;
@@ -35,7 +36,10 @@ export function feedbackPlanTransition(lease: PlanStorageLease, feedback: PlanFe
     updatedAt: new Date().toISOString(), storageRevision: createStorageRevision() };
   const record = phase === "saved" ? { ...feedback, approvalTransition: { planRevision: after.storageRevision! } } : feedback;
   const history = readCanonicalPlanStoragePackageUnderLease(lease).files.find(file => file.path === "history.jsonl")?.content.toString("utf8") || "";
-  const row = { id: `history-${randomUUID()}`, planId: before.id, kind: "updated", recordedAt: after.updatedAt, before, after };
+  const historyActor = phase === "delivered"
+    ? { kind: "system" as const, displayName: "计划反馈投递", channel: "manager" }
+    : normalizePlanHistoryActor(actor) ?? { kind: "unknown" as const };
+  const row = { actor: historyActor, id: `history-${randomUUID()}`,  planId: before.id, kind: "updated", recordedAt: after.updatedAt, before, after };
   return { record, operations: [
     { type: "replace-file", relativePath: "plan.json", content: Buffer.from(`${JSON.stringify(after, null, 2)}\n`) },
     { type: "replace-file", relativePath: "history.jsonl", content: Buffer.from(`${history}${history && !history.endsWith("\n") ? "\n" : ""}${JSON.stringify(row)}\n`) }

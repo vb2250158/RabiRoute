@@ -1185,7 +1185,7 @@ POST /roles/:roleId/plans
 
 只有代码、Prefab、资源、配置等会产生项目内容变动的计划才应采用“实施/开发验证/适用同步提交 → 等待打包 → 等待 QA 验收 → QA 通过完成；失败回实施”的流程。调查、设计评审、运营、资料收集、外部依赖与控制面维护按自身真实步骤推进；Agent 或批处理不得为这些计划虚构 package 或 QA 步骤。Manager 不根据标题、说明或 `kind` 自动补流程。
 
-`attachments` 可选。新附件可提供本机 `path`，或提供 `name`、可选 `mimeType` 与 `contentBase64`；最多 8 个，单个不超过 10 MiB、总计不超过 25 MiB。Manager 把内容复制到人格私有 `plans/attachments/<planId>/`，计划文件只保留安全元数据，不保存 Base64。PATCH 未提供 `attachments` 时保留原列表，提供空数组时清空记录；如需在 PATCH 中保留指定旧附件，可把 GET 返回的对应附件对象原样带回。Manager 对外计划 DTO 不返回本机 `path`。
+`attachments` 可选。新附件可提供本机 `path`，或提供 `name`、可选 `mimeType` 与 `contentBase64`；单次新增最多 8 个，单个不超过 10 MiB、新内容合计不超过 25 MiB；保留的旧附件不占本次额度。Manager 把内容复制到人格私有 `plans/attachments/<planId>/`，计划文件只保留安全元数据，不保存 Base64。PATCH 未提供 `attachments` 时保留原列表，提供空数组时清空记录；如需在 PATCH 中保留指定旧附件，可把 GET 返回的对应附件对象原样带回。Manager 对外计划 DTO 不返回本机 `path`。
 
 读取附件：
 
@@ -1639,3 +1639,5 @@ node rabi-agent.mjs --api GET "/api/roles/<roleId>/skills/<skillId>/download" --
 Manager 失败响应附带 `errorMessages`，包含 zh-CN 和 `en`，并保留原始 message、机器码、提交状态和请求编号。WebGUI 按当前语言显示。已登记的参数、附件、版本冲突和存储错误显示本地化原因；未登记的第三方异常保留诊断原文，不推断未知原因。
 
 正式回传的 inReplyToRequestId 关联受管请求时可省略 prompt，result 与 nextAction 仍必填；普通发送仍要求 prompt。新回复不生成历史结束标记。
+
+计划步骤资源记录及分批归档见[计划附件与步骤文件记录](plan-resources.md)。

@@ -157,6 +157,7 @@ export class LanAgentRegistry {
     statePath: string;
     authenticateNode?: (token: string) => { nodeId: string } | null;
     isAgentEnabled?: (nodeId: string, agentId: string) => boolean;
+    registerAgentCatalog?: (token: string, agents: readonly InstanceAgent[]) => void;
   }) {
     this.statePath = path.resolve(options.statePath);
     const identityPath = path.join(path.dirname(this.statePath), "agent-instance-id.json");
@@ -214,7 +215,7 @@ export class LanAgentRegistry {
   listInstances(localAgents: InstanceAgent[] = []): AgentInstance[] {
     return [{ instanceId: this.localInstanceId, local: true, connected: true, agents: localAgents }, ...this.listNodes().map(node => ({
       instanceId: node.nodeId, local: false, address: node.remoteAddress, connected: node.connected, version: node.version,
-      agents: (node.agents ?? []).map(agent => ({ ...agent, enabled: agent.enabled && (this.options.isAgentEnabled?.(node.nodeId, agent.agentId) ?? true) }))
+      agents: (node.agents ?? []).map(agent => ({ ...agent, enabled: this.options.isAgentEnabled?.(node.nodeId, agent.agentId) ?? agent.enabled }))
     }))];
   }
 
@@ -226,6 +227,11 @@ export class LanAgentRegistry {
   manageAgent(instanceId: string, operation: string, params: unknown, timeoutMs = 15_000): Promise<unknown> {
     const connection = this.requireConnection(instanceId);
     if (!this.requireNode(instanceId).agents) throw new Error("Update this instance connector before managing its Agents.");
+    if (operation === "threads" && this.options.isAgentEnabled) {
+      const input = params as { agentId?: string; action?: string; prompt?: unknown } | null;
+      const initializeNew = input?.agentId === "new-agent" && ["resolve", "create"].includes(input.action ?? "") && !input.prompt;
+      if (!initializeNew && (!input?.agentId || !this.options.isAgentEnabled(instanceId, input.agentId))) throw new Error("Manager has not enabled this remote Agent.");
+    }
     const requestId = randomUUID();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.managementRequests.delete(requestId); reject(new Error("Instance management timed out; refresh before retrying a change.")); }, timeoutMs);
@@ -282,7 +288,7 @@ export class LanAgentRegistry {
     if (!this.requireNode(nodeId).agentTypes?.includes(targetAgent)) throw new Error("The selected remote node does not support the requested Agent.");
     if (input.agentId) {
       const agent = this.requireNode(nodeId).agents?.find(agent => agent.agentId === input.agentId);
-      if (!agent || !agent.enabled || agent.provider !== targetAgent) throw new Error("The bound instance Agent is missing, disabled, or has a different provider.");
+      if (!agent || (!this.options.isAgentEnabled && !agent.enabled) || agent.provider !== targetAgent) throw new Error("The bound instance Agent is missing, disabled, or has a different provider.");
     }
     const now = nowIso();
     const task: LanAgentTask = {
@@ -381,6 +387,7 @@ export class LanAgentRegistry {
         closeSocket(connection.socket, 1008, "Node identity does not match its credential.");
         return;
       }
+      if (connection.authenticatedNodeId) this.options.registerAgentCatalog?.(connection.credential!, hello.agents ?? []);
       const previous = this.connections.get(hello.nodeId);
       if (previous && previous.socket !== connection.socket) {
         clearTimeout(previous.authenticationTimer);
@@ -421,6 +428,7 @@ export class LanAgentRegistry {
     }
     if (type === "agentCatalog") {
       const agents = normalizeInstanceAgents(message.agents);
+      if (connection.authenticatedNodeId) this.options.registerAgentCatalog?.(connection.credential!, agents);
       this.nodes.set(connection.nodeId, { ...this.requireNode(connection.nodeId), agents, agentTypes: [...new Set(agents.map(agent => agent.provider))] });
       this.persist();
       return;

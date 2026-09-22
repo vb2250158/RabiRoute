@@ -6,7 +6,7 @@ import {
   agentAdapterManifest,
   type PlanAssistantAgentType
 } from "../shared/agentAdapterCapabilities.js";
-import type { PlanItem, PlanSecretaryBinding, PlanTaskBinding } from "../roleKnowledge.js";
+import type { PlanHistoryRecord, PlanItem, PlanSecretaryBinding, PlanTaskBinding } from "../roleKnowledge.js";
 import { normalizePathForComparison } from "../shared/pathPolicy.js";
 
 export const PLAN_AGENT_STATUS_TIMEOUT_MS = 2_800;
@@ -58,6 +58,7 @@ type AgentSessionReadModel = {
 
 export type PlanAgentStatusService = {
   inspectPlans(plans: PlanItem[]): Promise<PlanAgentStatus[]>;
+  openHistoryActor?(record: PlanHistoryRecord): Promise<{ opened: true; agentType: string; threadId: string; threadTitle: string; workspace: string }>;
   openPlanAgent(plan: PlanItem, role: PlanAgentRole): Promise<{
     planId: string;
     role: PlanAgentRole;
@@ -310,6 +311,25 @@ export function createPlanAgentStatusService(
   }
 
   return {
+    async openHistoryActor(record) {
+      const actor = record.actor;
+      if (actor?.kind !== "agent" || !actor.agentType || !actor.sessionId) throw new Error("History has no Agent session identity.");
+      if (actor.agentType !== "codex" && actor.agentType !== "dsh" && actor.agentType !== "antigravity") {
+        throw new Error(`Opening history sessions is not supported for ${actor.agentType}.`);
+      }
+      const binding: PlanAgentBinding = {
+        agentType: actor.agentType,
+        sessionId: actor.sessionId,
+        sessionTitle: actor.displayName || actor.sessionId,
+        workspace: actor.workspace || "",
+        ...(actor.baseUrl ? { baseUrl: actor.baseUrl } : {})
+      };
+      const session = normalizeSession(await withTimeout(readBinding(binding), timeoutMs));
+      if (!session || session.id !== actor.sessionId) throw new Error("Original Agent session was not found.");
+      if (session.archived) throw new Error("Original Agent session is archived.");
+      await openBinding(binding, actor.sessionId);
+      return { opened: true, agentType: actor.agentType, threadId: actor.sessionId, threadTitle: session.title || binding.sessionTitle || actor.sessionId, workspace: session.cwd };
+    },
     async inspectPlans(plans) {
       const checkedAt = now().toISOString();
       const shared = new Map<string, Promise<PlanAgentBindingStatus>>();

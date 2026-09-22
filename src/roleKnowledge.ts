@@ -1,4 +1,6 @@
+import { normalizePlanHistoryActor, type PlanHistoryActor } from "./shared/planHistoryActor.js";
 import { RoleStorageValidationError } from "./shared/roleStorageValidationError.js";
+import { normalizePlanStepResources } from "./shared/planStepResources.js";
 import { planActivationStatus, planState, planStateForWrite, planCanAutoAdvance } from "./planState.js";
 import { publishKnowledgeChange, type KnowledgeChange, type KnowledgeKind } from "./roleKnowledgeSearch.js";
 import { readPlanIdentity, readPlanIdentityAsync } from "./planIdentityReadCache.js";
@@ -129,6 +131,7 @@ export type PlanApprovalGate = {
 };
 
 export type PlanStep = {
+  resourceRecords?: import('./shared/planStepResources.js').PlanStepResourceRecord[];
   id: string;
   title: string;
   detail?: string;
@@ -222,6 +225,7 @@ export type PlanItem = {
 };
 
 export type PlanHistoryRecord = {
+  actor?: import("./shared/planHistoryActor.js").PlanHistoryActor;
   id: string;
   planId: string;
   kind: "created" | "updated" | "archived";
@@ -1386,7 +1390,8 @@ function normalizePlanSteps(value: unknown, legacyCompletedAt: string): PlanStep
       startedAt: typeof raw.startedAt === "string" ? raw.startedAt : completedAt,
       completedAt,
       approvalRequest: normalizeApprovalRequest(raw.approvalRequest),
-      questions: raw.questions == null ? undefined : normalizePlanQuestions(raw.questions)
+      questions: raw.questions == null ? undefined : normalizePlanQuestions(raw.questions),
+      resourceRecords: normalizePlanStepResources(raw.resourceRecords)
     }];
   });
 }
@@ -1745,12 +1750,13 @@ function planHistoryKind(before: PlanItem | undefined, after: PlanItem): PlanHis
   return "updated";
 }
 
-function createPlanHistoryRecord(before: PlanItem | undefined, after: PlanItem): PlanHistoryRecord {
+function createPlanHistoryRecord(before: PlanItem | undefined, after: PlanItem, actor?: PlanHistoryActor): PlanHistoryRecord {
   const recordedAt = after.updatedAt || nowIso();
   return {
     id: generatedId("plan-history", `${after.id}-${recordedAt}`),
     planId: after.id,
     kind: planHistoryKind(before, after),
+    actor: normalizePlanHistoryActor(actor) ?? { kind: "unknown" },
     recordedAt,
     ...(before ? { before } : {}),
     after
@@ -1777,6 +1783,7 @@ export function listPlanHistory(roleDir: string, planId: string): PlanHistoryRec
           planId: canonicalPlanId,
           kind: value.kind,
           recordedAt: value.recordedAt,
+          ...(normalizePlanHistoryActor(value.actor) ? { actor: normalizePlanHistoryActor(value.actor) } : {}),
           ...(value.before && typeof value.before === "object" ? { before: value.before as PlanItem } : {}),
           after: value.after as PlanItem
         });
@@ -3515,7 +3522,7 @@ export function createPlan(
         prepared
       );
     }
-    const history = createPlanHistoryRecord(undefined, plan);
+    const history = createPlanHistoryRecord(undefined, plan, mutation?.actor);
     files.set("plan.json", Buffer.from(`${JSON.stringify(plan, null, 2)}\n`, "utf8"));
     files.set("history.jsonl", Buffer.from(appendPlanHistoryContent("", history), "utf8"));
     commitPlanLifecycleTransitionUnderLease(lease, {
@@ -3581,6 +3588,17 @@ export function updatePlan(
       storageMutationRequestId: mutation?.requestId
     });
     if (!next) throw new Error("Plan title is required.");
+    for (const step of next.steps) {
+      const previous = existing.steps.find(item => item.id === step.id)?.resourceRecords;
+      if (!previous?.length) continue;
+      const records = new Map(previous.map(item => [item.id, item]));
+      for (const item of step.resourceRecords || []) {
+        const prior = records.get(item.id);
+        if (prior && JSON.stringify(prior) !== JSON.stringify(item)) throw new Error(`Step resource record is immutable: ${item.id}.`);
+        records.set(item.id, item);
+      }
+      step.resourceRecords = [...records.values()];
+    }
     next.steps = recordPlanStepTimes(
       next.steps,
       existing.steps,
@@ -3638,7 +3656,7 @@ export function updatePlan(
         from: planDirectory(roleDir, next.id, currentBucket),
         to: planDirectory(roleDir, next.id, destinationBucket)
       }]) as PlanItem;
-    const historyRecord = createPlanHistoryRecord(historyBefore, next);
+    const historyRecord = createPlanHistoryRecord(historyBefore, next, mutation?.actor);
     const currentHistory = files.get("history.jsonl")?.toString("utf8") || "";
     files.set("history.jsonl", Buffer.from(appendPlanHistoryContent(currentHistory, historyRecord), "utf8"));
     files.set("plan.json", Buffer.from(`${JSON.stringify(next, null, 2)}\n`, "utf8"));

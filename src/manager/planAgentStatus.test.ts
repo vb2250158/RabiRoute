@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { PlanItem } from "../roleKnowledge.js";
+import type { PlanHistoryRecord, PlanItem } from "../roleKnowledge.js";
 import { createPlanAgentStatusService } from "./planAgentStatus.js";
 
 function plan(overrides: Partial<PlanItem> = {}): PlanItem {
@@ -18,6 +18,23 @@ function plan(overrides: Partial<PlanItem> = {}): PlanItem {
     archiveStatus: overrides.archiveStatus ?? "未归档"
   };
 }
+
+test("history navigation uses original actor, rejects missing/archived/mismatched sessions and never opens current binding", async () => {
+  const record: PlanHistoryRecord = { id: "history-1", planId: "plan-1", kind: "updated", recordedAt: "2026-08-07T00:00:00Z", after: plan({ taskBinding: { agentType: "codex", sessionId: "other" } }), actor: { kind: "agent", agentType: "dsh", sessionId: "original", displayName: "Original", workspace: "old-workspace" } };
+  const opened: string[] = [];
+  let value: unknown = thread({ id: "original", cwd: "new-workspace" });
+  const service = createPlanAgentStatusService({ readDshSession: async () => value, openDshSession: async id => { opened.push(id); } });
+  await service.openHistoryActor!(record);
+  assert.deepEqual(opened, ["original"]);
+  value = thread({ id: "other" });
+  await assert.rejects(service.openHistoryActor!(record), /not found/);
+  value = thread({ id: "original", archived: true });
+  await assert.rejects(service.openHistoryActor!(record), /archived/);
+  value = null;
+  await assert.rejects(service.openHistoryActor!(record), /not found/);
+  await assert.rejects(service.openHistoryActor!({ ...record, actor: { kind: "unknown" } }), /no Agent/);
+  assert.deepEqual(opened, ["original"]);
+});
 
 function thread(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {

@@ -18,7 +18,7 @@ test("one conditional selector follows the title in the top bar and reuses gatew
   const app = fs.readFileSync(path.join(root, "src/App.vue"), "utf8");
   const styles = fs.readFileSync(path.join(root, "src/styles.css"), "utf8");
   const sidebar = app.slice(app.indexOf("<v-navigation-drawer"), app.indexOf("</v-navigation-drawer>"));
-  const topbar = app.slice(app.indexOf("<v-app-bar flat"), app.indexOf("</v-app-bar>"));
+  const topbar = app.slice(app.indexOf("<v-app-bar "), app.indexOf("</v-app-bar>"));
   assert.doesNotMatch(sidebar, /<v-select|route-picker/);
   assert.equal((app.match(/<v-select\b/g) || []).length, 1);
   assert.match(topbar, /<v-toolbar-title[\s\S]*?<\/v-toolbar-title>[\s\S]*?<v-select[\s\S]*?v-if="showRouteSwitcher"/);

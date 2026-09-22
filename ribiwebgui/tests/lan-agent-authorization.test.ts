@@ -5,29 +5,53 @@ import vm from "node:vm";
 import ts from "typescript";
 
 const source = fs.readFileSync(new URL("../src/components/InstanceAgentSettings.vue", import.meta.url), "utf8");
-function harness(responses: Response[], options: { enrolled?: boolean; enabled?: boolean; cryptoMode?: "http" | "missing" } = {}) {
+function harness(responses: Response[], options: { enrolled?: boolean; enabled?: boolean; missingSnapshot?: boolean; cryptoMode?: "http" | "missing" } = {}) {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const authorization = { nodes: options.enrolled === false ? [] : [{ nodeId: "node-fixture", enabledAgentIds: options.enabled === false ? [] : ["agent-fixture"] }] };
   const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*;\r?\n/gm, "");
   const code = ts.transpileModule(script + "\nreturn { setAuthorization, authorized, error, notice, save, draft };", { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
   const agent = { agentId: "agent-fixture", enabled: false, name: "Fixture", workspace: "fixture-workspace", provider: "dsh", sessionId: "saved-session", managedSessionIds: ["saved-managed"] };
   const generatedKeys: string[] = [];
+  let mounted: (() => Promise<void>) | undefined;
   const context = {
     crypto: options.cryptoMode === "missing" ? undefined : options.cryptoMode === "http"
       ? { getRandomValues: (bytes: Uint8Array) => { generatedKeys.push("secure-bytes"); bytes.fill(15); return bytes; } }
       : { randomUUID: () => { const key = `fixture-action-${generatedKeys.length + 1}`; generatedKeys.push(key); return key; } },
-    defineProps: () => ({ instance: { instanceId: "node-fixture", local: false, connected: false }, agent, authorization }),
-    onMounted: () => {}, defineEmits: () => () => {}, ref: (value: unknown) => ({ value }), watch: (_source: unknown, effect: () => void, config?: { immediate: boolean }) => { if (config?.immediate) effect(); },
+    defineProps: () => ({ instance: { instanceId: "node-fixture", local: false, connected: false }, agent, authorization: options.missingSnapshot ? undefined : authorization }),
+    onMounted: (callback: () => Promise<void>) => { mounted = callback; }, defineEmits: () => () => {}, ref: (value: unknown) => ({ value }), watch: (_source: unknown, effect: () => void, config?: { immediate: boolean }) => { if (config?.immediate) effect(); },
     managerAccessToken: () => "fixture-admin", userFacingError: (error: unknown) => String(error),
     fetch: async (url: string, init?: RequestInit) => { calls.push({ url, init }); const response = responses.shift(); if (!response) throw new Error("Unexpected request"); return response; }
   };
-  return { state: vm.runInNewContext(`(function() { ${code} })()`, context), calls, agent, generatedKeys };
+  return { state: vm.runInNewContext(`(function() { ${code} })()`, context), calls, agent, generatedKeys, mount: () => mounted?.() };
 }
 const revision = '"' + "a".repeat(64) + '"';
 const json = (value: unknown, status = 200, etag?: string) => new Response(JSON.stringify(value), { status, headers: etag ? { etag } : {} });
 const access = () => json({ data: { token: "fixture-admin" } });
 const snapshot = (enabled: boolean) => ({ nodes: [{ nodeId: "node-fixture", enabledAgentIds: enabled ? ["agent-fixture"] : [] }] });
 const catalog = (enabled: boolean, etag = revision) => json({ code: 0, authorization: snapshot(enabled) }, 200, etag);
+
+test("local and remote switches share the exact label without a second API grant", () => {
+  assert.equal((source.match(/label="是否启用Agent"/g) || []).length, 2);
+  assert.doesNotMatch(source, /允许使用 Manager API 与 skills|启用本机 Agent 执行|不授予总控权限|先保存新 Agent，再由总控勾选授权/);
+});
+
+test("enabled state comes only from Manager projection, never the execution draft", () => {
+  const enabled = harness([]);
+  assert.equal(enabled.agent.enabled, false);
+  assert.equal(enabled.state.authorized.value, true);
+  const disabled = harness([], { enabled: false });
+  disabled.state.draft.value.enabled = true;
+  assert.equal(disabled.state.authorized.value, false);
+});
+
+test("missing snapshot and failed initial read never default to enabled", async () => {
+  const { state, calls, mount } = harness([access(), json({ code: -1, message: "fixture read failure" }, 503)], { missingSnapshot: true });
+  assert.equal(state.authorized.value, false);
+  await mount();
+  assert.equal(state.authorized.value, false);
+  assert.match(state.error.value, /fixture read failure/);
+  assert.equal(calls.some(call => call.init?.method === "PUT"), false);
+});
 
 test("offline disable immediately PUTs admin authorization with freshly read strong If-Match", async () => {
   const { state, calls } = harness([access(), catalog(true), json({ code: 0, authorization: snapshot(false) })]);
@@ -80,6 +104,14 @@ test("failed authorization rolls the switch back", async () => {
   assert.match(state.error.value, /fixture rejection/);
 });
 
+test("missing fresh snapshot fails without PUT instead of assuming enabled", async () => {
+  const { state, calls } = harness([access(), json({ code: 0 }, 200, revision)], { enabled: false });
+  await state.setAuthorization(true);
+  assert.equal(state.authorized.value, false);
+  assert.match(state.error.value, /无法读取总控启用状态/);
+  assert.equal(calls.some(call => call.init?.method === "PUT"), false);
+});
+
 test("412 refreshes the authoritative switch without replaying PUT", async () => {
   const { state, calls, generatedKeys } = harness([access(), catalog(true), json({ code: -1 }, 412), catalog(false)]);
   await state.setAuthorization(false);
@@ -99,12 +131,14 @@ test("missing enrollment and weak ETags fail closed without PUT", async () => {
   }
 });
 
-test("saving remote parameters never sends the UI grant as execution enabled", async () => {
-  const { state, calls } = harness([access(), json({ code: 0, result: { saved: true } })]);
-  await state.save();
-  const body = JSON.parse(String(calls[1].init?.body));
-  assert.equal(body.enabled, true);
-  assert.equal(body.workspace, "fixture-workspace");
-  assert.equal(state.authorized.value, true);
-  assert.doesNotMatch(calls[1].url, /authorization/);
+test("saving remote parameters never changes the Manager-owned enabled state", async () => {
+  for (const enabled of [true, false]) {
+    const { state, calls } = harness([access(), json({ code: 0, result: { saved: true } })], { enabled });
+    await state.save();
+    const body = JSON.parse(String(calls[1].init?.body));
+    assert.equal(body.enabled, true);
+    assert.equal(body.workspace, "fixture-workspace");
+    assert.equal(state.authorized.value, enabled);
+    assert.doesNotMatch(calls[1].url, /authorization/);
+  }
 });

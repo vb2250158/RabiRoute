@@ -83,6 +83,7 @@ export type ManagerStorageMutationPoolStatus = Readonly<{
 }>;
 
 export type ManagerStorageMutationOptions = Readonly<{
+  actor?: import("../shared/planHistoryActor.js").PlanHistoryActor;
   idempotencyKey: string;
   expectedRevision: string | null;
   signal?: AbortSignal;
@@ -90,6 +91,7 @@ export type ManagerStorageMutationOptions = Readonly<{
 }>;
 
 type PendingMutation<T = unknown> = {
+  actor?: import("../shared/planHistoryActor.js").PlanHistoryActor;
   roleId: string;
   planId?: string;
   idempotencyKey: string;
@@ -307,6 +309,7 @@ export class ManagerStorageMutationPool {
         idempotencyKey: options.idempotencyKey,
         expectedRevision: options.expectedRevision,
         task: cloneSerializable(task),
+        actor: options.actor ? cloneSerializable(options.actor) : undefined,
         timeoutMs: positiveInteger(options.timeoutMs, this.timeoutMs),
         signal: options.signal,
         resolve,
@@ -595,7 +598,8 @@ export class ManagerStorageMutationPool {
       requestId: pending.idempotencyKey,
       fence,
       expectedRevision: pending.expectedRevision,
-      task: pending.task
+      task: pending.task,
+      actor: pending.actor
     });
     const active: ActiveMutation = {
       slot,

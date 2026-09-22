@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { createManagerClient, isSkillDownloadTarget } from "./manager-client.mjs";
 
 /** Explicit CLI invocation uses the existing host shell, never a second Agent runtime. */
-export async function runManagerCommand(args, configPath, { fetchImpl = fetch, readInput = async () => "" } = {}) {
+export async function runManagerCommand(args, configPath, { fetchImpl = fetch, discover, readInput = async () => "" } = {}) {
   const commandIndex = args.indexOf("--api");
   const uploading = args.includes("--upload");
   if (uploading && commandIndex >= 0) throw new Error("--upload and --api are mutually exclusive.");
@@ -29,7 +29,8 @@ export async function runManagerCommand(args, configPath, { fetchImpl = fetch, r
   const agent = config.agents?.find(item => item.agentId === agentId);
   if (!agentId || !agent) throw new Error("Select a registered Agent with --agent; identities are never guessed.");
   if (agent.enabled === false) throw new Error("The selected Agent is disabled.");
-  const client = createManagerClient({ managerUrl: config.managerUrl, credential: config.nodeCredential, agentId, fetchImpl });
+  // Manager authenticates the exact registered ID and owns its current enabled state.
+  const client = createManagerClient({ config, configPath, agentId, fetchImpl, discover });
   if (downloading) {
     const controller = new AbortController();
     const cancel = () => controller.abort();

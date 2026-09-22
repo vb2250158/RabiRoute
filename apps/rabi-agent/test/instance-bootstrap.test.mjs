@@ -6,7 +6,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { __test } from "../rabi-agent.mjs";
 
-const identity = nodeId => ({ code: 0, data: { nodeId, applicationGenerationId: "generation-fixture", managerInstanceId: "manager-fixture", health: { state: "healthy", requiredReady: true } } });
+const identity = nodeId => ({ code: 0, data: { nodeId, applicationGenerationId: "generation-fixture", managerInstanceId: "manager-fixture", guid: "guid-fixture", rabiGuid: "guid-fixture", health: { live: true, state: "healthy", requiredReady: true } } });
 async function fixture(run) {
   const directory = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "rabi-instance-bootstrap-")));
   const configPath = path.join(directory, "config.json");
@@ -27,6 +27,10 @@ function server(requests, nodeId = "fixture-node") {
       assert.deepEqual(JSON.parse(init.body), { ticket: "fixture-ticket", nodeId });
       assert.equal(init.headers.authorization, undefined);
       return Response.json({ code: 0, data: { nodeId, token: "fixture-node-credential" } });
+    }
+    if (String(url).endsWith("/.well-known/rabiroute-manager")) {
+      assert.equal(init.headers.authorization, undefined);
+      return Response.json({ code: 0, data: { ...identity(nodeId).data, protocolVersion: "1" } });
     }
     assert.equal(init.headers.authorization, "Bearer fixture-node-credential");
     return Response.json(identity(nodeId));
@@ -124,6 +128,8 @@ test("queued task revoked before execution never enters the host", async () => f
   globalThis.fetch = async (_url, init) => { requests++; assert.equal(init.headers["x-rabiroute-agent-id"], "default"); return Response.json({ code: 403 }, { status: 403 }); };
   const runtime = new __test.RabiAgentRuntime({ managerUrl: "http://manager.test:54321", nodeId: "fixture-node", nodeCredential: "fixture-node", defaultWorkspace: directory, allowedWorkspaces: [directory], codexDesktop: { threadId: "fixture-session" } }, configPath);
   runtime.desktop.startTurn = async () => { turns++; };
+  // Exercise authority revocation, not the earlier disconnected-transport guard.
+  runtime.connected = true;
   runtime.taskQueue = new Promise(resolve => { releaseQueue = resolve; });
   try {
     runtime.enqueueTask({ taskId: "fixture-task", targetAgent: "codex-desktop", message: "fixture", cwd: directory });
@@ -141,7 +147,14 @@ test("WebSocket authenticates only with node credential after self verification"
   const savedSocket = globalThis.WebSocket;
   const sent = [];
   let socket;
-  globalThis.fetch = async (_url, init) => { assert.equal(init.headers.authorization, "Bearer fixture-node"); return Response.json(identity("fixture-node")); };
+  globalThis.fetch = async (url, init) => {
+    if (String(url).endsWith("/.well-known/rabiroute-manager")) {
+      assert.equal(init.headers.authorization, undefined);
+      return Response.json({ code: 0, data: { ...identity("fixture-node").data, protocolVersion: "1" } });
+    }
+    assert.equal(init.headers.authorization, "Bearer fixture-node");
+    return Response.json(identity("fixture-node"));
+  };
   globalThis.WebSocket = class {
     static OPEN = 1;
     static CONNECTING = 0;

@@ -6,6 +6,19 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.13 - 2026-09-22
+
+### Merge upstream updates while preserving public plan and Agent improvements
+
+- Unpublished candidate: integrate local work on the 0.3.12 baseline, retaining 8 initial plans, at most 50 per manual load and bounded event refresh. Remove duplicate full-catalog refresh introduced during conflict recovery; the focused page regressions pass 21/21.
+- Fix repeated workspace normalization losing Windows drive-root identities. Plan advancement restores the previous receipt and run count by reservation identity when failure occurs before invoking delivery; attempted deliveries with unknown outcomes retain replay protection.
+- Enrolled nodes may verify connection identity through exact `GET /meta` without gaining management business access. Automatic enablement does not override an explicit local connector stop. Complete the real connector handshake fixture and retain exact-session and disablement regressions.
+- Plans gain embedded views, workspace queries, categorized step resources and history with verified source identities. Automatic advancement uses a dedicated endpoint, releases unsent reservations and retains replay protection for unknown delivery outcomes.
+- Fix shared identity verification incorrectly rejecting concurrent diagnostics. Downloads verify the dynamic endpoint first, pin preflight, transfer and postflight to that origin, and reject instance changes after discovery.
+- Message history deduplicates before filtering and sorts only surviving records, preserving the earliest-record winner for conflicting copies. Time-range query guidance requires explicit Unix-second boundaries rather than treating invented keywords or limits as complete coverage.
+- Plan attachment limits apply to newly added content per batch; retained attachments do not consume that batch again. Step resource records remain immutable. Remote JSON bodies retain the 1 MiB ceiling; automatic enablement does not relax it.
+- The exact staged code was exported for isolated verification: complete build and TypeScript checks pass, together with 84/84 connector tests, 368/368 page tests and 26/26 skill/storage-audit checks. Instance end-to-end testing passes after building the management runtime. The working-tree script suite has 176 passes, 36 TODOs and zero failures; dependency audits report zero vulnerabilities. The isolated complete backend regression reports 2502 tests: 2495 passed, 7 skipped and zero failures; the upload fixture now supplies the live signal required by strict readiness validation. Nothing has been installed or deployed; cross-machine and 100000-record end-to-end performance acceptance are not claimed.
+
 ## 0.3.12 - 2026-09-21
 
 ### Complete-folder downloads for an explicitly selected persona Skill

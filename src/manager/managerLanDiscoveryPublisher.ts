@@ -46,6 +46,7 @@ export async function startManagerDiscoveryPublisher(
     port: number;
     applicationGenerationId: string;
     managerInstanceId: string;
+    guid?: string;
     onStatus?: (status: ManagerDiscoveryStatus) => void;
   }>,
   factory?: BonjourFactory
@@ -82,7 +83,8 @@ export async function startManagerDiscoveryPublisher(
         protocol: String(MANAGER_DISCOVERY_PROTOCOL_VERSION),
         path: MANAGER_DISCOVERY_PATH,
         applicationGenerationId: options.applicationGenerationId,
-        managerInstanceId: options.managerInstanceId
+        managerInstanceId: options.managerInstanceId,
+        ...(options.guid ? { guid: options.guid } : {})
       }
     });
   } catch (error) {

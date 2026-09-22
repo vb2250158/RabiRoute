@@ -34,7 +34,7 @@ test("real Hook discovery GET guidance reaches authorized API and public Skill c
     if (access.kind !== "agent") { json(response, 403, { code: -1 }); return; }
     const url = new URL(request.url!, "http://fixture.invalid");
     if (request.method === "GET" && url.pathname === "/meta") {
-      json(response, 200, { health: { state: "healthy", requiredReady: true }, applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-manager" }); return;
+      json(response, 200, { health: { state: "healthy", requiredReady: true, live: true }, applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-manager" }); return;
     }
     if (request.method === "POST" && url.pathname === `/api/lan-agent/instances/${nodeId}/agents/${agent.agentId}/context`) {
       let body = "";
@@ -68,6 +68,8 @@ test("real Hook discovery GET guidance reaches authorized API and public Skill c
     assert.ok(targets.includes("/api/lan-agent/resources"));
     const results = new Map<string, Record<string, any>>();
     for (const target of targets) {
+      // This is a documented template, not a discovered resource in this fixture.
+      if (target === "/api/roles/ROLE_ID/skills/SKILL_ID/download") continue;
       const response = await fetch(base + target, { headers });
       assert.equal(response.status, 200, target);
       results.set(target, await response.json());

@@ -709,11 +709,17 @@ function dedupeKey(item: MessageContextRecord): string {
   return item.id || stableRecordId(item);
 }
 
+function addDedupeRecord(byId: Map<string, MessageContextRecord>, record: MessageContextRecord): void {
+  const key = dedupeKey(record);
+  const existing = byId.get(key);
+  // Keep the same earliest compareRecords winner as the previous sort-first
+  // implementation, including records with mixed sequence/time fields.
+  if (!existing || compareRecords(record, existing) < 0) byId.set(key, record);
+}
+
 function dedupeRecords(records: MessageContextRecord[]): MessageContextRecord[] {
   const byId = new Map<string, MessageContextRecord>();
-  for (const record of [...records].sort(compareRecords)) {
-    if (!byId.has(dedupeKey(record))) byId.set(dedupeKey(record), record);
-  }
+  for (const record of records) addDedupeRecord(byId, record);
   return [...byId.values()].sort(compareRecords);
 }
 
@@ -1059,6 +1065,27 @@ function normalizeQuery(limitOrQuery: number | RecentMessageContextQuery, option
   return typeof limitOrQuery === "number" ? { limit: limitOrQuery, ...options } : limitOrQuery;
 }
 
+function queryTerms(query: RecentMessageContextQuery): string[] {
+  return query.query?.split(/[\s,，、]+/).map(term => term.trim().toLocaleLowerCase()).filter(Boolean) ?? [];
+}
+
+function matchesMessageQuery(item: MessageContextRecord, query: RecentMessageContextQuery, terms: readonly string[]): boolean {
+  if (query.adapter && item.adapter !== query.adapter) return false;
+  if (query.channel && item.channel !== query.channel) return false;
+  if (query.kind && item.kind !== query.kind) return false;
+  if (query.sender && item.sender !== query.sender) return false;
+  if (query.target && item.target !== query.target) return false;
+  if (query.conversationKey && item.conversationKey !== query.conversationKey) return false;
+  if (terms.length) {
+    const haystack = [item.text, item.sender, item.target].filter(Boolean).join(" ").toLocaleLowerCase();
+    if (query.queryMatch === "all" ? !terms.every(term => haystack.includes(term)) : !terms.some(term => haystack.includes(term))) return false;
+  }
+  if (Number.isFinite(query.from) && item.time < Number(query.from)) return false;
+  if (Number.isFinite(query.to) && item.time > Number(query.to)) return false;
+  if (query.excludedMessageIds?.length && query.excludedMessageIds.includes(String(item.messageId ?? ""))) return false;
+  return true;
+}
+
 function charCost(item: MessageContextRecord): number {
   return item.text.length + (item.segments?.reduce((total, segment) => total + segment.text.length + 40, 0) ?? 0) + 160;
 }
@@ -1069,29 +1096,24 @@ export function recentMessageContextItems(dataDirs: string[], limitOrQuery: numb
   if (limit === 0) return [];
   const maxChars = Math.max(1, Math.floor(query.maxChars ?? DEFAULT_MESSAGE_CONTEXT_MAX_CHARS));
   const dirs = [...new Set(dataDirs.filter(Boolean).map((item) => path.resolve(item)))];
-  const all = dirs.flatMap((dataDir) => {
+  // Dedupe must happen before query filtering: a conflicting duplicate may be
+  // the earliest compareRecords winner and therefore must not be replaced by
+  // a later matching copy. Keep one map across all files/directories, then
+  // sort only the surviving records once.
+  const byId = new Map<string, MessageContextRecord>();
+  for (const dataDir of dirs) {
     const indexExists = fs.existsSync(messageContextArchiveIndexPath(dataDir));
     const current = recordsFromFile(messageContextCurrentPath(dataDir));
     const compatibleCurrent = indexExists || current.length ? current : legacyItems(dataDir);
-    return query.includeArchives ? [...archiveRecords(dataDir, query), ...compatibleCurrent] : compatibleCurrent;
-  });
-  const filtered = dedupeRecords(all).filter((item) =>
-    (!query.adapter || item.adapter === query.adapter)
-    && (!query.channel || item.channel === query.channel)
-    && (!query.kind || item.kind === query.kind)
-    && (!query.sender || item.sender === query.sender)
-    && (!query.target || item.target === query.target)
-    && (!query.conversationKey || item.conversationKey === query.conversationKey)
-    && (!query.query || (() => {
-      const haystack = [item.text, item.sender, item.target].filter(Boolean).join(" ").toLocaleLowerCase();
-      const terms = query.query!.split(/[\s,，、]+/).map(term => term.trim().toLocaleLowerCase()).filter(Boolean);
-      if (!terms.length) return true;
-      return query.queryMatch === "all" ? terms.every(term => haystack.includes(term)) : terms.some(term => haystack.includes(term));
-    })())
-    && (!Number.isFinite(query.from) || item.time >= Number(query.from))
-    && (!Number.isFinite(query.to) || item.time <= Number(query.to))
-    && (!query.excludedMessageIds?.length || !query.excludedMessageIds.includes(String(item.messageId ?? "")))
-  );
+    const records = query.includeArchives
+      ? [...archiveRecords(dataDir, query), ...compatibleCurrent]
+      : compatibleCurrent;
+    for (const record of records) addDedupeRecord(byId, record);
+  }
+  const terms = queryTerms(query);
+  const filtered = [...byId.values()]
+    .filter(item => matchesMessageQuery(item, query, terms))
+    .sort(compareRecords);
   const selected: MessageContextRecord[] = [];
   let chars = 0;
   for (let index = filtered.length - 1; index >= 0 && selected.length < limit; index -= 1) {

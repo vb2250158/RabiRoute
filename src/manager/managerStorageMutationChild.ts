@@ -277,7 +277,8 @@ async function executeDomainMutation(
   const planId = validated.fence.planId;
   const mutation: StorageMutationStamp = Object.freeze({
     requestId: validated.requestId,
-    revision: storageMutationRevision(validated.requestId)
+    revision: storageMutationRevision(validated.requestId),
+    actor: validated.actor
   });
   switch (validated.task.type) {
     case "plan_status_create":
@@ -368,7 +369,8 @@ async function executeDomainMutation(
         planId: planId!,
         expectedRevision: validated.expectedRevision ?? undefined,
         storageRevision: mutation.revision,
-        storageMutationRequestId: mutation.requestId
+        storageMutationRequestId: mutation.requestId,
+        actor: mutation.actor
       });
     case "plan_feedback_delivery_update":
       return updatePlanFeedbackDelivery(
@@ -557,7 +559,8 @@ async function execute(request: ManagerStorageMutationRequest, identity: Manager
     payload: {
       roleId: validated.fence.roleId,
       planId: validated.fence.planId,
-      task: validated.task
+      task: validated.task,
+      ...(validated.actor ? { actor: validated.actor } : {})
     },
     audit: {
       expectedRevision: validated.expectedRevision

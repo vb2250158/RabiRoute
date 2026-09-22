@@ -31,7 +31,15 @@ export type LanAgentAuthorityOptions = {
   maxBootstrapTickets?: number;
 };
 
-type NodeGrant = { nodeId: string; secretHash: string; enabledAgentIds: string[]; agentBindings?: LanAgentApprovedBinding[] };
+type NodeGrant = { nodeId: string; secretHash: string; enabledAgentIds: string[]; disabledAgentIds?: string[]; agentBindings?: LanAgentApprovedBinding[] };
+
+function setNodeAgentEnabled(node: NodeGrant, agentId: string, enabled: boolean): void {
+  const disabled = node.disabledAgentIds ?? [];
+  if (!enabled && !disabled.includes(agentId) && disabled.length >= MAX_AGENTS_PER_NODE) throw new Error("Agent disable capacity reached.");
+  if (enabled && !node.enabledAgentIds.includes(agentId) && node.enabledAgentIds.length >= MAX_AGENTS_PER_NODE) throw new Error("Agent grant capacity reached.");
+  node.disabledAgentIds = enabled ? disabled.filter(id => id !== agentId) : [...new Set([...disabled, agentId])];
+  node.enabledAgentIds = enabled ? [...new Set([...node.enabledAgentIds, agentId])] : node.enabledAgentIds.filter(id => id !== agentId);
+}
 export type LanAgentAuthorizationMutation = {
   nodeId: string; agentId: string; enabled: boolean; binding?: LanAgentApprovedBinding;
   expectedRevision: string; idempotencyKey: string;
@@ -104,7 +112,11 @@ function loadState(statePath: string): AuthorityState {
       || typeof node.secretHash !== "string" || !/^[a-f0-9]{64}$/.test(node.secretHash)
       || !Array.isArray(node.enabledAgentIds) || node.enabledAgentIds.length > MAX_AGENTS_PER_NODE
       || !node.enabledAgentIds.every(validId) || new Set(node.enabledAgentIds).size !== node.enabledAgentIds.length
-      || Object.keys(node).some(key => !["nodeId", "secretHash", "enabledAgentIds", "agentBindings"].includes(key))) {
+      || (node.disabledAgentIds !== undefined && (!Array.isArray(node.disabledAgentIds)
+        || node.disabledAgentIds.length > MAX_AGENTS_PER_NODE || !node.disabledAgentIds.every(validId)
+        || new Set(node.disabledAgentIds).size !== node.disabledAgentIds.length
+        || node.disabledAgentIds.some(id => (node.enabledAgentIds as string[]).includes(id))))
+      || Object.keys(node).some(key => !["nodeId", "secretHash", "enabledAgentIds", "disabledAgentIds", "agentBindings"].includes(key))) {
       throw new Error("Invalid LAN agent authority node.");
     }
     seen.add(node.nodeId);
@@ -118,7 +130,13 @@ function loadState(statePath: string): AuthorityState {
         throw new Error("Invalid LAN agent authority duplicate binding.");
       }
     }
+    // Legacy files cannot distinguish a reviewed-but-never-enabled binding from a
+    // deliberately disabled one. Preserve both as disabled; an admin can enable it.
+    // Unbound legacy IDs are not registered implicitly by this migration.
+    const disabledAgentIds = node.disabledAgentIds as string[] | undefined
+      ?? (agentBindings ?? []).filter(binding => !(node.enabledAgentIds as string[]).includes(binding.agentId)).map(binding => binding.agentId);
     return { nodeId: node.nodeId, secretHash: node.secretHash, enabledAgentIds: [...node.enabledAgentIds],
+      disabledAgentIds: [...disabledAgentIds],
       ...(agentBindings !== undefined ? { agentBindings } : {}) };
   });
   let mutationReceipts: MutationReceipt[] | undefined;
@@ -203,7 +221,7 @@ export class LanAgentAuthority {
       if (!this.validateBootstrapTicket(ticket)) this.reject("enroll", "Invalid or expired bootstrap ticket.");
       if (state.nodes.some(node => node.nodeId === nodeId)) this.reject("enroll", "Node already enrolled.");
       if (state.nodes.length >= MAX_NODES) this.reject("enroll", "Node capacity reached.");
-      state.nodes.push({ nodeId, secretHash: hashSecret(secret), enabledAgentIds: [] });
+      state.nodes.push({ nodeId, secretHash: hashSecret(secret), enabledAgentIds: [], disabledAgentIds: [] });
       return true;
     });
     this.tickets.delete(hashSecret(ticket));
@@ -216,7 +234,29 @@ export class LanAgentAuthority {
     return node ? { nodeId: node.nodeId } : null;
   }
 
-  /** An authenticated node has no API authority until its exact agent ID is enabled. */
+  /** Register a complete catalog only from its live authenticated node connection.
+   * Re-authenticate under the write lock, replace (never merge) session claims, and
+   * retain Manager-owned explicit disables even across removal and reappearance.
+   */
+  registerAgentCatalog(token: string, agents: readonly LanAgentApprovedBinding[]): void {
+    if (!Array.isArray(agents) || agents.length > MAX_AGENTS_PER_NODE) this.reject("register-agent-catalog", "Invalid Agent catalog.");
+    const bindings = agents.map(agent => copyBinding(agent));
+    if (new Set(bindings.map(binding => binding.agentId)).size !== bindings.length) this.reject("register-agent-catalog", "Duplicate Agent catalog identity.");
+    this.mutate("register-agent-catalog", state => {
+      const identity = this.authenticatedNode(token, state);
+      if (!identity) this.reject("register-agent-catalog", "Invalid node credential.");
+      const node = state.nodes.find(item => item.nodeId === identity.nodeId);
+      if (!node) this.reject("register-agent-catalog", "Node is not enrolled.");
+      const enabledAgentIds = bindings.filter(binding => !node.disabledAgentIds?.includes(binding.agentId)).map(binding => binding.agentId);
+      if (JSON.stringify(node.agentBindings) === JSON.stringify(bindings)
+        && JSON.stringify(node.enabledAgentIds) === JSON.stringify(enabledAgentIds)) return false;
+      node.agentBindings = bindings;
+      node.enabledAgentIds = enabledAgentIds;
+      return true;
+    });
+  }
+
+  /** Only authenticated, registered (or explicitly admin-granted) IDs have authority. */
   authorize(token: string, agentId: string): LanAgentIdentity | null {
     if (!validId(agentId)) return null;
     const node = this.authenticatedNode(token);
@@ -303,13 +343,7 @@ export class LanAgentAuthority {
         if (index < 0 && bindings.length >= MAX_AGENTS_PER_NODE) this.reject(action, "Agent binding capacity reached.");
         node.agentBindings = index < 0 ? [...bindings, binding] : bindings.map((item, i) => i === index ? binding! : item);
       }
-      const enabled = node.enabledAgentIds.includes(input.agentId);
-      if (input.enabled && !enabled) {
-        if (node.enabledAgentIds.length >= MAX_AGENTS_PER_NODE) this.reject(action, "Agent grant capacity reached.");
-        node.enabledAgentIds = [...node.enabledAgentIds, input.agentId];
-      } else if (!input.enabled && enabled) {
-        node.enabledAgentIds = node.enabledAgentIds.filter(id => id !== input.agentId);
-      }
+      setNodeAgentEnabled(node, input.agentId, input.enabled);
       const revision = stateRevision(state);
       state.mutationReceipts = [...receipts, { keyHash, requestHash, revision, enabled: input.enabled,
         committedAt: now, expiresAt: now + LAN_AGENT_MUTATION_RECEIPT_TTL_MS }];
@@ -336,7 +370,7 @@ export class LanAgentAuthority {
       if (!node) this.reject("approve-and-enable-agent", "Node is not enrolled.");
       const bindings = node.agentBindings ?? [];
       const index = bindings.findIndex(item => item.agentId === binding.agentId);
-      const enabled = node.enabledAgentIds.includes(binding.agentId);
+      const enabled = (node.enabledAgentIds as string[]).includes(binding.agentId);
       if (index >= 0 && JSON.stringify(bindings[index]) === JSON.stringify(binding) && enabled) return false;
       if ((index < 0 && bindings.length >= MAX_AGENTS_PER_NODE)
         || (!enabled && node.enabledAgentIds.length >= MAX_AGENTS_PER_NODE)) {
@@ -344,7 +378,7 @@ export class LanAgentAuthority {
       }
       // Replacement, not merge: omitted managed sessions revoke previously approved claims.
       node.agentBindings = index < 0 ? [...bindings, binding] : bindings.map((item, i) => i === index ? binding : item);
-      if (!enabled) node.enabledAgentIds = [...node.enabledAgentIds, binding.agentId];
+      setNodeAgentEnabled(node, binding.agentId, true);
       return true;
     });
   }
@@ -368,13 +402,8 @@ export class LanAgentAuthority {
       }
       const node = state.nodes.find(item => item.nodeId === nodeId);
       if (!node) this.reject("set-agent-enabled", "Node is not enrolled.");
-      if (node.enabledAgentIds.includes(agentId) === enabled) return false;
-      if (enabled && node.enabledAgentIds.length >= MAX_AGENTS_PER_NODE) {
-        this.reject("set-agent-enabled", "Agent grant capacity reached.");
-      }
-      node.enabledAgentIds = enabled
-        ? [...node.enabledAgentIds, agentId]
-        : node.enabledAgentIds.filter(id => id !== agentId);
+      if (enabled ? node.enabledAgentIds.includes(agentId) : node.disabledAgentIds?.includes(agentId)) return false;
+      setNodeAgentEnabled(node, agentId, enabled);
       return true;
     });
   }
@@ -389,11 +418,11 @@ export class LanAgentAuthority {
     });
   }
 
-  private authenticatedNode(token: string): NodeGrant | null {
+  private authenticatedNode(token: string, state?: AuthorityState): NodeGrant | null {
     if (typeof token !== "string" || token.length > 177) return null;
     const [version, nodeId, secret, extra] = token.split(":");
     if (version !== "lan1" || !validId(nodeId) || !secret || !SECRET_PATTERN.test(secret) || extra !== undefined) return null;
-    const node = this.readState().nodes.find(item => item.nodeId === nodeId);
+    const node = (state ?? this.readState()).nodes.find(item => item.nodeId === nodeId);
     if (!node || !timingSafeEqual(Buffer.from(node.secretHash, "hex"), Buffer.from(hashSecret(secret), "hex"))) return null;
     return node;
   }

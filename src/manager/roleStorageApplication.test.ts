@@ -104,7 +104,10 @@ test("plan updates publish one point projection without recapturing the full rol
       storageGenerationLease: "point-storage-generation"
     }),
     stop: async () => undefined,
-    updatePlan: async () => updated
+    updatePlan: async (_roleId: string, _planId: string, _patch: unknown, options: { actor?: unknown }) => {
+      assert.deepEqual(options.actor, { kind: "agent", agentType: "dsh", sessionId: "session-point-owner" });
+      return updated;
+    }
   } as unknown as NonNullable<RoleStorageApplicationOptions["mutationPool"]>;
   const readPool = {
     run: async () => {
@@ -136,6 +139,7 @@ test("plan updates publish one point projection without recapturing the full rol
     title: updated.title
   }, {
     idempotencyKey: "point-projection-update",
+    actor: { kind: "agent", agentType: "dsh", sessionId: "session-point-owner" },
     expectedRevision: storageRevisionToken(original)
   });
 

@@ -8,6 +8,7 @@ import { CodexDesktopIpcClient } from "./lib/codex-desktop-ipc.mjs";
 import { normalizeDshBinding, sendDshTask } from "./lib/dsh.mjs";
 import { runManagerCommand } from "./lib/manager-cli.mjs";
 import { createManagerClient } from "./lib/manager-client.mjs";
+import { createEndpointSession } from "./lib/endpoint-session.mjs";
 import { instanceAgents, agentCatalog, configureInstanceAgent, resolveInstanceAgent, registerManagedSession } from "./lib/instance-agents.mjs";
 import { normalizeAllowedWorkspaces, resolveRealDirectory, resolveTaskWorkspace } from "./lib/cwd-policy.mjs";
 
@@ -131,14 +132,10 @@ function parseWorkspaceList(value, fallback) {
   return value.split(";");
 }
 
-async function verifyNodeIdentity(config, fetcher = fetch) {
-  const response = await authorizedFetch(config, "/api/lan-agent/self", fetcher);
-  const body = await response.json();
-  const identity = body?.data;
-  if (body?.code !== 0 || identity?.nodeId !== config.nodeId || !identity.applicationGenerationId || !identity.managerInstanceId || identity.health?.state !== "healthy" || identity.health?.requiredReady !== true) {
-    throw new Error("Manager node identity or readiness verification failed; reconnect using the current Manager address.");
-  }
-  return identity;
+async function verifyNodeIdentity(config, fetcher = fetch, configPath) {
+  const endpoint = await createEndpointSession({ config, configPath, fetchImpl: fetcher }).ensure();
+  Object.assign(config, endpoint.config);
+  return { guid: endpoint.guid, applicationGenerationId: endpoint.generation, managerInstanceId: endpoint.instance };
 }
 
 async function bootstrapConfig(configPath, fetcher = fetch) {
@@ -152,9 +149,10 @@ async function bootstrapConfig(configPath, fetcher = fetch) {
     const config = { ...previous, managerUrl };
     delete config.lanLinkToken;
     delete config.bootstrapTicket;
-    await verifyNodeIdentity(config, fetcher);
-    writePrivateJson(configPath, config);
-    return config;
+    const identity = await verifyNodeIdentity(config, fetcher);
+    const nextConfig = { ...config, managerGuid: identity.guid, applicationGenerationId: identity.applicationGenerationId, managerInstanceId: identity.managerInstanceId };
+    writePrivateJson(configPath, nextConfig);
+    return nextConfig;
   }
   if (!ticket) throw new Error(previous?.lanLinkToken ? "Legacy lanLinkToken is not accepted; re-enroll using a fresh RABI_AGENT_BOOTSTRAP_TICKET. Existing identities are preserved." : "RABI_AGENT_BOOTSTRAP_TICKET is required for bootstrap.");
   const defaultWorkspace = resolveRealDirectory(process.env.RABI_AGENT_DEFAULT_CWD || process.cwd(), "RABI_AGENT_DEFAULT_CWD");
@@ -173,6 +171,9 @@ async function bootstrapConfig(configPath, fetcher = fetch) {
     managerUrl,
     nodeId: previous?.nodeId || String(process.env.RABI_NODE_ID || "").trim() || randomNodeId(),
     releasePublicKeySha256,
+    managerGuid: String(previous?.managerGuid || "").trim() || undefined,
+    applicationGenerationId: String(previous?.applicationGenerationId || "").trim() || undefined,
+    managerInstanceId: String(previous?.managerInstanceId || "").trim() || undefined,
     defaultWorkspace,
     allowedWorkspaces,
     codexDesktop: {
@@ -276,6 +277,9 @@ function readConfig(configPath) {
     nodeCredential,
     nodeId,
     releasePublicKeySha256,
+    managerGuid: String(config.managerGuid || "").trim() || undefined,
+    applicationGenerationId: String(config.applicationGenerationId || "").trim() || undefined,
+    managerInstanceId: String(config.managerInstanceId || "").trim() || undefined,
     defaultWorkspace,
     allowedWorkspaces,
     codexDesktop: {
@@ -306,7 +310,9 @@ function releaseDirectory(configPath, version) {
 }
 
 async function authorizedFetch(config, pathname, fetcher = fetch) {
-  const origin = normalizeManagerUrl(config.managerUrl);
+  const session = config.managerGuid ? createEndpointSession({ config, fetchImpl: fetcher }) : null;
+  let origin = normalizeManagerUrl(config.managerUrl);
+  try { const endpoint = await session.ensure({ diagnostic: true }); origin = endpoint.managerUrl; Object.assign(config, endpoint.config); } catch (error) { if (config.managerGuid) throw error; }
   const target = new URL(pathname, `${origin}/`);
   if (!pathname.startsWith("/") || pathname.startsWith("//") || /[\\\r\n#]/.test(pathname) || target.origin !== origin || target.username || target.password) throw new Error("Cross-origin Manager request rejected.");
   if (!config.nodeCredential) throw new Error("An independent nodeCredential is required; re-enroll this connector.");
@@ -370,6 +376,7 @@ async function installRelease(config, release, configPath = CONFIG_PATH) {
 class RabiAgentRuntime {
   constructor(config, configPath) {
     this.config = config;
+    this.endpointSession = createEndpointSession({ config, configPath });
     this.configPath = configPath;
     this.stateStore = createAgentState(configPath);
     this.socket = null;
@@ -400,10 +407,12 @@ class RabiAgentRuntime {
     this.connecting = true;
     let socket;
     try {
-      await verifyNodeIdentity(this.config);
+      await verifyNodeIdentity(this.config, fetch, fs.existsSync(this.configPath) ? this.configPath : undefined);
       if (this.stopped) return;
       socket = new WebSocket(managerWebSocketUrl(this.config.managerUrl));
     } catch (error) {
+      // EndpointSession already performs bounded stable-GUID rediscovery and
+      // persists only verified identities. Never resurrect the old preverify write.
       this.scheduleReconnect(error);
       return;
     } finally { this.connecting = false; }
@@ -486,7 +495,12 @@ class RabiAgentRuntime {
             const { manageInstanceAgent } = await import("./runtime/management.mjs");
             const agent = instanceAgents(this.config).find(agent => agent.agentId === message.params?.agentId);
             const initializeNew = !agent && message.params?.agentId === "new-agent" && ["resolve", "create"].includes(message.params?.action) && !message.params?.prompt;
-            if (message.operation === "threads" && !agent?.enabled && !initializeNew) throw new Error("The instance Agent is missing or disabled.");
+            if (message.operation === "threads" && (!agent || agent.enabled === false) && !initializeNew) throw new Error("The instance Agent is missing or disabled.");
+            if (message.operation === "threads" && agent && this.config.nodeCredential) {
+              if (!this.connected) throw new Error("Manager connection is unavailable; queued operation was refused.");
+              const authority = await createManagerClient({ config: this.config, configPath: this.configPath, agentId: agent.agentId }).invoke("GET", "/meta");
+              if (!authority.ok || authority.uncertain || authority.identityChanged) throw new Error("Manager no longer authorizes this Agent operation.");
+            }
             const provider = agent?.provider === "codex-desktop" ? "codex" : agent?.provider;
             if (provider && message.params?.agentAdapter && message.params.agentAdapter !== provider) throw new Error("The operation provider does not match the instance Agent.");
             const dsh = (message.operation === "scan" || initializeNew) && message.params?.dshBaseUrl ? normalizeDshBinding({ baseUrl: message.params.dshBaseUrl, sessionId: "scan" }) : agent?.dsh || this.config.dsh;
@@ -533,13 +547,14 @@ class RabiAgentRuntime {
     this.send({ type: "ackTask", taskId });
     rememberTask(this.stateStore, taskId, { status: "acknowledged" });
     try {
+      if (!this.connected) throw new Error("Manager connection is unavailable; queued task execution was refused.");
       const agent = resolveInstanceAgent(this.config, task);
       const cwd = resolveTaskWorkspace(task.cwd || agent.workspace, { defaultWorkspace: this.config.defaultWorkspace, allowedWorkspaces: this.config.allowedWorkspaces });
       const prompt = String(task.message || "").trim();
       if (!prompt) throw new Error("Rabi Agent task message is empty.");
       // Queued work may outlive a grant revocation. Re-check Manager authority at
       // execution time; connection identity alone does not authorize a host turn.
-      const authority = await createManagerClient({ managerUrl: this.config.managerUrl, credential: this.config.nodeCredential, agentId: agent.agentId }).invoke("GET", "/meta");
+      const authority = await createManagerClient({ config: this.config, configPath: this.configPath, agentId: agent.agentId }).invoke("GET", "/meta");
       if (!authority.ok || authority.uncertain || authority.identityChanged) throw new Error("Manager no longer authorizes this Agent task; host execution was refused.");
       if (agent.provider === "dsh") {
         await sendDshTask(agent.dsh, prompt);

@@ -34,6 +34,30 @@ function mock(response = () => new Response(bytes, { headers }), after = meta) {
 }
 async function noPartial(f, expected = ["config.json"]) { assert.deepEqual((await fs.readdir(f.directory)).sort(), expected.sort()); }
 
+test("download pins the verified endpoint before credentialed transport", async t => {
+  const f = await fixture(t);
+  let verified = false;
+  const transport = mock();
+  const client = createManagerClient({ ...settings, endpointSession: { ensure: async () => { verified = true; return { managerUrl: "http://verified.invalid", meta }; } }, fetchImpl: async (url, options) => {
+    assert.equal(verified, true);
+    assert.equal(new URL(url).origin, "http://verified.invalid");
+    return transport.fetchImpl(url, options);
+  } });
+  assert.equal((await client.download(target, f.output)).ok, true);
+  assert.equal(transport.calls.length, 3);
+});
+
+test("download rejects identity changes between discovery and preflight", async t => {
+  const f = await fixture(t);
+  let calls = 0;
+  const client = createManagerClient({ ...settings, endpointSession: { ensure: async () => ({ managerUrl: "http://verified.invalid", meta }) }, fetchImpl: async () => {
+    calls++; return Response.json({ ...meta, managerInstanceId: "changed" });
+  } });
+  await assert.rejects(client.download(target, f.output), error => error.code === "IDENTITY_CHANGED");
+  assert.equal(calls, 1);
+  await noPartial(f);
+});
+
 test("download HTTP errors expose only fixed code, status and commitment diagnostics", async t => {
   const f = await fixture(t);
   for (const status of [401, 403, 404, 409, 413, 503]) {

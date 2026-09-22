@@ -289,7 +289,7 @@ export function commitPlanFeedbackUnderLease(
   lease: PlanStorageLease,
   inputRecord: PlanFeedbackRecord,
   attachmentUploads?: unknown,
-  options: PlanFeedbackCommitOptions = {}
+  options: PlanFeedbackCommitOptions & { actor?: import("./shared/planHistoryActor.js").PlanHistoryActor } = {}
 ): PlanFeedbackCommitResult {
   if (inputRecord.planId !== lease.planId) {
     throw new Error(`Plan feedback lease does not own plan ${inputRecord.planId}.`);
@@ -348,7 +348,7 @@ export function commitPlanFeedbackUnderLease(
     throw new Error(`New feedback attachments require upload bytes: ${record.id}`);
   }
 
-  const transition = feedbackPlanTransition(lease, record, "saved");
+  const transition = feedbackPlanTransition(lease, record, "saved", options.actor);
   record = transition.record;
   const operations: PlanStorageTransactionOperation[] = [...transition.operations];
   if (prepared.length > 0) {
@@ -391,7 +391,7 @@ export function commitPlanFeedback(
   roleDir: string,
   inputRecord: PlanFeedbackRecord,
   attachmentUploads?: unknown,
-  options: PlanFeedbackCommitOptions = {}
+  options: PlanFeedbackCommitOptions & { actor?: import("./shared/planHistoryActor.js").PlanHistoryActor } = {}
 ): PlanFeedbackCommitResult {
   return withPlanStorageLease(roleDir, inputRecord.planId, (lease) =>
     commitPlanFeedbackUnderLease(lease, inputRecord, attachmentUploads, options)

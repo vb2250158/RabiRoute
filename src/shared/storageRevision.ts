@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 export type StorageMutationStamp = Readonly<{
   requestId: string;
   revision: string;
+  actor?: import("./planHistoryActor.js").PlanHistoryActor;
 }>;
 
 function stableJson(value: unknown): string {

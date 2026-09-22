@@ -973,7 +973,7 @@ Ongoing analysis, completed analysis that still cannot form a concrete approvabl
 
 Only plans that change project content, such as code, prefabs, assets, or configuration, should follow `implementation/development validation/applicable sync and commit → Awaiting package → Awaiting QA acceptance → complete on QA pass; return to implementation on failure`. QA sending and its `sentMessageId` are actions and evidence inside the purple QA stage: missing receipt means `send_qa_request`, while a receipt with only the verdict outstanding means `wait_for_qa_result`. Investigation, design review, operations, information gathering, external dependencies, and control-plane maintenance follow their real steps. Agents and batch jobs must not manufacture package or QA steps for those plans, and Manager does not infer the lifecycle from a title, description, or `kind`.
 
-`attachments` is optional. A new item may provide a Manager-readable local `path`, or `name`, optional `mimeType`, and `contentBase64`. A plan may contain up to 8 attachments, limited to 10 MiB each and 25 MiB in total. Manager copies content into the persona-private `plans/attachments/<planId>/` directory; the plan file retains safe metadata only and never Base64. Omitting `attachments` from PATCH preserves the list, while an empty array clears it. To keep selected existing items in a PATCH, send back the corresponding attachment objects returned by GET. The public plan DTO does not expose the local `path`.
+`attachments` is optional. A new item may provide a Manager-readable local `path`, or `name`, optional `mimeType`, and `contentBase64`. Each request may add up to 8 new attachments, limited to 10 MiB each and 25 MiB of new content. Retained attachments do not consume this batch budget. Manager copies content into the persona-private `plans/attachments/<planId>/` directory; the plan file retains safe metadata only and never Base64. Omitting `attachments` from PATCH preserves the list, while an empty array clears it. To keep selected existing items in a PATCH, send back the corresponding attachment objects returned by GET. The public plan DTO does not expose the local `path`.
 
 Read one attachment through:
 
@@ -1221,3 +1221,5 @@ See [knowledge search](knowledge-search_en.md) for summary search and automatic 
 Manager failure responses include `errorMessages` in zh-CN and `en` while preserving the original message, machine code, commit state, and request ID. WebGUI displays the current language. Registered parameter, attachment, revision, and storage errors have localized causes; unregistered third-party failures retain their diagnostic text without inventing a cause.
 
 Formal replies may omit prompt when inReplyToRequestId identifies a managed request; result and nextAction remain required. Ordinary sends still require prompt. New replies omit the historical end delimiter.
+
+For step resource records and batched archiving, see [plan resources](plan-resources_en.md).

@@ -1,3 +1,5 @@
+import { planWorkspaceIdentity, type PlanBindingScope } from "./planWorkspaceQuery.js";
+
 export type RolePlanPageCounts = {
   total: number;
   current: number;
@@ -60,6 +62,8 @@ export type RolePlanSummary = ReturnType<typeof summarizeRolePlan>;
 export type RolePlanPreview = ReturnType<typeof previewRolePlan>;
 
 type PresentedPlanLike = {
+  taskBinding?: { agentType?: string; sessionId?: string; workspace?: string };
+  secretaryBinding?: { agentType?: string; sessionId?: string; workspace?: string };
   status: string;
   updatedAt: string;
   dueAt?: string;
@@ -95,6 +99,7 @@ type PresentedPlanLike = {
 };
 
 export type RolePlanPageFilter = {
+  bindingScope?: PlanBindingScope;
   view?: string;
   query?: string;
   sort?: "status" | "updated" | "importance" | "urgency";
@@ -158,6 +163,14 @@ export function paginateRolePlans<T extends PresentedPlanLike>(
   limit: number,
   filter: RolePlanPageFilter = {}
 ): RolePlanPage<T> {
+  if (filter.bindingScope) {
+    const scope = filter.bindingScope;
+    const ids = new Set(scope.sessionIds);
+    const workspace = planWorkspaceIdentity(scope.workspace);
+    plans = plans.filter(plan => [plan.taskBinding, plan.secretaryBinding].some(binding =>
+      binding?.agentType === scope.agentType && !!binding.sessionId && ids.has(binding.sessionId)
+      && !!binding.workspace && !!workspace && planWorkspaceIdentity(binding.workspace) === workspace));
+  }
   const offset = cursorOffset(cursor);
   const normalizedQuery = String(filter.query || "").trim().toLowerCase();
   const viewAndQueryPlans = plans.filter((plan) => {

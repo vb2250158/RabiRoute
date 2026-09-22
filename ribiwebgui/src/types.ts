@@ -256,6 +256,7 @@ export type MetaPayload = {
 };
 
 export type RolePlanStep = {
+  resourceRecords?: import("@shared/planStepResources").PlanStepResourceRecord[];
   questions?: import("@shared/planQuestions").PlanQuestion[];
   id: string;
   title: string;
@@ -409,6 +410,7 @@ export type RolePlan = {
 export type RolePlanHistorySnapshot = Omit<RolePlan, "presentation" | "approval">;
 
 export type RolePlanHistoryRecord = {
+  actor?: import("@shared/planHistoryActor").PlanHistoryActor;
   id: string;
   planId: string;
   kind: "created" | "updated" | "archived";

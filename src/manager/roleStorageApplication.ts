@@ -50,6 +50,7 @@ export type RoleStorageGenerationIdentity = Readonly<{
 }>;
 
 export type RoleStorageCommandContext = Readonly<{
+  actor?: import("../shared/planHistoryActor.js").PlanHistoryActor;
   idempotencyKey?: string;
   expectedRevision?: string | null;
   signal?: AbortSignal;
@@ -479,7 +480,7 @@ export class RoleStorageCommands {
     allowResourceDerivedKey?: boolean;
     context: RoleStorageCommandContext;
     expectedRevision: () => Promise<string | null>;
-    mutate(options: { idempotencyKey: string; expectedRevision: string | null; signal?: AbortSignal; timeoutMs?: number }): Promise<TCommit>;
+    mutate(options: { idempotencyKey: string; expectedRevision: string | null; actor?: import("../shared/planHistoryActor.js").PlanHistoryActor; signal?: AbortSignal; timeoutMs?: number }): Promise<TCommit>;
     project(catalog: RoleKnowledgeCatalogSnapshot): Promise<TProjection>;
   }): Promise<RoleStorageCommit<TCommit, TProjection>> {
     const roleId = canonicalStorageMutationRoleId(input.roleId);
@@ -509,6 +510,7 @@ export class RoleStorageCommands {
       commit = await input.mutate({
         idempotencyKey: operationId,
         expectedRevision,
+        actor: input.context.actor,
         signal: input.context.signal,
         timeoutMs: input.context.timeoutMs
       });
@@ -566,7 +568,7 @@ export class RoleStorageCommands {
     allowResourceDerivedKey?: boolean;
     context: RoleStorageCommandContext;
     expectedRevision: () => Promise<string | null>;
-    mutate(options: { idempotencyKey: string; expectedRevision: string | null; signal?: AbortSignal; timeoutMs?: number }): Promise<TCommit>;
+    mutate(options: { idempotencyKey: string; expectedRevision: string | null; actor?: import("../shared/planHistoryActor.js").PlanHistoryActor; signal?: AbortSignal; timeoutMs?: number }): Promise<TCommit>;
     project(commit: TCommit): Promise<TProjection>;
   }): Promise<RoleStorageProjectedCommit<TCommit, TProjection>> {
     const roleId = canonicalStorageMutationRoleId(input.roleId);
@@ -596,6 +598,7 @@ export class RoleStorageCommands {
       commit = await input.mutate({
         idempotencyKey: operationId,
         expectedRevision,
+        actor: input.context.actor,
         signal: input.context.signal,
         timeoutMs: input.context.timeoutMs
       });

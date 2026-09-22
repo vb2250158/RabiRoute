@@ -79,7 +79,7 @@ async function fixture(t: test.TestContext, captionFails = false, hashSink = fal
     setTrustedLanAgentSource(request, { ...access, provider: binding.provider, sessionId: binding.sessionId, sessionName: "Fixture" });
     sources.set(access.agentId, getTrustedLanAgentSource(request)!);
     if (request.url === "/meta") {
-      json(response, 200, { health: { state: "healthy", requiredReady: true }, applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-manager" });
+      json(response, 200, { health: { state: "healthy", requiredReady: true, live: true }, applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-manager" });
       return;
     }
     uploadRequests.push(`${request.method} ${request.url}`);

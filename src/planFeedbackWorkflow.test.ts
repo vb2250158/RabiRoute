@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createPlan, getPlan, updatePlan, type PlanApprovalRequest } from "./roleKnowledge.js";
+import { createPlan, getPlan, listPlanHistory, updatePlan, type PlanApprovalRequest } from "./roleKnowledge.js";
 import { submitPlanFeedback } from "./planFeedbackSubmission.js";
 import { commitPlanFeedback, createPlanFeedbackRecord, listPlanFeedback, recoverPlanFeedbackStoreTransactions, updatePlanFeedbackDelivery } from "./planFeedback.js";
 import { planPresentation } from "./roleKnowledgePresentation.js";
@@ -23,7 +23,8 @@ function fixture(t: test.TestContext) {
 }
 test("saved approval persists approved; failures wait; confirmed delivery returns analysis after secretary assignment", t => {
   const { roleDir, submit, read, plan } = fixture(t);
-  const saved = submit("first", { notifyAgent: false });
+  const saved = submit("first", { notifyAgent: false, actor: { kind: "user", displayName: "用户", channel: "webgui" } });
+  assert.deepEqual(listPlanHistory(roleDir, plan.id).at(-1)?.actor, { kind: "user", displayName: "用户", channel: "webgui" });
   assert.equal(saved.plan.markerStatus, "已审批");
   assert.equal(read().markerStatus, "已审批");
   assert.equal(planPresentation(read(), ensurePersonaPlanWorkflow(roleDir).workflow).approval.state, "approved");
@@ -34,6 +35,7 @@ test("saved approval persists approved; failures wait; confirmed delivery return
   updatePlan(roleDir, plan.id, { secretaryBinding: { agentType: "dsh", sessionId: "secretary", workspace: os.tmpdir() } });
   updatePlanFeedbackDelivery(roleDir, saved.record, "delivered");
   assert.equal(read().markerStatus, "分析中");
+  assert.deepEqual(listPlanHistory(roleDir, plan.id).at(-1)?.actor, { kind: "system", displayName: "计划反馈投递", channel: "manager" });
   updatePlanFeedbackDelivery(roleDir, saved.record, "failed");
   assert.equal(listPlanFeedback(roleDir, plan.id)[0]!.deliveryStatus, "delivered");
   updatePlan(roleDir, plan.id, { nextAction: "Review the recorded decision" });

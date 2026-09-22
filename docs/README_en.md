@@ -10,6 +10,8 @@ This directory contains current guides, experimental integrations, designs, rese
 
 ## Start here
 
+- [Workspace plan query](workspace-plan-query_en.md) — Paginated search scoped to host sessions and workspace.
+
 - [Persona all-day recording](persona-all-day-recording_en.md) — **New implementation**. Review computer and selected phone events by date, with explicit capture sources, pause state and coverage gaps.
 
 - [RibiWebGUI User Guide](user-guide/README_en.md) — **Current guide**. Start here on your first use to complete a real delivery, read status, change rules, and recover from common failures.

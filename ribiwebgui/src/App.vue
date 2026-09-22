@@ -39,6 +39,7 @@ import {
 const store = useGatewayStore();
 const route = useRoute();
 const router = useRouter();
+const embeddedPlanView = computed(() => Boolean(route.params.planId) && window.self !== window.top);
 const { t } = useI18n();
 const vuetifyTheme = useTheme();
 const interfaceThemePreference = ref<WebThemeId>("system");
@@ -284,7 +285,7 @@ function selectGateway(id: string): void {
 
 <template>
   <v-app>
-    <v-navigation-drawer v-model="drawer" width="276" class="left-sidebar">
+    <v-navigation-drawer v-if="!embeddedPlanView" v-model="drawer" width="276" class="left-sidebar">
       <div class="sidebar-brand">
         <v-avatar rounded="lg" size="46">
           <v-img src="/assets/rabiroute-icon.png" alt="RabiRoute" />
@@ -368,7 +369,7 @@ function selectGateway(id: string): void {
       </template>
     </v-navigation-drawer>
 
-    <v-app-bar flat class="top-app-bar px-2">
+    <v-app-bar v-if="!embeddedPlanView" flat class="top-app-bar px-2">
       <v-app-bar-nav-icon @click="drawer = !drawer" />
       <div class="topbar-context" :class="{ 'has-route-switcher': showRouteSwitcher }">
         <v-toolbar-title class="topbar-title">
