@@ -45,6 +45,37 @@ function listen(server: http.Server): Promise<number> {
   });
 }
 
+test("a focused plan responds 304 for its current view revision and 200 after a plan change", async (t) => {
+  const { application, roleDir, roleStorageApplication } = createTestRoleStorage(t, "rabi-focused-plan-cache-");
+  createPlan(roleDir, { id: "focused-plan", title: "Focused plan", focus: "Check caching", status: "分析中", keywords: ["cache"], currentStepId: "check", steps: [{ id: "check", title: "Check plan view" }] });
+  const server = http.createServer((request, response) => {
+    const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
+    if (handlePersonaPluginApi(request, requestUrl, response, { roleDir: () => roleDir, roleStorageApplication })) return;
+    response.writeHead(404).end();
+  });
+  const port = await listen(server);
+  t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
+  const endpoint = `http://127.0.0.1:${port}/api/roles/Rabi/plans/focused-plan`;
+  const first = await fetch(endpoint);
+  assert.equal(first.status, 200);
+  const revision = first.headers.get("x-plan-view-revision");
+  assert.ok(revision);
+  assert.ok(first.headers.get("etag"));
+  assert.equal((await first.json()).data.title, "Focused plan");
+  const same = await fetch(endpoint, { headers: { "if-plan-view-revision": revision } });
+  assert.equal(same.status, 304);
+  assert.equal(await same.text(), "");
+  const before = await application.queries.plan("Rabi", "focused-plan");
+  assert.ok(before);
+  await application.commands.updatePlan("Rabi", "focused-plan", { title: "Updated plan" }, {
+    expectedRevision: before.revision, idempotencyKey: "focused-plan-update"
+  });
+  const changed = await fetch(endpoint, { headers: { "if-plan-view-revision": revision } });
+  assert.equal(changed.status, 200);
+  assert.notEqual(changed.headers.get("x-plan-view-revision"), revision);
+  assert.equal((await changed.json()).data.title, "Updated plan");
+});
+
 async function waitUntil(check: () => boolean | Promise<boolean>, timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (true) {

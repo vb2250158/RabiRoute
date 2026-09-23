@@ -472,6 +472,69 @@ export async function loadRolePlan(roleId: string, planId: string, signal?: Abor
   };
 }
 
+type FocusedPlanSnapshot = { roleId: string; planId: string; revision: string; plan: RolePlan };
+const FOCUSED_PLAN_CACHE_KEY = "rabi:focused-plans:v1";
+const FOCUSED_PLAN_CACHE_LIMIT = 8;
+
+function focusedPlanSnapshots(): FocusedPlanSnapshot[] {
+  try {
+    const records = JSON.parse(sessionStorage.getItem(FOCUSED_PLAN_CACHE_KEY) || "[]") as unknown;
+    return Array.isArray(records) ? records.filter((record): record is FocusedPlanSnapshot => {
+      if (!record || typeof record !== "object") return false;
+      const item = record as Partial<FocusedPlanSnapshot>;
+      return typeof item.roleId === "string" && typeof item.planId === "string" && typeof item.revision === "string"
+        && item.plan?.id === item.planId && Array.isArray(item.plan.attachments) && Array.isArray(item.plan.steps);
+    }) : [];
+  } catch { return []; } // Storage may be disabled or contain an older schema.
+}
+
+/** The last full snapshot is displayed immediately while Manager checks its view revision. */
+export function cachedFocusedRolePlan(roleId: string, planId: string): FocusedPlanSnapshot | undefined {
+  return focusedPlanSnapshots().find(record => record.roleId === roleId && record.planId === planId);
+}
+
+function saveFocusedRolePlan(snapshot: FocusedPlanSnapshot): void {
+  try {
+    const records = focusedPlanSnapshots().filter(record => record.roleId !== snapshot.roleId || record.planId !== snapshot.planId);
+    records.unshift(snapshot);
+    const retained = records.slice(0, FOCUSED_PLAN_CACHE_LIMIT);
+    let serialized = JSON.stringify(retained);
+    while (serialized.length > 4_000_000 && retained.length > 1) {
+      retained.pop();
+      serialized = JSON.stringify(retained);
+    }
+    if (serialized.length <= 4_000_000) sessionStorage.setItem(FOCUSED_PLAN_CACHE_KEY, serialized);
+  } catch { /* A full browser storage quota must not prevent loading the plan. */ }
+}
+
+/** A 304 preserves the displayed snapshot; only a changed plan transfers its full body. */
+export async function loadFocusedRolePlan(
+  roleId: string, planId: string, cached = cachedFocusedRolePlan(roleId, planId), signal?: AbortSignal
+): Promise<{ plan: RolePlan; changed: boolean }> {
+  const path = `/api/roles/${encodeURIComponent(roleId)}/plans/${encodeURIComponent(planId)}`;
+  const response = await boundedManagerFetch(path, {
+    signal,
+    cache: "no-store",
+    headers: cached?.revision ? { "if-plan-view-revision": cached.revision } : undefined
+  });
+  if (response.status === 304 && cached) return { plan: cached.plan, changed: false };
+  const body = await response.json().catch(() => ({})) as ManagerEnvelope<RolePlan>;
+  if (!response.ok || body.code !== 0 || !body.data) {
+    throw new ManagerRequestError(body.message || `Manager request failed (HTTP ${response.status}).`, response.status, body);
+  }
+  const normalized = normalizeRolePlanFromManager(body.data);
+  const plan = {
+    ...normalized,
+    attachmentCount: normalized.attachments.length,
+    stepCount: normalized.steps.length,
+    completedStepCount: normalized.steps.filter(step => Boolean(step.completedAt)).length,
+    detailLevel: "full" as const
+  };
+  const revision = String(response.headers.get("x-plan-view-revision") || "");
+  if (revision) saveFocusedRolePlan({ roleId, planId, revision, plan });
+  return { plan, changed: true };
+}
+
 const PLAN_AGENT_STATUS_CHUNK_SIZE = 40;
 
 function planAgentStatusChunks(planIds: string[]): string[][] {

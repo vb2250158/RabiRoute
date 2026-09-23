@@ -51,6 +51,8 @@ import {
   loadPendingMemoryConsolidationRunCount,
   loadRoleMemoryPage,
   loadRoleKnowledgeFileCounts,
+  cachedFocusedRolePlan,
+  loadFocusedRolePlan,
   loadRolePlan,
   loadRolePlanPage,
   loadRolePlanPreview,
@@ -1289,25 +1291,33 @@ async function refreshMemoryKnowledge(selectedRoleId: string, currentRequest: nu
  */
 async function refreshFocusedPlan(selectedRoleId: string, currentRequest: number): Promise<void> {
   planError.value = "";
+  const cached = cachedFocusedRolePlan(selectedRoleId, focusedPlanId.value);
+  if (cached) applyFocusedPlan(cached.plan);
   try {
-    const plan = await loadRolePlan(selectedRoleId, focusedPlanId.value);
+    const { plan, changed } = await loadFocusedRolePlan(selectedRoleId, focusedPlanId.value, cached);
     if (currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
-    plans.value = [plan];
-    planListReady.value = true;
-    planListResultTotal.value = 1;
-    planNextCursor.value = "";
-    planListStatusOptions.value = [];
-    planListTagOptions.value = [];
-    planRenderStart.value = 0;
-    planDetailsLoaded[plan.id] = false;
-    expandedPlans[plan.id] = true;
-    // The full record carries steps, approvals and attachments the summary omits.
-    void loadFullPlanDetails(plan.id);
+    if (changed || !cached) applyFocusedPlan(plan);
   } catch (loadError) {
     if (currentRequest === requestVersion && selectedRoleId === roleId.value) {
       planError.value = userFacingError(loadError);
     }
   }
+}
+
+function applyFocusedPlan(plan: RolePlan): void {
+  plans.value = [plan];
+  planListReady.value = true;
+  planListResultTotal.value = 1;
+  planNextCursor.value = "";
+  planListStatusOptions.value = [];
+  planListTagOptions.value = [];
+  planRenderStart.value = 0;
+  planDetailsLoaded[plan.id] = true;
+  planFullDetailsLoaded[plan.id] = true;
+  expandedPlans[plan.id] = true;
+  delete planDetailErrors[plan.id];
+  applyFeedbackDeliveryState(plan.id, plan.approval.latest);
+  void refreshPlanMarkdownTeasers([plan], requestVersion);
 }
 
 async function refreshKnowledge(): Promise<void> {
@@ -1351,6 +1361,10 @@ async function refreshKnowledge(): Promise<void> {
   memoryRenderLimit.value = 24;
   resetPlanMediaLoadStates();
   resetPlanDetailHydration();
+  if (focusedPlanId.value) {
+    await refreshFocusedPlan(selectedRoleId, currentRequest);
+    return;
+  }
   void loadRoleKnowledgeFileCounts(selectedRoleId)
     .then((counts) => {
       if (currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
@@ -1374,10 +1388,6 @@ async function refreshKnowledge(): Promise<void> {
         knowledgeCountsError.value = userFacingError(loadError);
       }
     });
-  if (focusedPlanId.value) {
-    await refreshFocusedPlan(selectedRoleId, currentRequest);
-    return;
-  }
   if (showsPlanList.value) {
     await refreshPlanKnowledge(selectedRoleId, currentRequest);
     return;
@@ -2446,7 +2456,10 @@ function closeMemoryDetail(): void {
 function handlePlanFeedbackChanged(raw: Event): void {
   try {
     const data = JSON.parse((raw as MessageEvent).data || "{}") as { roleId?: string; planId?: string };
-    if (data.roleId === roleId.value && data.planId) void refreshPlanApproval(data.planId);
+    if (data.roleId === roleId.value && data.planId) {
+      void refreshPlanApproval(data.planId);
+      if (focusedPlanId.value === data.planId) planEventRefresh.request();
+    }
   } catch {
     // Ignore malformed event payloads and keep the latest valid plan snapshot.
   }
@@ -2479,8 +2492,8 @@ function handleMemoryConsolidationChanged(raw: Event): void {
 
 function handlePlanChanged(raw: Event): void {
   try {
-    const data = JSON.parse((raw as MessageEvent).data || "{}") as { roleId?: string };
-    if (data.roleId === roleId.value) planEventRefresh.request();
+    const data = JSON.parse((raw as MessageEvent).data || "{}") as { roleId?: string; planId?: string };
+    if (data.roleId === roleId.value && (!focusedPlanId.value || !data.planId || data.planId === focusedPlanId.value)) planEventRefresh.request();
   } catch { /* Keep the last valid snapshot on malformed notifications. */ }
 }
 
@@ -2491,8 +2504,8 @@ async function refreshPlansFromEvent(signal: AbortSignal): Promise<void> {
   const current = () => !signal.aborted && request === requestVersion && selectedRole === roleId.value
     && fingerprint === JSON.stringify([currentPlanPageFilter(), focusedPlanId.value]) && knowledgePageWorkAllowed();
   if (focusedPlanId.value) {
-    const latest = await loadRolePlan(selectedRole, focusedPlanId.value, signal);
-    if (current()) { plans.value = [latest]; planListReady.value = true; planError.value = ""; }
+    const { plan, changed } = await loadFocusedRolePlan(selectedRole, focusedPlanId.value, cachedFocusedRolePlan(selectedRole, focusedPlanId.value), signal);
+    if (current()) { if (changed) applyFocusedPlan(plan); planError.value = ""; }
     return;
   }
   // One event refresh is one first page, never the entire cursor chain.

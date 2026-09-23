@@ -8103,10 +8103,22 @@ function handleRoleKnowledgeApi(
             return;
           }
           response.setHeader("etag", `"${result.revision}"`);
+          // Keep the plan mutation ETag intact; the view revision also covers
+          // approval and persona presentation, which can change independently.
+          const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
+          const viewRevision = createHash("sha256")
+            .update(JSON.stringify([result.revision, result.approval, workflow]))
+            .digest("hex");
+          response.setHeader("x-plan-view-revision", viewRevision);
+          if (request.headers["if-plan-view-revision"] === viewRevision) {
+            response.writeHead(304);
+            response.end();
+            return;
+          }
           const detail = requestUrl.searchParams.get("detail")?.trim();
           const data = detail === "preview"
-            ? { ...previewRolePlan(presentPlan(result.plan, ensurePersonaPlanWorkflow(roleDir).workflow)), approval: result.approval }
-            : { ...presentPlan(result.plan, ensurePersonaPlanWorkflow(roleDir).workflow), approval: result.approval };
+            ? { ...previewRolePlan(presentPlan(result.plan, workflow)), approval: result.approval }
+            : { ...presentPlan(result.plan, workflow), approval: result.approval };
           jsonResponse(response, 200, { code: 0, data });
         }).catch((error) => respondRoleStorageError(response, error));
         return true;

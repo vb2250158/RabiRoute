@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { RolePlan } from "../src/types.js";
 import {
+  cachedFocusedRolePlan,
+  loadFocusedRolePlan,
   cachedPlanFeedbackRevision,
   loadPlanFeedbackWithRevision,
   loadPlanAgentStatuses,
@@ -18,6 +20,46 @@ import {
   ManagerRequestError,
   synchronizeRoleKnowledgeLifecycle
 } from "../src/roleKnowledgeClient.js";
+
+test("focused plan uses a saved full snapshot and transfers its body only after the view revision changes", async () => {
+  const previousFetch = globalThis.fetch;
+  const previousStorage = globalThis.sessionStorage;
+  const records = new Map<string, string>();
+  const sentHeaders: Array<HeadersInit | undefined> = [];
+  let revision = "first";
+  globalThis.sessionStorage = {
+    getItem: key => records.get(key) ?? null,
+    setItem: (key, value) => { records.set(key, value); },
+    removeItem: key => { records.delete(key); }
+  } as Storage;
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    sentHeaders.push(init?.headers);
+    if ((init?.headers as Record<string, string> | undefined)?.["if-plan-view-revision"] === revision) {
+      return new Response(null, { status: 304 });
+    }
+    return new Response(JSON.stringify({ code: 0, data: { ...plan(), title: revision } }), {
+      status: 200, headers: { "content-type": "application/json", "x-plan-view-revision": revision }
+    });
+  }) as typeof fetch;
+  try {
+    const first = await loadFocusedRolePlan("Rabi", "plan");
+    assert.equal(first.plan.title, "first");
+    const stored = cachedFocusedRolePlan("Rabi", "plan");
+    assert.equal(stored?.plan.title, "first");
+    const same = await loadFocusedRolePlan("Rabi", "plan", stored);
+    assert.equal(same.changed, false);
+    assert.equal(same.plan, stored?.plan);
+    revision = "second";
+    const changed = await loadFocusedRolePlan("Rabi", "plan", stored);
+    assert.equal(changed.changed, true);
+    assert.equal(changed.plan.title, "second");
+    assert.equal(cachedFocusedRolePlan("Rabi", "plan")?.plan.title, "second");
+    assert.deepEqual(sentHeaders.slice(1).map(headers => (headers as Record<string, string>)["if-plan-view-revision"]), ["first", "first"]);
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalThis.sessionStorage = previousStorage;
+  }
+});
 
 test("plan feedback errors retain commit state and actionable server guidance", () => {
   const error = new ManagerRequestError("Version conflict", 412, {
