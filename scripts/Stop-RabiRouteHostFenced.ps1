@@ -30,22 +30,57 @@ function Resolve-HostQuitFence([object]$Status) {
     throw "Unsupported Host state '$state'; refusing fenced quit."
 }
 
+function Repair-ChildProcessEnvironment {
+    # .NET Framework enumerates case-sensitive names, but Start-Process copies
+    # them into a case-insensitive dictionary when redirecting output. Validate
+    # every group before changing this process; never choose between values.
+    $groups = [Collections.Generic.Dictionary[string,object]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in [Environment]::GetEnvironmentVariables().GetEnumerator()) {
+        $name = [string]$entry.Key
+        if (-not $groups.ContainsKey($name)) { $groups.Add($name, [Collections.Generic.List[object]]::new()) }
+        $groups[$name].Add($entry)
+    }
+    foreach ($entries in $groups.Values) {
+        foreach ($entry in $entries) {
+            if (-not [string]::Equals([string]$entry.Value, [string]$entries[0].Value, [StringComparison]::Ordinal)) {
+                throw "Conflicting case-insensitive environment variable: $($entries[0].Key). Align its values in the launching environment and retry. Values are not logged."
+            }
+        }
+    }
+    foreach ($entries in $groups.Values) {
+        # Windows removes one case-insensitive match at a time. Leave one
+        # original entry untouched, including an explicitly empty value.
+        for ($i = 1; $i -lt $entries.Count; $i++) {
+            [Environment]::SetEnvironmentVariable([string]$entries[0].Key, $null, 'Process')
+        }
+    }
+}
+
 function Invoke-HostJson([string]$HostPath, [string[]]$Arguments, [string]$Work) {
     [IO.Directory]::CreateDirectory($Work) | Out-Null
     $id = [guid]::NewGuid().ToString("N")
     $stdout = Join-Path $Work "$id.stdout.txt"
     $stderr = Join-Path $Work "$id.stderr.txt"
+    $succeeded = $false
     try {
-        $process = Start-Process -FilePath $HostPath -ArgumentList $Arguments -WorkingDirectory (Split-Path -Parent $HostPath) `
-            -RedirectStandardOutput $stdout -RedirectStandardError $stderr -Wait -PassThru
+        try {
+            Repair-ChildProcessEnvironment
+            $process = Start-Process -FilePath $HostPath -ArgumentList $Arguments -WorkingDirectory (Split-Path -Parent $HostPath) `
+                -RedirectStandardOutput $stdout -RedirectStandardError $stderr -Wait -PassThru
+        } catch {
+            $launchError = Join-Path $Work "$id.launch-error.txt"
+            [IO.File]::WriteAllText($launchError, ($_.Exception.ToString() + "`n" + $_.InvocationInfo.PositionMessage + "`n" + $_.ScriptStackTrace))
+            throw "Host command failed before exit. stdout=$stdout; stderr=$stderr; launchError=$launchError"
+        }
+        if ($null -eq $process.ExitCode) { throw "Host command failed (ExitCode=unknown). stdout=$stdout; stderr=$stderr" }
+        if ($process.ExitCode -ne 0) { throw "Host command failed (ExitCode=$($process.ExitCode)). stdout=$stdout; stderr=$stderr" }
         $out = if (Test-Path -LiteralPath $stdout) { [IO.File]::ReadAllText($stdout) } else { "" }
-        $err = if (Test-Path -LiteralPath $stderr) { [IO.File]::ReadAllText($stderr) } else { "" }
-        if ($process.ExitCode -ne 0) { throw "Host command failed (ExitCode=$($process.ExitCode)): $err" }
-        try { $json = $out.Trim() | ConvertFrom-Json } catch { throw "Host command returned invalid JSON: $out" }
-        if ($null -eq $json -or $json.ok -ne $true) { throw "Host command did not return ok:true: $out" }
+        try { $json = $out.Trim() | ConvertFrom-Json } catch { throw "Host command returned invalid JSON. stdout=$stdout; stderr=$stderr" }
+        if ($null -eq $json -or $json.ok -ne $true) { throw "Host command did not return ok:true. stdout=$stdout; stderr=$stderr" }
+        $succeeded = $true
         return $json
     } finally {
-        Remove-Item -LiteralPath $stdout,$stderr -Force -ErrorAction SilentlyContinue
+        if ($succeeded) { Remove-Item -LiteralPath $stdout,$stderr -Force -ErrorAction SilentlyContinue }
     }
 }
 

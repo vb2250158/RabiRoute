@@ -13,6 +13,38 @@ import {
 } from "./agentThreads.js";
 import { listCodexDesktopThreadsFromRowsForTest } from "./codexDesktopBridge.js";
 import { proactiveCommunicationPolicyLines } from "./shared/agentCommunicationPolicy.js";
+import { errorResponsePresentation } from "./shared/errorPresentation.js";
+
+test("DSH thread failures retain raw evidence and non-replaying localized recovery", () => {
+  const message = "DSH authentication required or expired. Reconnect DSH in the local RabiRoute WebGUI; this RPC was not replayed.";
+  const failure = agentThreadRequestFailureData(new Error(message), { action: "read" });
+  const response = errorResponsePresentation({ code: -1, ...failure }, 400) as Record<string, unknown>;
+  assert.equal(response.reason, "dsh_connection_required");
+  assert.equal(response.message, message);
+  assert.equal(response.action, "read");
+  assert.deepEqual(response.error, { stage: "request", message, retryable: false });
+  const messages = response.errorMessages as Record<string, string>;
+  assert.match(messages["zh-CN"], /消息路线.*连接 DSH/);
+  assert.match(messages["zh-CN"], /没有自动重放/);
+  assert.doesNotMatch(messages["zh-CN"], /authentication/);
+  assert.match(messages.en, /not replayed/);
+});
+test("DSH transport thread failures preserve unknown outcomes through HTTP 400 presentation", () => {
+  const message = "DSH RPC transport failed; result may be unknown, check the original receipt before retrying.";
+  const failure = agentThreadRequestFailureData(new Error(message), { action: "send" });
+  const response = errorResponsePresentation({ code: -1, ...failure }, 400) as Record<string, unknown>;
+  assert.equal(response.reason, "dsh_transport_failed");
+  assert.equal(response.message, message);
+  assert.equal(response.action, "send");
+  assert.equal(response.status, "failed");
+  assert.deepEqual(response.error, { stage: "request", message, retryable: false });
+  const messages = response.errorMessages as Record<string, string>;
+  assert.match(messages["zh-CN"], /连接传输未完成/);
+  assert.match(messages["zh-CN"], /不等于请求参数错误或 Agent 业务权限不足/);
+  assert.match(messages["zh-CN"], /结果可能未知.*核对原操作回执.*不要自动重发/);
+  assert.doesNotMatch(messages["zh-CN"], /请求参数未通过校验|尚未开始|尚未发送业务请求/);
+  assert.ok(messages.en.includes(message));
+});
 import { recoverAgentResponseDelivery } from "./agentRequests/deliveryRecovery.js";
 import { AgentRequestStore, type AgentRequestPersistence } from "./agentRequests/store.js";
 import { codexThreadCreationReservationPathForTest } from "./codexThreadCreationReservations.js";

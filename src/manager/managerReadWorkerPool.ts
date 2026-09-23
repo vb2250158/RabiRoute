@@ -1,5 +1,6 @@
 import { fork } from "node:child_process";
 import os from "node:os";
+import { PlanPageCatalogLifecycle } from "./planPageCatalogLifecycle.js";
 import { planReadFence } from "../planReadInvalidation.js";
 import { fileURLToPath } from "node:url";
 import { recordPerformanceOperation } from "../performance/performanceInstrumentation.js";
@@ -333,21 +334,32 @@ export class ManagerReadWorkerPool {
     roleDir: string,
     options: { signal?: AbortSignal; timeoutMs?: number } = {}
   ): Promise<RoleKnowledgeCatalogSnapshot> {
+    const fence = planReadFence(roleDir);
     return this.run<RoleKnowledgeCatalogSnapshot>({
       type: "role_knowledge_catalog_snapshot",
       roleDir
-    }, options).then(snapshot => publishRoleKnowledgeCatalogSnapshot(roleDir, snapshot));
+    }, options).then(snapshot => {
+      const current = planReadFence(roleDir);
+      if (current.epoch !== fence.epoch || current.revision !== fence.revision) {
+        throw new Error("PLAN_CATALOG_DIRTY");
+      }
+      return publishRoleKnowledgeCatalogSnapshot(roleDir, snapshot);
+    });
   }
 
   queryRolePlanCatalog(
     roleDir: string,
     options: { signal?: AbortSignal; timeoutMs?: number } = {}
   ): Promise<RolePlanCatalogRead> {
+    const fence = planReadFence(roleDir);
     return this.run<RolePlanCatalogRead>({ type: "role_plan_catalog", roleDir }, options)
-      .then(result => ({
-        ...result,
-        plans: [...publishRolePlanCatalog(roleDir, result.plans)]
-      }));
+      .then(result => {
+        const current = planReadFence(roleDir);
+        if (current.epoch !== fence.epoch || current.revision !== fence.revision) {
+          throw new Error("PLAN_CATALOG_DIRTY");
+        }
+        return { ...result, plans: [...publishRolePlanCatalog(roleDir, result.plans)] };
+      });
   }
 
   queryRoleFileCounts<T>(roleDir: string, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<T> {
@@ -359,8 +371,11 @@ export class ManagerReadWorkerPool {
   queryRolePlanPage<T>(
     roleDir: string,
     input: RolePlanPageReadInput,
-    options: { signal?: AbortSignal; timeoutMs?: number } = {}
+    options: { signal?: AbortSignal; timeoutMs?: number; readyOnly?: boolean } = {}
   ): Promise<T> {
+    if (this === managerKnowledgePageWorkerPool) {
+      return residentPlanPageCatalogs.query(roleDir, input, options.signal, options.readyOnly) as Promise<T>;
+    }
     // Capture after successful commit publication; never coalesce a post-write
     // request with a pre-write task already queued in another resident reader.
     const fence = planReadFence(roleDir);
@@ -865,6 +880,37 @@ export class ManagerReadWorkerPool {
   }
 }
 
+/** One resident child per admitted role. Initialization is not an HTTP lease. */
+export function createPlanPageCatalogService() {
+  return new PlanPageCatalogLifecycle<RolePlanPageReadInput, unknown>({
+    maxRoles: 4,
+    maxQueriesPerRole: 32,
+    buildTimeoutMs: 5 * 60_000,
+    create: roleDir => {
+      const pool = new ManagerReadWorkerPool({ maxConcurrency: 1, maxQueue: 32 });
+      return {
+        prepare: async () => {
+          await pool.run({
+            type: "role_plan_page", roleDir, fence: planReadFence(roleDir),
+            cursor: "", limit: 1, query: "", sort: "updated", statuses: [], tags: [],
+            includeFacets: false, summary: true
+          }, { timeoutMs: 5 * 60_000 });
+        },
+        query: async input => {
+          const fence = planReadFence(roleDir);
+          const result = await pool.run({ type: "role_plan_page", roleDir, ...input, fence });
+          const current = planReadFence(roleDir);
+          if (current.epoch !== fence.epoch || current.revision !== fence.revision) {
+            throw new Error("PLAN_CATALOG_DIRTY");
+          }
+          return result;
+        },
+        stop: () => pool.stop()
+      };
+    }
+  });
+}
+
 export const managerReadWorkerPool = new ManagerReadWorkerPool();
 /**
  * User-driven knowledge pages must not wait behind startup reconciliation or
@@ -894,10 +940,21 @@ const builtinManagerReadWorkerPools = [
   managerPerformanceWorkerPool
 ] as const;
 
+let residentPlanPageCatalogs = createPlanPageCatalogService();
+let residentPlanPageCatalogsStopped = false;
+
 export function startBuiltinManagerReadWorkerPools(): void {
   for (const pool of builtinManagerReadWorkerPools) pool.start();
+  if (residentPlanPageCatalogsStopped) {
+    residentPlanPageCatalogs = createPlanPageCatalogService();
+    residentPlanPageCatalogsStopped = false;
+  }
 }
 
 export async function stopBuiltinManagerReadWorkerPools(): Promise<void> {
-  await Promise.all(builtinManagerReadWorkerPools.map(pool => pool.stop()));
+  await Promise.all([
+    residentPlanPageCatalogs.stop(),
+    ...builtinManagerReadWorkerPools.map(pool => pool.stop())
+  ]);
+  residentPlanPageCatalogsStopped = true;
 }

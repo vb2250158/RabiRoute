@@ -7,6 +7,17 @@ import type { AgentResourceCatalog } from "./agentResourceCatalog.js";
 import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
 import { listAgentApiOperations } from "./agentApiPolicy.js";
 
+export function summarizeAgentCapabilityCoverage(operations = listAgentApiOperations()) {
+  const baseline = operations.filter(item => item.help.contractLevel === "baseline").length;
+  const verified = operations.filter(item => item.help.contractLevel === "verified"
+    && item.help.coverage.exactRequestSchema === true
+    && item.help.coverage.exactResponseSchema === true
+    && item.help.coverage.missing.length === 0).length;
+  const unverified = operations.length - baseline - verified;
+  const missing = [...new Set(operations.flatMap(item => item.help.coverage.missing))];
+  return Object.freeze({ operationCount: operations.length, baselineCount: baseline, verifiedCount: verified, unverifiedCount: unverified, missing: Object.freeze(missing) });
+}
+
 export type LanAgentRoutesContext = {
   readJsonBody: <T>(request: http.IncomingMessage) => Promise<T>;
   jsonResponse: (response: http.ServerResponse, statusCode: number, body: unknown) => void;
@@ -74,7 +85,20 @@ export function handleLanAgentApi(
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/lan-agent/capabilities") {
     if (nodeAccess.kind !== "agent" && !context.isManagementRequestAuthorized(request, requestUrl)) { agentUnauthorized(response, context); return true; }
-    context.jsonResponse(response, 200, { code: 0, operations: listAgentApiOperations(), resources: "/api/lan-agent/resources" });
+    context.jsonResponse(response, 200, {
+      code: 0,
+      schemaVersion: "1",
+      contractRevision: "agent-api-help-1",
+      generatedAt: new Date().toISOString(),
+      operations: listAgentApiOperations(),
+      coverage: summarizeAgentCapabilityCoverage(),
+      help: {
+        summary: "每个 operation 都包含 help；按 operationId 或 method+pathTemplate 选择调用合同。",
+        refreshRule: "每次 Manager generation 变化或接口失败后重新读取；不要缓存渠道或参数目录。",
+        errorRule: "按 errorCode/help/repair 修正；超时、5xx 或写入不确定时先读取回执/资源，不自动重放。"
+      },
+      resources: "/api/lan-agent/resources"
+    });
     return true;
   }
   if (request.method === "GET" && ["/api/lan-agent/resources", "/api/lan-agent/resources/read"].includes(requestUrl.pathname)) {

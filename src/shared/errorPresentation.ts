@@ -13,12 +13,27 @@ const reasons: Record<string, [string, string]> = {
   timeout: ["等待操作结果超时。", "Waiting for the operation result timed out."],
   worker_failed: ["处理操作的工作进程失败。", "The worker processing the operation failed."],
   termination_unconfirmed: ["未能确认工作进程已经停止。", "Worker termination has not been confirmed."],
+  dsh_connection_configuration: ["Rabi 与 DSH 的连接配置未就绪，不是当前 Agent 的业务权限不足。", "The Rabi-to-DSH connection configuration is not ready; this is not an Agent business-permission denial."],
+  dsh_connection_required: ["DSH 宿主连接需要重新建立，不需要为当前查询单独申请权限。", "The DSH owner connection must be restored; no separate permission grant is needed for this query."],
+  dsh_transport_failed: ["DSH 连接传输未完成，不等于请求参数错误或 Agent 业务权限不足。", "The DSH connection transport did not complete; this does not imply invalid request parameters or an Agent business-permission denial."],
   unauthorized: ["访问凭据缺失或已失效，请重新认证。", "Access credentials are missing or expired. Authenticate again."],
   forbidden: ["当前身份没有执行此操作的权限。", "The current identity is not permitted to perform this operation."],
   service_failure: ["服务处理失败，服务器未能完成请求。", "The service failed while processing the request."],
   request_failed: ["请求未完成，服务器未提供更具体原因。", "The request did not complete and no more specific cause was provided."],
 };
 const exact: Record<string, string> = {
+  "DSH authentication configuration has no matching endpoint.": "旧 DSH 连接配置没有当前地址的条目；这不证明会话不存在或 Agent 无权查询。",
+  "DSH authentication configuration is unreadable.": "无法读取旧 DSH 连接配置，请检查指定配置文件是否存在且可读。",
+  "DSH authentication configuration is invalid JSON.": "旧 DSH 连接配置不是有效 JSON。",
+  "DSH authentication configuration requires endpoints.": "旧 DSH 连接配置缺少 endpoints 数组。",
+  "DSH authentication has duplicate endpoint configuration.": "旧 DSH 连接配置中同一地址有重复条目。",
+  "DSH authorization is expired or disconnected; reconnect in WebGUI.": "DSH 连接已过期或已主动断开；请在本机消息路线 → 消息适配器 → Agent 端 → DSH → 连接 DSH 中重新连接。",
+  "DSH authentication required or expired. Reconnect DSH in the local RabiRoute WebGUI; this RPC was not replayed.": "DSH 宿主要求认证或连接已过期；请在本机消息路线 → 消息适配器 → Agent 端 → DSH → 连接 DSH 中重新连接。本次请求没有自动重放。",
+  "DSH launch log is unreadable; configure the current owner launch log.": "无法读取旧 DSH 启动日志；可在本机消息路线的 DSH 卡片中使用当前登录链接建立连接，不必手改旧配置。",
+  "DSH current launch URL is absent from the configured log.": "旧启动日志没有当前 DSH 登录地址；请在本机消息路线的 DSH 卡片中重新连接。",
+  "DSH authentication exchange rejected; reopen the current owner launch URL.": "DSH 拒绝建立连接，请使用当前宿主的登录链接；尚未发送业务请求。",
+  "DSH authentication exchange failed; no RPC was sent.": "DSH 连接认证未完成；尚未发送业务请求。",
+  "DSH RPC transport failed; result may be unknown, check the original receipt before retrying.": "DSH 请求传输失败，结果可能未知；请先核对原操作回执，不要自动重发。",
   "The write succeeded. Read the resource to confirm its current contents; replay only the original payload with the same Idempotency-Key if the receipt is still needed.": "写入已成功。请读取资源确认内容；仍需回执时，仅用原内容和原 Idempotency-Key 重试。",
   "Read the resource and original operation receipt. Retry only the original payload with the same Idempotency-Key; do not create a replacement operation.": "请读取资源和原操作回执；仅用原内容和原 Idempotency-Key 重试，不要另建替代操作。",
   "GET the latest resource and strong ETag, merge your intended changes with the current contents, then submit with If-Match.": "GET 最新资源和强 ETag，合并修改后携带 If-Match 提交。",
@@ -54,6 +69,9 @@ const exact: Record<string, string> = {
   "role must be task or secretary.": "role 必须为 task 或 secretary。",
 };
 function inferReason(message: string, status: number): string {
+  if (/^DSH RPC transport failed;/.test(message)) return "dsh_transport_failed";
+  if (/DSH authentication (?:configuration|has duplicate endpoint)|DSH (?:launch log is unreadable|current launch URL is absent)/.test(message)) return "dsh_connection_configuration";
+  if (/DSH (?:authentication (?:required or expired|exchange)|authorization is expired or disconnected)/.test(message)) return "dsh_connection_required";
   if (status === 401 || /unauthorized|authentication|credentials? missing|token expired/i.test(message)) return "unauthorized";
   if (status === 403 || /permission|forbidden|access denied|EACCES|EPERM/i.test(message)) return "forbidden";
   if (status === 412 || /revision|etag|version conflict/i.test(message)) return "revision_conflict";

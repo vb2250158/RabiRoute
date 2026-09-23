@@ -36,7 +36,9 @@ async function launchLogFor(origin: string): Promise<string | undefined> {
   if (config.endpoints.some(row => !row || typeof row.baseUrl !== 'string')) throw new Error('DSH authentication endpoint configuration is invalid.');
   const matches = config.endpoints.filter(row => originOf(row.baseUrl) === origin);
   if (matches.length > 1) throw new Error('DSH authentication has duplicate endpoint configuration.');
-  if (!matches.length) throw new Error('DSH authentication configuration has no matching endpoint.');
+  // Legacy credentials are optional per origin, not an allowlist of accessible owners.
+  // Never borrow another origin's launch credential; let the requested owner authenticate.
+  if (!matches.length) return undefined;
   const logPath = matches[0].launchLogPath;
   if (typeof logPath !== 'string' || !path.isAbsolute(logPath)) throw new Error('DSH launchLogPath must be absolute.');
   // A local launch credential must never be sent to a remote endpoint.

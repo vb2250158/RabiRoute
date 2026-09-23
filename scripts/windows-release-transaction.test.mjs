@@ -63,7 +63,7 @@ test("fenced stop selects the state-owned generation and fails closed on incompl
   }
 });
 
-function makeFixture(scenario = "success") {
+function makeFixture(scenario = "success", packageVersion = "9.9.9") {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-release-transaction-"));
   const install = path.join(root, "install");
   const distribution = path.join(root, "distribution");
@@ -77,7 +77,7 @@ function makeFixture(scenario = "success") {
     fs.mkdirSync(path.dirname(destination), { recursive: true });
     fs.writeFileSync(destination, `candidate:${relative}`);
   }
-  const manifest = writeManifest(version, "9.9.9");
+  const manifest = writeManifest(version, packageVersion);
   const immutable = path.join(distribution, "versions", manifest.releaseId);
   fs.mkdirSync(path.dirname(immutable), { recursive: true });
   fs.renameSync(version, immutable);
@@ -227,6 +227,30 @@ function runUninstall(fixture, preflight = true, { failDeleteAt = 0, failStage =
     env: { ...process.env, APPDATA: fixture.appData, RABIROUTE_INSTALL_TRANSACTION_TEST_MODE: "1" },
     timeout: 30_000,
   });
+}
+
+function seedRecoveryBackups(fixture, transactionRoot) {
+  fs.mkdirSync(path.join(transactionRoot, "backup"), { recursive: true });
+  for (const name of ["current.json", "RabiRouteHost.exe"]) {
+    fs.copyFileSync(path.join(fixture.install, name), path.join(transactionRoot, "backup", name));
+  }
+}
+
+function snapshotTree(root) {
+  const entries = {};
+  function visit(directory) {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name);
+      const relative = path.relative(root, file);
+      const stat = fs.statSync(file);
+      entries[relative] = entry.isDirectory() ? { directory: true } : {
+        bytes: fs.readFileSync(file).toString("base64"), mtimeMs: stat.mtimeMs,
+      };
+      if (entry.isDirectory()) visit(file);
+    }
+  }
+  visit(root);
+  return entries;
 }
 
 function readLegacyTasks(fixture) {
@@ -392,6 +416,94 @@ test("a completed rollback journal is deterministically recovered on retry", { s
   } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
 });
 
+test("stale rolled-back recovery refuses a later successfully published third release without mutation", { skip: process.platform !== "win32" }, () => {
+  const fixture = makeFixture();
+  const later = makeFixture("success", "10.0.0");
+  try {
+    seedLegacyFlatEntries(fixture);
+    assert.notEqual(run(fixture, "after-pointer").status, 0);
+    const journalPath = path.join(fixture.install, ".rabiroute-install-transaction.json");
+    const journalBytes = fs.readFileSync(journalPath);
+    const journal = JSON.parse(journalBytes);
+    const savedRoot = path.join(fixture.root, "retained-transaction");
+    fs.cpSync(journal.transactionRoot, savedRoot, { recursive: true });
+    fs.rmSync(journalPath);
+    const published = run({ ...fixture, zip: later.zip, releaseId: later.releaseId });
+    assert.equal(published.status, 0, published.stderr || published.stdout);
+    fs.cpSync(savedRoot, journal.transactionRoot, { recursive: true });
+    fs.writeFileSync(journalPath, journalBytes);
+    const before = snapshotTree(fixture.root);
+    const rejected = run(fixture, "after-recovery");
+    assert.notEqual(rejected.status, 0);
+    assert.notEqual(rejected.status, 95);
+    assert.match(rejected.stderr, /Recovery ownership mismatch/);
+    assert.deepEqual(snapshotTree(fixture.root), before);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+    fs.rmSync(later.root, { recursive: true, force: true });
+  }
+});
+
+for (const scenario of ["bad-pointer", "same-release-different-pointer", "bootstrap-drift", "missing-pointer", "missing-pointer-backup", "missing-bootstrap-backup", "missing-candidate", "invalid-backup", "missing-hadPointer"]) {
+  test(`recovery rejects ${scenario} before any helper, restore or cleanup mutation`, { skip: process.platform !== "win32" }, () => {
+    const fixture = makeFixture();
+    try {
+      seedLegacyFlatEntries(fixture);
+      const interrupted = run(fixture, "after-autostart-before-journal", { autostartScript: autostartConfigurator });
+      assert.equal(interrupted.status, 98, interrupted.stderr || interrupted.stdout);
+      const journalPath = path.join(fixture.install, ".rabiroute-install-transaction.json");
+      const journal = JSON.parse(fs.readFileSync(journalPath));
+      const pointerPath = path.join(fixture.install, "current.json");
+      if (scenario === "bad-pointer") fs.writeFileSync(pointerPath, "{broken");
+      if (scenario === "same-release-different-pointer") fs.appendFileSync(pointerPath, " ");
+      if (scenario === "bootstrap-drift") fs.writeFileSync(path.join(fixture.install, "RabiRouteHost.exe"), "third-bootstrap");
+      if (scenario === "missing-pointer") fs.rmSync(pointerPath);
+      if (scenario === "missing-pointer-backup") fs.rmSync(path.join(journal.transactionRoot, "backup", "current.json"));
+      if (scenario === "missing-bootstrap-backup") fs.rmSync(path.join(journal.transactionRoot, "backup", "RabiRouteHost.exe"));
+      if (scenario === "missing-candidate") fs.rmSync(path.join(journal.transactionRoot, "candidate", "current.json"));
+      if (scenario === "invalid-backup") fs.writeFileSync(path.join(journal.transactionRoot, "backup", "current.json"), "{}");
+      if (scenario === "missing-hadPointer") {
+        delete journal.hadPointer;
+        fs.writeFileSync(journalPath, JSON.stringify(journal));
+      }
+      const before = snapshotTree(fixture.root);
+      const rejected = run(fixture, "after-recovery", { autostartScript: autostartConfigurator });
+      assert.notEqual(rejected.status, 0);
+      assert.notEqual(rejected.status, 95);
+      assert.deepEqual(snapshotTree(fixture.root), before);
+    } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+  });
+}
+
+for (const scenario of ["backup-pointer-candidate-bootstrap", "candidate-pointer-backup-bootstrap", "absent-pointer-candidate-bootstrap", "first-install-candidate", "first-install-restored"]) {
+  test(`recovery accepts the evidenced intermediate state ${scenario}`, { skip: process.platform !== "win32" }, () => {
+    const fixture = makeFixture();
+    try {
+      const noPointer = scenario.startsWith("first-install") || scenario === "absent-pointer-candidate-bootstrap";
+      const noBootstrap = scenario.startsWith("first-install");
+      if (noPointer) fs.rmSync(path.join(fixture.install, "current.json"));
+      if (noBootstrap) fs.rmSync(path.join(fixture.install, "RabiRouteHost.exe"));
+      const interrupted = run(fixture, "after-autostart-before-journal");
+      assert.equal(interrupted.status, 98, interrupted.stderr || interrupted.stdout);
+      const journalPath = path.join(fixture.install, ".rabiroute-install-transaction.json");
+      const journal = JSON.parse(fs.readFileSync(journalPath));
+      if (scenario === "backup-pointer-candidate-bootstrap") fs.copyFileSync(path.join(journal.transactionRoot, "backup", "current.json"), path.join(fixture.install, "current.json"));
+      if (scenario === "candidate-pointer-backup-bootstrap") fs.copyFileSync(path.join(journal.transactionRoot, "backup", "RabiRouteHost.exe"), path.join(fixture.install, "RabiRouteHost.exe"));
+      if (scenario === "absent-pointer-candidate-bootstrap" || scenario === "first-install-restored") fs.rmSync(path.join(fixture.install, "current.json"));
+      if (scenario === "first-install-restored") fs.rmSync(path.join(fixture.install, "RabiRouteHost.exe"));
+      journal.state = "rolled-back"; // Recovery must not assume this means complete.
+      fs.writeFileSync(journalPath, JSON.stringify(journal));
+      const recovered = run(fixture, "after-recovery");
+      assert.equal(recovered.status, 95, recovered.stderr || recovered.stdout);
+      assert.equal(fs.existsSync(path.join(fixture.install, "current.json")), !noPointer);
+      assert.equal(fs.existsSync(path.join(fixture.install, "RabiRouteHost.exe")), !noBootstrap);
+      if (!noPointer) assert.equal(fs.readFileSync(path.join(fixture.install, "current.json"), "utf8"), fixture.previousPointer);
+      if (!noBootstrap) assert.equal(fs.readFileSync(path.join(fixture.install, "RabiRouteHost.exe"), "utf8"), "old-bootstrap");
+      assert.equal(fs.existsSync(journalPath), false);
+    } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+  });
+}
+
 test("power loss after immutable version move is reconciled before retry", { skip: process.platform !== "win32" }, () => {
   const fixture = makeFixture();
   try {
@@ -477,6 +589,7 @@ test("power-loss journal restores a move that completed before its status flush"
   const destination = path.join(quarantineRoot, "RabiRoute-Desktop.exe.retired");
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   fs.mkdirSync(transactionRoot, { recursive: true });
+  seedRecoveryBackups(fixture, transactionRoot);
   fs.renameSync(source, destination);
   fs.writeFileSync(path.join(fixture.install, ".rabiroute-install-transaction.json"), `${JSON.stringify({
     schemaVersion: 1, appId: "io.rabiroute.windows", state: "quarantining", releaseId: fixture.releaseId,
@@ -499,6 +612,7 @@ test("recovery rejects a journal-controlled quarantine root without moving eithe
   const foreignRoot = path.join(fixture.root, "foreign-quarantine");
   const destination = path.join(foreignRoot, "RabiRoute-Desktop.exe.retired");
   fs.mkdirSync(transactionRoot, { recursive: true });
+  seedRecoveryBackups(fixture, transactionRoot);
   fs.mkdirSync(foreignRoot, { recursive: true });
   fs.writeFileSync(destination, "foreign evidence");
   fs.writeFileSync(path.join(fixture.install, ".rabiroute-install-transaction.json"), `${JSON.stringify({

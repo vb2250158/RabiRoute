@@ -1,0 +1,45 @@
+{
+  "status":"实验阶段，非生产或十万验收",
+  "runtime":{"node":"v22.17.1","sqlite":"3.50.0"},
+  "workload":{"rows":512,"connections":1,"queryClasses":8,"samplesPerSql":3,"largeBenchmarkEnabled":false,"twentyWorkerTestExecuted":false},
+  "jobs":{"initial":"pwsh-61 exit0","regression":"pwsh-62 exit0, 4 passed, 0 failed, 953.8664ms"},
+  "correctness":{"unicodeRows":83,"includesDifferentialQueries":991,"checks":["规范化与字面Unicode","结构过滤与完整facets","固定快照keyset","增改删commit与rollback","8类查询的旧SQL/rowidSQL/优化search结果完全相等"]},
+  "changes":[
+    "FTS候选由d.id IN (SELECT id ...)改为d.rowid IN (SELECT rowid ...)，不改变持久化Schema",
+    "完整status facets求和得到精确total，search从三条SQL减为facets+page两条；仅在facets完整、同一过滤范围时成立"
+  ],
+  "queryPlanEvidence":{
+    "selectiveFtsBefore":"SEARCH d USING INDEX sqlite_autoindex_documents_1 (id=?)",
+    "selectiveFtsAfter":"SEARCH d USING INTEGER PRIMARY KEY (rowid=?)",
+    "ftsCandidate":"SCAN fulltext VIRTUAL TABLE INDEX 0:M2",
+    "remainingPageCost":"USE TEMP B-TREE FOR ORDER BY",
+    "remainingBroadFacetCost":"GROUP BY over every matched row; some predicates USE TEMP B-TREE FOR GROUP BY",
+    "emptyQuery":"SCAN d for count/facets; SCAN d USING INDEX document_order for page"
+  },
+  "finalRunRepresentativePhases":{
+    "query":{"text":"token-000123","archived":true},
+    "matched":1,
+    "baselineSamplesMs":{"count":[0.2721,0.0788,0.0644],"facets":[0.2222,0.1424,0.1074],"page":[0.1875,0.137,0.137]},
+    "rowidSamplesMs":{"count":[0.1053,0.0938,0.0735]},
+    "note":"这些是各SQL独立的3次耗时，不是完整search分位数；baseline先运行，缓存与顺序偏差未排除。优化后的search不再执行独立count SQL。"
+  },
+  "broadQueryFollowup":{
+    "job":"pwsh-64 exit0, 1 passed, 560.821ms",
+    "query":{"text":"literal%_","kind":"recent"},
+    "matched":219,
+    "baselineSamplesMs":{"count":[0.6564,0.7943,0.6585],"facets":[0.6529,0.6553,0.6809],"page":[0.7179,0.6887,0.6793]},
+    "rowidSamplesMs":{"count":[0.2819,0.2775,0.2678],"facets":[0.293,0.2799,0.2911],"page":[0.3271,0.3216,0.3191]},
+    "bothPlans":["SEARCH d USING INDEX document_filter (kind=? AND archived=?)","LIST SUBQUERY 1","SCAN fulltext VIRTUAL TABLE INDEX 0:M2","CREATE BLOOM FILTER"],
+    "pageAdditionalPlan":"USE TEMP B-TREE FOR ORDER BY",
+    "interpretation":"广匹配计划仍扫描结构过滤结果并物化FTS候选。rowid减少文本id候选访问成本，但不改变大集合复杂度；3样本不能外推十万性能。"
+  },
+  "remaining":[
+    "短词posting与约55.81倍历史存储放大未修复，也未重新测量",
+    "广匹配候选仍可能物化大集合；完整facets仍需访问全部命中",
+    "kind+archived过滤下的分页排序可继续对照不含status前缀的有序覆盖索引，但本轮未新增",
+    "原始SQL和新SQL均未建立跨语句一致读事务；跨连接写入时的facets/page快照一致性仍需正式设计",
+    "生产计划逐字段includes与知识全文规范化语义不同，不能直接接此原型替换生产接口",
+    "未进行生产API、十万重测、并发负载、build或deploy"
+  ],
+  "reproduce":"node --import tsx --test --test-name-pattern='normalized|structured|committed|profile exact' tests/performance/knowledgeSqlitePrototype.test.ts tests/performance/knowledgeSqliteQueryPlan.test.ts"
+}

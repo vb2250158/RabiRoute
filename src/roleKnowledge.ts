@@ -4,6 +4,7 @@ import { normalizePlanStepResources } from "./shared/planStepResources.js";
 import { planActivationStatus, planState, planStateForWrite, planCanAutoAdvance } from "./planState.js";
 import { publishKnowledgeChange, type KnowledgeChange, type KnowledgeKind } from "./roleKnowledgeSearch.js";
 import { readPlanIdentity, readPlanIdentityAsync } from "./planIdentityReadCache.js";
+import { loadPlanPageCheckpoint, savePlanPageCheckpoint } from "./planPageCatalogCheckpoint.js";
 import { invalidatePlanReads, type PlanReadFence } from "./planReadInvalidation.js";
 import { normalizePlanQuestions, type PlanQuestion } from "./shared/planQuestions.js";
 import { createHash } from "node:crypto";
@@ -1821,9 +1822,16 @@ type PlanListCacheEntry = {
 };
 
 function deepFreeze<T>(value: T): T {
-  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
-  for (const nested of Object.values(value as Record<string, unknown>)) deepFreeze(nested);
-  return Object.freeze(value);
+  // Keep traversal within one instrumentation boundary, including deep records.
+  const pending: unknown[] = [value];
+  while (pending.length) {
+    const current = pending.pop();
+    if (!current || typeof current !== "object" || Object.isFrozen(current)) continue;
+    const nested = Object.values(current as Record<string, unknown>);
+    Object.freeze(current);
+    for (const child of nested) pending.push(child);
+  }
+  return value;
 }
 
 function immutablePublication<T>(value: T): T {
@@ -1982,10 +1990,8 @@ type AsyncPlanFileCacheResult = {
 
 async function readChangedPlanFile(filePath: string, retryOnTransient = true): Promise<AsyncPlanFileCacheResult> {
   try {
-    const [stat, text] = await Promise.all([
-      fs.promises.stat(filePath),
-      fs.promises.readFile(filePath, "utf8")
-    ]);
+    const stat = await fs.promises.stat(filePath);
+    const text = await fs.promises.readFile(filePath, "utf8");
     const after = await fs.promises.stat(filePath);
     if (stat.size !== after.size || stat.mtimeMs !== after.mtimeMs || stat.ctimeMs !== after.ctimeMs || stat.ino !== after.ino) {
       return { filePath, retry: true };
@@ -2322,13 +2328,28 @@ export function readPlansFromStorageInWorker(roleDir: string): PlanItem[] {
   }
 }
 
+function isPlanCheckpointEntry(value: unknown): value is PlanFileCacheEntry {
+  if (!value || typeof value !== "object") return false;
+  const entry = value as Partial<PlanFileCacheEntry>;
+  if (!Number.isSafeInteger(entry.size) || entry.size! < 0
+    || !Number.isFinite(entry.mtimeMs) || !Number.isFinite(entry.ctimeMs)
+    || !Number.isFinite(entry.ino) || !entry.ino || !entry.ctimeMs || !entry.plan) return false;
+  // Re-normalization validates the complete current schema, not a summary DTO.
+  // Reject rather than silently repairing obsolete checkpoint content.
+  const normalized = normalizePlan(entry.plan);
+  if (JSON.stringify(normalized) !== JSON.stringify(entry.plan)) return false;
+  entry.plan = normalized;
+  return true;
+}
+
 const planPageReconcileTimings = new Map<string, Record<string, number>>();
-async function reconcilePlanPageFiles(roleDir: string): Promise<void> {
+async function reconcilePlanPageFiles(roleDir: string, forceReadPaths: ReadonlySet<string> = new Set(), restoreCheckpoint = false): Promise<void> {
   const started = performance.now();
   let normalizeMs = 0;
   const key = planListCacheKey(roleDir);
   const files = (await allPlanFilesAsync(roleDir)).map(file => path.resolve(file)).sort();
-  const previousFiles = planFileCache.get(key);
+  const previousFiles = planFileCache.get(key)
+    ?? (restoreCheckpoint ? await loadPlanPageCheckpoint(roleDir, isPlanCheckpointEntry) : undefined);
   const nextFiles = new Map<string, PlanFileCacheEntry>();
   const signatures: string[] = new Array(files.length);
   const plans: Array<PlanItem | null> = new Array(files.length);
@@ -2341,23 +2362,22 @@ async function reconcilePlanPageFiles(roleDir: string): Promise<void> {
       const file = files[index]!;
       let stat: fs.Stats;
       try {
-        // Cold content hydration is kept contiguous in this isolated process.
-        // Interleaving libuv metadata waits with synchronous body reads adds
-        // avoidable scheduling gaps; warm reconciliation stays concurrent.
-        stat = previousFiles ? await fs.promises.stat(file) : fs.statSync(file);
+        // Use the same bounded I/O concurrency for cold and warm scans.
+        // Synchronous cold reads serialize all sixteen hydration loops.
+        stat = await fs.promises.stat(file);
       }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         signatures[index] = `${file}\u001fmissing`; plans[index] = null; continue;
       }
       let entry = previousFiles?.get(file);
-      if (!entry || !samePlanFileMetadata(entry,stat)) {
+      if (!entry || forceReadPaths.has(file) || !samePlanFileMetadata(entry,stat)) {
         try {
-          // This is an isolated reader process. A synchronous body read avoids
-          // one asynchronous open/close scheduling chain per cold document;
-          // reuse the metadata already fetched and verify it once afterwards.
-          const text = fs.readFileSync(file,"utf8");
-          const after = fs.statSync(file);
+          // Keep body reads within the bounded hydration loops and verify the
+          // metadata after reading; concurrent replacements still take the
+          // existing retry path rather than publishing an unverified document.
+          const text = await fs.promises.readFile(file,"utf8");
+          const after = await fs.promises.stat(file);
           if (stat.size === after.size && stat.mtimeMs === after.mtimeMs && stat.ctimeMs === after.ctimeMs && stat.ino === after.ino) {
             const normalizeStart = performance.now();
             const raw = JSON.parse(text) as Record<string,unknown> | null;
@@ -2393,8 +2413,6 @@ async function reconcilePlanPageFiles(roleDir: string): Promise<void> {
   planPageReconcileTimings.set(key,{scanMs,normalizeMs,freezeMs:performance.now()-started-scanMs});
 }
 
-/** Request-triggered reconciliation bounds missed external watcher events. */
-export const PLAN_PAGE_RECONCILE_INTERVAL_MS = 5_000;
 const planPageWorkerRoles = new Set<string>();
 const planPageWorkerState = new Map<string, { epoch: string; revision: number; checkedAt: number }>();
 const planPageReadReasons = new Map<string, string[]>();
@@ -2412,8 +2430,8 @@ export async function readPlanPageCatalogInWorker(roleDir: string, fence: PlanRe
   const key = planListCacheKey(roleDir);
   planPageWorkerRoles.add(key);
   const watchBacked = ensurePlanListWatchers(roleDir);
-  // Let already queued native watch callbacks run; this is not an external-write
-  // linearizability guarantee. The periodic authoritative scan is the backstop.
+  // Drain queued native watch callbacks. Managed fences and watcher changes
+  // drive refresh; watcher failure, restart and explicit refresh reconcile sources.
   await new Promise<void>(resolve => setImmediate(resolve));
   const previous = planPageWorkerState.get(key);
   const cached = planListCache.get(key);
@@ -2422,26 +2440,30 @@ export async function readPlanPageCatalogInWorker(roleDir: string, fence: PlanRe
     previous && previous.epoch !== fence.epoch && "epoch-changed",
     previous && previous.revision > fence.revision && "older-fence",
     previous && previous.revision < fence.fullRevision && "fence-gap",
-    previous && Date.now() - previous.checkedAt >= PLAN_PAGE_RECONCILE_INTERVAL_MS && "periodic-metadata",
     planListDirtyFiles.get(key) === null && "unknown-watch-change"
   ].filter((reason): reason is string => typeof reason === "string");
   planPageReadReasons.set(key,reasons);
   const full = reasons.length > 0;
   try {
     if (full) {
-      // Periodic reconciliation enumerates/stat-checks, but does not discard
-      // unchanged JSON. Only explicit authoritative refresh, an unknown watch
-      // event or a fence gap requires content rehydration. An external writer
-      // preserving metadata AND losing all watch events needs explicit refresh.
+      // Recovery reconciles metadata without discarding unchanged JSON.
+      // Explicit refresh, strong invalidation or a fence gap rehydrates bodies.
+      // Silent external changes without a watcher notification require explicit
+      // refresh or restart, matching the watcher-backed incremental contract.
       if (authoritative || planPageStrongInvalidations.has(key)
         || (previous && (previous.epoch !== fence.epoch || previous.revision < fence.fullRevision))) {
         planFileCache.delete(key);
         planListCache.delete(key);
       }
+      const forceReadPaths = new Set(planListDirtyFiles.get(key) ?? []);
+      for (const change of fence.changes) if (change.revision > (previous?.revision ?? -1)) {
+        for (const file of planCandidateFiles(roleDir, change.planId)) forceReadPaths.add(path.resolve(file));
+      }
+      const restoreCheckpoint = !previous && !authoritative && watchBacked && !planPageStrongInvalidations.has(key);
       planPageStrongInvalidations.delete(key);
       planListDirtyFiles.delete(key);
       planListDirtyAt.delete(key);
-      await reconcilePlanPageFiles(roleDir);
+      await reconcilePlanPageFiles(roleDir, forceReadPaths, restoreCheckpoint);
     } else {
       const dirty = new Set(planListDirtyFiles.get(key) ?? []);
       for (const change of fence.changes) if (change.revision > (previous?.revision ?? -1)) {
@@ -2473,6 +2495,16 @@ export async function readPlanPageCatalogInWorker(roleDir: string, fence: PlanRe
     if (planListDirtyFiles.has(key)) {
       if (attempt >= 2) throw new Error("PLAN_CATALOG_REFRESH_UNAVAILABLE");
       return await readPlanPageCatalogInWorker(roleDir, fence, false, attempt + 1);
+    }
+    if (!previous) {
+      // Cold preparation owns checkpoint publication. Hot requests never rewrite
+      // the entire projection; restart always reconciles source metadata.
+      try { await savePlanPageCheckpoint(roleDir, planFileCache.get(key)!); }
+      catch { planPageReadReasons.set(key, [...reasons, "checkpoint-write-failed"]); }
+      if (planListDirtyFiles.has(key)) {
+        if (attempt >= 2) throw new Error("PLAN_CATALOG_REFRESH_UNAVAILABLE");
+        return await readPlanPageCatalogInWorker(roleDir, fence, false, attempt + 1);
+      }
     }
     return planListCache.get(key)!.plans;
   } catch (error) {
@@ -3054,7 +3086,7 @@ function normalizedPublishedMemories<T extends RecentMemoryItem | ConsolidatedMe
 /** Publishes a normalized worker result into the existing plan catalog cache. */
 export function publishRolePlanCatalog(roleDir: string, rawPlans: unknown): readonly PlanItem[] {
   const plans = immutablePlanCatalog(normalizedPublishedPlans(rawPlans));
-  invalidatePlanReads(roleDir);
+  // Read publication is not a managed write and must not advance its fence.
   const cacheKey = planListCacheKey(roleDir);
   planListCache.set(cacheKey, {
     signature: JSON.stringify(plans.map((plan) => [plan.id, plan.status, plan.updatedAt])),

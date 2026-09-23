@@ -1,4 +1,28 @@
+import { getAgentUploadContract, type AgentUploadMachineContract } from "./agentUploadContract.js";
+
 export type AgentApiMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+
+export type AgentApiHelp = Readonly<{
+  operationId: string;
+  method: AgentApiMethod;
+  pathTemplate: string;
+  description: string;
+  queryParameters: readonly string[];
+  repeatableQueryParameters: readonly string[];
+  limitations: readonly string[];
+  request: Readonly<{ body: string; query: string; path: string }>;
+  response: string;
+  machineReadable?: AgentUploadMachineContract;
+  errors: readonly string[];
+  nextStep: string;
+  auth: Readonly<{ required: boolean | null; source: string; scopes: readonly string[] }>;
+  effects: Readonly<{ mode: "readOnly" | "mutating" | "unknown"; sideEffects: string }>;
+  idempotency: Readonly<{ required: boolean | null; retryRule: string }>;
+  contractResourceId: string;
+  contractLevel: "baseline" | "verified";
+  auditLevel: "none" | "implementation-summary";
+  coverage: Readonly<{ exactRequestSchema: boolean; exactResponseSchema: boolean; missing: readonly string[] }>;
+}>;
 
 export type AgentApiOperation = Readonly<{
   id: string;
@@ -9,6 +33,7 @@ export type AgentApiOperation = Readonly<{
   queryParameters: readonly string[];
   repeatableQueryParameters: readonly string[];
   limitations: readonly string[];
+  help: AgentApiHelp;
 }>;
 
 export type AgentApiAuthorization =
@@ -24,13 +49,64 @@ const loopbackBoundary = "现有处理器仅允许 loopback；目录收录不代
 function operations(group: string, prefix: string, definitions: readonly Definition[], limitations: readonly string[] = []): AgentApiOperation[] {
   return definitions.map(([method, suffix, description, query = "", repeatable = ""]) => {
     const pathTemplate = `${prefix}${suffix}`;
-    return Object.freeze({
-      id: `${group}:${method}:${pathTemplate}`,
-      method, pathTemplate, description, contractResourceId,
-      queryParameters: Object.freeze(query.split(" ").filter(Boolean)),
-      repeatableQueryParameters: Object.freeze(repeatable.split(" ").filter(Boolean)),
-      limitations: Object.freeze([handlerBoundary, ...limitations])
+    const id = `${group}:${method}:${pathTemplate}`;
+    const queryParameters = Object.freeze(query.split(" ").filter(Boolean));
+    const repeatableQueryParameters = Object.freeze(repeatable.split(" ").filter(Boolean));
+    const auditedSummary = pathTemplate === "/api/agent/send" && method === "POST"
+      ? {
+          requestBody: "JSON 对象：deliveryId、sender { agentType, sessionId }、routeId、channel、params、payload；Content-Type 与发送渠道参数以 send capabilities 为准。",
+          response: "成功为 code=0 且包含 send result；202 仅表示 Manager 接受，平台最终送达须读取 receipt/traces。",
+          auth: "请求来源和 sender 权限由 Manager/Route 处理器核验；远端 trusted source 缺失时 fail closed。",
+          effects: "高风险外发：可能向外部消息渠道发送内容；不代表平台最终回执。",
+          retry: "deliveryId 是稳定幂等键；超时、5xx、切代或 uncertain 时只读取同 deliveryId 回执，不改 ID、渠道或自动重放。", mutating: true, idempotencyRequired: true
+        }
+      : pathTemplate === "/api/agent/uploads/:uploadId"
+        ? {
+            requestBody: method === "PUT" ? "application/octet-stream；必须使用 UUID uploadId、同值 Idempotency-Key、x-rabiroute-content-sha256 和 URI 编码文件名；禁止 content-encoding。" : "GET 无请求体。",
+            response: "PUT 成功返回 code=0、data { id, fileName, size, sha256, expiresAt }；GET 返回当前上传回执/资源。",
+            auth: "必须由当前已认证 Agent trusted source 访问，并在开始、提交和读取阶段复核 owner 与权限。",
+            effects: method === "PUT" ? "只保存受管文件，不自动外发；后续发送必须显式引用 fileId/fileSha256。" : "只读取受管上传状态。",
+              retry: "uploadId 与 Idempotency-Key 必须稳定且相同；不确定时先 GET 同一 uploadId，不改 ID、不自动重传。", mutating: method === "PUT", idempotencyRequired: method === "PUT"
+          }
+        : pathTemplate === "/api/agent/xiaomi-home/action-requests" && method === "POST"
+          ? {
+              requestBody: "JSON：requestId?、resourceId、capability、arguments?、expectedStateVersion、reason?、dryRun?；必须携带稳定 Idempotency-Key，并携带当前 application-generation/manager-instance fence。",
+              response: "202 返回 code=0 与 action receipt；planned/succeeded/failed/uncertain 是不同状态，不能把接受当作设备完成。",
+              auth: "仅受 loopback/control-plane 门禁及生命周期 fence 允许；设备资源权限和 Action Gate 仍由 Xiaomi Home 执行层核验。",
+              effects: "可能调用家庭设备服务并执行状态变更；dryRun 或 writeEnabled=false 只产生 planned。",
+              retry: "相同 key 只读恢复既有 receipt；状态版本变化、in_progress 或 uncertain 时先读回，禁止自动重发。", mutating: true, idempotencyRequired: true
+            }
+          : undefined;
+    const machineReadable = getAgentUploadContract(method, pathTemplate);
+    const operation = {
+      id, method, pathTemplate, description, contractResourceId,
+      queryParameters,
+      repeatableQueryParameters,
+      limitations: Object.freeze([handlerBoundary, ...limitations]),
+      help: undefined as unknown as AgentApiHelp
+    };
+    operation.help = Object.freeze({
+      operationId: id, method, pathTemplate, description,
+      queryParameters, repeatableQueryParameters,
+      limitations: operation.limitations,
+      request: Object.freeze({
+        body: auditedSummary?.requestBody ?? (method === "GET" ? "无请求体；按 path/queryParameters 传参。" : "请求体格式尚未在 Help 核验；先查 contractResourceId 的对应接口，包括 Content-Type。不要假定为 JSON，也不要把凭据放进 query。"),
+        query: queryParameters.length ? `允许：${queryParameters.join(", ")}。` : "不接受 query 参数。",
+        path: "只传相对路径；先从当前 Manager 能力目录取得真实 pathTemplate。"
+      }),
+      response: auditedSummary?.response ?? "以 HTTP 状态码和 JSON code/data 或 error 为准；不要把网络可达当作业务成功。",
+      errors: Object.freeze(["400：参数或业务合同错误；按 error/help/repair 修正。", "401/403：身份、权限或 Agent 启停被拒绝。", "404：资源或接口不存在，重新读取当前能力目录。", "412/5xx/超时：先读回资源或回执，不自动重放写入。"]),
+      nextStep: method === "GET" ? "根据返回的 data/coverage 判断结果；空结果不等于系统没有数据。" : "保存原请求体和幂等键；不确定时先查询回执或资源状态。",
+      auth: Object.freeze({ required: auditedSummary ? true : null, source: auditedSummary?.auth ?? "当前目录仅说明 Agent 入口；实际身份、对象权限和 Action Gate 以处理器及当前请求来源为准。", scopes: Object.freeze(["agent-api-entry"]) }),
+      effects: Object.freeze({ mode: auditedSummary?.mutating ? "mutating" : auditedSummary ? "readOnly" : "unknown", sideEffects: auditedSummary?.effects ?? "未从统一目录核验；不得依据 HTTP 方法推断无副作用或必然写入。" }),
+      idempotency: Object.freeze({ required: auditedSummary?.idempotencyRequired ?? (auditedSummary ? false : null), retryRule: auditedSummary?.retry ?? "幂等要求尚未逐接口核验；发生超时、5xx、412 或切代时保留原请求和原键，先读回回执/资源，不自动重放。" }),
+      contractResourceId,
+      contractLevel: "baseline",
+       auditLevel: auditedSummary ? "implementation-summary" : "none",
+      ...(machineReadable ? { machineReadable } : {}),
+      coverage: Object.freeze({ exactRequestSchema: false, exactResponseSchema: false, missing: machineReadable?.missing ?? Object.freeze(["request-body-schema", "response-schema"]) })
     });
+    return Object.freeze(operation);
   });
 }
 
@@ -108,6 +184,8 @@ const catalog: readonly AgentApiOperation[] = Object.freeze([
     ["POST", "/api/agent/threads", "发现、读取、创建、命名与单向投递会话；远端来源仅支持 responsePolicy:none，不支持正式回复或跨远端投递"],
     ["PUT", "/api/agent/uploads/:uploadId", "上传当前远端 Agent 的受管文件，不自动外发"],
     ["GET", "/api/agent/uploads/:uploadId", "核对当前远端 Agent 的文件上传回执"],
+    ["GET", "/api/agent/help", "按 operationId、方法或路径查询当前接口帮助", "operationId path method"],
+    ["GET", "/api/agent/send/capabilities", "列出发送渠道、参数示例与不重试规则"],
     ["POST", "/api/agent/send", "通过渠道策略发送消息或受管附件"],
     ["GET", "/api/agent/send/traces", "按平台消息追踪发送", "channel sentMessageId routeId"],
     ["GET", "/api/agent/send/receipts/:deliveryId", "读取渠道发送回执"],
@@ -223,7 +301,9 @@ const matchers = catalog.map(operation => ({ operation, segments: operation.path
  * request.url, before URL normalization; never a decoded pathname or an absolute URL. No I/O or body parsing.
  * A successful decision is an entry-point permission, not evidence that a business action was authorized or ran.
  */
-export function authorizeAgentApiOperation(method: string, requestTarget: string): AgentApiAuthorization {
+export function validateAgentApiRequestTarget(method: string, requestTarget: string):
+  | { allowed: true; rawSegments: string[]; decodedSegments: (string | undefined)[]; query: string[] }
+  | Extract<AgentApiAuthorization, { allowed: false }> {
   if (typeof method !== "string" || !/^(?:GET|POST|PUT|PATCH|DELETE)$/.test(method)) return { allowed: false, reason: "invalid_method" };
   if (typeof requestTarget !== "string" || requestTarget.length > 16_384 || !requestTarget.startsWith("/")
     || requestTarget.startsWith("//") || /[\\#\x00-\x20\x7f]/.test(requestTarget)) return { allowed: false, reason: "invalid_path" };
@@ -250,6 +330,14 @@ export function authorizeAgentApiOperation(method: string, requestTarget: string
     }
   }
 
+  return { allowed: true, rawSegments, decodedSegments, query };
+}
+
+/** Public operation catalog policy; request authentication is a separate boundary. */
+export function authorizeAgentApiOperation(method: string, requestTarget: string): AgentApiAuthorization {
+  const target = validateAgentApiRequestTarget(method, requestTarget);
+  if (!target.allowed) return target;
+  const { rawSegments, decodedSegments, query } = target;
   const match = matchers.find(({ operation, segments }) => operation.method === method
     && segments.length === rawSegments.length && segments.every((segment, index) => {
       if (!segment.startsWith(":")) return segment === rawSegments[index];

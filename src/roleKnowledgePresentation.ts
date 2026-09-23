@@ -9,6 +9,7 @@ import { planApprovalGate } from "./roleKnowledge.js";
 import { planActivationStatus, planCanAutoAdvance, planState } from "./planState.js";
 import {
   personaPlanWorkflowRevision,
+  validatePersonaPlanWorkflow,
   planStatusDefinition,
   type PersonaPlanStatusDefinition,
   type PersonaPlanWorkflow
@@ -117,6 +118,14 @@ export function planPresentation(
   plan: PlanItem,
   workflow: PersonaPlanWorkflow
 ): PlanPresentation {
+  return planPresentationForDefinition(plan, workflow, definitionFor(plan, workflow));
+}
+
+function planPresentationForDefinition(
+  plan: PlanItem,
+  workflow: PersonaPlanWorkflow,
+  definition: PersonaPlanStatusDefinition
+): PlanPresentation {
   const approval = approvalPresentation(plan);
   if ((plan.markerStatus ?? plan.status) === workflow.roles.approved && planActivationStatus(plan, workflow) === "进行中") {
     approval.enabled = approval.state === "ready";
@@ -124,7 +133,6 @@ export function planPresentation(
     approval.label = "已审批";
     approval.helper = "审批意见已保存，可编辑后重新提交；确认投递后回到分析中。";
   }
-  const definition = definitionFor(plan, workflow);
   const activation = planActivationStatus(plan, workflow);
   const views: PlanPresentationView[] = activation === "已归档"
     ? ["archived"]
@@ -206,8 +214,22 @@ export function presentPlans(
   const byRevision = presentedPlanCatalogCache.get(plans);
   const cached = byRevision?.get(revision);
   if (cached) return cached;
+  // The lookup belongs to this batch, not to the caller's mutable workflow.
+  // Each call still checks the content revision before using cached output.
+  const validated = validatePersonaPlanWorkflow(workflow);
+  const definitions = new Map(validated.statuses.map(status => [status.key, status]));
   const presented = plans
-    .map(plan => presentPlan(plan, workflow))
+    .map(plan => {
+      const key = typeof plan.status === "string" ? plan.status.trim() : "";
+      const definition = definitions.get(key);
+      if (!definition) throw new Error(`PLAN_STATUS_CONFIG_INVALID: ${plan.status} is not defined by this persona.`);
+      return {
+        ...plan,
+        ...planState(plan, workflow),
+        attachments: plan.attachments.map(({ path: _path, ...attachment }) => attachment),
+        presentation: planPresentationForDefinition(plan, workflow, definition)
+      };
+    })
     .sort((left, right) => {
       const statusDelta = left.presentation.statusLevel - right.presentation.statusLevel;
       if (statusDelta !== 0) return statusDelta;

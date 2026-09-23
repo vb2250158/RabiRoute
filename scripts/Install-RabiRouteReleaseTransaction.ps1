@@ -63,9 +63,79 @@ function Write-JsonDurable([string]$Path, [object]$Value) {
         [IO.File]::Replace($tmp, $Path, [System.Management.Automation.Language.NullString]::Value, $true)
     } else { [IO.File]::Move($tmp, $Path) }
 }
+function ConvertTo-WindowsArgument([AllowEmptyString()][string]$Value) {
+    # Start-Process joins ArgumentList with spaces, so supply one CRT-quoted
+    # command line. Backslashes only escape quotes (including our closing quote).
+    $quoted = [Text.StringBuilder]::new()
+    [void]$quoted.Append('"')
+    $slashes = 0
+    foreach ($character in $Value.ToCharArray()) {
+        if ($character -eq '\') { $slashes++; continue }
+        if ($character -eq '"') {
+            [void]$quoted.Append(('\' * (2 * $slashes + 1)))
+        } else {
+            [void]$quoted.Append(('\' * $slashes))
+        }
+        [void]$quoted.Append($character)
+        $slashes = 0
+    }
+    [void]$quoted.Append(('\' * (2 * $slashes)))
+    [void]$quoted.Append('"')
+    return $quoted.ToString()
+}
+function Repair-ChildProcessEnvironment {
+    # .NET Framework enumerates case-sensitive names, but Start-Process copies
+    # them into a case-insensitive dictionary when redirecting output. Validate
+    # every group before changing this process; never choose between values.
+    $groups = [Collections.Generic.Dictionary[string,object]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in [Environment]::GetEnvironmentVariables().GetEnumerator()) {
+        $name = [string]$entry.Key
+        if (-not $groups.ContainsKey($name)) { $groups.Add($name, [Collections.Generic.List[object]]::new()) }
+        $groups[$name].Add($entry)
+    }
+    foreach ($entries in $groups.Values) {
+        foreach ($entry in $entries) {
+            if (-not [string]::Equals([string]$entry.Value, [string]$entries[0].Value, [StringComparison]::Ordinal)) {
+                throw "Conflicting case-insensitive environment variable: $($entries[0].Key). Align its values in the launching environment and retry. Values are not logged."
+            }
+        }
+    }
+    foreach ($entries in $groups.Values) {
+        # Windows removes one case-insensitive match at a time. Leave one
+        # original entry untouched, including an explicitly empty value.
+        for ($i = 1; $i -lt $entries.Count; $i++) {
+            [Environment]::SetEnvironmentVariable([string]$entries[0].Key, $null, 'Process')
+        }
+    }
+}
 function Invoke-Checked([string]$File, [string[]]$Arguments, [string]$Label) {
-    $process = Start-Process -FilePath $File -ArgumentList $Arguments -Wait -PassThru -WindowStyle Hidden
-    if ($process.ExitCode -ne 0) { throw "$Label failed with ExitCode=$($process.ExitCode)." }
+    # All callers run after candidate/backup creation; never fall back to a
+    # shared temp directory or a previous transaction's evidence directory.
+    if (-not $transactionRoot -or -not (Test-Path -LiteralPath $transactionRoot -PathType Container)) {
+        throw "$Label failed before launch: transaction evidence directory is unavailable."
+    }
+    $id = [guid]::NewGuid().ToString('N')
+    $stdout = Join-Path $transactionRoot "$id.stdout.txt"
+    $stderr = Join-Path $transactionRoot "$id.stderr.txt"
+    $start = @{
+        FilePath=$File; Wait=$true; PassThru=$true; WindowStyle='Hidden'
+        RedirectStandardOutput=$stdout; RedirectStandardError=$stderr
+    }
+    if ($Arguments.Count) { $start.ArgumentList = (($Arguments | ForEach-Object { ConvertTo-WindowsArgument $_ }) -join ' ') }
+    try {
+        Repair-ChildProcessEnvironment
+        $process = Start-Process @start
+    }
+    catch {
+        $launchError = Join-Path $transactionRoot "$id.launch-error.txt"
+        [IO.File]::WriteAllText($launchError, ($_.Exception.ToString() + "`n" + $_.InvocationInfo.PositionMessage + "`n" + $_.ScriptStackTrace))
+        throw "$Label failed before exit. stdout=$stdout; stderr=$stderr; launchError=$launchError"
+    }
+    if ($null -eq $process.ExitCode) { throw "$Label failed with ExitCode=unknown. stdout=$stdout; stderr=$stderr" }
+    if ($process.ExitCode -ne 0) {
+        # The journal receives this summary, not potentially sensitive output.
+        throw "$Label failed with ExitCode=$($process.ExitCode). stdout=$stdout; stderr=$stderr"
+    }
 }
 function Invoke-BootstrapSelfTest([string]$Bootstrap, [string]$Label) {
     if ($TestSelfTestScript) {
@@ -148,6 +218,56 @@ function Read-Candidate([string]$Candidate, [string]$Expected) {
     $computedRelease = "$([string]$manifest.packageVersion)-$($computedPayload.Substring(0,12))"
     if ($computedPayload -ne ([string]$manifest.payloadSha256).ToLowerInvariant() -or $computedRelease -ne $Expected) { throw "Canonical payload identity does not match manifest/releaseId." }
     return [pscustomobject]@{ pointer = $pointer; version = $version; bootstrap = $bootstrap }
+}
+function Assert-RecoveryPointer([string]$Path, [string]$ExpectedReleaseId = "") {
+    $pointer = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    $releaseId = [string]$pointer.releaseId
+    if ($pointer.schemaVersion -ne 1 -or [string]$pointer.appId -cne $AppId -or
+        [string]::IsNullOrWhiteSpace($releaseId) -or $releaseId -match '[\\/:]' -or $releaseId -in @(".", "..") -or
+        [string]$pointer.versionPath -cne "versions/$releaseId" -or [string]::IsNullOrWhiteSpace([string]$pointer.payloadSha256) -or
+        ($ExpectedReleaseId -and $releaseId -cne $ExpectedReleaseId)) {
+        throw "Recovery ownership pointer evidence is invalid: $Path"
+    }
+}
+function Test-RecoveryFileEqual([string]$Left, [string]$Right) {
+    return ((Get-Item -LiteralPath $Left).Length -eq (Get-Item -LiteralPath $Right).Length -and
+        (Get-Sha256File $Left) -ceq (Get-Sha256File $Right))
+}
+function Assert-RecoveryOwnership([object]$Journal, [string]$Install, [string]$TransactionRoot) {
+    # A rolled-back journal can still describe an incomplete rollback. Never
+    # discard it, or replay it over a later release, based on state alone.
+    if ($Journal.schemaVersion -ne 1 -or $Journal.hadPointer -isnot [bool] -or $Journal.hadBootstrap -isnot [bool] -or
+        [string]::IsNullOrWhiteSpace([string]$Journal.releaseId)) {
+        throw "Recovery ownership evidence is incomplete."
+    }
+    foreach ($item in @(
+        [pscustomobject]@{ Name="current.json"; Had=$Journal.hadPointer; Pointer=$true },
+        [pscustomobject]@{ Name="RabiRouteHost.exe"; Had=$Journal.hadBootstrap; Pointer=$false }
+    )) {
+        $current = Join-Path $Install $item.Name
+        $backup = Join-Path (Join-Path $TransactionRoot "backup") $item.Name
+        $candidate = Join-Path (Join-Path $TransactionRoot "candidate") $item.Name
+        if ($item.Had) {
+            if (-not (Test-Path -LiteralPath $backup -PathType Leaf)) { throw "Recovery ownership backup is missing: $($item.Name)" }
+            if ($item.Pointer) { Assert-RecoveryPointer $backup }
+        } elseif (Test-Path -LiteralPath $backup) {
+            throw "Recovery ownership absence evidence conflicts with backup: $($item.Name)"
+        }
+        if (-not (Test-Path -LiteralPath $current)) {
+            if (-not $item.Had) { continue }
+            throw "Recovery ownership current file is missing: $($item.Name)"
+        }
+        if (-not (Test-Path -LiteralPath $current -PathType Leaf)) { throw "Recovery ownership current entry is not a file: $($item.Name)" }
+        if ($item.Pointer) { Assert-RecoveryPointer $current }
+        if ($item.Had -and (Test-RecoveryFileEqual $current $backup)) { continue }
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { throw "Recovery ownership candidate is missing: $($item.Name)" }
+        # The candidate pointer remains in staging even after the version moves.
+        # Do not infer ownership from releaseId alone or from the incoming ZIP.
+        Assert-RecoveryPointer (Join-Path (Join-Path $TransactionRoot "candidate") "current.json") ([string]$Journal.releaseId)
+        if (-not (Test-RecoveryFileEqual $current $candidate)) {
+            throw "Recovery ownership mismatch: $($item.Name) is neither the transaction backup nor candidate. Evidence retained."
+        }
+    }
 }
 function Restore-Previous([string]$Install, [string]$PointerBackup, [string]$BootstrapBackup, [bool]$HadPointer, [bool]$HadBootstrap) {
     $pointer = Join-Path $Install "current.json"; $bootstrap = Join-Path $Install "RabiRouteHost.exe"
@@ -292,6 +412,9 @@ if (Test-Path -LiteralPath $journal) {
     $stagingRoot = Join-Path $install ".install-staging"
     if (-not (Is-Under $previousRoot $stagingRoot)) { throw "Transaction journal references an unsafe staging root." }
     $priorPointer = Join-Path $previousRoot "backup\current.json"; $priorBootstrap = Join-Path $previousRoot "backup\RabiRouteHost.exe"
+    # Validate both files before ANY recovery mutation, including helpers,
+    # quarantine restoration, version deletion, or journal/staging cleanup.
+    Assert-RecoveryOwnership $previous $install $previousRoot
     $needsPointerRestore = [string]$previous.state -in @("switching","switched","autostart-applying","autostart-applied","rolled-back")
     $initialPointerRecoveryFailure = $null
     if ($needsPointerRestore) {

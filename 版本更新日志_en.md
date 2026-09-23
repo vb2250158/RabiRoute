@@ -6,6 +6,16 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.14 - 2026-09-23
+
+### Plan-read performance and Agent API diagnostics
+
+- Use bounded asynchronous cold reads, event-driven invalidation and rebuildable catalog checkpoints. Shared initialization survives caller cancellation and returns explicit 503 retry guidance rather than a false empty list. Read-only publication no longer advances the write fence, and reads overtaken by managed writes are rejected.
+- Retry initialization serially within bounds, clear cancellation timers and preserve applied filters when facets change. Traversal search retains per-field matching and workflow presentation reuses batch projections.
+- Add Agent API help, send-channel parameters and upload contracts with explicit coverage gaps and readback rules for uncertain writes. Discover DSH dynamically and distinguish connection configuration failures from business authorization denials.
+- Strengthen managed shutdown, environment handling and rolled-back transaction archival checks in Windows installation transactions; synchronize bilingual operations documentation and regression cases.
+- Publish incremental source improvements as requested, without requiring the original strict latency target for this publication. Recorded same-directory cold-read diagnostics improved from about 119.5 to 43.15 seconds; after removing periodic scans, an interval hot read of 100000 records took about 1.14 milliseconds. These diagnostics are not full HTTP or installed-runtime acceptance. The latest 1000-record HTTP test still has three p95 groups above the original 300-millisecond target; strict 100000-record performance acceptance is not claimed. SQLite files remain isolated experiments outside the production read chain.
+
 ## 0.3.13 - 2026-09-22
 
 ### Merge upstream updates while preserving public plan and Agent improvements

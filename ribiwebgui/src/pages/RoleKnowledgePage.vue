@@ -88,6 +88,7 @@ const memoryLoading = ref(false);
 const planError = ref("");
 const planPageError = ref("");
 const planListReady = ref(false);
+const planCatalogInitializing = ref(false);
 const planEventReset = ref(false);
 const knowledgeCountsReady = ref(false);
 const knowledgeCountsError = ref("");
@@ -292,8 +293,14 @@ const planEventRefresh = createBoundedPlanRefresh({
   failed: error => { planError.value = userFacingError(error); }
 });
 function cancelPlanListWork(keepPending = false): void {
+  if (knowledgeFilterTimer) window.clearTimeout(knowledgeFilterTimer);
+  knowledgeFilterTimer = 0;
   planEventRefresh.cancel(keepPending);
   planListAbort?.abort();
+  planListAbort = null;
+  planCatalogInitializing.value = false;
+  loading.value = false;
+  loadingMorePlans.value = false;
 }
 let planAgentStatusGeneration = 0;
 let cachedKnowledgeScrollY = 0;
@@ -423,6 +430,11 @@ const knowledgeListWarning = computed(() => Boolean(
   || (showsMemoryList.value && memoryError.value)
 ));
 const knowledgeListStatus = computed(() => {
+  if (showsPlanList.value && planCatalogInitializing.value) {
+    return isEnglish.value
+      ? "Preparing the plan list; it will load automatically when ready. You can switch pages."
+      : "正在准备计划列表，就绪后会自动加载；期间可以切换页面。";
+  }
   if (showsPlanList.value && !loading.value && (planError.value || planPageError.value)) {
     return isEnglish.value
       ? "Plans could not be refreshed. Any visible items are previously loaded data; retry to update."
@@ -630,7 +642,6 @@ watch(
   () => planListStatusOptions.value.map((option) => option.status).join("\u001f"),
   () => {
     const available = new Set(planListStatusOptions.value.map((option) => option.status));
-    planListHiddenStatuses.value = planListHiddenStatuses.value.filter((status) => available.has(status));
     planListDraftHiddenStatuses.value = planListDraftHiddenStatuses.value.filter((status) => available.has(status));
   }
 );
@@ -639,7 +650,6 @@ watch(
   () => planListTagOptions.value.map((option) => option.tag).join("\u001f"),
   () => {
     const available = new Set(planListTagOptions.value.map((option) => option.tag));
-    planListSelectedTags.value = planListSelectedTags.value.filter((tag) => available.has(tag));
     planListDraftSelectedTags.value = planListDraftSelectedTags.value.filter((tag) => available.has(tag));
   }
 );
@@ -1128,7 +1138,10 @@ async function loadMorePlans(limit = 50): Promise<void> {
     const page = await loadRolePlanPage(selectedRoleId, cursor, limit, {
       ...currentPlanPageFilter(),
       includeFacets: false
-    }, controller.signal);
+    }, controller.signal, () => {
+      if (planListAbort === controller && !controller.signal.aborted
+        && currentRequest === requestVersion && selectedRoleId === roleId.value) planCatalogInitializing.value = true;
+    });
     if (controller.signal.aborted || currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
     applyPlanSnapshots(page.items, false, currentRequest);
     planEventReset.value = false;
@@ -1141,8 +1154,11 @@ async function loadMorePlans(limit = 50): Promise<void> {
       planPageError.value = userFacingError(loadError);
     }
   } finally {
-    if (planListAbort === controller) planListAbort = null;
-    if (currentRequest === requestVersion) loadingMorePlans.value = false;
+    if (planListAbort === controller) {
+      planListAbort = null;
+      planCatalogInitializing.value = false;
+      loadingMorePlans.value = false;
+    }
     planEventRefresh.idle();
     scheduleProgressiveSentinelRefresh();
   }
@@ -1196,7 +1212,10 @@ async function refreshPlanKnowledge(selectedRoleId: string, currentRequest: numb
   const controller = new AbortController();
   planListAbort = controller;
   try {
-    const result = await loadRolePlanPage(selectedRoleId, "", 8, currentPlanPageFilter(), controller.signal);
+    const result = await loadRolePlanPage(selectedRoleId, "", 8, currentPlanPageFilter(), controller.signal, () => {
+      if (planListAbort === controller && !controller.signal.aborted
+        && currentRequest === requestVersion && selectedRoleId === roleId.value) planCatalogInitializing.value = true;
+    });
     if (controller.signal.aborted || currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
     applyPlanSnapshots(result.items, true, currentRequest);
     planListReady.value = true;
@@ -1208,13 +1227,15 @@ async function refreshPlanKnowledge(selectedRoleId: string, currentRequest: numb
   } catch (loadError) {
     if (!controller.signal.aborted && currentRequest === requestVersion) {
       planError.value = userFacingError(loadError);
-      planNextCursor.value = "";
       planListReady.value = false;
     }
     return;
   } finally {
-    if (planListAbort === controller) planListAbort = null;
-    if (currentRequest === requestVersion) loading.value = false;
+    if (planListAbort === controller) {
+      planListAbort = null;
+      planCatalogInitializing.value = false;
+      loading.value = false;
+    }
     planEventRefresh.idle();
     scheduleProgressiveSentinelRefresh();
   }
@@ -1324,7 +1345,6 @@ async function refreshKnowledge(): Promise<void> {
   loadingMorePlans.value = false;
   planError.value = "";
   memoryError.value = "";
-  planNextCursor.value = "";
   memoryNextCursor.value = "";
   planRenderStart.value = 0;
   planRenderLimit.value = 8;
@@ -1403,6 +1423,16 @@ watch(
     const previousRoleId = previous?.[0];
     const previousRouteBootstrapLoading = previous?.[1];
     if (previous && nextRoleId !== previousRoleId) {
+      cancelPlanListWork();
+      requestVersion++;
+      plans.value = [];
+      planNextCursor.value = "";
+      planListReady.value = false;
+      planListResultTotal.value = 0;
+      planListStatusOptions.value = [];
+      planListTagOptions.value = [];
+      planError.value = "";
+      planPageError.value = "";
       planListSortMode.value = "status";
       planListHiddenStatuses.value = [];
       planListSelectedTags.value = [];

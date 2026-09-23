@@ -74,17 +74,58 @@ type NormalizedAgentSend = {
   internal: AgentReplyRequest;
 };
 
-const SEND_CHANNELS = new Set<AgentSendChannel>([
-  "napcat",
-  "wecom",
-  "weixin",
-  "feishu",
-  "rabilink",
-  "speech",
-  "fennenote",
-  "role_panel",
-  "plan_feedback"
+// Only trusted built-in descriptors enter this registry; help never grants Route authority.
+function freezeChannelHelp<T>(value: T): T {
+  if (value && typeof value === "object") {
+    for (const child of Object.values(value)) freezeChannelHelp(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+export type AgentSendChannelHelp = Readonly<{
+  channel: AgentSendChannel;
+  description: string;
+  params: Readonly<Record<string, unknown>>;
+  example: Readonly<Record<string, unknown>>;
+}>;
+
+export const AGENT_SEND_CHANNEL_HELP: readonly AgentSendChannelHelp[] = freezeChannelHelp([
+  { channel: "napcat", description: "QQ 群聊或私聊；QQ 不使用 channel=qq。", params: { target: "group|private", groupId: "群号（group 时必填）", userId: "QQ 号（private 时必填）", instanceId: "NapCat 实例 ID（可选）", replyToMessageId: "来源 QQ 消息 ID；群聊必填，可传空字符串表示不引用", replyImageDescriptions: "引用图片的描述字符串数组（可选；图片引用仍受下游要求约束）", allowAdditionalReply: "是否允许追加回复（可选布尔值，默认 false）" }, example: { channel: "napcat", params: { target: "group", groupId: "example-group-id", replyToMessageId: "example-message-id" }, payload: { type: "text", text: "消息正文" } } },
+  { channel: "wecom", description: "企业微信会话。", params: { chatId: "会话 ID", userId: "用户 ID（可选）", reqId: "请求 ID（可选）" }, example: { channel: "wecom", params: { chatId: "chat-id" }, payload: { type: "text", text: "消息正文" } } },
+  { channel: "weixin", description: "微信会话。", params: { sessionId: "会话 ID", userId: "用户 ID（可选）" }, example: { channel: "weixin", params: { sessionId: "session-id" }, payload: { type: "text", text: "消息正文" } } },
+  { channel: "feishu", description: "飞书会话。", params: { chatId: "会话 ID", userId: "用户 ID（可选）" }, example: { channel: "feishu", params: { chatId: "chat-id" }, payload: { type: "text", text: "消息正文" } } },
+  { channel: "rabilink", description: "RabiLink 设备消息。", params: { proactive: "是否主动发送", sourceMessageId: "非主动发送时的来源消息 ID", targetDeviceIds: "设备 ID 数组", targetDeviceKinds: "设备类型数组", source: "来源标识（可选）", presentation: "呈现方式字符串数组（可选）", priority: "优先级（可选）" }, example: { channel: "rabilink", params: { proactive: true, targetDeviceIds: ["device-id"] }, payload: { type: "text", text: "消息正文" } } },
+  { channel: "speech", description: "语音消息。", params: { sessionId: "语音会话 ID（可选）" }, example: { channel: "speech", params: { sessionId: "session-id" }, payload: { type: "text", text: "消息正文" } } },
+  { channel: "fennenote", description: "FenneNote 语音消息或播放。", params: { sessionId: "会话 ID", mode: "message|playback" }, example: { channel: "fennenote", params: { sessionId: "session-id", mode: "message" }, payload: { type: "text", text: "消息正文" } } },
+  { channel: "role_panel", description: "人格面板消息。", params: { roleId: "人格 ID", messageId: "消息 ID（可选）" }, example: { channel: "role_panel", params: { roleId: "role-id" }, payload: { type: "text", text: "消息正文" } } },
+  { channel: "plan_feedback", description: "计划 guidance 或 approval 反馈。", params: { roleId: "人格 ID", planId: "计划 ID", kind: "guidance|approval", stepId: "步骤 ID（可选）", feedbackId: "反馈 ID（可选）" }, example: { channel: "plan_feedback", params: { roleId: "role-id", planId: "plan-id", kind: "guidance" }, payload: { type: "text", text: "反馈正文" } } }
 ]);
+
+// A partial field allowlist, not a JSON Schema: value and conditional validation stays below.
+export const AGENT_SEND_REQUEST_CONTRACT = freezeChannelHelp({
+  version: 1,
+  kind: "partial-field-allowlist",
+  allowedFields: {
+    request: ["deliveryId", "sender", "routeId", "channel", "params", "payload", "tracking", "styleValidation"],
+    sender: ["agentType", "sessionId"],
+    payload: ["type", "text", "path", "url", "fileName", "fileId", "fileSha256", "planAttachment"]
+  },
+  channelValues: AGENT_SEND_CHANNEL_HELP.map(item => item.channel),
+  paramsAllowedFields: Object.fromEntries(AGENT_SEND_CHANNEL_HELP.map(item => [item.channel, Object.keys(item.params)])),
+  missing: [
+    "field-types-and-value-constraints",
+    "required-and-conditional-fields",
+    "cross-field-validation",
+    "nested-tracking-and-planAttachment-contracts",
+    "runtime-authorization-and-delivery-policy",
+    "response-and-error-contracts"
+  ]
+} as const);
+
+export function agentSendChannelHelp(channel?: string): AgentSendChannelHelp | undefined {
+  return AGENT_SEND_CHANNEL_HELP.find(item => item.channel === channel);
+}
 
 function assertOnlyFields(value: Record<string, unknown>, allowed: readonly string[], field: string): void {
   const allowedSet = new Set(allowed);
@@ -107,7 +148,7 @@ function textValue(value: unknown, field: string, required = true): string | und
 
 function senderValue(value: unknown): AgentSendSender {
   const sender = objectValue(value, "sender");
-  assertOnlyFields(sender, ["agentType", "sessionId"], "sender");
+  assertOnlyFields(sender, AGENT_SEND_REQUEST_CONTRACT.allowedFields.sender, "sender");
   const agentType = textValue(sender.agentType, "sender.agentType") as string;
   const sessionId = textValue(sender.sessionId, "sender.sessionId") as string;
   if (agentType.length > 80 || !/^[A-Za-z][A-Za-z0-9._-]*$/.test(agentType)) {
@@ -166,7 +207,7 @@ function planAttachmentReference(
 }
 
 function payloadFields(payload: Record<string, unknown>): Pick<AgentReplyRequest, "payload" | "payloadType" | "text"> {
-  assertOnlyFields(payload, ["type", "text", "path", "url", "fileName", "fileId", "fileSha256", "planAttachment"], "payload");
+  assertOnlyFields(payload, AGENT_SEND_REQUEST_CONTRACT.allowedFields.payload, "payload");
   const type = textValue(payload.type, "payload.type") as "text" | "image" | "voice" | "file";
   if (!(["text", "image", "voice", "file"] as string[]).includes(type)) {
     throw new Error("payload.type must be text, image, voice, or file.");
@@ -217,12 +258,18 @@ function payloadFields(payload: Record<string, unknown>): Pick<AgentReplyRequest
 }
 
 function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
-  assertOnlyFields(request as Record<string, unknown>, ["deliveryId", "sender", "routeId", "channel", "params", "payload", "tracking", "styleValidation"], "request");
+  assertOnlyFields(request as Record<string, unknown>, AGENT_SEND_REQUEST_CONTRACT.allowedFields.request, "request");
   const deliveryId = textValue(request.deliveryId, "deliveryId") as string;
   const sender = senderValue(request.sender);
   const routeId = textValue(request.routeId, "routeId") as string;
   const channel = textValue(request.channel, "channel") as AgentSendChannel;
-  if (!SEND_CHANNELS.has(channel)) throw new Error(`Unsupported send channel: ${channel}.`);
+  const channelHelp = agentSendChannelHelp(channel);
+  if (!channelHelp) {
+    const supportedChannels = AGENT_SEND_CHANNEL_HELP.map(item => item.channel);
+    const error = new Error(`Unsupported send channel: ${channel}. Use one of: ${supportedChannels.join(", ")}. QQ/NapCat uses channel=napcat, not channel=qq.`);
+    Object.assign(error, { code: "UNSUPPORTED_SEND_CHANNEL", supportedChannels, help: AGENT_SEND_CHANNEL_HELP, repair: "Use channel=napcat for QQ/NapCat and copy the matching params example. Do not retry with a different deliveryId unless the receipt is confirmed absent." });
+    throw error;
+  }
   const params = objectValue(request.params, "params");
   const rawPayload = objectValue(request.payload, "payload");
   const payload = payloadFields(rawPayload);
@@ -250,8 +297,8 @@ function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
   let replyImageDescriptions: string[] = [];
   let target: Record<string, unknown>;
 
+  assertOnlyFields(params, Object.keys(channelHelp.params), "params");
   if (channel === "napcat") {
-    assertOnlyFields(params, ["target", "groupId", "userId", "instanceId", "replyToMessageId", "replyImageDescriptions", "allowAdditionalReply"], "params");
     const targetType = textValue(params.target, "params.target") as "group" | "private";
     if (targetType !== "group" && targetType !== "private") throw new Error("params.target must be group or private for napcat.");
     const groupId = targetType === "group" ? textValue(params.groupId, "params.groupId") : undefined;
@@ -284,22 +331,18 @@ function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
     });
     Object.assign(replyContext, { replyToSource: Boolean(replyToMessageId) });
   } else if (channel === "wecom") {
-    assertOnlyFields(params, ["chatId", "userId", "reqId"], "params");
     const chatId = textValue(params.chatId, "params.chatId") as string;
     target = { chatId, userId: textValue(params.userId, "params.userId", false) };
     Object.assign(internal, { adapterType: "wecom", targetType: "group", groupId: chatId, wecomChatId: chatId, userId: target.userId, wecomReqId: textValue(params.reqId, "params.reqId", false) });
   } else if (channel === "feishu") {
-    assertOnlyFields(params, ["chatId", "userId"], "params");
     const chatId = textValue(params.chatId, "params.chatId") as string;
     target = { chatId, userId: textValue(params.userId, "params.userId", false) };
     Object.assign(internal, { adapterType: "feishu", targetType: "group", groupId: chatId, feishuChatId: chatId, userId: target.userId });
   } else if (channel === "weixin") {
-    assertOnlyFields(params, ["sessionId", "userId"], "params");
     const sessionId = textValue(params.sessionId, "params.sessionId") as string;
     target = { sessionId, userId: textValue(params.userId, "params.userId", false) };
     Object.assign(internal, { adapterType: "weixin", targetType: "private", userId: target.userId ?? sessionId, weixinSessionId: sessionId, sessionId });
   } else if (channel === "rabilink") {
-    assertOnlyFields(params, ["proactive", "sourceMessageId", "source", "targetDeviceIds", "targetDeviceKinds", "presentation", "priority"], "params");
     const proactive = booleanValue(params.proactive, "params.proactive");
     const sourceMessageId = textValue(params.sourceMessageId, "params.sourceMessageId", false);
     const targetDeviceIds = stringList(params.targetDeviceIds, "params.targetDeviceIds");
@@ -321,13 +364,11 @@ function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
       priority: textValue(params.priority, "params.priority", false)
     });
   } else if (channel === "speech") {
-    assertOnlyFields(params, ["sessionId"], "params");
     const sessionId = textValue(params.sessionId, "params.sessionId", false);
     target = { sessionId };
     Object.assign(internal, { adapterType: "speech", targetType: "voice_transcript", sessionId });
     Object.assign(replyContext, { adapterType: "speech", sessionId, characterTtsDialogue: true });
   } else if (channel === "fennenote") {
-    assertOnlyFields(params, ["sessionId", "mode"], "params");
     const sessionId = textValue(params.sessionId, "params.sessionId") as string;
     const mode = textValue(params.mode, "params.mode") as "message" | "playback";
     if (mode !== "message" && mode !== "playback") throw new Error("params.mode must be message or playback for fennenote.");
@@ -336,13 +377,11 @@ function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
     Object.assign(replyContext, { adapterType: "fennenote", sessionId, routeKind: "voice_transcript" });
     if (mode === "playback") (internal.payload as Record<string, unknown>).play = true;
   } else if (channel === "role_panel") {
-    assertOnlyFields(params, ["roleId", "messageId"], "params");
     const roleId = textValue(params.roleId, "params.roleId") as string;
     target = { roleId, messageId: textValue(params.messageId, "params.messageId", false) };
     Object.assign(internal, { adapterType: "rolePanel", targetType: "role_panel", roleId, messageId: target.messageId });
     Object.assign(replyContext, { targetType: "role_panel", roleId });
-  } else {
-    assertOnlyFields(params, ["roleId", "planId", "stepId", "feedbackId", "kind"], "params");
+  } else if (channel === "plan_feedback") {
     const roleId = textValue(params.roleId, "params.roleId") as string;
     const planId = textValue(params.planId, "params.planId") as string;
     const kind = textValue(params.kind, "params.kind") as "guidance" | "approval";
@@ -357,6 +396,9 @@ function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
       planFeedbackId: target.feedbackId,
       planFeedbackKind: kind
     });
+  } else {
+    const unhandledChannel: never = channel;
+    throw new Error(`Send channel has no normalizer: ${unhandledChannel}`);
   }
 
   return { deliveryId, sender, routeId, channel, allowAdditionalReply, replyImageDescriptions, target, styleValidation, internal };

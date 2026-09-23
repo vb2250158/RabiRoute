@@ -36,12 +36,18 @@ test('authentication fails closed on redirects, missing cookies and malformed co
       await assert.rejects(dshAuthenticatedFetch(origin, 'session/prompt', '{}'), /expired cookie/);
     }
     await fs.writeFile(config, JSON.stringify({ endpoints: [] }));
-    await assert.rejects(dshAuthenticatedFetch(origin, 'session/prompt', '{}'), /no matching endpoint/);
+    globalThis.fetch = (async (_input, init) => {
+      calls++;
+      assert.equal(new Headers(init?.headers).has('cookie'), false);
+      assert.equal(init?.redirect, 'manual');
+      return new Response(null, { status: 401 });
+    }) as typeof fetch;
+    await assert.rejects(dshAuthenticatedFetch(origin, 'session/prompt', '{}'), /not replayed/);
     await fs.unlink(config);
     await assert.rejects(dshAuthenticatedFetch(origin, 'session/prompt', '{}'), /configuration is unreadable/);
     await fs.writeFile(config, 'null');
     await assert.rejects(dshAuthenticatedFetch(origin, 'session/list', '{}'), /requires endpoints/);
-    assert.equal(calls, 6);
+    assert.equal(calls, 7);
     await assert.rejects(dshAuthenticatedFetch('secret-invalid-url', 'session/list', '{}'), error => error instanceof Error && !error.message.includes('secret-invalid-url'));
   } finally {
     globalThis.fetch = original;

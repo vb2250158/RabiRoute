@@ -12,7 +12,49 @@ Windows 安装版只有一个应用生命周期入口：`RabiRouteHost.exe`。Ma
 
 发布页同时提供便携 ZIP 和 `SHA256SUMS.txt`。便携 ZIP 使用 `RabiRouteHost.exe + current.json + versions/<releaseId>` 布局，只能解压到新的空目录，不能覆盖旧 RabiRoute 目录；升级既有安装必须运行 Setup。Setup 嵌入同一份便携 ZIP，先在安装盘暂存并逐清单校验哈希、大小、私有路径、reparse point 与 Host 自检，再按当前 application generation 执行 fenced quit；只有候选通过后才原子切换 `current.json` 与 bootstrap，失败会恢复上一指针和 bootstrap。经精确识别的旧生命周期入口会以 `.retired` 后缀移入安装器所有的非执行 quarantine；事务失败或断电恢复会把它们原位还原，foreign 和相似后缀文件不移动。`data/`、`logs/` 与 foreign 文件不参与覆盖或卸载。当前 Windows 包尚未签名，遇到 SmartScreen“未知发布者”提示时先核对校验和。
 
+旧安装事务恢复会先执行只读所有权检查，再允许任何指针/bootstrap 还原、登录启动或计划任务恢复、quarantine 移动、版本删除及事务清理。当前 `current.json` 必须与该旧事务保存的 backup 或 candidate 字节一致，且指针结构有效；bootstrap 也必须匹配该事务的 backup 或 candidate。原本不存在的文件只允许仍不存在或匹配 candidate，支持切换/回滚中途两文件分别处于旧、新状态。必要的备份、身份或匹配证据缺失时失败关闭；第三版本、损坏的指针或 bootstrap 漂移均拒绝恢复，保留日志、backup 和相关资源，不自动覆盖后续成功发布。`rolled-back` 仍可能表示回滚不完整，不能仅凭该状态删除或跳过日志。遇到所有权拒绝时，应保留证据并人工核对，不能删除日志后盲目重试。此检查不是完整终态重构，也不判断后续登录启动设置是否仍属于旧事务。
+
 发布清单生成时会核对桌面 profile 中启用插件声明的进程内 Web 入口：入口必须在包内且实际存在，否则拒绝打包并指出插件与缺失路径。单独重建插件包会移除后续 Web 构建生成的入口，因此必须完成 Web Bundle 同步后再冻结发布产物；不能仅凭 Manager 健康或 HTML 可下载判断页面可用。安装验收还需读取与 HTML `webRelease` 一致的模块目录及模块入口。
+
+### 安装子进程失败证据
+
+事务 `Invoke-Checked` 按 Windows 参数规则保留空参数、空格、引号与末尾反斜杠的边界；每次调用把唯一命名的 `*.stdout.txt`、`*.stderr.txt` 写入本次 `transactionRoot`。该目录在首次候选自检之前随 candidate/backup 创建，不借用旧事务或共享临时目录。非零退出仍立即失败，不自动重放或跳过 generation fence；失败 journal 只增加操作标签、退出码和证据路径，不复制原始输出。进程启动异常另存 `*.launch-error.txt`，无法取得退出码时按 `unknown` 失败关闭。
+
+`Stop-RabiRouteHostFenced.ps1` 的内部 Host 调用在非零退出、JSON 无效或未返回 `ok:true` 时保留自己的 stdout/stderr，异常仅引用路径；成功调用仍清理内部证据。业务 JSON 错误可能位于 stdout，排障时应同时核对双流。失败事务保留目录供人工检查，成功事务仍按原规则删除整个 staging。原始文件可能包含敏感信息，不应直接上传。此前仅有 `Fenced Host stop ... ExitCode=1` 的日志不足以确定真实根因；参数修复本身不证明真实安装故障已解决。以下归档入口仍只接受原有精确旧错误文本，不扩展到带证据路径的新错误。
+
+### 继承环境中的大小写重复名称
+
+Setup 的 Windows PowerShell 子进程可能继承同时包含 `NO_PROXY` 与 `no_proxy` 的原生环境块；输出重定向使 .NET Framework 在 `ProcessStartInfo.get_EnvironmentVariables` 建立不区分大小写的字典，从而在候选 bootstrap 自检真正启动前抛出重复键 `ArgumentException`。这不是 bootstrap 自检失败，也不能据此修改 generation fence。
+
+安装和停止脚本在每次重定向启动前检查全部环境变量：名称按 `OrdinalIgnoreCase` 分组，值按 `Ordinal` 精确比较。同值重复只删除多余条目，留下一个原始条目（包括空值）；不同值则在启动目标程序前失败，`*.launch-error.txt` 记录冲突名称和处理提示，不输出环境值。必须在启动 Setup 的上游环境中统一冲突值后再重试，不自动选择大写或小写版本。不清空代理、不禁用 proxy，也不修改用户或系统环境；规范化只作用于当前安装/停止脚本进程及其后续子进程。
+
+两个脚本独立携带相同小函数，回归测试保证内容一致，现有 Setup 嵌入路径不变，不增加需要单独部署的 helper。`node --test scripts/windows-environment-case.test.mjs scripts/windows-invoke-checked.test.mjs` 使用临时原生 `CreateProcessW` 环境块启动 Windows PowerShell，覆盖真实重复继承、同值/异值/空值、无关值保留和原有参数/日志行为；不执行真实安装或 Host quit。
+
+### 人工核验旧 rolled-back 日志后归档（窄场景）
+
+独立维护入口 `scripts/Archive-RabiRouteRolledBackTransaction.ps1` **没有默认安装路径，不被 Setup 或 Developer Channel 自动调用**。必须先人工确认后续第三版本已经发布成功，并保存当前指针和旧日志的 SHA256。省略 `-Archive` 只读核验；实际归档必须另行显式授权并传入该开关：
+
+```powershell
+# 所有值来自人工核验；不要将占位值原样执行。
+.\scripts\Archive-RabiRouteRolledBackTransaction.ps1 `
+  -InstallRoot '<canonical-local-install-root>' `
+  -ExpectedCurrentReleaseId '<verified-current-release-id>' `
+  -ExpectedJournalSha256 '<64-hex-journal-sha256>' `
+  -ExpectedCurrentPointerSha256 '<64-hex-current-json-sha256>'
+# 核验通过不代表已归档；获准后用完全相同的参数追加 -Archive。
+```
+
+大包核验可显式追加 `-Verbose`，查看 `transaction-tree`、`release-tree`、`manifest-hash`、`extra-files` 和 `cas` 阶段的开始/完成；manifest 每校验完 1000 项报告一次计数；`scope=staged-candidate` 与 `scope=current` 标明正在验证哪份发布。默认不输出进度，不改变任何校验或准入条件。进度写入 PowerShell Verbose 流（流 4），成功流仍只返回最终 JSON；外部 `powershell.exe` 的控制台可能将进度呈现在标准输出，机器解析时须在 PowerShell 调用层用 `4> '<progress-log-path>'` 单独重定向，不能把合并后的控制台文本直接当 JSON。阶段完成仅表示该阶段检查通过，不代表归档完成或运行健康。
+
+当前仅接受 `rolled-back`、空 `quarantineMoves`、`versionMoveState=not-started`、布尔 `versionCommitted=false`、`legacyTaskMigrationState=restored`、`autostartState=captured`，且错误精确为 `Fenced Host stop failed with ExitCode=1.`。还必须同时满足：
+
+- 旧事务原本已有指针和 bootstrap；backup 完整；安装 `versions/<old-release>` 目标目录和 quarantine 目录必须不存在；当前不是旧 backup 或 candidate release。
+- `not-started` 正常会把完整候选留在 `.install-staging/<transaction-id>/candidate`，不能把它等同于已提交的安装版本。现在要求该候选完整存在：根层仅有非空 bootstrap、有效 `current.json` 和 `versions`，后者仅有与旧 journal 一致的唯一版本。候选与当前发布复用同一个只读验证函数，逐项核验完整 manifest、大小/哈希、必需项、额外文件、canonical payload/releaseId 和 reparse 边界；损坏或缺失的候选拒绝。候选全部原位保留，不执行其中程序。候选 bootstrap 仅校验普通非空文件及路径，发布 manifest 不覆盖根 bootstrap，不能据此宣称其签名或独立来源已认证。
+- 旧任务备份明确 `wasPresent=false, wasRunning=false` 且无 XML；登录启动和旧登录启动快照明确原本不存在，settings 快照若存在则校验原备份哈希。不会读取或恢复当前用户设置、快捷方式或计划任务。
+- 当前完整 manifest 的必需文件、全部文件大小/哈希、额外文件、canonical payload/releaseId 与指针均通过校验；根 bootstrap 与旧 backup 字节一致。这里使用只读文件验证，不执行 Host、自检或运行期健康请求；运行健康仍需操作者独立核验。
+- 安装根及证据路径必须是规范本机绝对路径；拒绝路径逃逸、别名形式和任意祖先/证据树 reparse point。缺失、冲突或其他状态只读拒绝，不提供强制绕过。
+
+入口沿用安装/Developer 的同名 mutex，获取前后及提交前检查 journal/指针 SHA256。先用 `CreateNew`、`WriteThrough` 和 `Flush(true)` 持久化原始日志字节到原事务所有权目录 `.install-staging/<transaction-id>/journal-<sha256>.original.json`，再无覆盖移动活跃日志为同目录 `journal-<sha256>.removed.json`。版本、backup、candidate、快照和中断的 `.pending` 证据全部保留，不删除、不恢复、不改写旧日志状态。已持久化未移动及已移动重试均可识别；已有异值归档拒绝覆盖。此 `Local\` mutex/CAS 只约束同一 Windows 登录会话、相同 canonical-root 的协作安装写入者；执行前必须排除其他登录会话或不同文件系统别名的写入，不是跨会话互斥、恶意本机管理员并发替换或存储硬件断电语义的保证。原安装恢复门禁不变，不能推广为所有 `rolled-back` 均已完成。
 
 ## 生命周期所有权
 

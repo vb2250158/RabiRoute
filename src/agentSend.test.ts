@@ -4,8 +4,73 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { handleAgentSend, inspectAgentSendDelivery, prepareAgentSendRequest, type AgentSendRequest } from "./agentSend.js";
+import { AGENT_SEND_CHANNEL_HELP, AGENT_SEND_REQUEST_CONTRACT, agentSendChannelHelp, handleAgentSend, inspectAgentSendDelivery, prepareAgentSendRequest, type AgentSendRequest } from "./agentSend.js";
 import type { AgentReplyOptions } from "./outbox.js";
+
+test("channel discovery is deeply immutable and matches accepted channel examples", () => {
+  const assertFrozen = (value: unknown): void => {
+    if (!value || typeof value !== "object") return;
+    assert.ok(Object.isFrozen(value));
+    for (const child of Object.values(value)) assertFrozen(child);
+  };
+  assertFrozen(AGENT_SEND_CHANNEL_HELP);
+  assert.equal(new Set(AGENT_SEND_CHANNEL_HELP.map(item => item.channel)).size, AGENT_SEND_CHANNEL_HELP.length);
+  for (const help of AGENT_SEND_CHANNEL_HELP) {
+    assert.equal(agentSendChannelHelp(help.channel), help);
+    assert.throws(() => prepareAgentSendRequest({
+      deliveryId: "example-delivery", sender: { agentType: "dsh", sessionId: "example-session" },
+      routeId: "example-route", ...help.example,
+      params: { ...(help.example.params as Record<string, unknown>), unsupportedField: true }
+    }), /params contains unsupported fields: unsupportedField/);
+    assert.doesNotThrow(() => prepareAgentSendRequest({
+      deliveryId: "example-delivery", sender: { agentType: "dsh", sessionId: "example-session" },
+      routeId: "example-route", ...help.example
+    }));
+  }
+  assert.equal(agentSendChannelHelp("qq"), undefined);
+  assert.equal(Reflect.set(AGENT_SEND_CHANNEL_HELP[0], "channel", "qq"), false);
+});
+
+test("partial request field contract is frozen and shares the parser allowlists", () => {
+  const contract = AGENT_SEND_REQUEST_CONTRACT;
+  const assertFrozen = (value: unknown): void => {
+    if (!value || typeof value !== "object") return;
+    assert.ok(Object.isFrozen(value));
+    for (const child of Object.values(value)) assertFrozen(child);
+  };
+  assertFrozen(contract);
+  assert.equal(contract.kind, "partial-field-allowlist");
+  assert.ok(contract.missing.length > 0);
+  assert.equal("schema" in contract, false);
+  assert.deepEqual(contract.channelValues, AGENT_SEND_CHANNEL_HELP.map(item => item.channel));
+  for (const help of AGENT_SEND_CHANNEL_HELP) {
+    assert.deepEqual(contract.paramsAllowedFields[help.channel], Object.keys(help.params));
+  }
+  const base = {
+    deliveryId: "contract-delivery", sender: { agentType: "dsh", sessionId: "contract-session" },
+    routeId: "contract-route", channel: "speech", params: {}, payload: { type: "text", text: "hello" }
+  };
+  for (const section of ["request", "sender", "payload"] as const) {
+    const allowed: readonly string[] = contract.allowedFields[section];
+    assert.equal(allowed.includes("unsupportedField"), false);
+    const extra = section === "request" ? { ...base, unsupportedField: true }
+      : { ...base, [section]: { ...base[section], unsupportedField: true } };
+    assert.throws(() => prepareAgentSendRequest(extra), {
+      message: `${section} contains unsupported fields: unsupportedField.`
+    });
+    // An allowed key may fail value checks, but must never fail the field-name allowlist.
+    for (const field of allowed) {
+      const candidate = section === "request" ? { ...base, [field]: undefined }
+        : { ...base, [section]: { ...base[section], [field]: undefined } };
+      try { prepareAgentSendRequest(candidate); } catch (error) {
+        assert.doesNotMatch(String(error), /contains unsupported fields/);
+      }
+    }
+  }
+  assert.throws(() => prepareAgentSendRequest({ ...base, sender: {}, payload: { unsupportedField: true } }), /Missing sender.agentType/);
+  assert.throws(() => prepareAgentSendRequest({ ...base, params: { unsupportedField: true }, payload: { unsupportedField: true } }), /payload contains unsupported fields/);
+  assert.doesNotThrow(() => prepareAgentSendRequest({ ...base, deliveryId: 123, payload: { type: "text", text: 456, path: "example-path", url: "https://example.invalid/file" } }));
+});
 
 async function withJsonServer(
   handler: (body: Record<string, unknown>, request: http.IncomingMessage) => Record<string, unknown>,
@@ -443,7 +508,7 @@ test("a managed plan attachment image is sent through the resolver port only", a
       return await send({ path: imagePath, fileName: "attachment-shot-1.png" });
     };
     const result = await handleAgentSend({ ...request, deliveryId: "send-plan-attachment-2" }, opts);
-    assert.equal(result.status, "sent");
+    assert.equal(result.status, "sent", JSON.stringify({ status: result.status, reason: result.reason }));
     observed = { path: imagePath, fileName: "attachment-shot-1.png" };
     assert.ok(observed);
   });

@@ -37,7 +37,15 @@
 
 此规则覆盖 Rabi 管理的群聊/私聊、附件、跨人格、持久 Agent 任务正文与续投、任务结果、callback / knowledge-callback 和 Outbox。普通界面对用户的答复、只读任务核对及同一任务内临时子 Agent 协作不属于旁路投递。发送仍须有原动作授权。
 
-群聊/私聊和文件使用 `POST /api/agent/send`；跨人格使用 `POST /api/personas/{targetPersonaId}/messages`；持久任务正文与续投使用 Rabi 线程桥 `POST /api/agent/threads`；正式 callback 按来源需求合同调用。保留原 taskBinding、来源身份、requestId、tracking、引用和稳定幂等字段。Rabi 的 adapter 最终调用 NapCat、Desktop IPC 或其它平台是受管链路的一部分；调用方绕开 Rabi 才属于旁路。
+先调用 `GET /api/agent/help` 获取当前 Agent API 目录，并可按 `operationId`、方法或路径查询单个接口帮助。返回项会标明 `contractLevel`：`baseline` 是尚未完成精确 schema 核验的帮助，不代表接口不能调用；应读取权威专题合同补齐 `coverage.missing` 后再调用。`auditLevel: implementation-summary` 仅表示已有实现审计摘要，不等于 `verified`。能力汇总仅在 verified 标签、请求与响应精确标记均为 true 且 missing 为空时计入 `verifiedCount`；未知等级或矛盾声明计入 `unverifiedCount`。三类计数 baselineCount + verifiedCount + unverifiedCount 等于 operationCount，不把未知项当成已验证。
+
+`contractRevision` 表示帮助结构版本；`catalogDigest` 是完整接口目录的 JSON 序列化内容 SHA-256（`sha256:` 前缀），不随筛选条件或 `generatedAt` 改变。发送能力的 `channelsDigest` 只摘要完整渠道描述数组，不包含外层通用 contract。摘要用于发现内容变化，不是 ETag、授权、schema 验证或 Manager 身份凭据；切代仍须重新发现并核验 `/meta`。
+
+发送能力另提供 `data.requestContract`（`version: 1`、`kind: partial-field-allowlist`）：`allowedFields.request/sender/payload` 是 `src/agentSend.ts` 拥有的冻结字段名白名单，`prepareAgentSendRequest` 直接使用同一定义；`channelValues` 和 `paramsAllowedFields` 从现有 `AGENT_SEND_CHANNEL_HELP` 派生。`requestContractDigest` 单独摘要该局部结构的 JSON 序列化内容（SHA-256，`sha256:` 前缀）；`channelsDigest` 不覆盖它。字段名数组只说明哪些键允许出现，**不是完整 JSON Schema**，不证明字段必填或值有效。`requestContract.missing` 明确列出未覆盖的值类型/约束、必填与条件、跨字段规则、嵌套 tracking/planAttachment 合同、运行时授权/投递策略及响应/错误合同；请继续读取专题合同。此发现增量不提升 send 的 `baseline` 或精确 schema 标记，不改变解析顺序、执行权限或幂等语义。
+
+Help 查询参数为 `operationId`、`path`、`method`，每项最多一次且非空，多个条件取交集；`path` 使用目录中的精确路径模板，`method` 不区分大小写。处理器对未知、重复或空参数返回 400 `AGENT_HELP_INVALID_QUERY` 和修复指引；LAN 权限层可能先拒绝非法查询。指定 `operationId` 未匹配返回 404 `AGENT_HELP_NOT_FOUND`；仅按路径或方法查无结果仍返回 200 空列表以兼容现有调用。错误不回显查询值，不得把凭据放入查询参数。
+
+插件层还提供 `node scripts/agent-api-route-inventory.mjs`：它输出 exact method/path、`dispatchScopes`（prefix）和 `unresolved`（通配或未展开项）三类清单。扫描使用 TypeScript AST，不执行插件；支持属性换序和带引号属性，忽略注释中的伪声明，动态路径、动态方法与 spread 声明记入 unresolved。它只识别显式含 routeId 的对象，无法覆盖完全由导入或工厂生成的声明；exact 数量按文件与 routeId 区分，不是全局唯一 URL 数量。不要把 prefix 或单一 Agent 目录数量当成全部 Rabi API。群聊/私聊和文件使用 `POST /api/agent/send`。发送前可再调用 `GET /api/agent/send/capabilities` 获取当前渠道、参数说明和示例。内置目录的 `params` 键与发送校验共用字段白名单；字段类型、条件必填和权限仍由实际校验器执行，不应把说明文本当作完整 JSON Schema。QQ/NapCat 使用 `channel: "napcat"`，不能写 `channel: "qq"`。未知渠道会返回 `errorCode`、`help`、`repair` 和支持渠道；其他参数错误的帮助完整度以具体处理器为准；跨人格使用 `POST /api/personas/{targetPersonaId}/messages`；持久任务正文与续投使用 Rabi 线程桥 `POST /api/agent/threads`；正式 callback 按来源需求合同调用。保留原 taskBinding、来源身份、requestId、tracking、引用和稳定幂等字段。Rabi 的 adapter 最终调用 NapCat、Desktop IPC 或其它平台是受管链路的一部分；调用方绕开 Rabi 才属于旁路。
 
 只有按上节动态发现、核对身份并有界重试后确认 Rabi 不可用，才允许在原授权内使用已核实的当前平台入口。旧端口拒绝连接、Hook 概括提示、参数错误、权限/策略拒绝、owner 未加载或接口能力不足，都不能单独证明 Rabi 已挂。截图或旧任务中的地址不能替代当前 generation。Rabi 健康时应解决具体接口问题，不因工具方便而直发。
 
@@ -58,7 +66,9 @@
 GET /api/roles/{roleId}/message-endpoint-history
 ```
 
-常用参数：`query`（支持空格、英文逗号、中文逗号、顿号分隔的多个关键词）、`match=any|all`（默认 `any`）、`adapter`、`kind=group|private`、`sender`、`target`、`conversationKey`、`from`、`to`、`includeArchives=1`、`limit`。返回 `entries`、`count` 和 `coverage`；消息记录保留消息端、群/私聊会话键、发送者、目标、消息 ID、回复 ID 和附件摘要。`kind=group` 只查群聊入站消息，`kind=private` 只查私聊入站消息；`reply_sent` 等出站回复不应当当作用户原始反馈。
+常用参数：`query`（支持空格、英文逗号、中文逗号、顿号分隔的多个关键词）、`match=any|all`（默认 `any`）、`adapter`、`kind=group|private`、`sender`、`target`、`conversationKey`、`from`、`to`、`includeArchives=1`、`limit`。用户说“最近一小时”等时间范围时，必须转换为 Unix 秒 `from`（必要时传 `to`）；用户要求“所有消息”时省略 `query`，不要臆造关键词。`limit` 只是返回上限，不代表完整覆盖；无时间范围的归档查询会扫描完整归档，应避免用于大历史。返回 `entries`、`count` 和 `coverage`；消息记录保留消息端、群/私聊会话键、发送者、目标、消息 ID、回复 ID 和附件摘要。`kind=group` 只查群聊入站消息，`kind=private` 只查私聊入站消息；`reply_sent` 等出站回复不应当当作用户原始反馈。
+
+查询由有界交互读进程执行，不占用目录整理任务队列；客户端断开会取消排队任务或终止仍在读取的进程。另支持 `channel` 和 `maxChars`；`limit` 默认 50、最多 200，`maxChars` 默认及最多 200,000。成功结构和筛选语义不变；读池繁忙、超时或无法确认子进程终止返回 HTTP 503，业务参数错误仍返回 400，不把失败伪装成零条记录。此隔离不承诺任意大小历史都能在超时前查完，也不代表其它同步入口或线上健康已验收。
 
 查询由有界交互读进程执行，不占用目录整理任务队列；客户端断开会取消排队任务或终止仍在读取的进程。另支持 `channel` 和 `maxChars`；`limit` 默认 50、最多 200，`maxChars` 默认及最多 200,000。成功结构和筛选语义不变；读池繁忙、超时或无法确认子进程终止返回 HTTP 503，业务参数错误仍返回 400，不把失败伪装成零条记录。此隔离不承诺任意大小历史都能在超时前查完，也不代表其它同步入口或线上健康已验收。
 
@@ -786,6 +796,19 @@ node rabi-agent.mjs --api GET /api/agent/uploads/<UUID> --agent <agentId>
   }
 }
 ```
+
+#### 上传 Help 的局部机器可读合同
+
+`GET /api/agent/help?path=%2Fapi%2Fagent%2Fuploads%2F%3AuploadId` 的 PUT/GET 帮助提供可选 `help.machineReadable`（`version:1`、`kind:partial-upload-contract`），定义位于 `src/manager/agentUploadContract.ts`。这不是全 API OpenAPI 文档，也不参与执行校验或授权。
+
+- `request.path.uploadId.schema` 描述小写 UUID（版本 1–8、RFC variant）；`request.query.allowed=[]` 表示 Agent 目录不允许查询参数。
+- `request.headers` 只列上传业务头，不是完整认证头合同。PUT 必填头必须单值；`idempotency-key.equalsPathParameter=uploadId` 表达跨字段相等，Content-Type 值不区分大小写但不接受参数，`content-encoding` 禁止。SHA-256 请求头允许大小写；回执统一小写。文件名先 URI 解码，再通过路由和存储的 basename、安全名称与 UTF-8 字节限制检查；这些语义未完整 schema 化。可选 Content-Length 由实现转成 Number、经存储核对非负安全整数及实际字节数。
+- PUT `request.body` 为 `{kind:binary,mediaType:application/octet-stream,encoding:raw,emptyAllowed:true}`，**没有 JSON Schema**，不代表 JSON 字符串或 Base64。GET 为 `kind:none`，处理器不读取正文，不宣称主动拒绝所有带正文的请求。
+- `responses["200"].schema` 是 JSON Schema 2020-12，只描述成功 JSON 正文 `{code:0,data:{id,fileName,size,sha256,expiresAt}}` 的字段结构，所有字段必填且不允许额外字段。PUT/GET 共用同一结构；GET 不提供上传进度、完整状态机、文件字节、owner 或本地 path。`scope:success-body-shape` 不意味着全部值语义或 HTTP 边界已被 schema 覆盖。
+
+两项仍为 `contractLevel:baseline`、`coverage.exactRequestSchema=false`、`coverage.exactResponseSchema=false`。`coverage.missing` 与机器合同的 `missing` 一致，明确保留认证/授权边界、错误响应 schema、响应头、存储 DTO 值语义，以及 PUT 的文件名/流完整性/动态限额或 GET 的归属/过期/完整性检查。消费者不能凭 200 schema 的存在升级为 verified、绕过 owner 检查或重放上传。
+
+上传错误保留原有字符串 `code`，并附带同值 `errorCode`、`help { method, path }`、`repair` 和 `retryable:false`。`retryable:false` 表示不能自动重放，不表示人工修正后永远不可再调用；415 按提示修正二进制格式，403 核对原身份和启停，409 或不确定结果先 GET 原 ID 核对，不换 ID 绕过。帮助链接不授予额外权限。408 `upload_timeout` 和连接中断 `upload_aborted` 有具体恢复提示，仍为 `retryable:false`；先 GET 原 ID，不自动重传。连接已断开时无法保证收到错误 JSON。
 
 默认限制为单文件 2 GiB（2048 MiB，硬上限）、总量 4 GiB、最多 100 个文件、TTL 24 小时；HTTP 上传总并发上限为 4，跨 owner 合计。归属按 `nodeId + agentId` 隔离，同一 Agent 的多个 session 可共享文件，但每次请求仍须来自可信且已批准的 source；知道 ID 不构成授权。超时、503、响应不确定或 generation 变化后，保留原 UUID、文件内容和摘要，先重新发现并核对当前 `/meta`，再 `GET` 原路径核对 `id/fileName/size/sha256/expiresAt`，不自动重试 PUT 或换 ID。
 

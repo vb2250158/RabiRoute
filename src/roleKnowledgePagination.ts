@@ -176,7 +176,7 @@ export function paginateRolePlans<T extends PresentedPlanLike>(
   const viewAndQueryPlans = plans.filter((plan) => {
     if (filter.view && !plan.presentation.views.includes(filter.view)) return false;
     if (normalizedQuery && filter.view !== "archived" && plan.presentation.views.includes("archived")) return false;
-    return !normalizedQuery || searchableKnowledgeStrings(plan).some((value) => value.includes(normalizedQuery));
+    return !normalizedQuery || knowledgeMatchesQuery(plan, normalizedQuery);
   });
   const includeFacets = filter.includeFacets !== false;
   const statusFacets = new Map<string, RolePlanPage<T>["facets"]["statuses"][number]>();
@@ -224,21 +224,26 @@ export function paginateRolePlans<T extends PresentedPlanLike>(
   const orderedPlans = sortPlans(filteredPlans, filter.sort);
   const items = orderedPlans.slice(offset, offset + limit);
   const nextOffset = offset + items.length;
-  const byStatus = Object.fromEntries([...new Set(plans.map((plan) => plan.status))]
-    .map((status) => [status, plans.filter((plan) => plan.status === status).length]));
+  // Counts cover the binding scope, not the selected view/query. Aggregate once
+  // rather than rescanning the catalog for each configurable status and counter.
+  const statusCounts = new Map<string, number>();
   const counts: RolePlanPageCounts = {
-    total: plans.length,
-    current: plans.filter((plan) => plan.presentation.views.includes("current")).length,
-    plans: plans.filter((plan) => plan.presentation.views.includes("plans")).length,
-    archived: plans.filter((plan) => plan.presentation.views.includes("archived")).length,
-    blocked: plans.filter((plan) => plan.presentation.roles.includes("approval")).length,
-    qa: plans.filter((plan) => plan.presentation.roles.includes("waitingQa")).length,
-    active: plans.filter((plan) => plan.presentation.views.includes("current")).length,
-    stages: {
-      byStatus,
-      archived: plans.filter((plan) => plan.presentation.views.includes("archived")).length
-    }
+    total: plans.length, current: 0, plans: 0, archived: 0,
+    blocked: 0, qa: 0, active: 0,
+    stages: { byStatus: {}, archived: 0 }
   };
+  for (const plan of plans) {
+    statusCounts.set(plan.status, (statusCounts.get(plan.status) ?? 0) + 1);
+    const { views, roles } = plan.presentation;
+    if (views.includes("current")) counts.current++;
+    if (views.includes("plans")) counts.plans++;
+    if (views.includes("archived")) counts.archived++;
+    if (roles.includes("approval")) counts.blocked++;
+    if (roles.includes("waitingQa")) counts.qa++;
+  }
+  counts.active = counts.current;
+  counts.stages.archived = counts.archived;
+  counts.stages.byStatus = Object.fromEntries(statusCounts);
   return {
     items,
     total: orderedPlans.length,
@@ -261,7 +266,7 @@ export function paginateRoleMemory<T>(
   const offset = cursorOffset(cursor);
   const normalizedQuery = String(query || "").trim().toLowerCase();
   const filteredItems = normalizedQuery
-    ? items.filter((item) => searchableKnowledgeStrings(item).some((value) => value.includes(normalizedQuery)))
+    ? items.filter((item) => knowledgeMatchesQuery(item, normalizedQuery))
     : items;
   const pageItems = filteredItems.slice(offset, offset + limit);
   const nextOffset = offset + pageItems.length;
@@ -273,19 +278,28 @@ export function paginateRoleMemory<T>(
   };
 }
 
-function searchableKnowledgeStrings(value: unknown, output: string[] = [], seen = new WeakSet<object>()): string[] {
-  if (typeof value === "string") {
-    output.push(value.toLowerCase());
-    return output;
+function knowledgeMatchesQuery(value: unknown, query: string): boolean {
+  // Match each string independently: concatenation would introduce false matches
+  // across fields. Stop on the first hit without retaining every lowercase value.
+  const seen = new WeakSet<object>();
+  const pending: Iterator<unknown>[] = [[value][Symbol.iterator]()];
+  while (pending.length) {
+    const next = pending[pending.length - 1]!.next();
+    if (next.done) {
+      pending.pop();
+      continue;
+    }
+    const current = next.value;
+    if (typeof current === "string") {
+      if (current.toLowerCase().includes(query)) return true;
+      continue;
+    }
+    if (!current || typeof current !== "object" || seen.has(current)) continue;
+    seen.add(current);
+    const children = Array.isArray(current) ? current : Object.values(current as Record<string, unknown>);
+    pending.push(children[Symbol.iterator]());
   }
-  if (!value || typeof value !== "object" || seen.has(value)) return output;
-  seen.add(value);
-  if (Array.isArray(value)) {
-    for (const item of value) searchableKnowledgeStrings(item, output, seen);
-    return output;
-  }
-  for (const item of Object.values(value as Record<string, unknown>)) searchableKnowledgeStrings(item, output, seen);
-  return output;
+  return false;
 }
 
 function currentPlanStep(plan: RolePlanSummarySource) {

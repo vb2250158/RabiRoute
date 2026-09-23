@@ -14,6 +14,12 @@ RabiRoute continues using the current DSH Web owner's session API. It does not s
 
 Current DSH Web exchanges its process launch URL for a cookie at the root path. An unauthenticated legacy bridge receives HTTP 401. Changing the port alone cannot fix authentication or the legacy RPC contract.
 
+## Session bridge endpoint selection
+
+The session bridge first uses an explicit `dshBaseUrl` from call options, then the address of a complete DSH primary binding, and finally the shared `resolveDshBaseUrl()`. Without a complete primary binding, default read and list requests also use existing local discovery: `DSH_WEB_URL` first, then clean loopback origins from known launch logs under `DSH_HOME`. If neither provides an address, the original `DEFAULT_DSH_BASE_URL` remains the fallback. An address without a valid session ID and working directory is not a complete primary binding.
+
+This fix does not scan ports, retry against candidate addresses, extract credentials from discovery logs, or change the no-automatic-replay rules for 401 responses and writes. Endpoint selection and authentication remain separate. Isolated HTTP fixtures cover default reads/lists and primary/explicit endpoint priority; live deployment acceptance is still pending.
+
 ## Connect in WebGUI (in development; deployment not accepted yet)
 
 Use **Connect DSH** in the local RabiRoute console's DSH settings:
@@ -41,6 +47,12 @@ An unexpired authorization survives ordinary DSH restarts at the same address wi
 ### Legacy log compatibility exit criteria
 
 To avoid breaking existing installations during upgrade, log authentication remains only for legacy endpoints with no protected-store record. The only migration path is WebGUI **Verify and save existing connection**, or pasting the current login link. Once authorization is saved, expires, or is removed, business RPCs never use that endpoint's old log again. Reconnecting after removal requires the login link. After every configured endpoint migrates, the old `dsh-auth.json` can be removed; new installations do not need it. Authorization saves immediately and is not rolled back by cancelling the Route form. Disconnect blocks requests not yet dispatched but cannot retract tasks already handed to DSH.
+
+Legacy configuration supplies credentials for each origin; it is not an endpoint access allowlist. A valid configuration without a matching entry no longer blocks dispatch: the request carries no other origin's cookie, and the target DSH decides whether to accept it. Authentication failures are not retried. Expired or explicitly disconnected protected records still block dispatch and never fall back to logs. This change has not yet passed deployment acceptance.
+
+The presentation layer classifies legacy connection configuration failures as `dsh_connection_configuration`, and owner authentication exchange, expiry or disconnect failures as `dsh_connection_required`, rather than a generic Agent permission denial. Responses preserve raw diagnostics and include `errorMessages.zh-CN/en`. WebGUI language is stored in the browser, not a global Manager language setting; API consumers should select the corresponding field. Recovery guidance points to the local Route → Message adapters → Agent → DSH → Connect DSH panel. Automatic onboarding and live deployment still require separate acceptance.
+
+For `DSH RPC transport failed; result may be unknown, check the original receipt before retrying.`, the presentation layer uses `dsh_transport_failed` before the generic HTTP 400 validation classification. It means the DSH connection transport did not complete, not that request parameters are invalid or Agent business permissions were denied. The original English `message` and `retryable: false` remain unchanged. The request is not automatically replayed, and its outcome may be unknown: check the original session and operation receipt before retrying; do not assume execution never started. This presentation-only correction changes neither HTTP status codes nor authentication/RPC execution logic and has not passed deployment acceptance.
 
 ## Legacy local configuration (compatibility entry)
 

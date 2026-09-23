@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import fs from "node:fs";
+import ts from "typescript";
 import { authorizeAgentApiOperation as authorize, listAgentApiOperations } from "./agentApiPolicy.js";
 
 function sample(template: string): string {
@@ -24,26 +25,67 @@ test("discovery and enforcement share one immutable catalog with discoverable co
     assert.ok(Object.isFrozen(operation.queryParameters));
     assert.ok(Object.isFrozen(operation.repeatableQueryParameters));
     assert.ok(Object.isFrozen(operation.limitations));
+    assert.ok(Object.isFrozen(operation.help));
+    assert.ok(Object.isFrozen(operation.help.request));
+    assert.ok(Object.isFrozen(operation.help.errors));
+    assert.equal(operation.help.operationId, operation.id);
+    assert.equal(operation.help.method, operation.method);
+    assert.equal(operation.help.pathTemplate, operation.pathTemplate);
+    assert.ok(operation.help.nextStep.length > 0);
+    const verified = ["agent:POST:/api/agent/send", "agent:PUT:/api/agent/uploads/:uploadId", "agent:GET:/api/agent/uploads/:uploadId", "home:POST:/api/agent/xiaomi-home/action-requests"].includes(operation.id);
+    assert.equal(operation.help.auth.required, verified ? true : null);
+    assert.ok(Object.isFrozen(operation.help.auth.scopes));
+    assert.equal(operation.help.effects.mode, verified ? (operation.method === "GET" ? "readOnly" : "mutating") : "unknown");
+    assert.equal(operation.help.idempotency.required, verified ? operation.method !== "GET" : null);
     assert.ok(operation.description.length > 0);
     assert.equal(operation.contractResourceId, "docs/rabi-agent-interfaces.md");
+    assert.equal(operation.help.contractLevel, "baseline");
+    assert.equal(operation.help.auditLevel, verified ? "implementation-summary" : "none");
+    if (!verified && operation.method !== "GET") assert.match(operation.help.request.body, /尚未在 Help 核验/);
+    assert.equal(operation.help.coverage.exactRequestSchema, false);
+    assert.equal(operation.help.coverage.exactResponseSchema, false);
+    if (operation.help.machineReadable) {
+      assert.equal(operation.pathTemplate, "/api/agent/uploads/:uploadId");
+      assert.deepEqual(operation.help.coverage.missing, operation.help.machineReadable.missing);
+      assert.ok(operation.help.coverage.missing.includes("error-response-schemas"));
+    } else assert.deepEqual(operation.help.coverage.missing, ["request-body-schema", "response-schema"]);
     const decision = authorize(operation.method, sample(operation.pathTemplate));
     assert.equal(decision.allowed, true, operation.id);
     if (decision.allowed) assert.equal(decision.operation.id, operation.id);
     assert.equal(authorize(operation.method, `${sample(operation.pathTemplate)}/unexpected/action`).allowed, false, operation.id);
-    assert.equal(authorize(operation.method, `${sample(operation.pathTemplate)}?path=example`).allowed, false, operation.id);
+    assert.equal(authorize(operation.method, `${sample(operation.pathTemplate)}?__unknown=example`).allowed, false, operation.id);
   }
   assert.throws(() => Object.assign(catalog[0], { pathTemplate: "/api/webgui-access" }));
 });
 
-test("every catalog operation is owned by an existing builtin route declaration", () => {
+test("every catalog operation has declaration-level dispatch coverage, not handler verification", () => {
   const root = new URL("../../plugins/builtin/", import.meta.url);
   const declarations: { kind: string; path: string; methods?: string[] }[] = [];
   for (const entry of fs.readdirSync(root, { recursive: true, encoding: "utf8" })) {
     if (!entry.replaceAll("\\", "/").endsWith("/manager.mjs")) continue;
     const source = fs.readFileSync(new URL(entry.replaceAll("\\", "/"), root), "utf8");
-    for (const match of source.matchAll(/\{\s*routeId:\s*"[^"]+",\s*kind:\s*"(exact|prefix)",\s*(?:path|pathPrefix):\s*"([^"]+)"([^}]*)\}/g)) {
-      declarations.push({ kind: match[1], path: match[2], methods: match[3].match(/methods:\s*\[([^\]]+)\]/)?.[1].match(/[A-Z*]+/g) ?? undefined });
-    }
+    const ast = ts.createSourceFile(entry, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+    const literal = (node: ts.Node | undefined): string | undefined => node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : undefined;
+    const visit = (node: ts.Node): void => {
+      if (ts.isObjectLiteralExpression(node) && !node.properties.some(ts.isSpreadAssignment)) {
+        const fields = new Map<string, ts.Expression>();
+        for (const field of node.properties) {
+          if (!ts.isPropertyAssignment(field)) continue;
+          const name = ts.isIdentifier(field.name) ? field.name.text : literal(field.name);
+          if (name) fields.set(name, field.initializer);
+        }
+        const kind = literal(fields.get("kind"));
+        const routePath = literal(fields.get(kind === "prefix" ? "pathPrefix" : "path"));
+        const methodsNode = fields.get("methods");
+        const methods = methodsNode && ts.isArrayLiteralExpression(methodsNode) ? methodsNode.elements.map(literal) : undefined;
+        if (literal(fields.get("routeId")) && (kind === "exact" || kind === "prefix") && routePath
+          && (!methodsNode || (methods && methods.every((method): method is string => method !== undefined)))) {
+          declarations.push({ kind, path: routePath, methods: methods as string[] | undefined });
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(ast);
   }
   assert.ok(declarations.length > 50);
   for (const operation of listAgentApiOperations()) {

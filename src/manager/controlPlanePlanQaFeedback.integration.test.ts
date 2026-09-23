@@ -274,5 +274,5 @@ test("the feedback route returns 202 after durable commit even when QA post-comm
   const records = (await application.queries.planFeedback("Rabi", "plan-route-feedback-post-commit"))?.records ?? [];
   assert.equal(records.length, 1);
   assert.equal((records[0] as any).postCommit.status, "failed");
-  assert.equal(records[0].qaHandling?.status, "dispatch_failed");
+  assert.equal(records[0].qaHandling?.status, "dispatch_failed", JSON.stringify(records[0]));
 });

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, test } from "node:test";
 import { withTestDeadline } from "../testFiniteDeadline.js";
+import { listenManagerEndpoint } from "../managerEndpointPolicy.js";
 import {
   ManagerWatchBroker,
   isUncPath,
@@ -46,22 +47,44 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
 }
 
 async function listen(server: http.Server): Promise<number> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.removeListener("error", reject);
-      resolve();
-    });
+  // OS-assigned ports can still be blocked by WHATWG Fetch.
+  const endpoint = await listenManagerEndpoint({
+    server,
+    host: "127.0.0.1",
+    policy: { mode: "auto" }
   });
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("Test health server did not bind TCP.");
-  return address.port;
+  return endpoint.port;
 }
 
 async function closeServer(server: http.Server): Promise<void> {
   if (!server.listening) return;
   await new Promise<void>(resolve => server.close(() => resolve()));
 }
+
+test("health fixture retries an OS-assigned port blocked by Fetch before serving requests", async (t) => {
+  const server = http.createServer((_request, response) => response.end("ok"));
+  t.after(() => closeServer(server));
+  const address = server.address.bind(server);
+  let reportedBlockedPort = false;
+  t.mock.method(server, "address", () => {
+    const boundAddress = address();
+    if (!reportedBlockedPort && boundAddress && typeof boundAddress !== "string") {
+      reportedBlockedPort = true;
+      return { ...boundAddress, port: 6000 };
+    }
+    return boundAddress;
+  });
+  const close = t.mock.method(server, "close");
+
+  const port = await listen(server);
+
+  assert.equal(reportedBlockedPort, true);
+  assert.ok(close.mock.callCount() >= 1, "the blocked allocation must be closed before retrying");
+  assert.equal(port, (address() as { port: number }).port);
+  const response = await fetch(`http://127.0.0.1:${port}/health`);
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "ok");
+});
 
 test("UNC detection is independent of the current platform path implementation", () => {
   assert.equal(isUncPath("\\\\example-host\\example-share\\project"), true);

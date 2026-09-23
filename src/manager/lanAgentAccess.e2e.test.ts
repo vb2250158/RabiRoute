@@ -67,7 +67,8 @@ test("HTTP enrollment, explicit admin grant, resources and offline revocation sh
     const listed = await fetch(`${base}/api/lan-agent/resources`, { headers });
     assert.equal(listed.status, 200);
     assert.equal((await listed.json()).data[0].id, "skills/example/SKILL.md");
-    assert.equal((await fetch(`${base}/api/lan-agent/nodes`, { headers })).status, 403);
+    // No remote-only operation denial: the handler still requires management authentication.
+    assert.equal((await fetch(`${base}/api/lan-agent/nodes`, { headers })).status, 401);
     assert.equal((await fetch(`${base}/api/lan-agent/resources/read?id=..%2Fauthority.json`, { headers })).status, 400);
     authority.setAgentEnabled("node-fixture", "worker", false);
     assert.equal((await fetch(`${base}/api/lan-agent/resources`, { headers })).status, 403);

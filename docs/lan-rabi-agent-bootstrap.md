@@ -30,6 +30,10 @@
 
 `GET /api/lan-agent/resources` 返回 `200` 且 `data: []` 不等于未授权；权限拒绝返回 `401/403`。公开资源由 Manager 从当前安装包的 `packageRoot/skills` 和白名单 `packageRoot/docs` 读取，不能从可写的 `stateRoot` 扫描。安装版两根分离时，旧接线会错误返回空目录。修复或升级主机 Manager 后，用原节点凭据重新读取目录及 `docs/rabi-agent-interfaces.md`；不需要重新注册节点或反复授权，也不要把文档复制到状态目录绕过问题。连接状态、资源可读状态和 macOS 登录启动状态须分别验证。
 
+### 已连接但资源目录为空
+
+`GET /api/lan-agent/resources` 返回 `200` 且 `data: []` 不等于未授权；权限拒绝返回 `401/403`。公开资源由 Manager 从当前安装包的 `packageRoot/skills` 和白名单 `packageRoot/docs` 读取，不能从可写的 `stateRoot` 扫描。安装版两根分离时，旧接线会错误返回空目录。修复或升级主机 Manager 后，用原节点凭据重新读取目录及 `docs/rabi-agent-interfaces.md`；不需要重新注册节点或反复授权，也不要把文档复制到状态目录绕过问题。连接状态、资源可读状态和 macOS 登录启动状态须分别验证。
+
 ### 旧节点必须重新接入
 
 缺少 `nodeCredential` 的旧配置不能把 `lanLinkToken` 当作新节点凭据。使用新票据重新接入，保留原 `nodeId`、Agent、任务绑定与允许的工作目录；已有独立凭据的重连不重复兑换票据。新源码已加入监听 HTTP/WS 前的安全迁移：发现旧 `lan-agent-tasks.json` 且没有完成标记时，即使旧注册表为空也轮换 WebGUI Token，成功后才写完成标记；迁移失败则中止启动。旧浏览器远程链接会失效，须在本机获取新链接，并更新受信管理客户端。对于检测范围外曾暴露的共享密钥，仍须确认撤销或轮换。**未轮换的旧共享密钥仍可能以管理权限绕过节点授权，关闭 Agent 授权不能撤销它。** 整体部署与 Host 健康不等于旧节点迁移验收；仍须逐节点核对重新接入和旧密钥失效，不能说所有现有安装已自动安全迁移。兑换超时或回执不确定时先核对 Manager 节点状态与本机私有配置，不自动重放兑换。
@@ -98,7 +102,8 @@ node rabi-agent.mjs --api GET "/api/lan-agent/resources/read?id=docs%2Frabi-agen
 - 人格技能另走 `GET /api/roles/:roleId/skills`（摘要列表）与 `GET /api/roles/:roleId/skills/:skillId`（详情）；`/roles/...` 别名遵守相同边界。已获 Manager API 授权且在该人格 Route 中配置的准确 `instanceId + agentId`，可以读取该人格有效技能目录，不需要逐技能重复授权。未配置该人格返回 `403 LAN_AGENT_PERSONA_NOT_CONFIGURED`，同名 Agent 或其他节点不能借用绑定；本机管理请求保留原认证。这里不合并宿主全局或私有技能目录，也不将私有技能、凭据和同步配置发布到公共 `resources`。
 - 人格技能列表和详情均使用有界交互读取池，不排在目录批量任务之后；断连取消读取，队列忙、任务超时或工作进程终止未确认返回 `503`，而不是合法空列表。已授权人格的技能不存在返回 `404`，正常无技能为 `200` 加空列表。上述人格权限与队列修复需以实际部署版本验收，源码测试不代表所有运行节点已更新。
 - 按需取 Manager 当前发布的最新技能和合同，随后读取目录中可用的 references；不要把整套技能长期复制为另一份权威来源。计划、记忆与消息处理状态仍由 Manager 持有，不复制到远端维护第二套业务状态。
-- 管理员设置、授权修改、任意文件和宿主控制不向节点 API 开放。已有 loopback-only 处理器仍拒绝远端调用，不通过本机代理绕过限制。
+- 不再以远端专属业务子集直接拒绝目录外请求；原始路径、编码和查询凭据检查仍有效。目录外路径、方法或未收录查询参数继续进入既有管理 Token 校验，节点凭据不能代替管理 Token（即使请求来自 loopback）。因此目录外业务仍可能返回 `401 WEBGUI_TOKEN_REQUIRED`，不能宣称全部 API 已与本机能力对齐。管理员设置、授权修改、任意文件和宿主控制不会因启用 Agent 自动开放；已有 loopback-only 处理器仍拒绝远端调用，不通过本机代理绕过限制。
+- JSON 请求体沿用本机 `readJsonBody` 默认值及各接口显式限额，不再叠加远端专属 1 MiB 上限，也没有新增共同限额。来源身份校验、上传限额及各业务处理器原有检查保持不变。
 - 向消息渠道正式发送沿用 Manager 的消息合同，必须取得 Manager 与渠道回执；任务最终文本不代表已发送。远端调用仍遵守 Route 发送权限：`onlyPrimary` 要求可信 `provider`、Route 的 `instanceId`/`nodeId` 与 `agentId`、已批准的会话及 `primary_persona` 身份全部匹配；仅裸会话 ID 同名不会继承本机权限。
 - 跨 Agent 投递时，远端主会话来源按实例命名空间记录。目前只支持 `responsePolicy: "none"` 的单向投递；因缺少可信回传路由，`responsePolicy: "required"`、`inReplyToRequestId` 正式回复及远端到远端投递均明确拒绝，不能视为完整支持正式回复。远端上下文只走自身专用 `context` 入口，不开放通用 `codex-hook` 接口。
 

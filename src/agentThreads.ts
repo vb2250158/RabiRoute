@@ -42,6 +42,7 @@ import {
   CodexThreadCreationBlockedError,
   createCodexThreadWithReservation
 } from "./codexThreadCreationReservations.js";
+import { resolveDshBaseUrl } from "./dshDiscovery.js";
 import { normalizeCodexThreadTitle } from "./shared/codexThreadTitle.js";
 import { proactiveCommunicationPolicyLines } from "./shared/agentCommunicationPolicy.js";
 import type { CodexReasoningEffort } from "./shared/gatewayConfigModel.js";
@@ -274,7 +275,7 @@ export function agentThreadRequestFailureData(
 function dshBaseUrlFor(options?: AgentThreadRequestOptions): string {
   return options?.dshBaseUrl?.trim()
     || readDshPrimaryBinding()?.baseUrl
-    || "http://127.0.0.1:3080";
+    || resolveDshBaseUrl();
 }
 
 const defaultDriver: AgentThreadDriver = {

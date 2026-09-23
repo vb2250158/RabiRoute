@@ -457,6 +457,7 @@ import {
   managerPerformanceWorkerPool,
   managerReadWorkerPool
 } from "./managerReadWorkerPool.js";
+import { PlanPageCatalogInitializingError } from "./planPageCatalogLifecycle.js";
 import {
   RoleStorageApplication,
   RoleStorageApplicationError,
@@ -4351,6 +4352,17 @@ async function submitAgentPlanFeedback(
   });
 }
 
+function respondPlanPageError(response: http.ServerResponse, error: unknown): void {
+  if (error instanceof PlanPageCatalogInitializingError) {
+    response.setHeader("Retry-After", "2");
+    jsonResponse(response, 503, { code: -1, reason: error.reason, message: error.message });
+    return;
+  }
+  jsonResponse(response, error instanceof ManagerReadWorkerError ? 503 : 500, {
+    code: -1, message: error instanceof Error ? error.message : String(error)
+  });
+}
+
 function respondRoleStorageError(response: http.ServerResponse, error: unknown): void {
   const mapped = roleStorageHttpError(error);
   for (const [name, value] of Object.entries(mapped.headers)) response.setHeader(name, value);
@@ -8073,9 +8085,11 @@ function handleRoleKnowledgeApi(
     if (request.method === "POST" && resource === "plans" && itemId === "query") {
       void readJsonBody<unknown>(request, 1024 * 1024)
         .then(body => import("../planWorkspaceQuery.js").then(({ parseWorkspacePlanQuery }) => parseWorkspacePlanQuery(body)))
-        .then(input => managerKnowledgePageWorkerPool.queryRolePlanPage(roleDir, input))
-        .then(data => jsonResponse(response, 200, { code: 0, data }))
-        .catch(error => jsonResponse(response, error instanceof ManagerReadWorkerError ? 503 : 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+        .then(input => {
+          void managerKnowledgePageWorkerPool.queryRolePlanPage(roleDir, input, { readyOnly: true })
+            .then(data => jsonResponse(response, 200, { code: 0, data }))
+            .catch(error => respondPlanPageError(response, error));
+        }, error => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
       return true;
     }
     if (request.method === "GET" && resource === "plans") {
@@ -8116,12 +8130,9 @@ function handleRoleKnowledgeApi(
           tags: requestUrl.searchParams.getAll("tag").map((value) => value.trim()).filter(Boolean),
           includeFacets: requestUrl.searchParams.get("facets") !== "0",
           summary: wantsSummary
-        })
+        }, { readyOnly: true })
           .then((data) => jsonResponse(response, 200, { code: 0, data }))
-          .catch((error) => jsonResponse(response, error instanceof ManagerReadWorkerError && error.code === "busy" ? 503 : 500, {
-            code: -1,
-            message: error instanceof Error ? error.message : String(error)
-          }));
+          .catch((error) => respondPlanPageError(response, error));
         return true;
       }
       void managerCatalogWorkerPool.queryRolePlanCatalog(roleDir)
@@ -10172,7 +10183,14 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
           return lanAgentAuthority.validateBootstrapTicket(token) || Boolean(lanAgentAuthority.authenticate(token));
         })())
       );
-      if (lanAgentAccess.kind !== "agent" && !enrollmentAccess && !webguiLanRequestAllowed(request, requestUrl)) {
+      // A node credential is not an admin token, even when relayed over loopback.
+      const managementAccessAllowed = lanAgentAccess.kind === "agent"
+        ? !lanAgentAccess.requiresManagementAuth || webguiTokenMatches(
+          headerValue(request.headers.authorization).match(/^Bearer\s+(.+)$/i)?.[1]?.trim() ?? "",
+          rabiGlobalConfig.read().webguiLan.accessToken
+        )
+        : enrollmentAccess || webguiLanRequestAllowed(request, requestUrl);
+      if (!managementAccessAllowed) {
         response.setHeader("cache-control", "no-store");
         response.setHeader("www-authenticate", "Bearer realm=\"RabiRoute WebGUI\"");
         jsonResponse(response, 401, {

@@ -79,6 +79,18 @@ AstrBot 这类服务型 Agent 必须显示服务健康、认证状态和可选�
 
 任一项失败，先修所有权，不继续增加回退模式。
 
+## 统一 API Help 与敏捷兼容流程
+
+Agent 适配器不得把 API、渠道或参数写死为长期真源。每次启动、Manager generation 变化、接口返回未知字段/错误，按以下顺序刷新：
+
+1. 从 Host status 或结构化 READY 取得当前 Manager 地址，并用 `/meta` 核对 generation、instance 和健康边界。
+2. 调用 `GET /api/agent/help`，按 `operationId` 或 `method + pathTemplate` 选择当前接口合同；发送渠道另调用 `GET /api/agent/send/capabilities`。
+3. 只使用 help 返回的 path、query、body、response、errors、nextStep 和 capability；先检查 `contractLevel` 与 `coverage.missing`：`baseline` 不得当作精确 schema，缺失项必须回到 contractResource 或专用 capabilities；未知接口、渠道或字段 fail closed，不猜测、不自动换渠道。
+4. 成功与失败都保存 HTTP 状态、JSON `code`、`errorCode`、`help`、`repair` 和 receipt/resource 标识。写请求超时、5xx、412 或 generation 变化时，保留原 body 和 delivery/idempotency key，先读回，不自动重放。
+5. 新增接口或渠道时，先更新统一能力目录、help、真实路由声明、契约 fixture 和中英文导航；不得只改长文或 Agent skill。
+
+`/api/lan-agent/capabilities` 应返回同一 operation help 摘要。Help 只描述当前 Manager 版本，不能缓存成永久合同；适配器应记录读取时的 generation 和 contract/schema 版本（若返回）。
+
 ## 统一能力模型
 
 每个 Agent adapter 都要先声明自己支持哪些能力，再决定 UI 显示什么字段：

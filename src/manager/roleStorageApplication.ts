@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { invalidatePlanReads } from "../planReadInvalidation.js";
 import type {
   MemoryConsolidationRequest,
   MemoryConsolidationRun,
@@ -395,6 +396,10 @@ export class RoleStorageQueries {
     return value;
   }
 
+  invalidateCommittedCatalog(roleId: string): void {
+    invalidatePlanReads(this.roleDir(roleId));
+  }
+
   async recaptureCatalog(roleId: string, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<RoleKnowledgeCatalogSnapshot> {
     this.assertCurrentGeneration();
     const value = await this.catalogReadPool.queryRoleKnowledgeCatalogSnapshot(this.roleDir(roleId), options).catch(error => {
@@ -536,6 +541,8 @@ export class RoleStorageCommands {
       after: afterRevision ? { revision: afterRevision } : undefined,
       durationMs: Date.now() - startedAt
     });
+    // Read publication does not invalidate; confirmed writes own this fence.
+    this.queries.invalidateCommittedCatalog(roleId);
     try {
       const catalog = await this.queries.recaptureCatalog(roleId, {
         signal: input.context.signal,

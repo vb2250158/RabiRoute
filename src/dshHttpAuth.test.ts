@@ -48,6 +48,17 @@ test('launch exchange is origin bound; RPC 401 and redirects never replay writes
     await assert.rejects(dshAuthenticatedFetch(origin, '../escape', '{}'), /method is invalid/);
     await fs.writeFile(config, JSON.stringify({ endpoints: [{ baseUrl: origin, launchLogPath: log }, { baseUrl: origin, launchLogPath: log }] }));
     await assert.rejects(dshAuthenticatedFetch(origin, 'session/list', '{}'), /duplicate/);
+    await fs.writeFile(config, JSON.stringify({ endpoints: [{ baseUrl: 'http://localhost:39271', launchLogPath: log }] }));
+    let unmatchedCalls = 0;
+    globalThis.fetch = (async (input, init) => {
+      assert.equal(String(input), `${origin}/api/session/list`);
+      assert.equal(new Headers(init?.headers).has('cookie'), false);
+      assert.equal(init?.redirect, 'manual');
+      unmatchedCalls++;
+      return new Response(null, { status: 200 });
+    }) as typeof fetch;
+    assert.equal((await dshAuthenticatedFetch(origin, 'session/list', '{}')).status, 200);
+    assert.equal(unmatchedCalls, 1);
     await fs.writeFile(config, '{invalid');
     await assert.rejects(dshAuthenticatedFetch(origin, 'session/list', '{}'), /invalid JSON/);
   } finally {

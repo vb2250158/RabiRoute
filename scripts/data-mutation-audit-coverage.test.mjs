@@ -11,6 +11,7 @@ const mutationPattern = /\bfs(?:\.promises)?\.(?:writeFile|appendFile|rename|unl
 const auditPattern = /\brecordDataMutationAudit\s*\(|\batomicWriteFileSync\s*\(|\bappendAdapterLog\s*\(/;
 
 const infrastructureExclusions = new Map([
+  ["src/planPageCatalogCheckpoint.ts", "disposable plan projection cache; source JSON remains authoritative and is reconciled on restore; atomic temporary publication does not mutate business records"],
   ["src/manager/sourcePatchService.ts", "source patch publication journals and recovery fences; publication events use the injected audit callback"],
   ["src/manager/webPatchService.ts", "immutable Web bundle cache; committed state emits web_patch_committed through the injected audit callback"],
   ["src/manager/webPatchCatalog.ts", "content-addressed Web artifacts and atomic patch-state writer owned by WebPatchService"],

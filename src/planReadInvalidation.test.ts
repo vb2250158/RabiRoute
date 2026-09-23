@@ -7,7 +7,7 @@ import path from "node:path";
 import test from "node:test";
 import { ensurePersonaPlanWorkflow, writePersonaPlanWorkflow } from "./personaPlanWorkflow.js";
 import { invalidatePlanReads, planReadFence } from "./planReadInvalidation.js";
-import { readPlanPageCatalogInWorker, publishCommittedRolePlan, readPlansFromStorageInWorker, roleKnowledgeFileCountsInWorker } from "./roleKnowledge.js";
+import { readPlanPageCatalogInWorker, publishRolePlanCatalog, publishCommittedRolePlan, readPlansFromStorageInWorker, roleKnowledgeFileCountsInWorker } from "./roleKnowledge.js";
 import { ManagerReadWorkerPool, type ManagerReadWorkerChild } from "./manager/managerReadWorkerPool.js";
 
 function fixture() {
@@ -20,11 +20,69 @@ function fixture() {
   fs.writeFileSync(file,JSON.stringify(plan));
   return {root,file,plan};
 }
+test("publishing a read-only catalog does not advance the managed-write fence", t => {
+  const { root, plan } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const before = planReadFence(root);
+  const published = publishRolePlanCatalog(root, [plan]);
+  assert.equal(published[0].id, plan.id);
+  assert.deepEqual(planReadFence(root), before);
+});
+
+test("catalog publication rejects a slow read overtaken by a managed write", async t => {
+  const { root } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const pool = new ManagerReadWorkerPool();
+  let finish!: (value: unknown) => void;
+  t.mock.method(pool, "run", () => new Promise(resolve => { finish = resolve; }));
+  for (const query of [
+    () => pool.queryRolePlanCatalog(root),
+    () => pool.queryRoleKnowledgeCatalogSnapshot(root)
+  ]) {
+    const pending = query();
+    invalidatePlanReads(root, "sample");
+    finish({ plans: [] });
+    await assert.rejects(pending, /PLAN_CATALOG_DIRTY/);
+  }
+});
+
+test("fresh module restores a verified checkpoint without reading unchanged source bodies", async t => {
+  const { root, file } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const first = await readPlanPageCatalogInWorker(root, planReadFence(root));
+  const { pathToFileURL } = await import("node:url");
+  const fresh = await import(`${pathToFileURL(path.resolve("src/roleKnowledge.ts")).href}?checkpoint=${Date.now()}`);
+  const original = fs.promises.readFile;
+  let sourceReads = 0;
+  t.mock.method(fs.promises, "readFile", async (...args: Parameters<typeof original>) => {
+    if (String(args[0]) === file) sourceReads++;
+    return original(...args);
+  });
+  const restored = await fresh.readPlanPageCatalogInWorker(root, { ...planReadFence(root), epoch: "restart" });
+  assert.deepEqual(restored, first);
+  assert.equal(sourceReads, 0);
+  // A persisted projection is only a candidate: restart must re-read changed
+  // source bodies and remove deleted files before publishing the next catalog.
+  const changed = { ...JSON.parse(fs.readFileSync(file, "utf8")), focus: "changed while stopped" };
+  fs.writeFileSync(file, JSON.stringify(changed));
+  const changedModule = await import(`${pathToFileURL(path.resolve("src/roleKnowledge.ts")).href}?checkpoint=changed-${Date.now()}`);
+  const updated = await changedModule.readPlanPageCatalogInWorker(root, { ...planReadFence(root), epoch: "restart-again" });
+  assert.equal(updated[0].focus, changed.focus);
+  assert.equal(sourceReads, 1);
+  fs.unlinkSync(file);
+  const deletedModule = await import(`${pathToFileURL(path.resolve("src/roleKnowledge.ts")).href}?checkpoint=deleted-${Date.now()}`);
+  assert.deepEqual(await deletedModule.readPlanPageCatalogInWorker(root, { ...planReadFence(root), epoch: "restart-deleted" }), []);
+});
+
 test("resident catalog hot reads avoid file enumeration; explicit reconciliation sees metadata-preserving writes",async t=>{
   const {root,file,plan}=fixture(); t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const first=await readPlanPageCatalogInWorker(root,planReadFence(root));
   const stat=t.mock.method(fs,"statSync"); const read=t.mock.method(fs,"readFileSync"); const scan=t.mock.method(fs,"readdirSync");
+  const asyncScan=t.mock.method(fs.promises,"readdir");
+  const asyncStat=t.mock.method(fs.promises,"stat");
+  const now=Date.now(); t.mock.method(Date,"now",()=>now+60_000);
   const next=await readPlanPageCatalogInWorker(root,planReadFence(root));
+  assert.equal(asyncScan.mock.callCount(),0); assert.equal(asyncStat.mock.callCount(),0);
   assert.strictEqual(next,first); assert.equal(stat.mock.callCount(),0); assert.equal(read.mock.callCount(),0); assert.equal(scan.mock.callCount(),0);
   const before=fs.statSync(file); fs.writeFileSync(file,JSON.stringify({...plan,focus:"new"})); fs.utimesSync(file,before.atime,before.mtime);
   const fresh=await readPlanPageCatalogInWorker(root,planReadFence(root),true);
@@ -63,9 +121,9 @@ test("watch dirtiness arriving during an awaited point read is consumed before r
 test("cold read verifies metadata after a body replacement or deletion",async t=>{
   for(const remove of [false,true]) {
     const {root,file,plan}=fixture();
-    const original=fs.readFileSync; let once=true;
-    const probe=t.mock.method(fs,"readFileSync",(...args:Parameters<typeof original>)=>{
-      const text=original(...args);
+    const original=fs.promises.readFile; let once=true;
+    const probe=t.mock.method(fs.promises,"readFile",async (...args:Parameters<typeof original>)=>{
+      const text=await original(...args);
       if(String(args[0])===file && once) {
         once=false;
         if(remove) fs.unlinkSync(file);
@@ -140,7 +198,7 @@ test("unknown events reuse reliable metadata; same-mtime replacement and watch e
   const watcher=Object.assign(new EventEmitter(),{close(){},unref(){return this;},ref(){return this;}});
   t.mock.method(fs,"watch",(_file:fs.PathLike,_options:unknown,listener:typeof changed)=>{changed=listener;return watcher;});
   await readPlanPageCatalogInWorker(root,planReadFence(root));
-  const reads=t.mock.method(fs,"readFileSync");
+  const reads=t.mock.method(fs.promises,"readFile");
   changed("change",null);
   await readPlanPageCatalogInWorker(root,planReadFence(root));
   assert.equal(reads.mock.callCount(),0,"an unchanged unknown event must not reread the body");

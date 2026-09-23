@@ -130,10 +130,26 @@ test("pagination facets and filters use plan.status and exclude archived plans f
   const page = paginateRolePlans(items, "", 20, { includeFacets: true });
   assert.equal(page.counts.current, 2);
   assert.equal(page.counts.archived, 1);
+  assert.equal(page.counts.active, page.counts.current);
+  assert.equal(page.counts.stages.archived, page.counts.archived);
+  assert.deepEqual(page.counts.stages.byStatus, { "分析中": 1, "执行中": 1, "完成": 1 });
+  assert.deepEqual(paginateRolePlans(items, "1", 1, {
+    query: "recall-target", statuses: ["执行中"], includeFacets: false
+  }).counts, page.counts);
   assert.deepEqual(page.facets.statuses.map((item) => item.status), ["分析中", "执行中", "完成"]);
   assert.deepEqual(paginateRolePlans(items, "", 20, { statuses: ["执行中"] }).items.map((item) => item.id), ["execution"]);
   assert.deepEqual(paginateRolePlans(items, "", 20, { query: "recall-target" }).items.map((item) => item.id), ["analysis", "execution"]);
   assert.deepEqual(paginateRolePlans(items, "", 20, { view: "archived", query: "recall-target" }).items.map((item) => item.id), ["archived"]);
+});
+
+test("search matches individual nested strings and handles cyclic values", () => {
+  const nested: Record<string, unknown> = { left: "alpha", right: "beta", children: ["深层 NEEDLE"] };
+  nested.self = nested;
+  const counts = { recent: 1, consolidated: 0, archived: 0, consolidationRuns: 0 };
+  assert.equal(paginateRoleMemory([nested], "", 8, "needle", counts).total, 1);
+  assert.equal(paginateRoleMemory([nested], "", 8, "深层", counts).total, 1);
+  assert.equal(paginateRoleMemory([nested], "", 8, "alphabeta", counts).total, 0);
+  assert.equal(paginateRoleMemory([nested], "", 8, "missing", counts).total, 0);
 });
 
 test("summary and preview keep the canonical status and omit attachment paths", () => {

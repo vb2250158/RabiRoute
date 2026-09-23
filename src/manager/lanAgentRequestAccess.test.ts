@@ -16,7 +16,24 @@ test("Agent credentials cannot downgrade to local admin or survive disabled gran
     assert.equal(evaluateLanAgentRequest(make("/meta"), authority, true).kind, "denied");
     authority.setAgentEnabled("node-fixture", "worker", true);
     assert.equal(evaluateLanAgentRequest(make("/meta"), authority, true).kind, "agent");
-    assert.equal(evaluateLanAgentRequest(make("/api/webgui-access"), authority, true).kind, "denied");
+    for (const target of ["/api/webgui-access", "/api/unknown-business", "/api/roles/persona-a/skills?view=extra"]) {
+      assert.deepEqual(evaluateLanAgentRequest(make(target), authority, true), {
+        kind: "agent", nodeId: "node-fixture", agentId: "worker", requiresManagementAuth: true
+      });
+    }
+    const post = make("/api/roles/persona-a/skills");
+    post.method = "POST";
+    assert.deepEqual(evaluateLanAgentRequest(post, authority, true), {
+      kind: "agent", nodeId: "node-fixture", agentId: "worker", requiresManagementAuth: true
+    });
+    for (const target of ["/api/roles/persona-b/skills", "/roles/persona-b/skills/example"]) {
+      assert.deepEqual(evaluateLanAgentRequest(make(target), authority, true), {
+        kind: "agent", nodeId: "node-fixture", agentId: "worker"
+      });
+    }
+    for (const target of ["/api/unknown/../admin", "/api/unknown/%2e%2e/admin", "/api/unknown/%252fadmin", "/api/unknown?access_token=fixture", "/api/unknown?query=%00", "/api/codex-hook/sessions/other"]) {
+      assert.equal(evaluateLanAgentRequest(make(target), authority, true).kind, "denied", target);
+    }
     assert.equal(evaluateLanAgentRequest(make("/meta", { "x-rabiroute-webgui-token": "admin-fixture" }), authority, true).kind, "denied");
     assert.equal(evaluateLanAgentRequest(make("/meta?webgui_token=fixture"), authority, true).kind, "denied");
     assert.equal(evaluateLanAgentRequest(make("/meta", { authorization: "Bearer lan1:malformed" }), authority, true).kind, "denied");

@@ -21,6 +21,31 @@ export type AgentUploadRoutesContext = {
   jsonResponse?: (response: ServerResponse, statusCode: number, body: unknown) => void;
 };
 
+const uploadRepairs: Readonly<Record<string, string>> = Object.freeze({
+  forbidden: "核对当前 Agent 启用状态与可信来源；不得伪造身份或换 owner 读取。",
+  invalid_input: "核对小写 UUID 路径、单值请求头、64 位十六进制 SHA256 和 URI 编码的纯文件名。",
+  invalid_idempotency_key: "PUT 的 Idempotency-Key 必须与路径 uploadId 完全一致。",
+  unsupported_media_type: "PUT 使用 application/octet-stream 原始二进制，不发送 JSON 或 multipart。",
+  unsupported_content_encoding: "移除 Content-Encoding；上传原始未压缩请求体。",
+  method_not_allowed: "仅支持 GET 查询或 PUT 上传。",
+  file_too_large: "读取当前上传大小限制；不要截断文件或自动拆分重传。",
+  conflict: "同一 uploadId 已绑定不同内容；先 GET 原 ID 核对，不自动换 ID 重传。",
+  integrity: "核对原始字节与 SHA256；先 GET 原 ID 确认状态，不自动重传。",
+  not_found: "核对原 owner 和 uploadId；缺失不代表允许跨身份读取或自动上传。",
+  upload_busy: "并发上传达到限制；等待已有操作结束，再核对原 ID 状态，不自动重传。",
+  upload_timeout: "上传读取超时；保留原 uploadId 和内容，先 GET 同一 uploadId 核对回执，再检查传输耗时，不自动重传。",
+  upload_aborted: "上传连接中断；保留原 uploadId 和内容，先 GET 同一 uploadId 核对回执，不自动重传。"
+});
+function uploadFailure(code: string) {
+  return {
+    code,
+    errorCode: code,
+    help: { method: "GET", path: "/api/agent/help?path=%2Fapi%2Fagent%2Fuploads%2F%3AuploadId" },
+    repair: uploadRepairs[code] ?? "保留原 uploadId、请求头和内容；先 GET 同一 uploadId 核对状态，再处理服务或存储问题，不自动重传。",
+    retryable: false
+  };
+}
+
 class UploadHttpError extends Error {
   constructor(readonly status: number, readonly code: string) { super(code); }
 }
@@ -139,7 +164,7 @@ export function createAgentUploadRoutes(context: AgentUploadRoutesContext): {
         // Close after the JSON response. Discard without buffering; server requestTimeout
         // remains the outer bound for an uncooperative peer. Never destroy before 413.
         if (!request.complete) { response.setHeader("Connection", "close"); request.on("error", () => undefined); request.resume(); }
-        json(response, status, { code: error instanceof UploadHttpError || (code && statuses[code]) ? code : "storage_failure" });
+        json(response, status, uploadFailure(error instanceof UploadHttpError ? error.code : (code && statuses[code]) ? code : "storage_failure"));
       }
     } finally {
       if (ownerKey !== undefined) {
@@ -156,7 +181,7 @@ export function createAgentUploadRoutes(context: AgentUploadRoutesContext): {
   return {
     handler: (request, url, response) => {
       if (!url.pathname.startsWith("/api/agent/uploads/")) return false;
-      if (!accepting) { json(response, 503, { code: "upload_stopping" }); return true; }
+      if (!accepting) { json(response, 503, uploadFailure("upload_stopping")); return true; }
       return tracked(request, url, response);
     },
     stopAcceptingAndDrain: () => { accepting = false; return tracker.stop(); },

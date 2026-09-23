@@ -1,11 +1,11 @@
 import type { IncomingMessage } from "node:http";
 import { isLanAgentCredentialToken, type LanAgentAuthority } from "./lanAgentAuthority.js";
-import { authorizeAgentApiOperation } from "./agentApiPolicy.js";
+import { authorizeAgentApiOperation, validateAgentApiRequestTarget } from "./agentApiPolicy.js";
 
 export type LanAgentRequestAccess =
   | { kind: "unrelated" }
   | { kind: "denied"; status: 401 | 403; error: string }
-  | { kind: "agent"; nodeId: string; agentId: string };
+  | { kind: "agent"; nodeId: string; agentId: string; requiresManagementAuth?: true };
 
 /** Node-only connection diagnostics, never a business authorization grant. */
 export function isLanNodeMetadataRequest(request: IncomingMessage, authority: LanAgentAuthority): boolean {
@@ -41,8 +41,18 @@ export function evaluateLanAgentRequest(request: IncomingMessage, authority: Lan
     && !/[\\\\\u0000-\u001f]/.test(url.searchParams.get("id") ?? "");
   const bootstrapRead = request.method === "GET" && (["/meta", "/api/lan-agent/capabilities", "/api/lan-agent/resources"].includes(target) || resourceRead);
   const hook = request.method === "POST" && target === ownContext;
-  if (!bootstrapRead && !hook && !authorizeAgentApiOperation(request.method ?? "GET", target).allowed) {
-    return { kind: "denied", status: 403, error: "LAN_AGENT_OPERATION_NOT_ALLOWED" };
+  if (!validateAgentApiRequestTarget(request.method ?? "GET", target).allowed) {
+    return { kind: "denied", status: 403, error: "LAN_AGENT_INVALID_REQUEST_TARGET" };
   }
-  return { kind: "agent", nodeId: identity.nodeId, agentId: agentHeader };
+  // Generic hooks have no authenticated remote owner mapping. Keep the own-Agent
+  // context path rather than allowing callers to claim another session's identity.
+  if (url.pathname.startsWith("/api/codex-hook/")) {
+    return { kind: "denied", status: 403, error: "LAN_AGENT_SOURCE_NOT_SUPPORTED" };
+  }
+  // The catalog is not a remote business subset. Outside it, continue to the
+  // existing management authentication instead of granting admin with a node key.
+  const requiresManagementAuth = !bootstrapRead && !hook
+    && !authorizeAgentApiOperation(request.method ?? "GET", target).allowed;
+  return { kind: "agent", nodeId: identity.nodeId, agentId: agentHeader,
+    ...(requiresManagementAuth ? { requiresManagementAuth: true as const } : {}) };
 }

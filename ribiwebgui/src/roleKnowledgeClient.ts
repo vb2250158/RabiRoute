@@ -150,10 +150,12 @@ export type ManagerResource<T> = {
   etag: string;
 };
 
+import { parseRetryAfter, retryPlanCatalogInitialization } from "./planCatalogRetry";
+
 export class ManagerRequestError extends Error {
   readonly status: number;
 
-  constructor(message: string, status: number, readonly details?: { reason?: string; commitState?: string; nextAction?: string; causeCode?: string; errorMessages?: { "zh-CN"?: string; en?: string } }) {
+  constructor(message: string, status: number, readonly details?: { reason?: string; commitState?: string; nextAction?: string; causeCode?: string; errorMessages?: { "zh-CN"?: string; en?: string } }, readonly retryAfterMs?: number) {
     super(details?.nextAction ? `${message}\n${details.nextAction}` : message);
     this.name = "ManagerRequestError";
     this.status = status;
@@ -245,7 +247,7 @@ async function managerResource<T>(
     const response = await boundedManagerFetch(path, init);
     const body = await response.json().catch(() => ({})) as ManagerEnvelope<T>;
     if (!response.ok || body.code !== 0 || body.data == null) {
-      throw new ManagerRequestError(body.message || `Manager request failed (HTTP ${response.status}).`, response.status, body);
+      throw new ManagerRequestError(body.message || `Manager request failed (HTTP ${response.status}).`, response.status, body, parseRetryAfter(response.headers.get("Retry-After")));
     }
     const etag = strongEtag(response);
     if (etag && lifecycleKey) managerResourceEtags.set(managerResourceEtagKey(lifecycleKey, path), etag);
@@ -423,7 +425,8 @@ export async function loadRolePlanPage(
   cursor = "",
   limit = ROLE_PLAN_PAGE_SIZE,
   filter: RolePlanPageFilter = {},
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onInitializing?: () => void
 ): Promise<RolePlanPage> {
   const params = new URLSearchParams({ limit: String(limit), detail: "summary" });
   if (cursor) params.set("cursor", cursor);
@@ -433,8 +436,12 @@ export async function loadRolePlanPage(
   for (const status of filter.statuses || []) params.append("status", status);
   for (const tag of filter.tags || []) params.append("tag", tag);
   if (filter.includeFacets === false) params.set("facets", "0");
-  const page = await managerData<Omit<RolePlanPage, "items"> & { items: RolePlanSummary[] }>(
-    `/api/roles/${encodeURIComponent(roleId)}/plans?${params.toString()}`, { signal }
+  const path = `/api/roles/${encodeURIComponent(roleId)}/plans?${params.toString()}`;
+  const page = await retryPlanCatalogInitialization(
+    requestSignal => managerData<Omit<RolePlanPage, "items"> & { items: RolePlanSummary[] }>(path, { signal: requestSignal }),
+    { signal, onInitializing, retryDelay: error => error instanceof ManagerRequestError
+      && error.status === 503 && error.details?.reason === "PLAN_CATALOG_INITIALIZING"
+      ? error.retryAfterMs ?? 2000 : undefined }
   );
   return {
     ...page,

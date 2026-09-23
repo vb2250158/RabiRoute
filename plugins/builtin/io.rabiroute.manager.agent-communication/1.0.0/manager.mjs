@@ -47,6 +47,8 @@ export const activate = definePlugin({
             ], [
                 { routeId: "requests", kind: "exact", path: "/api/agent/requests", methods: ["GET"] },
                 { routeId: "request-resource", kind: "prefix", pathPrefix: "/api/agent/requests/" },
+                { routeId: "agent-help", kind: "exact", path: "/api/agent/help", methods: ["GET"] },
+                { routeId: "send-capabilities", kind: "exact", path: "/api/agent/send/capabilities", methods: ["GET"] },
                 { routeId: "send", kind: "exact", path: "/api/agent/send", methods: ["POST"] },
                 { routeId: "uploads", kind: "prefix", pathPrefix: "/api/agent/uploads/", methods: ["GET", "PUT"], handlerIndex: 2 },
                 { routeId: "send-traces", kind: "exact", path: "/api/agent/send/traces", methods: ["GET"] },

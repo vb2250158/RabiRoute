@@ -83,6 +83,26 @@ test("HTTP rejects forged identity, invalid headers, hash, filename and method",
   assert.equal(f.commits(), 0);
 });
 
+test("upload errors preserve legacy code and expose non-replaying repair guidance", async t => {
+  const f = await fixture(t);
+  const id = randomUUID();
+  const invalid = await f.send(id, undefined, { "content-type": "application/json" });
+  assert.equal(invalid.status, 415);
+  assert.equal(invalid.body.code, "unsupported_media_type");
+  assert.equal(invalid.body.errorCode, invalid.body.code);
+  assert.match(invalid.body.repair, /application\/octet-stream/);
+  assert.equal(invalid.body.retryable, false);
+  assert.equal(invalid.body.help.method, "GET");
+  assert.equal(new URL(invalid.body.help.path, "http://fixture.invalid").searchParams.get("path"), "/api/agent/uploads/:uploadId");
+  assert.equal(f.commits(), 0);
+  await f.routes.stopAcceptingAndDrain();
+  const stopping = await f.send(id);
+  assert.equal(stopping.status, 503);
+  assert.equal(stopping.body.code, "upload_stopping");
+  assert.equal(stopping.body.retryable, false);
+  assert.match(stopping.body.repair, /不自动重传/);
+});
+
 test("HTTP bounded chunked body accepts exact limit, rejects extra byte and declared excess", async t => {
   const f = await fixture(t, { limit: 8 });
   assert.equal((await f.send(randomUUID(), Buffer.alloc(8))).status, 200);
@@ -103,7 +123,13 @@ test("HTTP global and per-owner concurrency are bounded and readers release afte
   const slow = f.request(randomUUID()); slow.req.write(slow.bytes.subarray(0, 1)); await f.sawAuthorization();
   assert.equal((await f.send()).status, 429);
   assert.equal((await f.send(randomUUID(), undefined, { authorization: "fixture-b" })).status, 429);
-  assert.equal((await slow.result).status, 408);
+  const timeout = await slow.result;
+  assert.equal(timeout.status, 408);
+  assert.equal(timeout.body.code, "upload_timeout");
+  assert.equal(timeout.body.errorCode, "upload_timeout");
+  assert.equal(timeout.body.retryable, false);
+  assert.match(timeout.body.repair, /读取超时.*GET 同一 uploadId.*不自动重传/);
+  assert.equal(f.commits(), 0);
   assert.equal((await f.send()).status, 200);
 });
 
