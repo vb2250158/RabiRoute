@@ -622,6 +622,8 @@ export async function sendDshSessionMessage(params: {
   baseUrl?: string;
   imagePaths?: string[];
   modelSelection?: DshModelSelection;
+  /** Automatic plan advancement queues behind a turn that starts after its idle check. */
+  mode?: "queue" | "steer";
   /** Reuse across retries of the same delivery; persisted by the owner on the user message. */
   requestId?: string;
 }): Promise<DshSessionDelivery> {
@@ -643,7 +645,7 @@ export async function sendDshSessionMessage(params: {
     // delivery never waits for the current turn to finish. This matches the
     // Codex desktop path, which steers first and only starts a turn when the
     // target has no active turn.
-    mode: "steer",
+    mode: params.mode ?? "steer",
     content
   } });
   if (result.ok && result.value?.accepted !== true) throw new Error("DSH session delivery returned no acceptance receipt.");
@@ -661,7 +663,7 @@ export async function sendDshSessionMessage(params: {
     const retried = await dshRpc<{ accepted?: boolean }>(baseUrl, "session/prompt", { request: {
       requestId,
       sessionId: params.sessionId,
-      mode: "steer",
+      mode: params.mode ?? "steer",
       content: [{ type: "text", text: degraded }]
     } });
     if (retried.ok && retried.value?.accepted !== true) throw new Error("DSH session delivery returned no acceptance receipt.");

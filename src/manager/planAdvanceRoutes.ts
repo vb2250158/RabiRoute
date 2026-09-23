@@ -88,7 +88,7 @@ export function handlePlanAdvanceApi(request: http.IncomingMessage, url: URL, re
         const plan = plans.find(row => row.id === group[0]!.planId)!;
         const current = (await planAgentStatusService.inspectPlans([plan]))[0]?.taskAgent;
         if (current?.sessionStatus !== "idle") throw new Error("Session no longer idle.");
-        const request: AgentThreadRequest = { action: "send", agentAdapter: "dsh", threadId: sessionId, cwd: workspace, dshBaseUrl: plan.taskBinding?.baseUrl,
+        const request: AgentThreadRequest = { action: "send", agentAdapter: "dsh", dshDeliveryMode: "queue", threadId: sessionId, cwd: workspace, dshBaseUrl: plan.taskBinding?.baseUrl,
           deliveryId: reserved[0]!.id, createIfMissing: false, prompt: group.map(item => `GET /api/roles/${encodeURIComponent(roleId)}/plans/${encodeURIComponent(item.planId)}\n${item.prompt}`).join("\n\n---\n\n"),
           messageSource: { type: "system", eventType: "plan_advance", eventName: "Rabi plan advance", eventId: reserved[0]!.id }, responsePolicy: "none" };
         deliveryAttempted = true;

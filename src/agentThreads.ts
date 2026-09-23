@@ -100,6 +100,7 @@ export type AgentThreadRequest = {
   reasoningEffort?: CodexReasoningEffort;
   imagePaths?: string[];
   dshBaseUrl?: string;
+  dshDeliveryMode?: "queue" | "steer";
   messageSource?: RabiMessageSource;
   contextBlocks?: string[];
   controlBlocks?: string[];
@@ -1706,6 +1707,7 @@ async function executeAgentThreadRequest(
             prompt,
             cwd,
             baseUrl: dshBaseUrlFor(options),
+            mode: request.dshDeliveryMode,
             imagePaths: delivery.imagePaths
           })
         : driver.send(delivery);

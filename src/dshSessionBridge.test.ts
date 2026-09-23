@@ -26,7 +26,7 @@ const catalog = { groups: [{ id: "example-provider", name: "Example", models: [{
 
 // Wire contract from current session-controller/index.ts, types.ts and workspace-controller.
 // list returns all rows; it has no server pagination/nextCursor. history page's default 50 is unrelated.
-function installDshRpcStub(rows: SessionRow[], response?: (body: RpcRequest) => unknown) {
+function installDshRpcStub(rows: SessionRow[], response?: (body: RpcRequest) => unknown, mode: "queue" | "steer" = "steer") {
   const originalFetch = globalThis.fetch;
   const originalAuthFile = process.env.RABI_DSH_AUTH_FILE;
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-bridge-test-"));
@@ -81,7 +81,7 @@ function installDshRpcStub(rows: SessionRow[], response?: (body: RpcRequest) => 
     } else if (body.method === "session/prompt") {
       assert.equal(request.sessionId, id(1));
       assert.match(request.requestId, /^[0-9a-f-]{36}$/);
-      assert.equal(request.mode, "steer");
+      assert.equal(request.mode, mode);
       assert.ok(Array.isArray(request.content));
       value = { accepted: true };
     } else throw new Error(`Unexpected RPC: ${body.method}`);
@@ -181,6 +181,15 @@ test("missing session model fails closed without selecting or prompting", async 
   const stub = installDshRpcStub([]);
   try { await assert.rejects(sendDshSessionMessage({ sessionId: id(1), prompt: "test", cwd: "C:\\work\\example", modelSelection: selection, baseUrl: fixtureBaseUrl }), /not found/); }
   finally { stub.restore(); }
+});
+
+test("automatic advancement queues in the original session when another turn starts", async () => {
+  const stub = installDshRpcStub([], undefined, "queue");
+  try {
+    await sendDshSessionMessage({ sessionId: id(1), prompt: "Advance the bound plan", cwd: "C:\\work\\example", mode: "queue", baseUrl: fixtureBaseUrl });
+    assert.equal(stub.requests.length, 1);
+    assert.equal(stub.requests[0]?.payload.args.request.mode, "queue");
+  } finally { stub.restore(); }
 });
 
 test("image rejection reuses request identity and current prompt endpoint; no implicit model switch", async () => {
