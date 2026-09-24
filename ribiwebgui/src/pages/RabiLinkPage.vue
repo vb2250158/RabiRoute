@@ -5,7 +5,14 @@ import { managerEventSource } from "../managerApi";
 import { useGatewayStore } from "../stores/gatewayStore";
 import { rabiLinkManagementUrl, rabiLinkTab } from "../rabiLinkPresentation";
 import { createRabiLinkRefreshFence } from "../rabiLinkRefreshFence";
-import { readRabiLinkHome, rabiLinkCapabilities, type RabiLinkHomeData } from "../rabiLinkHomeClient";
+import {
+  readRabiLinkHome,
+  rabiLinkCapabilities,
+  rabiLinkDeviceDisplayName,
+  rabiLinkDeviceIcon,
+  rabiLinkDeviceKind,
+  type RabiLinkHomeData
+} from "../rabiLinkHomeClient";
 import { createRabiLinkHomeLoader, type RabiLinkHomeState } from "../rabiLinkHomeState";
 import LanAgentsPage from "./LanAgentsPage.vue";
 import RabiLinkSettings from "../components/RabiLinkSettings.vue";
@@ -24,8 +31,17 @@ const connected = computed(() => runtime.value?.state === "online");
 const managementUrl = computed(() => rabiLinkManagementUrl(store.meta.rabiLinkRelay?.url));
 const statusLabel = computed(() => !ready.value ? "读取状态中" : ({ disabled: "已关闭", incomplete: "配置不完整", connecting: "连接中", online: "已连接", error: "连接失败" }[runtime.value?.state || "disabled"]));
 const home = ref<RabiLinkHomeState<RabiLinkHomeData>>({ phase: "idle" });
-const homeLoader = createRabiLinkHomeLoader(readRabiLinkHome, value => { home.value = value; }, () => "暂时无法读取已授权电脑，请检查服务器连接后重试。");
-const devices = computed(() => home.value.phase === "ready" ? home.value.data.devices.map(device => ({ ...device, services: rabiLinkCapabilities(device.capabilities) })) : []);
+const homeLoader = createRabiLinkHomeLoader(readRabiLinkHome, value => { home.value = value; }, () => "暂时无法读取已授权设备，请检查服务器连接后重试。");
+const devices = computed(() => home.value.phase === "ready" ? home.value.data.devices.map(device => {
+  const kind = rabiLinkDeviceKind(device);
+  return {
+    ...device,
+    kind,
+    icon: rabiLinkDeviceIcon(device),
+    displayName: rabiLinkDeviceDisplayName(device),
+    services: rabiLinkCapabilities(device.capabilities, kind)
+  };
+}) : []);
 const checkedAt = computed(() => home.value.phase === "ready" ? new Date(home.value.data.checkedAt).toLocaleString("zh-CN") : "");
 let managerEvents: EventSource | undefined;
 let metaRequest: AbortController | undefined;
@@ -113,7 +129,7 @@ onBeforeUnmount(() => { disposed = true; metaRequest?.abort(); managerEvents?.cl
       <v-tab value="config">配置</v-tab>
     </v-tabs>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
-    <section v-if="tab === 'home'" aria-label="已授权电脑" :aria-busy="home.phase === 'loading'">
+    <section v-if="tab === 'home'" aria-label="已授权设备" :aria-busy="home.phase === 'loading'">
       <template v-if="!ready">
         <p v-if="!error" role="status" class="section-note">正在读取连接状态…</p>
       </template>
@@ -125,31 +141,31 @@ onBeforeUnmount(() => { disposed = true; metaRequest?.abort(); managerEvents?.cl
       </div>
       <template v-else>
         <div class="rabilink-list-heading">
-          <h2 class="section-title">已授权电脑</h2>
-          <span v-if="home.phase === 'ready'" class="section-note">{{ devices.length }} 台 · 更新于 {{ checkedAt }}</span>
+          <h2 class="section-title">已授权设备</h2>
+          <span v-if="home.phase === 'ready'" class="section-note">{{ devices.length }} 台设备 · 更新于 {{ checkedAt }}</span>
         </div>
         <details class="rabilink-help section-note">
           <summary>查看范围与服务器管理</summary>
-          <p>这里只显示当前应用已授权的电脑。服务标签表示电脑声明支持的能力，不代表服务正在运行。服务器管理在新窗口打开，需要使用服务器账号独立登录；应用令牌不能代替网页登录。</p>
+          <p>这里只显示当前应用已授权的设备（包括电脑、手机与眼镜等端侧设备）。服务标签表示设备声明支持的能力，不代表服务正在运行。服务器管理在新窗口打开，需要使用服务器账号独立登录；应用令牌不能代替网页登录。</p>
         </details>
-        <v-progress-linear v-if="home.phase === 'loading'" indeterminate aria-label="正在读取已授权电脑" class="mt-3" />
-        <p v-if="home.phase === 'loading'" role="status" class="section-note py-4">正在读取已授权电脑…</p>
+        <v-progress-linear v-if="home.phase === 'loading'" indeterminate aria-label="正在读取已授权设备" class="mt-3" />
+        <p v-if="home.phase === 'loading'" role="status" class="section-note py-4">正在读取已授权设备…</p>
         <v-alert v-else-if="home.phase === 'error'" type="error" variant="tonal" class="mt-3">
           {{ home.error }}
           <v-btn variant="text" size="small" @click="refreshHome">重试</v-btn>
         </v-alert>
         <p v-else-if="saving" role="status" class="section-note py-4">正在保存连接设置…</p>
         <div v-else-if="home.phase === 'ready' && !devices.length" class="rabilink-empty">
-          <v-icon icon="mdi-monitor" size="32" />
-          <h3 class="section-title">当前应用尚无已授权电脑</h3>
-          <p class="section-note">连接电脑后刷新查看，或前往服务器管理检查应用授权。</p>
+          <v-icon icon="mdi-devices" size="32" />
+          <h3 class="section-title">当前应用尚无已授权设备</h3>
+          <p class="section-note">连接设备后刷新查看，或前往服务器管理检查应用授权。</p>
         </div>
         <ul v-else-if="home.phase === 'ready'" class="rabilink-devices">
           <li v-for="device in devices" :key="device.guid || device.id" class="rabilink-device">
-            <v-icon icon="mdi-monitor" class="rabilink-device-icon" />
+            <v-icon :icon="device.icon" class="rabilink-device-icon" />
             <div class="rabilink-device-content">
               <div class="d-flex flex-wrap align-center ga-2">
-                <strong>{{ device.name || '未命名电脑' }}</strong>
+                <strong>{{ device.displayName }}</strong>
                 <v-chip size="x-small" :color="device.online ? 'success' : 'default'" variant="tonal">{{ device.online ? '在线' : '离线' }}</v-chip>
               </div>
               <div class="d-flex flex-wrap ga-2 mt-2">

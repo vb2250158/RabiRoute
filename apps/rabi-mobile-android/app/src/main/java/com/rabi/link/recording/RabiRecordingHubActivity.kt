@@ -87,7 +87,7 @@ class RabiRecordingHubActivity : Activity() {
             recordingToggle = Switch(this).apply {
                 text = if(settings().running) "记录中" else "开始记录"; textSize = 14f
                 minHeight = dp(48); setPadding(dp(8),0,dp(12),0); setTextColor(RabiMobileUi.primary)
-                isChecked = settings().running; contentDescription = "开始或暂停记录"
+                isChecked = settings().autoResume || settings().running; contentDescription = "开始或暂停记录"
                 setOnCheckedChangeListener { _, checked ->
                     if(!updatingToggle) {
                         if(checked) startRecording() else serviceAction { RabiConversationService.pauseRecording(this@RabiRecordingHubActivity) }
@@ -230,8 +230,8 @@ class RabiRecordingHubActivity : Activity() {
     private fun refreshRuntime() {
         if(!active) return
         if(settings().running && !RabiConversationService.recordingOwnerAvailable()) {
-            settings().withRunning(false,System.currentTimeMillis()).save(this)
-            runtime().edit().putString("allDayStatus","录音已中断，请重新开启记录")
+            // Keep the saved switch; foreground lifecycle restores the capture owner.
+            runtime().edit().putString("allDayStatus","记录已开启，等待恢复采集")
                 .putLong("captureLastReceivedAt",0).putBoolean("captureHasSignal",false).apply()
         }
         reviewPanel?.refreshLive()
@@ -239,9 +239,9 @@ class RabiRecordingHubActivity : Activity() {
         if(current !== live) { live?.unlisten(videoChanged); live = current; current?.listen(videoChanged) }
         val value = settings(); val data = runtime()
         updatingToggle = true
-        recordingToggle?.isChecked = value.running
+        recordingToggle?.isChecked = value.autoResume || value.running
         val recentAudio = System.currentTimeMillis()-data.getLong("captureLastReceivedAt",0) < 5000
-        recordingToggle?.text = if(value.running) { if(value.mode == "audio" && !recentAudio) "等待声音" else "记录中" } else "开始记录"
+        recordingToggle?.text = if(value.running) { if(value.mode == "audio" && !recentAudio) "等待声音" else "记录中" } else if(value.autoResume) "等待恢复" else "开始记录"
         recordingToggle?.isEnabled = !transitionPending()
         updatingToggle = false
         val actualStatus = data.getString("allDayStatus", "").orEmpty()

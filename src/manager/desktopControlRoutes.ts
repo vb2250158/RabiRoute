@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type http from "node:http";
@@ -73,6 +75,15 @@ export async function desktopConfigFilePayload(
     const configPath = await context.ensurePersonaConfigFile(safeRoleId);
     openPath(configPath);
     return { code: 0, data: { path: configPath } };
+  }
+
+  if (type === "xiaomi-recordings" || type === "xiaomi-media" || type === "camera-clips") {
+    const safeRoleId = sanitizeRoleId(roleId ?? route?.agentRoleId) || "YeYu";
+    const roleDir = await context.ensureRoleFolder(safeRoleId);
+    const mediaDir = path.join(roleDir, "xiaomi-media");
+    fs.mkdirSync(mediaDir, { recursive: true });
+    openPath(mediaDir);
+    return { code: 0, data: { path: mediaDir } };
   }
 
   if (type !== "routes" && type !== "route-folder") {

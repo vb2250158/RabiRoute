@@ -9,6 +9,7 @@
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <application android:allowBackup="false" android:label="Rabi 录像" android:theme="@android:style/Theme.Material.NoActionBar"
         android:usesCleartextTraffic="true">
+        <activity android:name=".GlassTextActivity" android:exported="true" android:launchMode="singleTask" android:label="Rabi 消息" />
         <activity android:name=".GlassVideoActivity" android:exported="true" android:launchMode="singleTask">
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
         </activity>

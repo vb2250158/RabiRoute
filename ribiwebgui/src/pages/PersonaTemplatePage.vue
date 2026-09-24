@@ -49,6 +49,7 @@ import { PERSONA_AVATAR_ACCEPT } from "@shared/personaAvatarContract";
 import { copyTextToClipboard } from "../clipboard";
 import { markdownPreviewExcerpt } from "../markdownPreview";
 import { routeScopedPersonaDocumentPath } from "../routeScopedNavigation";
+import { xiaomiHomeSettingsClient, type XiaomiHomeResource } from "../xiaomiHomeSettingsClient";
 import {
   adapterLabel,
   automationRulesForGateway,
@@ -229,7 +230,7 @@ const actionTypeOptions = [
 const messageAutomationGroups = computed(() => {
   const definitions = [
     { key: "chat", title: "聊天消息", note: "私聊、群聊、回复和 @", kinds: ["private", "group_message", "direct_at", "direct_reply", "indirect_reply", "wecom_message", "weixin_message", "feishu_message"] },
-    { key: "voice", title: "语音与设备", note: "语音转写、穿戴设备和 RabiLink", kinds: ["voice_transcript", "wearable_health_alert", "rabilink"] },
+    { key: "devices", title: "语音与智能设备", note: "米家设备、语音转写、穿戴设备和 RabiLink", kinds: ["xiaomi_home_event", "voice_transcript", "wearable_health_alert", "rabilink"] },
     { key: "system", title: "手动与系统消息", note: "手动触发、角色面板和兼容事件", kinds: ["manual_trigger", "role_panel_message", "plan_feedback", "heartbeat"] },
     { key: "other", title: "其他来源", note: "未归入以上分组的消息类型", kinds: [] as string[] }
   ];
@@ -360,10 +361,357 @@ function removeSchedule(index: number): void {
   patchRule({ schedules });
 }
 
+const xiaomiResources = ref<readonly XiaomiHomeResource[]>([]);
+const loadingXiaomiResources = ref(false);
+
+async function loadXiaomiResources(): Promise<void> {
+  if (loadingXiaomiResources.value) return;
+  loadingXiaomiResources.value = true;
+  try {
+    xiaomiResources.value = await xiaomiHomeSettingsClient.listResources();
+  } catch {
+    // Graceful fallback if HA not yet connected
+  } finally {
+    loadingXiaomiResources.value = false;
+  }
+}
+
+interface XiaomiDeviceEntity {
+  entityId: string;
+  cleanName: string;
+  rawName: string;
+  kind: string;
+  icon: string;
+  available: boolean;
+  state: string;
+}
+
+interface XiaomiDeviceGroup {
+  key: string;
+  name: string;
+  icon: string;
+  entities: XiaomiDeviceEntity[];
+}
+
+function resolveDeviceIcon(deviceName: string, deviceKey: string): string {
+  const text = (deviceName + " " + deviceKey).toLowerCase();
+  if (text.includes("摄像") || text.includes("camera") || text.includes("chuangmi")) return "mdi-cctv";
+  if (text.includes("电视") || text.includes("tv") || text.includes("television")) return "mdi-television";
+  if (text.includes("水壶") || text.includes("kettle") || text.includes("yunmi")) return "mdi-kettle-outline";
+  if (text.includes("风扇") || text.includes("fan") || text.includes("dmaker")) return "mdi-fan";
+  if (text.includes("净化器") || text.includes("purifier") || text.includes("zhimi")) return "mdi-air-purifier";
+  if (text.includes("屏幕") || text.includes("插座") || text.includes("开关") || text.includes("cuco") || text.includes("zimi") || text.includes("switch")) return "mdi-power-socket-cn";
+  if (text.includes("灯") || text.includes("light") || text.includes("yeelink")) return "mdi-lightbulb-outline";
+  if (text.includes("门锁") || text.includes("门铃") || text.includes("lock") || text.includes("door")) return "mdi-door-closed";
+  if (text.includes("database") || text.includes("数据库") || text.includes("虚拟")) return "mdi-database-outline";
+  return "mdi-devices";
+}
+
+function resolveEntityIcon(entity: XiaomiHomeResource, cleanName: string): string {
+  const attrIcon = String(entity.attributes?.icon || "").trim();
+  if (attrIcon.startsWith("mdi:")) {
+    return `mdi-${attrIcon.slice(4)}`;
+  }
+  const text = (cleanName + " " + entity.entityId + " " + entity.kind).toLowerCase();
+  if (text.includes("motion") || text.includes("移动") || text.includes("有人") || text.includes("人体")) return "mdi-motion-sensor";
+  if (text.includes("camera") || text.includes("video") || text.includes("录像") || text.includes("视频") || text.includes("画面")) return "mdi-video-outline";
+  if (text.includes("bell") || text.includes("alarm") || text.includes("报警") || text.includes("提醒") || text.includes("告警") || text.includes("推送")) return "mdi-bell-ring-outline";
+  if (text.includes("temp") || text.includes("温度") || text.includes("湿度") || text.includes("自检") || text.includes("gauge") || text.includes("sensor")) return "mdi-gauge";
+  if (text.includes("switch") || text.includes("开") || text.includes("关") || text.includes("电源")) return "mdi-toggle-switch-outline";
+  return "mdi-lightning-bolt-outline";
+}
+
+function findLongestCommonPrefix(strings: string[]): string {
+  if (!strings.length) return "";
+  let prefix = strings[0] || "";
+  for (let i = 1; i < strings.length; i++) {
+    const s = strings[i] || "";
+    while (!s.startsWith(prefix)) {
+      prefix = prefix.slice(0, -1);
+      if (!prefix) return "";
+    }
+  }
+  return prefix;
+}
+
+const xiaomiDeviceGroups = computed<XiaomiDeviceGroup[]>(() => {
+  const res = xiaomiResources.value;
+  if (!res || res.length === 0) return [];
+
+  const candidates = res.filter(item => {
+    const kind = item.kind.toLowerCase();
+    if (kind === "todo" || kind === "update" || kind === "tts" || kind === "zone") return false;
+    return kind === "event" || kind === "camera" || kind === "binary_sensor" || kind === "sensor" || kind === "switch" || kind === "text";
+  });
+
+  const bucketMap = new Map<string, XiaomiHomeResource[]>();
+  for (const item of candidates) {
+    const match = item.entityId.match(/^[a-z0-9_]+\.([a-z0-9]+_[a-z0-9]+_[0-9]+(?:_[a-z0-9]+)?)/i);
+    const key = match ? match[1].toLowerCase() : item.entityId.split(".")[0] || "other";
+    const list = bucketMap.get(key) || [];
+    list.push(item);
+    bucketMap.set(key, list);
+  }
+
+  const groups: XiaomiDeviceGroup[] = [];
+
+  for (const [key, items] of bucketMap.entries()) {
+    const displayNames = items.map(i => i.displayName.trim());
+    let deviceName = "";
+
+    const starItem = displayNames.find(n => n.includes(" * "));
+    if (starItem) {
+      deviceName = starItem.split(/\s*\*\s*/)[0]?.trim() || "";
+    } else if (displayNames.length > 1) {
+      const prefix = findLongestCommonPrefix(displayNames).trim();
+      if (prefix.length >= 2) {
+        deviceName = prefix;
+      }
+    }
+
+    if (!deviceName) {
+      if (displayNames[0]?.startsWith("Zero Database")) {
+        deviceName = "Zero Database";
+      } else {
+        const spaceIdx = displayNames[0]?.indexOf(" ") ?? -1;
+        if (spaceIdx > 2) {
+          deviceName = displayNames[0]!.slice(0, spaceIdx).trim();
+        } else {
+          deviceName = displayNames[0] || key;
+        }
+      }
+    }
+
+    const deviceIcon = resolveDeviceIcon(deviceName, key);
+
+    const entities: XiaomiDeviceEntity[] = items.map(item => {
+      const raw = item.displayName.trim();
+      let clean = raw;
+      if (raw.includes(" * ")) {
+        clean = raw.split(/\s*\*\s*/).slice(1).join(" * ").trim() || raw;
+      } else if (deviceName && raw.startsWith(deviceName) && raw.length > deviceName.length) {
+        clean = raw.slice(deviceName.length).trim();
+      }
+      if (!clean) clean = raw;
+      return {
+        entityId: item.entityId,
+        cleanName: clean,
+        rawName: raw,
+        kind: item.kind,
+        icon: resolveEntityIcon(item, clean),
+        available: item.available,
+        state: item.state
+      };
+    });
+
+    groups.push({
+      key,
+      name: deviceName,
+      icon: deviceIcon,
+      entities
+    });
+  }
+
+  return groups.sort((a, b) => {
+    const aCam = a.icon === "mdi-cctv" ? 0 : 1;
+    const bCam = b.icon === "mdi-cctv" ? 0 : 1;
+    if (aCam !== bCam) return aCam - bCam;
+    return a.name.localeCompare(b.name, "zh-CN");
+  });
+});
+
+const cascaderMenuOpen = ref(false);
+const currentHoveredDeviceKey = ref("");
+const entitySearchQuery = ref("");
+const manualEntityInputMode = ref(false);
+
+const filteredXiaomiDeviceGroups = computed(() => {
+  const q = entitySearchQuery.value.trim().toLowerCase();
+  if (!q) return xiaomiDeviceGroups.value;
+  return xiaomiDeviceGroups.value
+    .map(group => {
+      const matchDevice = group.name.toLowerCase().includes(q) || group.key.toLowerCase().includes(q);
+      if (matchDevice) return group;
+      const matchingEntities = group.entities.filter(ent =>
+        ent.cleanName.toLowerCase().includes(q)
+        || ent.entityId.toLowerCase().includes(q)
+        || ent.rawName.toLowerCase().includes(q)
+      );
+      if (matchingEntities.length > 0) {
+        return { ...group, entities: matchingEntities };
+      }
+      return null;
+    })
+    .filter((g): g is XiaomiDeviceGroup => g !== null);
+});
+
+const activeDeviceGroup = computed(() => {
+  const groups = filteredXiaomiDeviceGroups.value;
+  if (!groups.length) return null;
+  const found = groups.find(g => g.key === currentHoveredDeviceKey.value);
+  return found || groups[0] || null;
+});
+
+watch(filteredXiaomiDeviceGroups, (groups) => {
+  if (groups.length > 0 && (!currentHoveredDeviceKey.value || !groups.some(g => g.key === currentHoveredDeviceKey.value))) {
+    currentHoveredDeviceKey.value = groups[0]!.key;
+  }
+});
+
+const selectedXiaomiEntityId = computed(() => {
+  return String((activeMessageTrigger.value as any)?.targetEntityId || activeMessageTrigger.value?.regex || "").trim();
+});
+
+const selectedEntityInfo = computed(() => {
+  const id = selectedXiaomiEntityId.value;
+  if (!id) return null;
+  for (const group of xiaomiDeviceGroups.value) {
+    const ent = group.entities.find(e => e.entityId === id);
+    if (ent) {
+      return {
+        entityId: ent.entityId,
+        cleanName: ent.cleanName,
+        deviceName: group.name,
+        deviceIcon: group.icon,
+        entityIcon: ent.icon
+      };
+    }
+  }
+  return {
+    entityId: id,
+    cleanName: id,
+    deviceName: "自定义实体",
+    deviceIcon: "mdi-devices",
+    entityIcon: "mdi-lightning-bolt-outline"
+  };
+});
+
+function selectXiaomiEntity(entity: XiaomiDeviceEntity): void {
+  patchAutomationMessageTrigger({
+    targetEntityId: entity.entityId,
+    regex: entity.entityId
+  });
+  cascaderMenuOpen.value = false;
+}
+
+function clearXiaomiEntity(e?: Event): void {
+  e?.stopPropagation();
+  patchAutomationMessageTrigger({
+    targetEntityId: "",
+    regex: ""
+  });
+}
+
+const openingRecordingsFolder = ref(false);
+
+async function openRecordingsFolder(): Promise<void> {
+  if (openingRecordingsFolder.value) return;
+  openingRecordingsFolder.value = true;
+  try {
+    const roleId = gateway.value?.agentRoleId || "YeYu";
+    await store.openConfigFile("xiaomi-recordings", "", roleId);
+  } catch {
+    // Graceful fallback if manager fails to open
+  } finally {
+    openingRecordingsFolder.value = false;
+  }
+}
+
+const candidateXiaomiEntities = computed(() => {
+  const res = xiaomiResources.value;
+  if (!res || res.length === 0) return [];
+  return res
+    .filter(item => {
+      const kind = item.kind.toLowerCase();
+      const id = item.entityId.toLowerCase();
+      const name = item.displayName.toLowerCase();
+      const isCamera = kind === "camera" || id.startsWith("camera.");
+      const isEvent = kind === "event" || id.startsWith("event.");
+      const isBinary = kind === "binary_sensor" || id.startsWith("binary_sensor.");
+      const isSensor = kind === "sensor" || id.startsWith("sensor.");
+      const hasKeywords =
+        id.includes("motion")
+        || id.includes("video")
+        || id.includes("camera")
+        || name.includes("移动")
+        || name.includes("人体")
+        || name.includes("有人")
+        || name.includes("事件")
+        || name.includes("门铃")
+        || name.includes("哭声")
+        || name.includes("摄像");
+      return isCamera || ((isEvent || isBinary || isSensor) && hasKeywords);
+    })
+    .map(item => ({
+      title: `${item.displayName} (${item.entityId})`,
+      value: item.entityId
+    }));
+});
+
+const endpointOptions = [
+  { value: "xiaomiHome", title: "米家 / Xiaomi Home", icon: "mdi-home-automation", routeKinds: ["xiaomi_home_event"] },
+  { value: "napcat", title: "QQ (NapCat / OneBot)", icon: "mdi-qqchat", routeKinds: ["direct_at", "direct_reply", "indirect_reply", "group_message", "private"] },
+  { value: "weixin", title: "个人微信 / Weixin", icon: "mdi-wechat", routeKinds: ["weixin_message"] },
+  { value: "wecom", title: "企业微信 / WeCom", icon: "mdi-account-group", routeKinds: ["wecom_message"] },
+  { value: "fennenote", title: "语音转写 (FenneNote)", icon: "mdi-microphone", routeKinds: ["voice_transcript"] },
+  { value: "rolePanel", title: "角色面板 / 桌面入口", icon: "mdi-desktop-classic", routeKinds: ["role_panel_message", "manual_trigger"] },
+  { value: "wearable", title: "智能手表/手环", icon: "mdi-watch", routeKinds: ["wearable_health_alert"] },
+  { value: "schedule", title: "到达时间 (定时任务)", icon: "mdi-calendar-clock-outline", routeKinds: ["heartbeat"] },
+  { value: "webhook", title: "通用 Webhook / 其他", icon: "mdi-webhook", routeKinds: [] }
+];
+
+const selectedEndpoint = computed({
+  get() {
+    if (!activeAutomation.value) return "napcat";
+    if (activeAutomation.value.trigger.type === "schedule") return "schedule";
+    const kinds = activeAutomation.value.trigger.routeKinds || [];
+    if (kinds.includes("xiaomi_home_event") || (activeAutomation.value.trigger as any).endpointType === "xiaomiHome") return "xiaomiHome";
+    if (kinds.some(k => ["direct_at", "direct_reply", "indirect_reply", "group_message", "private"].includes(k))) return "napcat";
+    if (kinds.includes("weixin_message")) return "weixin";
+    if (kinds.includes("wecom_message")) return "wecom";
+    if (kinds.includes("voice_transcript")) return "fennenote";
+    if (kinds.includes("wearable_health_alert")) return "wearable";
+    if (kinds.includes("rabilink")) return "rabilink";
+    if (kinds.some(k => ["role_panel_message", "manual_trigger"].includes(k))) return "rolePanel";
+    return "webhook";
+  },
+  set(endpoint: string) {
+    if (!activeAutomation.value) return;
+    if (endpoint === "schedule") {
+      setAutomationTriggerType("schedule");
+    } else {
+      if (activeAutomation.value.trigger.type !== "message") {
+        setAutomationTriggerType("message");
+      }
+      const option = endpointOptions.find(o => o.value === endpoint);
+      patchAutomationMessageTrigger({
+        routeKinds: option ? [...option.routeKinds] : [],
+        endpointType: endpoint
+      });
+      if (endpoint === "xiaomiHome") {
+        void loadXiaomiResources();
+      }
+    }
+  }
+});
+
+const activeMessageTrigger = computed(() => {
+  if (!activeAutomation.value || activeAutomation.value.trigger.type !== "message") return null;
+  return activeAutomation.value.trigger;
+});
+
+const activeScheduleTrigger = computed(() => {
+  if (!activeAutomation.value || activeAutomation.value.trigger.type !== "schedule") return null;
+  return activeAutomation.value.trigger;
+});
+
 function openAutomation(ruleId: string): void {
   activeAutomationId.value = ruleId;
   automationDialog.value = true;
   routeKindQuery.value = "";
+  if (selectedEndpoint.value === "xiaomiHome") {
+    void loadXiaomiResources();
+  }
 }
 
 function createAutomation(triggerType: "message" | "schedule", actionType: string): void {
@@ -479,6 +827,107 @@ function automationActionLabel(rule: PersonaAutomationRuleDefinition): string {
 
 function automationActionColor(rule: PersonaAutomationRuleDefinition): string {
   return rule.action.type === "run_script" ? "warning" : "secondary";
+}
+
+function resolveRuleEndpointInfo(rule: PersonaAutomationRuleDefinition): { icon: string; color: string } {
+  if (rule.trigger.type === "schedule") {
+    return { icon: "mdi-calendar-clock-outline", color: "indigo" };
+  }
+  const trigger = rule.trigger;
+  const kinds = trigger.routeKinds ?? [];
+  const endpointType = (trigger as any).endpointType;
+
+  // 1. 米家 / Xiaomi Home
+  if (endpointType === "xiaomiHome" || kinds.includes("xiaomi_home_event")) {
+    const targetEntityId = String((trigger as any).targetEntityId || trigger.regex || "").toLowerCase();
+    if (targetEntityId.startsWith("camera.") || targetEntityId.includes("camera") || targetEntityId.includes("video")) {
+      return { icon: "mdi-cctv", color: "cyan" };
+    }
+    if (targetEntityId.includes("power") || targetEntityId.includes("electric") || targetEntityId.includes("consumption")) {
+      return { icon: "mdi-flash", color: "amber-darken-2" };
+    }
+    if (targetEntityId.startsWith("switch.") || targetEntityId.includes("plug") || targetEntityId.includes("socket")) {
+      return { icon: "mdi-power-socket-cn", color: "amber" };
+    }
+    if (targetEntityId.startsWith("sensor.") || targetEntityId.startsWith("binary_sensor.")) {
+      return { icon: "mdi-motion-sensor", color: "teal" };
+    }
+    return { icon: "mdi-home-automation", color: "teal" };
+  }
+
+  // 2. 个人微信 / Weixin
+  if (endpointType === "weixin" || kinds.includes("weixin_message")) {
+    return { icon: "mdi-wechat", color: "success" };
+  }
+
+  // 3. 企业微信 / WeCom
+  if (endpointType === "wecom" || kinds.includes("wecom_message")) {
+    return { icon: "mdi-account-group", color: "blue" };
+  }
+
+  // 4. 飞书 / Feishu
+  if (endpointType === "feishu" || kinds.includes("feishu_message")) {
+    return { icon: "mdi-feather", color: "blue-darken-1" };
+  }
+
+  // 5. QQ (NapCat / OneBot)
+  if (endpointType === "napcat" || kinds.some(k => ["direct_at", "direct_reply", "indirect_reply", "group_message", "private"].includes(k))) {
+    if (kinds.includes("private")) {
+      return { icon: "mdi-account", color: "light-blue" };
+    }
+    if (kinds.includes("direct_at")) {
+      return { icon: "mdi-at", color: "light-blue-darken-1" };
+    }
+    if (kinds.includes("direct_reply") || kinds.includes("indirect_reply")) {
+      return { icon: "mdi-reply", color: "light-blue" };
+    }
+    return { icon: "mdi-qqchat", color: "light-blue" };
+  }
+
+  // 6. 语音转写 (FenneNote / Speech)
+  if (endpointType === "fennenote" || kinds.includes("voice_transcript")) {
+    return { icon: "mdi-microphone", color: "purple" };
+  }
+
+  // 7. 智能手表/手环 (Wearable)
+  if (endpointType === "wearable" || kinds.includes("wearable_health_alert")) {
+    return { icon: "mdi-heart-pulse", color: "error" };
+  }
+
+  // 8. RabiLink
+  if (endpointType === "rabilink" || kinds.includes("rabilink")) {
+    return { icon: "mdi-link-variant", color: "blue-grey" };
+  }
+
+  // 9. 角色面板 / 桌面入口 (RolePanel)
+  if (endpointType === "rolePanel" || kinds.includes("role_panel_message")) {
+    return { icon: "mdi-desktop-classic", color: "secondary" };
+  }
+
+  // 10. 手动触发 (Manual Trigger)
+  if (kinds.includes("manual_trigger")) {
+    return { icon: "mdi-gesture-tap-button", color: "orange" };
+  }
+
+  // 11. 心跳 (Heartbeat)
+  if (kinds.includes("heartbeat")) {
+    return { icon: "mdi-clock-outline", color: "indigo" };
+  }
+
+  // 12. 计划反馈 (Plan Feedback)
+  if (kinds.includes("plan_feedback")) {
+    return { icon: "mdi-clipboard-check-outline", color: "teal" };
+  }
+
+  // 13. Webhook / 其他
+  return { icon: "mdi-webhook", color: "grey" };
+}
+
+function automationCardTooltip(rule: PersonaAutomationRuleDefinition): string {
+  const name = rule.name || rule.id;
+  const source = automationSourceSummary(rule);
+  const action = automationActionSummary(rule);
+  return `${name}\n触发：${source}\n动作：${action}`;
 }
 
 function enableTimerInput(): void {
@@ -1535,17 +1984,27 @@ onBeforeUnmount(() => {
                     type="button"
                     class="automation-card"
                     :class="{ disabled: rule.enabled === false, warning: automationDiagnostics(rule).length > 0 }"
+                    :title="automationCardTooltip(rule)"
                     @click="openAutomation(rule.id)"
                   >
                     <span class="automation-card-topline">
                       <strong data-no-i18n>{{ rule.name || rule.id }}</strong>
                       <v-chip size="x-small" :color="automationActionColor(rule)" variant="tonal">{{ automationActionLabel(rule) }}</v-chip>
                     </span>
-                    <span class="automation-card-source">{{ automationSourceSummary(rule) }}</span>
-                    <span class="automation-card-action">{{ automationActionSummary(rule) }}</span>
-                    <span v-if="automationDiagnostics(rule).length" class="automation-card-warning">
-                      <v-icon size="16">mdi-alert-circle-outline</v-icon>
-                      {{ automationDiagnostics(rule)[0] }}
+                    <span class="automation-card-bottomline">
+                      <span class="automation-card-source">
+                        <v-icon size="15" :icon="resolveRuleEndpointInfo(rule).icon" :color="resolveRuleEndpointInfo(rule).color" class="mr-1" />
+                        {{ automationSourceSummary(rule) }}
+                      </span>
+                      <v-icon
+                        v-if="automationDiagnostics(rule).length"
+                        size="14"
+                        color="warning"
+                        class="automation-card-warning-icon"
+                        :title="automationDiagnostics(rule)[0]"
+                      >
+                        mdi-alert-circle-outline
+                      </v-icon>
                     </span>
                   </button>
                 </div>
@@ -1596,20 +2055,27 @@ onBeforeUnmount(() => {
                 type="button"
                 class="automation-card scheduled-card"
                 :class="{ disabled: rule.enabled === false, warning: automationDiagnostics(rule).length > 0 }"
+                :title="automationCardTooltip(rule)"
                 @click="openAutomation(rule.id)"
               >
                 <span class="automation-card-topline">
                   <strong data-no-i18n>{{ rule.name || rule.id }}</strong>
                   <v-chip size="x-small" :color="automationActionColor(rule)" variant="tonal">{{ automationActionLabel(rule) }}</v-chip>
                 </span>
-                <span class="automation-schedule-line">
-                  <v-icon size="18">mdi-clock-outline</v-icon>
-                  {{ automationSourceSummary(rule) }}
-                </span>
-                <span class="automation-card-action">{{ automationActionSummary(rule) }}</span>
-                <span v-if="automationDiagnostics(rule).length" class="automation-card-warning">
-                  <v-icon size="16">mdi-alert-circle-outline</v-icon>
-                  {{ automationDiagnostics(rule)[0] }}
+                <span class="automation-card-bottomline">
+                  <span class="automation-card-source">
+                    <v-icon size="15" :icon="resolveRuleEndpointInfo(rule).icon" :color="resolveRuleEndpointInfo(rule).color" class="mr-1" />
+                    {{ automationSourceSummary(rule) }}
+                  </span>
+                  <v-icon
+                    v-if="automationDiagnostics(rule).length"
+                    size="14"
+                    color="warning"
+                    class="automation-card-warning-icon"
+                    :title="automationDiagnostics(rule)[0]"
+                  >
+                    mdi-alert-circle-outline
+                  </v-icon>
                 </span>
               </button>
             </div>
@@ -1761,136 +2227,362 @@ onBeforeUnmount(() => {
             <span class="automation-step-number">2</span>
             <div class="automation-editor-section-body">
               <div class="automation-section-heading">
-                <strong>什么时候触发</strong>
-                <span>切换类型后，只显示这一类触发条件需要的参数。</span>
+                <strong>选择消息端类型</strong>
+                <span>选择触发这条规则的消息端或时间事件。</span>
               </div>
-              <v-btn-toggle
-                :model-value="activeAutomation.trigger.type"
-                color="secondary"
-                mandatory
-                divided
-                class="automation-type-toggle"
-                @update:model-value="value => setAutomationTriggerType(value === 'schedule' ? 'schedule' : 'message')"
-              >
-                <v-btn value="message" prepend-icon="mdi-message-processing-outline">收到消息</v-btn>
-                <v-btn value="schedule" prepend-icon="mdi-calendar-clock-outline">到达时间</v-btn>
-              </v-btn-toggle>
+              <v-select
+                v-model="selectedEndpoint"
+                :items="endpointOptions"
+                item-title="title"
+                item-value="value"
+                label="消息端类型"
+                density="compact"
+                variant="outlined"
+                hide-details
+                prepend-inner-icon="mdi-swap-horizontal"
+                class="mt-2"
+              />
+            </div>
+          </div>
 
-              <template v-if="activeAutomation.trigger.type === 'message'">
-                <div class="config-toolbar mt-4">
-                  <v-text-field
-                    v-model="routeKindQuery"
-                    density="compact"
-                    prepend-inner-icon="mdi-magnify"
-                    label="搜索消息来源"
-                    hide-details
-                    clearable
-                  />
-                  <v-chip size="small" color="secondary" variant="tonal">已选 {{ activeAutomation.trigger.routeKinds?.length || 0 }}</v-chip>
-                </div>
-                <div class="route-kind-catalog compact-catalog">
-                  <section v-for="definition in visibleRouteKindDefinitions" :key="definition.adapter" class="catalog-section">
-                    <div class="catalog-section-head">
-                      <div>
-                        <div class="catalog-section-title">{{ definition.title }}</div>
-                        <div class="section-note">{{ definition.note }}</div>
-                      </div>
-                    </div>
-                    <div v-for="group in definition.groups" :key="group.title" class="route-kind-group">
-                      <div class="route-kind-group-head"><span>{{ group.title }}</span></div>
-                      <div class="route-kind-chip-grid">
-                        <button
-                          v-for="kind in group.routeKinds"
-                          :key="kind"
-                          class="route-kind-chip"
-                          :class="{ active: activeAutomation.trigger.routeKinds?.includes(kind) }"
-                          type="button"
-                          @click="toggleAutomationRouteKind(kind)"
-                        >
-                          <v-icon size="18">{{ activeAutomation.trigger.routeKinds?.includes(kind) ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
-                          <span>{{ routeKindLabels[kind] || kind }}</span>
-                          <code>{{ kind }}</code>
-                        </button>
-                      </div>
-                    </div>
-                  </section>
-                </div>
+          <div class="automation-editor-section">
+            <span class="automation-step-number">3</span>
+            <div class="automation-editor-section-body">
+              <div class="automation-section-heading">
+                <strong>设置消息端参数</strong>
+                <span>根据所选消息端，配置具体的触发条件与过滤参数。</span>
+              </div>
 
-                <div class="automation-subsection">
-                  <div class="automation-section-heading compact-heading">
-                    <strong>进一步筛选（可选）</strong>
-                    <span>不填写时，只按上面选择的消息来源判断。</span>
+              <!-- 米家 / Xiaomi Home -->
+              <template v-if="selectedEndpoint === 'xiaomiHome'">
+                <div class="form-grid mt-2">
+                  <div class="full-span d-flex align-center justify-space-between mb-1">
+                    <span class="text-caption text-medium-emphasis">从 Home Assistant 接入的米家设备中选择触发实体</span>
+                    <v-btn
+                      size="x-small"
+                      variant="text"
+                      color="primary"
+                      :loading="loadingXiaomiResources"
+                      prepend-icon="mdi-refresh"
+                      @click="loadXiaomiResources"
+                    >
+                      刷新设备列表
+                    </v-btn>
                   </div>
-                  <div class="form-grid">
-                    <v-text-field
-                      :model-value="activeAutomation.trigger.regex"
-                      label="消息包含或匹配"
-                      placeholder="例如：需求|报错|构建失败"
-                      @update:model-value="value => patchAutomationMessageTrigger({ regex: String(value || '') })"
+                  <!-- 手动输入模式 -->
+                  <template v-if="manualEntityInputMode">
+                    <div class="full-span d-flex align-center ga-2">
+                      <v-text-field
+                        :model-value="selectedXiaomiEntityId"
+                        label="触发实体 ID"
+                        placeholder="输入实体 ID（如 event.chuangmi_cn_...）"
+                        density="compact"
+                        variant="outlined"
+                        hide-details
+                        class="flex-grow-1"
+                        @update:model-value="val => patchAutomationMessageTrigger({ targetEntityId: String(val || ''), regex: String(val || '') })"
+                      />
+                      <v-btn
+                        size="small"
+                        variant="tonal"
+                        color="secondary"
+                        prepend-icon="mdi-format-list-bulleted-type"
+                        @click="manualEntityInputMode = false"
+                      >
+                        选择列表
+                      </v-btn>
+                    </div>
+                  </template>
+
+                  <!-- 二级级联选择菜单模式 -->
+                  <template v-else>
+                    <div class="full-span xiaomi-cascader-wrapper">
+                      <v-menu
+                        v-model="cascaderMenuOpen"
+                        :close-on-content-click="false"
+                        location="bottom start"
+                        offset="4"
+                      >
+                        <template #activator="{ props: menuProps }">
+                          <div
+                            v-bind="menuProps"
+                            class="xiaomi-cascader-trigger"
+                            :class="{ active: cascaderMenuOpen, 'has-value': !!selectedEntityInfo }"
+                          >
+                            <div class="xiaomi-cascader-trigger-content">
+                              <template v-if="selectedEntityInfo && selectedXiaomiEntityId">
+                                <v-chip
+                                  size="x-small"
+                                  color="primary"
+                                  variant="tonal"
+                                  :prepend-icon="selectedEntityInfo.deviceIcon"
+                                  class="mr-1"
+                                >
+                                  {{ selectedEntityInfo.deviceName }}
+                                </v-chip>
+                                <span class="cascader-trigger-entity">
+                                  <v-icon size="15" class="mr-1">{{ selectedEntityInfo.entityIcon }}</v-icon>
+                                  {{ selectedEntityInfo.cleanName }}
+                                </span>
+                                <span class="cascader-trigger-id">({{ selectedEntityInfo.entityId }})</span>
+                              </template>
+                              <template v-else>
+                                <span class="xiaomi-cascader-placeholder">点击选择米家设备及其触发事件 / 实体...</span>
+                              </template>
+                            </div>
+                            <div class="xiaomi-cascader-trigger-actions">
+                              <v-icon
+                                v-if="selectedEntityInfo && selectedXiaomiEntityId"
+                                size="16"
+                                icon="mdi-close-circle"
+                                class="cascader-clear-btn mr-1"
+                                title="清除选择"
+                                @click="clearXiaomiEntity"
+                              />
+                              <v-icon size="18" icon="mdi-chevron-down" class="cascader-arrow-btn" />
+                            </div>
+                          </div>
+                        </template>
+
+                        <!-- 二级级联下拉面板 -->
+                        <div class="xiaomi-cascader-menu">
+                          <!-- 顶部工具栏：搜索与输入切换 -->
+                          <div class="xiaomi-cascader-toolbar">
+                            <v-icon size="16" icon="mdi-magnify" class="text-medium-emphasis mr-1" />
+                            <input
+                              v-model="entitySearchQuery"
+                              type="text"
+                              placeholder="搜索设备或事件名称..."
+                              class="cascader-search-input"
+                              @keydown.stop
+                            />
+                            <v-icon
+                              v-if="entitySearchQuery"
+                              size="14"
+                              icon="mdi-close"
+                              class="cursor-pointer text-medium-emphasis mr-2"
+                              @click="entitySearchQuery = ''"
+                            />
+                            <v-btn
+                              size="x-small"
+                              variant="text"
+                              color="secondary"
+                              prepend-icon="mdi-keyboard-outline"
+                              @click="manualEntityInputMode = true; cascaderMenuOpen = false"
+                            >
+                              手动输入
+                            </v-btn>
+                          </div>
+
+                          <!-- 级联双栏主体 -->
+                          <div class="xiaomi-cascader-body">
+                            <!-- 左栏：设备列表（一级） -->
+                            <div class="xiaomi-cascader-device-list">
+                              <div
+                                v-if="filteredXiaomiDeviceGroups.length === 0"
+                                class="pa-4 text-caption text-medium-emphasis text-center"
+                              >
+                                没有匹配的米家设备
+                              </div>
+                              <div
+                                v-for="dev in filteredXiaomiDeviceGroups"
+                                :key="dev.key"
+                                class="xiaomi-cascader-device-item"
+                                :class="{ active: activeDeviceGroup?.key === dev.key }"
+                                @mouseenter="currentHoveredDeviceKey = dev.key"
+                                @click="currentHoveredDeviceKey = dev.key"
+                              >
+                                <v-icon size="18" :icon="dev.icon" class="device-icon" />
+                                <span class="cascader-device-name" :title="dev.name">{{ dev.name }}</span>
+                                <span class="cascader-device-count">{{ dev.entities.length }}</span>
+                                <v-icon size="16" icon="mdi-chevron-right" class="cascader-device-arrow" />
+                              </div>
+                            </div>
+
+                            <!-- 右栏：事件/实体列表（二级） -->
+                            <div class="xiaomi-cascader-event-list">
+                              <template v-if="activeDeviceGroup">
+                                <div class="xiaomi-cascader-event-header">
+                                  <v-icon size="16" :icon="activeDeviceGroup.icon" />
+                                  <strong>{{ activeDeviceGroup.name }}</strong>
+                                  <span class="text-caption text-medium-emphasis">（{{ activeDeviceGroup.entities.length }} 个可用实体）</span>
+                                </div>
+                                <div
+                                  v-for="ent in activeDeviceGroup.entities"
+                                  :key="ent.entityId"
+                                  class="xiaomi-cascader-event-item"
+                                  :class="{ selected: selectedXiaomiEntityId === ent.entityId }"
+                                  @click="selectXiaomiEntity(ent)"
+                                >
+                                  <v-icon size="18" :icon="ent.icon" class="event-icon" />
+                                  <div class="cascader-event-info">
+                                    <span class="cascader-event-title">{{ ent.cleanName }}</span>
+                                    <span class="cascader-event-id">{{ ent.entityId }}</span>
+                                  </div>
+                                  <v-icon
+                                    v-if="selectedXiaomiEntityId === ent.entityId"
+                                    size="16"
+                                    icon="mdi-check"
+                                    color="primary"
+                                    class="ml-auto"
+                                  />
+                                </div>
+                              </template>
+                              <div v-else class="pa-6 text-caption text-medium-emphasis text-center">
+                                请在左侧选择设备
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </v-menu>
+                    </div>
+                  </template>
+                  <div class="full-span d-flex align-center justify-space-between mt-2 flex-wrap ga-2">
+                    <v-switch
+                      :model-value="(activeMessageTrigger as any)?.saveClip !== false"
+                      label="自动下载并保存该事件的录像切片（MP4）"
+                      color="warning"
+                      inset
+                      density="compact"
+                      hide-details
+                      @update:model-value="val => patchAutomationMessageTrigger({ saveClip: Boolean(val) })"
                     />
-                    <v-text-field
-                      v-if="(activeAutomation.trigger.routeKinds || []).some(kind => ['group_message', 'direct_at', 'direct_reply', 'indirect_reply', 'wecom_message', 'feishu_message'].includes(kind))"
-                      :model-value="activeAutomation.trigger.targetGroupId"
-                      label="只限这个群"
-                      placeholder="留空表示不限群"
-                      @update:model-value="value => patchAutomationMessageTrigger({ targetGroupId: String(value || '') })"
-                    />
-                    <v-combobox
-                      v-if="activeAutomation.trigger.routeKinds?.includes('voice_transcript')"
-                      class="full-span"
-                      :model-value="activeAutomation.trigger.allowedSpeakerNames || []"
-                      label="只限这些说话人"
-                      chips
-                      multiple
-                      closable-chips
-                      @update:model-value="value => patchAutomationMessageTrigger({ allowedSpeakerNames: Array.isArray(value) ? value.map(String) : [] })"
-                    />
+                    <v-btn
+                      size="small"
+                      variant="tonal"
+                      color="secondary"
+                      prepend-icon="mdi-folder-play-outline"
+                      :loading="openingRecordingsFolder"
+                      @click="openRecordingsFolder"
+                    >
+                      打开记录文件夹
+                    </v-btn>
                   </div>
                 </div>
               </template>
 
-              <template v-else>
-                <div class="form-grid mt-4">
+              <!-- QQ (NapCat) -->
+              <template v-else-if="selectedEndpoint === 'napcat'">
+                <div class="form-grid mt-2">
+                  <div class="full-span">
+                    <div class="text-caption text-medium-emphasis mb-2">触发场景</div>
+                    <div class="route-kind-chip-grid">
+                      <button
+                        v-for="kind in ['direct_at', 'direct_reply', 'indirect_reply', 'group_message', 'private']"
+                        :key="kind"
+                        class="route-kind-chip"
+                        :class="{ active: activeMessageTrigger?.routeKinds?.includes(kind) }"
+                        type="button"
+                        @click="toggleAutomationRouteKind(kind)"
+                      >
+                        <v-icon size="18">{{ activeMessageTrigger?.routeKinds?.includes(kind) ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
+                        <span>{{ routeKindLabels[kind] || kind }}</span>
+                      </button>
+                    </div>
+                  </div>
+                  <v-text-field
+                    :model-value="activeMessageTrigger?.targetGroupId"
+                    label="只限这个群（可选）"
+                    placeholder="留空表示不限群"
+                    density="compact"
+                    variant="outlined"
+                    class="mt-2"
+                    @update:model-value="value => patchAutomationMessageTrigger({ targetGroupId: String(value || '') })"
+                  />
+                  <v-text-field
+                    :model-value="activeMessageTrigger?.regex"
+                    label="消息包含或正则匹配（可选）"
+                    placeholder="例如：需求|报错|构建失败"
+                    density="compact"
+                    variant="outlined"
+                    class="mt-2"
+                    @update:model-value="value => patchAutomationMessageTrigger({ regex: String(value || '') })"
+                  />
+                </div>
+              </template>
+
+              <!-- 语音转写 (FenneNote) -->
+              <template v-else-if="selectedEndpoint === 'fennenote'">
+                <div class="form-grid mt-2">
+                  <v-combobox
+                    class="full-span"
+                    :model-value="activeMessageTrigger?.allowedSpeakerNames || []"
+                    label="只限这些说话人（可选）"
+                    chips
+                    multiple
+                    closable-chips
+                    density="compact"
+                    variant="outlined"
+                    placeholder="输入说话人并按回车"
+                    @update:model-value="value => patchAutomationMessageTrigger({ allowedSpeakerNames: Array.isArray(value) ? value.map(String) : [] })"
+                  />
+                  <v-text-field
+                    class="full-span mt-2"
+                    :model-value="activeMessageTrigger?.regex"
+                    label="转写内容包含或正则匹配（可选）"
+                    placeholder="例如：唤醒词|夜雨"
+                    density="compact"
+                    variant="outlined"
+                    @update:model-value="value => patchAutomationMessageTrigger({ regex: String(value || '') })"
+                  />
+                </div>
+              </template>
+
+              <!-- 定时任务 (schedule) -->
+              <template v-else-if="selectedEndpoint === 'schedule'">
+                <div class="form-grid mt-2">
                   <v-select
-                    :model-value="activeAutomation.trigger.schedule.type"
+                    :model-value="activeScheduleTrigger?.schedule?.type || 'interval'"
                     :items="scheduleTypeOptions"
                     label="时间类型"
+                    density="compact"
+                    variant="outlined"
                     @update:model-value="value => setAutomationScheduleType(String(value || 'interval'))"
                   />
-                  <template v-if="activeAutomation.trigger.schedule.type === 'interval'">
+                  <template v-if="activeScheduleTrigger?.schedule?.type === 'interval'">
                     <v-text-field
-                      :model-value="activeAutomation.trigger.schedule.intervalSeconds"
+                      :model-value="activeScheduleTrigger?.schedule?.intervalSeconds || 900"
                       type="number"
                       min="1"
                       step="1"
                       label="间隔秒数"
+                      density="compact"
+                      variant="outlined"
                       @update:model-value="value => patchAutomationSchedule({ intervalSeconds: Number(value || 900) })"
                     />
                     <v-text-field
-                      :model-value="activeAutomation.trigger.schedule.windowStartTime"
+                      :model-value="activeScheduleTrigger?.schedule?.windowStartTime || ''"
                       label="每天从几点开始（可选）"
                       placeholder="09:30"
+                      density="compact"
+                      variant="outlined"
                       @update:model-value="value => patchAutomationSchedule({ windowStartTime: String(value || '') })"
                     />
                     <v-text-field
-                      :model-value="activeAutomation.trigger.schedule.windowEndTime"
+                      :model-value="activeScheduleTrigger?.schedule?.windowEndTime || ''"
                       label="每天到几点结束（可选）"
                       placeholder="19:00"
+                      density="compact"
+                      variant="outlined"
                       @update:model-value="value => patchAutomationSchedule({ windowEndTime: String(value || '') })"
                     />
                   </template>
                   <v-text-field
-                    v-else-if="activeAutomation.trigger.schedule.type === 'daily_time'"
-                    :model-value="activeAutomation.trigger.schedule.timeOfDay"
+                    v-else-if="activeScheduleTrigger?.schedule?.type === 'daily_time'"
+                    :model-value="activeScheduleTrigger?.schedule?.timeOfDay || ''"
                     type="time"
                     label="每天执行时间"
+                    density="compact"
+                    variant="outlined"
                     @update:model-value="value => patchAutomationSchedule({ timeOfDay: String(value || '') })"
                   />
                   <v-text-field
                     v-else
-                    :model-value="activeAutomation.trigger.schedule.onceAt"
+                    :model-value="activeScheduleTrigger?.schedule?.onceAt || ''"
                     type="datetime-local"
                     label="执行日期和时间"
+                    density="compact"
+                    variant="outlined"
                     @update:model-value="value => patchAutomationSchedule({ onceAt: String(value || '') })"
                   />
                 </div>
@@ -1901,11 +2593,36 @@ onBeforeUnmount(() => {
                   </div>
                 </v-alert>
               </template>
+
+              <!-- 其他/通用消息端 (weixin, wecom, rolePanel, etc.) -->
+              <template v-else>
+                <div class="form-grid mt-2">
+                  <v-text-field
+                    class="full-span"
+                    :model-value="activeMessageTrigger?.regex"
+                    label="消息包含或正则匹配（可选）"
+                    placeholder="留空表示匹配所有该渠道消息"
+                    density="compact"
+                    variant="outlined"
+                    @update:model-value="value => patchAutomationMessageTrigger({ regex: String(value || '') })"
+                  />
+                  <v-text-field
+                    v-if="(activeMessageTrigger?.routeKinds || []).some((kind: string) => ['wecom_message', 'feishu_message'].includes(kind))"
+                    class="full-span"
+                    :model-value="activeMessageTrigger?.targetGroupId"
+                    label="只限这个群（可选）"
+                    placeholder="留空表示不限群"
+                    density="compact"
+                    variant="outlined"
+                    @update:model-value="value => patchAutomationMessageTrigger({ targetGroupId: String(value || '') })"
+                  />
+                </div>
+              </template>
             </div>
           </div>
 
           <div class="automation-editor-section">
-            <span class="automation-step-number">3</span>
+            <span class="automation-step-number">4</span>
             <div class="automation-editor-section-body">
               <div class="automation-section-heading">
                 <strong>触发后做什么</strong>

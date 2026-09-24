@@ -1,12 +1,29 @@
 param(
   [string] $OutputDir = "",
   [string] $RelayBaseUrl = "",
-  [string] $VersionId = ""
+  [string] $VersionId = "",
+  [switch] $NoBump
 )
 
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")
+
+if (-not $NoBump) {
+  $releaseJsonPath = Join-Path $projectRoot "craft-release.json"
+  if (Test-Path -LiteralPath $releaseJsonPath) {
+    $releaseJson = Get-Content -LiteralPath $releaseJsonPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($releaseJson.version -match '^(\d+)\.(\d+)\.(\d+)$') {
+      $major = [int]$matches[1]
+      $minor = [int]$matches[2]
+      $patch = [int]$matches[3] + 1
+      $newVersion = "$major.$minor.$patch"
+      $releaseJson.version = $newVersion
+      $releaseJson | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $releaseJsonPath -Encoding UTF8
+      Write-Host "Auto-bumped craft-release.json version to $newVersion"
+    }
+  }
+}
 if (-not $RelayBaseUrl) {
   $relayConfigPath = Join-Path $projectRoot "..\..\data\rabilink-relay\config.json"
   if (Test-Path -LiteralPath $relayConfigPath) {

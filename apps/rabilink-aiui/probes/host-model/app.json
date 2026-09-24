@@ -1,0 +1,11 @@
+{
+  "pages": [
+    "pages/home/index",
+    "pages/index/index"
+  ],
+  "window": {
+    "navigationBarTitleText": "Rabi 对话",
+    "navigationBarBackgroundColor": "#000000",
+    "navigationBarTextStyle": "white"
+  }
+}

@@ -1453,6 +1453,7 @@ public final class RabiGlassPcBackend {
         JSONArray presentation = item.optJSONArray("presentation");
         boolean wantsTts = !text.isEmpty() && (presentation == null || presentation.length() == 0);
         for (int index = 0; !text.isEmpty() && presentation != null && index < presentation.length(); index++) if ("tts".equals(presentation.optString(index))) wantsTts = true;
+        if (RabiGlassTextOutput.enabled(context)) wantsTts = false;
         if (wantsTts) listener.onStatus("Rabi PC 正在合成移动端回复");
         byte[] pcm = wantsTts ? cachedReply(messageId) : new byte[0];
         if (wantsTts && pcm == null) {

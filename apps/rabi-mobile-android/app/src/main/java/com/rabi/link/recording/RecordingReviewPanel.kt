@@ -148,22 +148,27 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
             textSize = 13f; setBackgroundColor(android.graphics.Color.TRANSPARENT)
         }
         eventColumn.addView(HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false; addView(navigation) })
-        eventColumn.addView(Spinner(context).apply {
+        val filters = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        filters.addView(Spinner(context).apply {
             adapter = ArrayAdapter(context,android.R.layout.simple_spinner_dropdown_item,listOf("全部类型","ASR 事件","录像"))
             contentDescription = "筛选事件类型"
             onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
                 override fun onNothingSelected(parent: AdapterView<*>?) = Unit
                 override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) { if(typeFilter != position) { typeFilter = position; renderRows(); load() } }
             }
-        },LinearLayout.LayoutParams(-1,dp(48)))
-        eventColumn.addView(Spinner(context).apply {
+        },LinearLayout.LayoutParams(0,dp(48),1f))
+        filters.addView(Spinner(context).apply {
             adapter = ArrayAdapter(context,android.R.layout.simple_spinner_dropdown_item,listOf("全部来源","手机","眼镜"))
             contentDescription = "筛选记录来源"
             onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
                 override fun onNothingSelected(parent: AdapterView<*>?) = Unit
                 override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) { if(sourceFilter != position) { sourceFilter = position; renderRows(); load() } }
             }
-        },LinearLayout.LayoutParams(-1,dp(48)))
+        },LinearLayout.LayoutParams(0,dp(48),1f))
+        eventColumn.addView(filters, LinearLayout.LayoutParams(-1,dp(48)))
         eventColumn.addView(listStatus)
         listStatus.setOnClickListener { listDriving = true; live = false; load(true) }
         scroll.adapter = rowAdapter

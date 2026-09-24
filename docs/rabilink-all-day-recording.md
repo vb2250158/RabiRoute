@@ -199,7 +199,7 @@
 - 新设置模型为 `AllDayRecordingSettings`：`mode=audio|video|health`（UI 对应音频/音视频/仅健康）、`source=mobile|glasses`、`processingPolicy=local_only|transcribe|agent`，以及 `running`、`healthEnabled`、`uploadEnabled`、`autoResume`、`windowStartedAt`。
 - `processingPolicy` 默认拟为 `transcribe`，但升级后 `running=false`，不能因此自动开启录音；转写处理默认不等于上传/人格共享授权。仅健康场景不生成音频转写任务。
 - `running=false` 表示当前不允许采集，不得作为清空历史暂停区间的理由；`windowStartedAt` 表示当前允许窗口起点，单个当前窗口字段不能替代跨重启、迟到健康样本所需的历史排除区间记录。
-- `uploadEnabled` 控制同步许可，`autoResume` 当前仅内部保留 false，无行为的 UI 已移除，开机明确暂停，不宣称自动恢复已实现；前述建议中的 Wi-Fi、独立视频来源和细分运行状态仍需按实际实现逐项确认，不因为字段表存在而声称全部支持。
+- `uploadEnabled` 控制同步许可，`autoResume` 保存用户记录开关；开机恢复后台连接及通知入口，应用进入前台且权限已授予后恢复开启的记录，关闭开关则取消自动恢复；前述建议中的 Wi-Fi、独立视频来源和细分运行状态仍需按实际实现逐项确认，不因为字段表存在而声称全部支持。
 - PC 端 `transcribe` 仅转写、不自动投递 Agent 的能力与 worker 围栏已接入源码，最终回归与部署验收仍待。在 PC 不支持该策略时应明确报不支持/等待升级，不能静默回退 `agent` 或误报转写闭环完成。
 
 补充实现边界：PC 能力的正/负缓存按端点变化、网络恢复或人工 retry 失效，没有周期性能力查询；离线 PC 升级后需要人工 retry 重新核验，不能承诺自动发现升级。视频已实现持久 binding、停止后的持久入队及死进程身份恢复，但真机验收仍待；健康能力真实 Relay 测试已通过：仅新版 worker 的明确能力可用，旧 worker 不获虚假支持，目标切换返回冲突。`transcribe` 只保存健康记录不投 Agent；旧无绑定或缺少 Route 的记录保留本机，不自动绑定。

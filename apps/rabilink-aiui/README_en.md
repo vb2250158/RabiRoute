@@ -4,261 +4,144 @@ English | <a href="./README.md">简体中文</a>
 </div>
 <!-- /docs-language-switch -->
 
-# RabiLink AIUI
+# RabiLink AIUI - Universal On-Device Agent & Lingzhu Collaboration Framework for Rokid AR Glasses
 
-> **Controlled polling exception:** Rokid AIUI QuickJS exposes only whole-response `wx.request`, with no SSE, WebSocket, or chunk callback. To preserve foreground proactive messages and offline backlog, the standalone AIX keeps a 25-second long wait; it stops immediately when hidden, switched out of conversation mode, or disconnected, and does not issue high-frequency empty requests. The host also exposes no verified glasses-battery change event, so fresh phone-side CXR state is read once per 60 seconds only while the page is visible. Time and transcription-duration presentation use cancellable one-shot timers instead of fixed intervals. The Android companion path still prefers Relay events, while the native glasses chain streams audio only.
+> **Latest Architecture Specification**: RabiLink AIUI adopts a **Unified Single Agent Mode** architecture, eliminating the obsolete dual-mode switching between conversation and configuration. It is an open, universal on-device master agent framework completely decoupled from any hardcoded persona (including YeYu), and **fully supports configuring and binding any Rokid Lingzhu Agent**—users can bind whatever agent they want!
 
-RabiLink AIUI is the Agent messaging surface for Rokid glasses. Its home screen has two modes on one swipeable HUD: `Connect Conversation` and `Configuration Assistant`.
+---
 
-For publishing, phone enrollment, glasses synchronization, and known failures, see [Installation and Troubleshooting](docs/installation-and-troubleshooting_en.md). For requirement-by-requirement status and evidence, see the [Acceptance Report](docs/acceptance-report_en.md).
+## Core Philosophy
 
-## Message model
+1. **Unified Single Mode: Agent Mode**:
+   - **One Single Mode**: Opening the app directly enters the AR agent interface. No complex dual-segment sliders or manual mode toggles.
+   - **Comprehensive Intelligence**: Natural chit-chat, knowledge queries, device control, and agent binding are all processed seamlessly by the AI model within this unified Agent Mode.
+2. **Support Configuring & Binding Lingzhu Agents**:
+   - **Decoupled Personality**: No hardcoded persona locks. Users can connect to any agent in the Rokid Lingzhu ecosystem.
+   - **3 Flexible Configuration Methods**:
+     1. **Voice Command Setting**: Simply speak "设置灵珠智能体为 xxx" (Set Lingzhu agent to xxx) or "绑定智能体 xxx" to immediately update and persist the target agent;
+     2. **Startup Parameter Injection**: Pass `agentId`, `agentName`, and `systemPrompt` via page tool schema;
+     3. **Static Preset in Configuration**: Configure default agent information in `app.json`.
+   - **Dynamic HUD Display**: The top bar dynamically displays the bound Lingzhu agent's name, accompanied by real-time status indicators (Thinking, Speaking, Listening, Ready).
+3. **Zero-Token Standalone Master Agent**:
+   - Talk immediately upon putting on the glasses—**no token configuration, no QR code pairing, and no desktop PC required**.
+   - Fully on-device native loop: native `SpeechRecognition` -> system-level native on-device `LanguageModel.create()` (zero-parameter contract) -> native `speechSynthesis`.
+   - Built-in on-device fallback responder ensures zero freezes and continuous availability.
+4. **Smart Barge-in & Echo Suppression**:
+   - Strict microphone lifecycle management: proactively releases ASR before TTS begins, and resumes listening upon playback completion.
+   - Tailored for near-ear speakers: suppresses native TTS echoes and millisecond-level rapid duplicate ASR artifacts.
+   - True voice barge-in: only genuine human speech triggers an instant interruption of active TTS playback and launches a fresh dialogue turn.
+5. **AR-Optimized Transparent HUD**:
+   - Engineered for Rokid AR optical transparency:
+     - **Bottom 20px High-Contrast Subtitles**: Retro-green (#00FF88 / #55FF99) on translucent dark card, clear under direct sunlight or indoor lighting.
+     - **Top Minimalist Status Capsule**: Displays bound Lingzhu agent name, status pill, clock, and battery level. Central real-world vision remains 100% unobstructed.
+     - **Intuitive Touchpad Gestures**: Single-tap for barge-in / review, double-tap to go back / exit.
 
-The production path is record-first and uses two independent queues:
+---
 
-```text
-Open or resume Connect Conversation
--> the bound Lingzhu agent opens pages/home/index(mode=transcription)
--> foreground AIUI SpeechRecognition renews one recognition round at a time
--> final text passes conservative duplicate and native-TTS echo filtering
--> AIX POSTs rabilink.observation to Relay /rokid/rabilink/input
--> the PC worker appends it to rabilink-conversation.jsonl
--> the upstream item completes without waiting for a Codex reply
+## Operating Architecture & Dual Modalities
 
-Idle review
--> Rabi detects unreviewed observations in the ledger
--> waits for the bound Codex thread to become idle
--> starts a new Codex turn that reads the current JSONL and, when needed, archives
--> remains silent when there is nothing worth interrupting the user for
-
-Continuous reflection
--> can run on a configurable interval even without new transcripts
--> rechecks intent, commitments, plans, time changes, and local Agent results
--> may prepare low-risk work silently and speaks only when the result is useful
-
-Touchpad review
--> a single touchpad click in Connect Conversation requests review
--> starts review immediately when idle or steers the active Codex turn
--> does not pause ASR or switch modes
-
-Agent downstream
--> Codex, a scheduler, or a planner POSTs /api/agent/send
-   routeId=<target-route>, channel=rabilink, params.proactive=true, params.targetDeviceKinds=[glasses]
--> RabiRoute output safety gate
--> Relay /worker/messages persistent outbox
--> the delivered Agent record is appended to the same conversation ledger
--> AIX continuously consumes /rokid/rabilink/messages?stream=1 by cursor
--> glasses-native speechSynthesis plays messages in order
-```
-
-The upstream queue does not create a page task for each transcript. `taskId` remains only for the legacy direct-message compatibility path. Downstream producers provide a stable `deliveryId`; retries reuse the same Relay item so the glasses do not display or speak duplicate messages.
-
-The shared ledger uses these directions:
-
-- `user_to_agent` for user observations;
-- `agent_to_user` for successfully queued Agent messages;
-- `control` for touchpad review requests.
-
-When the local date changes or the idle gap reaches `rabilinkConversationSplitAfterHours` (six hours by default), the current file moves mechanically to `rabilink-conversations/YYYY-MM-DD[-NN].jsonl`. Archiving never summarizes or rewrites the original text. Cross-process locking protects append, deduplication, partitioning, and index updates.
-
-Relay retains the application outbox independently of task lifecycle for at least 48 hours. AIUI persists each received batch before advancing `nextCursor`; hiding the page, switching modes, or interrupting TTS therefore does not discard unplayed messages. Queues are isolated by an opaque credential fingerprint so changing the bound application cannot leak observations, cursors, or TTS items across accounts.
-
-## Configuration Assistant
-
-Configuration Assistant remains in the same Interactive InkView:
+The entire application runs under a single unified Agent Mode, supporting standalone offline execution and remote collaboration:
 
 ```text
-Swipe to Configuration Assistant
--> AIUI SpeechRecognition captures the complete request
--> native LanguageModel selects an allow-listed execute_configuration_action tool call
-   or the outer bound agent invokes mode=configuration with a strict normalized intent
--> the page calls existing Relay mobile/WebGUI actions
--> the HUD displays and speaks the result
--> the next configuration ASR round resumes
++-----------------------------------------------------------------------------------+
+|                        RabiLink AIUI (Unified Agent Mode)                         |
+|                                                                                   |
+|  [ Standalone Master Agent (Zero-Token) ]  [ Remote Collaboration (Token/Relay) ] |
+|   - Fully offline / ready out-of-the-box    - Upstream: Observation ledger         |
+|   - Native ASR -> On-device SLM -> TTS      - Downstream: Cursor stream            |
+|   - Smart barge-in & fallback responder     - Supports cloud Lingzhu agent push    |
+|                                                                                   |
+|  [ Lingzhu Agent Configuration & Control ]                                        |
+|   - Voice: "设置灵珠智能体为 xxx" / "绑定智能体 xxx"                                |
+|   - Parameters: agentId / agentName / systemPrompt                                |
+|   - 84 allow-listed commands & toolcalls for device and system adjustments        |
++-----------------------------------------------------------------------------------+
 ```
 
-The page-local `LanguageModel` is a new native model session. It does not recursively invoke the full bound Lingzhu Agent Loop and does not automatically inherit that agent's memory, variables, or plugins. The outer agent may still pass a confirmed strict `intent`.
+### 1. Standalone Zero-Token Loop
+- **Workflow**:
+  ```text
+  User speaks
+  -> AIUI SpeechRecognition captures natural language
+  -> Echo suppression and rapid duplicate filtering
+  -> If TTS is speaking and genuine new speech is detected: trigger Barge-in Interruption
+  -> On-device native LanguageModel.create() (zero-parameter contract) generates streaming response
+     (Fallback responder pool triggers if SLM has lag or error)
+  -> Sentences stream to native speechSynthesis
+  -> Bottom 20px green HUD displays subtitles synchronously
+  -> ASR resumes automatically upon playback completion
+  ```
 
-The page does not own the PC configuration source of truth. Routes, agents, roles, gateways, directories, and process state remain authoritative in RabiRoute Manager and RibiWebGUI. Destructive or externally visible actions still pass through explicit confirmation and RabiRoute safety gates.
+### 2. Remote Collaboration Mode (Optional)
+- **Workflow**:
+  ```text
+  [Upstream Queue - Observation Ledger]
+  Glasses ASR observation -> attaches clientMessageId -> POST /rokid/rabilink/input
+  -> Remote worker appends to unified ledger (rabilink-conversation.jsonl)
+  -> Immediately releases upstream request without blocking for a turn reply
+  -> Remote brain (Codex/cloud agent) reviews ledger when idle, or triggered by touchpad tap
 
-The current allow-listed surface covers common Route, Agent, gateway, NapCat, policy, pipeline, profile, variable, notification rule, schedule, network, Manager, and manual-trigger operations. Unknown free-form requests are not converted into arbitrary HTTP calls.
+  [Downstream Queue - Persistent Cursor Stream]
+  Remote agent (proactive alerts / review replies) -> writes to persistent Outbox
+  -> Glasses poll /rokid/rabilink/messages?stream=1 using local durable nextCursor
+  -> Stored in local persistent queue -> Native speechSynthesis reads aloud in sequence
+  ```
 
-## Current capabilities
+---
 
-- One-page `transcription` and `configuration` tool modes with a JSON Schema.
-- Foreground continuous recognition implemented as serialized `SpeechRecognition.start()` rounds.
-- Record-only observations with stable client message IDs, timestamps, deduplication, offline persistence, and automatic replay after page reconstruction.
-- Conservative whitespace normalization, punctuation-only rejection, short-window exact deduplication, and native-TTS echo suppression.
-- Idle review, touchpad steering, and configurable continuous reflection in one bound Codex thread.
-- Global cursor-based downstream delivery for ordinary replies and proactive messages, independent of `taskId`.
-- Native ASR/TTS adapters and shared DTOs without a paid API fallback or hidden network fallback.
-- TTS/ASR microphone handoff: abort recognition before playback, then resume from host lifecycle callbacks or a bounded text-duration watchdog.
-- Persistent failed-message handling: after three playback failures an item remains retryable but yields the queue head so later messages can continue.
-- Native `LanguageModel` configuration understanding plus a strict outer-agent `intent` entry point.
-- The advanced Gateway editor covers Codex Hook switches together with the remaining `GatewayDefinition` fields; the PC Manager remains the configuration source of truth.
-- Device enrollment with a glasses serial number and an `rbd_` device credential stored in Agent-isolated `localStorage`.
-- Relay-backed glasses cloud logs with offline buffering and privacy filtering; transcripts, configuration text, Agent replies, tokens, and passwords are excluded.
-- One shared HUD for 448×150 card and 480×352 immersive surfaces, with mode rail, status, latest text, time, release version, and glasses battery state.
+## How to Configure Lingzhu Agent
 
-## Product boundaries
+### Method 1: Instant Voice Command (Fastest)
+Speak directly to the microphone while wearing the glasses:
+- "设置灵珠智能体为 星河"
+- "绑定智能体 小爱"
+- "切换灵珠智能体为 助手"
 
-- Continuous ASR is guaranteed only while the AIUI page is in the foreground. Hiding, exiting, locking, or host recycling stops recognition. This is not a system-level 24-hour recorder or a FenneNote-style Android foreground service.
-- AIUI exposes final recognition text, not PCM, audio levels, dynamic noise floor, Whisper probability, custom VAD, prebuffer, or audio segmentation controls.
-- Craft browser ASR is a simulator. It accepts text entered through Craft after the microphone is activated; it does not read the PC microphone.
-- The glasses reach the bound PC only through RabiLink Relay and never connect directly to a private LAN port.
-- Real application tokens are runtime variables. They must not be stored in the AIX package, prompts, repository, examples, or documentation.
-- Plan approval feedback is not exposed through the AIUI configuration assistant. It writes an audit record and notifies a real Agent, so users must review the full plan and steps in RibiWebGUI or the tray before submitting it explicitly.
-- The page does not trust generic browser or phone battery APIs as glasses state. It displays only fresh Relay state reported by the RabiLink mobile CXR status service; stale state becomes `--` after three minutes.
-- CXR-L is not part of the AIUI message path and must not proxy AIUI messages, audio, configuration, or cursor state.
+The system updates the bound agent name and durable local storage immediately, refreshes the HUD top bar, and speaks confirmation via TTS.
 
-## UI and runtime rules
-
-- Maintain `pages/home/index.ink` as the source of truth. Packaging generates the traditional four-file page and bundles local utilities into `pages/home/index.js`.
-- Keep one small HUD tree and no `scroll-view`. Large conditional Ink trees and complex scrolling can lock Ink during card-to-immersive resize.
-- Grow content upward from the lower edge of the field of view and leave the central real-world view unobstructed.
-- Use the single green theme through border, opacity, text weight, and selected fill; do not introduce a second semantic color.
-- Treat mode switching as state inside the same page. Do not call `finish()` or create a second page.
-- Keep ASR ownership serialized across modes. Do not start two recognition rounds on one instance.
-- Do not depend solely on `onReady`; current Craft/Ink hosts do not trigger it reliably. Schedule local-state activation, network startup, and real-device ASR after the first frame from `onLoad`.
-
-## Local verification and packaging
-
-Run these commands from `apps/rabilink-aiui`:
-
-```powershell
-npm run check
-npm run startup:safety
-npm run startup:soak
-npm run interactive:resize
-npm run interactive:resize:daily
-npm run craft:headless
-npm run package:aix
-npm run readiness
-npm run craft:staging
-npm run craft:upload:dryrun
-npm run delivery
-npm run delivery:verify
-npm run acceptance:local
-npm run goal:evidence
-```
-
-`npm run check` covers the Relay contract, configuration action coverage, native LanguageModel tool routing, record-first ASR, continuous downstream delivery, taskless proactive delivery, token-fingerprint queue isolation, TTS/ASR handoff, device state, repeated same-page mode switching, Ink rendering, startup safety, AIX structure, and Craft upload contract.
-
-`npm run delivery:verify` reads the final `dist/rabilink-aiui.aix`, compares its files with the current build, and runs the final package in the real Ink runtime. `npm run acceptance:local` records the local matrix in `dist/local-acceptance.json` and explicitly distinguishes local completion from real-glasses acceptance.
-
-The release name and pending version have one source of truth:
-
+### Method 2: Startup Parameters (Schema Injection)
+When invoking via AIUI Studio or from an external Lingzhu Agent, pass:
 ```json
 {
-  "agentName": "RabiLink",
-  "version": "1.0.23"
+  "agentId": "your-lingzhu-agent-id",
+  "agentName": "Custom Agent Name",
+  "systemPrompt": "You are a concise, helpful assistant for AR glasses."
 }
 ```
 
-This is `craft-release.json`. It is separate from the development package version in `package.json`.
+---
 
-## Relay URL and credentials
+## Official API Contracts & Reference Links
 
-To inject a private Relay URL into a private build:
+Developed in strict compliance with official Rokid AIUI standard APIs:
 
-```powershell
-$env:RABILINK_AIUI_RELAY_URL="https://your-relay.example.com"
-npm run package:aix
-npm run craft:staging
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Test-RabiLinkAiuiReadiness.ps1 `
-  -ExpectedRelayBaseUrl $env:RABILINK_AIUI_RELAY_URL `
-  -RequireCraftStaging
-Remove-Item Env:RABILINK_AIUI_RELAY_URL
-```
+- **Speech Recognition (ASR)**: [AIUI SpeechRecognition API (0.18.0)](https://js.rokid.com/AIUI/api/ai/speech-recognition?lang=zh-CN&version=0.18.0)
+- **Speech Synthesis (TTS)**: [AIUI speechSynthesis API (0.18.0)](https://js.rokid.com/AIUI/api/ai/speech-synthesis?lang=zh-CN&version=0.18.0)
+- **On-Device Language Model (SLM)**: [AIUI LanguageModel API (0.18.0)](https://js.rokid.com/AIUI/api/ai/language-model?lang=zh-CN&version=0.18.0)
 
-Do not inject a real application token into the build. Production glasses obtain a device credential after the serial number is bound under Relay `/manage`. The page tool `token` parameter is retained only for Craft environments that do not expose a device serial number.
+---
 
-## Craft upload
+## HUD Visual & Touchpad Interaction Contract
 
-`npm run craft:staging` produces the only supported import directory, `dist/craft-upload`. It contains one self-contained runtime representation and excludes source `.ink`, utilities, scripts, `node_modules`, package files, and nested build output.
+- **AR Display Adaptation**: Crafted specifically for Rokid AR optical waveguide characteristics; avoids massive bright color patches to keep real-world vision unobstructed.
+- **HUD Layout**:
+  - **Top Status Capsule**: Bound Lingzhu Agent Name (dynamic), status pill (Thinking / Speaking / Listening / Ready), clock, and battery level.
+  - **Bottom Subtitle Card**: 20px high-contrast retro-green (#00FF88 / #55FF99) text over translucent dark background.
+- **Touchpad Interaction**:
+  - **Tap / Enter**: Instantly interrupt (Barge-in) speaking TTS; request immediate review when idle in remote mode.
+  - **Double Tap**: Go back or exit current application.
 
-For an authorized CLI upload, use temporary environment variables:
+---
 
-```powershell
-$env:ROKID_CRAFT_ACCOUNT_TOKEN="..."
-$env:ROKID_CRAFT_ACCOUNT_ID="..." # required when the token does not expose accountId
-$env:ROKID_CRAFT_URL="https://js.rokid.com/craft?defaultAgentId=...&region=cn&lang=zh-CN"
-# Alternatively set ROKID_CRAFT_AGENT_ID directly.
-npm run craft:upload:dryrun
-npm run craft:upload
-Remove-Item Env:ROKID_CRAFT_ACCOUNT_TOKEN
-Remove-Item Env:ROKID_CRAFT_ACCOUNT_ID -ErrorAction SilentlyContinue
-Remove-Item Env:ROKID_CRAFT_URL -ErrorAction SilentlyContinue
-Remove-Item Env:ROKID_CRAFT_AGENT_ID -ErrorAction SilentlyContinue
-```
-
-The upload endpoint returns an SSE stream. HTTP 200 means only that the stream opened. Success requires a `done` event and no `error` event. The uploader derives `metadata.tools` from `pages/home/index.json`; an empty tool definition is rejected even inside an HTTP 200 stream.
-
-If Chrome is already logged in and you do not want to expose the account token to PowerShell, use the same-origin browser helper:
+## Local Verification, Build, & Deployment
 
 ```powershell
-$env:ROKID_CRAFT_URL="https://js.rokid.com/craft?defaultAgentId=...&region=cn&lang=zh-CN"
-npm run craft:open-embedded-helper
-Remove-Item Env:ROKID_CRAFT_URL -ErrorAction SilentlyContinue
+# 1. Run full contract checks and smoke tests
+node .\scripts\check-rabilink-aiui.mjs
+node .\scripts\Smoke-RabiLinkVoiceRuntime.mjs
+node .\scripts\Smoke-RabiLinkAiuiStartupSafety.mjs
+node .\scripts\Smoke-RabiLinkAiuiRuntime.mjs
+
+# 2. Stage files for Rokid AIUI Studio (Craft)
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\Prepare-RabiLinkAiuiCraftUpload.ps1 -NoBump
 ```
-
-Paste the generated helper into DevTools on the target `js.rokid.com` page. It uploads the embedded AIX with the existing Craft session, does not print the account token, and can download a sanitized upload report.
-
-Uploading is not the full release flow. The production order is:
-
-```text
-upload AIX
--> switch Craft from the local project to the bound cloud project
--> submit for review and wait for approval
--> add or update RabiLink in the Rokid AI App store
--> synchronize the glasses
--> perform real-device acceptance
-```
-
-Upload and review submission require explicit account-owner authorization.
-
-## Device and runtime evidence
-
-Useful read-only or local evidence commands include:
-
-```powershell
-npm run craft:status
-npm run phone:inspect
-npm run phone:inspect:deep
-npm run phone:inspect:store
-npm run runtime:proof
-npm run device-status:e2e
-npm run goal:evidence
-```
-
-`runtime:proof` accepts real application events such as `app-start`, `relay-connected`, `pc-bound`, `webgui-config-loaded`, and `webgui-config-saved`; a local smoke event does not count as glasses runtime evidence. `goal:evidence` rejects stale versions, stale AIX hashes, historical sessions, and incomplete external stages.
-
-Do not install `.aix` as an APK through ADB. The official path is Craft plus the Rokid AI App. Phone-side `.aix` file opening and private management activities are not public installation interfaces.
-
-## Route requirement on the PC
-
-Connecting the PC globally to Relay only marks that Rabi instance online. It does not choose the ledger or Agent for observations. Enable a Route that has:
-
-- kind `rabilink`;
-- input and output policies enabled;
-- Agent `codex`;
-- persona `RabiActive`;
-- the correct workspace and bound Codex thread;
-- the expected Manager and gateway ports.
-
-Public disabled templates are available under `examples/data/route/RabiLink` and `examples/data/roles/RabiActive`. Copy and adapt them without copying private IDs, credentials, paths, or runtime data into the repository.
-
-## Related documentation
-
-- [AIUI Framework and Logic Development](docs/aiui-framework-and-logic-development_en.md)
-- [AIUI Visual Design and Theme Tokens](docs/aiui-visual-design-system_en.md)
-- [AIUI Interaction Design and Input Contract](docs/aiui-interaction-design_en.md)
-- [AIUI Canvas 2D Quick Reference](docs/aiui-canvas-2d-reference_en.md)
-- [AIUI A2UI Boundaries](docs/aiui-a2ui-notes_en.md)
-- [AIUI Global Runtime Reference](docs/aiui-global-runtime-reference_en.md)
-- [Installation and Troubleshooting](docs/installation-and-troubleshooting_en.md)
-- [Acceptance Report](docs/acceptance-report_en.md)
-- [Rokid AIUI quick start](https://js.rokid.com/AIUI/guide/quickstart-intro?lang=zh-CN)
-- [Rokid AIUI basic APIs](https://js.rokid.com/AIUI/api/basic?lang=zh-CN)
-- [Rokid visual design guide](https://js.rokid.com/AIUI/design/visual?lang=zh-CN)
-- [Rokid interaction guide](https://js.rokid.com/AIUI/design/interaction?lang=zh-CN)

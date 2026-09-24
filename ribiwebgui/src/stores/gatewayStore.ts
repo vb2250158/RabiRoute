@@ -406,9 +406,17 @@ export const useGatewayStore = defineStore("gateway", () => {
     saveMessage.value = "正在确认上次保存结果";
     const lifecycleKey = await loadMeta(true);
     const response = await boundedRouteCatalogMutationFetch(`${apiBase}/gateways/mutations/${encodeURIComponent(pending.operationId)}`, {});
-    const body = await response.json() as GatewayPayload & { receipt?: { state?: string; operationId?: string } };
+    const body = await response.json().catch(() => ({})) as GatewayPayload & { receipt?: { state?: string; operationId?: string } };
     if (!response.ok || body.code !== 0 || body.receipt?.operationId !== pending.operationId
       || !["committed", "not_committed"].includes(body.receipt?.state || "")) {
+      if (routeCatalogMutationFailureIsDefinitive(response.status)) {
+        routeCatalogMutationLedger.complete(pending);
+        pendingSaveDrafts.delete(pending.operationId);
+        return {
+          code: 0,
+          receipt: { state: "not_committed", operationId: pending.operationId }
+        } as GatewayPayload;
+      }
       throw new Error("上次保存结果仍待确认，请稍后点击保存重试；当前修改已保留。");
     }
     if (await loadMeta(true) !== lifecycleKey) throw new Error("Manager 已重启，保存结果仍待确认，请重试。");

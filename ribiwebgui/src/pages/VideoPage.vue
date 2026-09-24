@@ -10,6 +10,7 @@ import { readDraft, writeDraft } from "./videoDraftStorage";
 import { useVideoCanvas } from "./useVideoCanvas";
 import { managerEventSource, managerResourceUrl } from "../managerApi";
 import VideoGenerationProgress from "../components/VideoGenerationProgress.vue";
+import MediaVideoPlayer from "../components/MediaVideoPlayer.vue";
 import type { VideoProgressJob } from "./videoJobProgress";
 
 type WorkflowProfile = { kind?: string; label: string; steps: number };
@@ -781,7 +782,7 @@ onBeforeUnmount(() => { disposed = true; events?.close(); for (const url of gene
       <div class="creation-stage canvas-object" :class="{'canvas-selected':selectedIds.includes(activeVideoId)}" :style="canvas.position(activeVideoId)" @pointerdown="cardPointerDown($event,activeVideo)" @contextmenu="openCardMenu($event,activeVideo)">
         <button class="canvas-drag-handle" :aria-label="`移动${activeVideo.title}`" @click="selectCard(activeVideo)" @keydown="canvas.nudge($event,activeVideoId)"><v-icon icon="mdi-video-outline" size="16" />{{ activeVideo.title }}<v-icon icon="mdi-drag" size="16" /></button>
         <div class="preview-stage">
-          <video v-if="canvasVideoUrl(activeVideo)" :key="activeVideo.id" :src="canvasVideoUrl(activeVideo)" controls preload="metadata" @pointerdown.stop />
+          <MediaVideoPlayer v-if="canvasVideoUrl(activeVideo)" :key="activeVideo.id" :src="canvasVideoUrl(activeVideo)!" />
           <div v-else class="preview-empty"><v-icon :icon="selected ? 'mdi-movie-open-outline' : 'mdi-play-box-outline'" size="32" /><h2>{{ selected ? snapshot?.states[selected.status]?.label || selected.status : '让想象成为镜头' }}</h2><p>{{ selected?.error || (selected ? '生成结果会出现在这里' : '从一段描述或参考素材开始') }}</p><label v-if="!selected" class="card-upload-button" @pointerdown.stop>上传视频<input type="file" accept="video/mp4" aria-label="上传当前视频素材" :disabled="busy || uploading" @change="uploadCanvasAsset($event,activeVideo)" /></label><VideoGenerationProgress v-if="selected && ['running','queued'].includes(selected.status)" :job="selected" /></div>
         </div>
         <div v-if="selected" class="result-details"><div class="result-actions"><v-chip size="small" variant="tonal">{{ snapshot?.states[selected.status]?.label || selected.status }}</v-chip><span class="video-hint">{{ selected.width }} × {{ selected.height }} · {{ ((selected.frames || 0)/24).toFixed(2) }} 秒</span><v-spacer /><v-btn v-if="selected.videoUrl" :href="managerResourceUrl(selected.videoUrl)" :download="`${selected.id}.mp4`" variant="outlined" size="small" prepend-icon="mdi-download">下载</v-btn><v-btn variant="text" size="small" @click="copyPrompt(selected)">复制提示词</v-btn><v-btn variant="tonal" size="small" @click="reuse(selected)">复用参数</v-btn><v-btn v-if="selected.status==='queued'" variant="text" size="small" :disabled="busy" @click="cancelSelected">取消排队</v-btn></div><details class="result-prompt"><summary>生成提示词</summary><p class="video-prompt">{{ selected.prompt }}</p></details></div>
@@ -893,7 +894,6 @@ onBeforeUnmount(() => { disposed = true; events?.close(); for (const url of gene
 .video-workspace { position:absolute; inset:64px 0 0; overflow:hidden; touch-action:none; background-image:radial-gradient(#ffffff15 .8px,transparent .8px); background-size:24px 24px; }
 .creation-stage { position:absolute; width:640px; display:flex; flex-direction:column; align-items:center; }
 .preview-stage { flex-shrink:0; width:min(380px,100%); height:214px; background:#232325; border:1px solid #ffffff35; border-radius:10px; overflow:hidden; display:flex; align-items:center; justify-content:center; color:#e7e7ed; box-shadow:0 12px 40px #0003; }
-.preview-stage>video { width:100%; height:100%; object-fit:contain; }
 .preview-empty { text-align:center; max-width:80%; color:#b4b4c2; }
 .preview-empty h2 { font-size:14px; margin:12px 0 8px; color:#ddd; font-weight:500; }
 .preview-empty p { font-size:12px; margin-bottom:12px; }

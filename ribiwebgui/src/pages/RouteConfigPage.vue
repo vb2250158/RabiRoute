@@ -249,6 +249,8 @@ async function runAgentScan(): Promise<void> {
   finally { agentScan.value.loading = false; }
 }
 
+import { readRabiLinkHome, rabiLinkDeviceDisplayName, rabiLinkDeviceKind } from "../rabiLinkHomeClient";
+
 const agentInstances = ref<AgentInstance[]>([]);
 const lanAgentLoading = ref(false);
 const lanAgentError = ref("");
@@ -262,7 +264,36 @@ async function refreshLanAgentNodes(): Promise<void> {
     const response = await fetch("/api/lan-agent/instances", { cache: "no-store", headers: { "x-rabiroute-webgui-token": token } });
     const body = await response.json();
     if (!response.ok || body.code !== 0) throw new Error(body.message || "读取远端节点失败");
-    agentInstances.value = body.instances || [];
+    const lanInstances: AgentInstance[] = body.instances || [];
+
+    const rabiLinkInstances: AgentInstance[] = [];
+    try {
+      const linkHome = await readRabiLinkHome(new AbortController().signal);
+      for (const device of linkHome.devices) {
+        if (!device.online) continue;
+        const kind = rabiLinkDeviceKind(device);
+        const displayName = rabiLinkDeviceDisplayName(device);
+        const isEdgeAgent = kind === "phone" || kind === "glasses" || device.capabilities.some(c => c.includes("agent"));
+        if (!isEdgeAgent) continue;
+        const kindLabel = kind === "glasses" ? "Rokid 眼镜智能体" : (kind === "phone" ? "手机智能体" : "RabiLink 智能体");
+        rabiLinkInstances.push({
+          instanceId: device.guid || device.id,
+          local: false,
+          address: displayName,
+          connected: true,
+          agents: [{
+            agentId: "agent",
+            name: `${displayName}（${kindLabel}）`,
+            provider: "codex",
+            enabled: true
+          }]
+        });
+      }
+    } catch {
+      // RabiLink 离线或未配置时静默忽略，不阻塞局域网节点
+    }
+
+    agentInstances.value = [...lanInstances, ...rabiLinkInstances];
   } catch (error) {
     agentInstances.value = [];
     lanAgentError.value = userFacingError(error);
@@ -470,6 +501,13 @@ const adapterGroups: Array<{ title: string; note: string; choices: Array<{ type:
     ]
   },
   {
+    title: "移动设备",
+    note: "来自手机端、手环或眼镜的记录与事件。",
+    choices: [
+      { type: "rabilink", title: "移动端（全天记录）", note: "接收手机端全天记录与语音事件，并与当前人格绑定", icon: "mdi-cellphone-clock" }
+    ]
+  },
+  {
     title: "外部接口",
     note: "未命名系统的 HTTP 兜底入口。",
     choices: [
@@ -606,6 +644,9 @@ async function setAdapterEnabled(type: MessageAdapterType, value: unknown): Prom
   if (enabled === !isAdapterDisabled(gateway.value, type)) return;
   toggleAdapterDisabled(gateway.value, type);
   store.touch();
+  if (type === "rabilink" && enabled) {
+    void bindMobileRecordingToCurrentRole();
+  }
   if (type !== "speech") return;
 
   await persistAndSyncSpeechAdapter();
@@ -731,7 +772,10 @@ function rawLogJson(entry: Record<string, any>): string {
 
 function toggleAdapterParams(type: MessageAdapterType): void {
   adapterParamOpen.value[type] = !adapterParamOpen.value[type];
-  if (adapterParamOpen.value[type]) void runMessageAdapterScan();
+  if (adapterParamOpen.value[type]) {
+    void runMessageAdapterScan();
+    if (type === "rabilink") void loadMobileRecordingInfo();
+  }
 }
 
 function removeAdapter(type: MessageAdapterType): void {
@@ -744,9 +788,62 @@ function removeAdapter(type: MessageAdapterType): void {
 }
 
 const availableToAdd = computed(() => {
-  const allTypes: MessageAdapterType[] = ["napcat", "wecom", "weixin", "feishu", "speech", "heartbeat", "xiaomiHome", "webhook"];
+  const allTypes: MessageAdapterType[] = ["napcat", "wecom", "weixin", "feishu", "speech", "heartbeat", "xiaomiHome", "webhook", "rabilink"];
   return allTypes.filter(t => !addedAdapters.value.includes(t));
 });
+
+const mobileRecordingInfo = ref<{
+  devices: Array<{ id: string; lastReceivedAt: number }>;
+  loading: boolean;
+}>({ devices: [], loading: false });
+
+async function loadMobileRecordingInfo(): Promise<void> {
+  const roleId = gateway.value?.agentRoleId;
+  if (!roleId) return;
+  mobileRecordingInfo.value.loading = true;
+  try {
+    const res = await fetch(`/api/roles/${encodeURIComponent(roleId)}/all-day-recording`);
+    if (res.ok) {
+      const json = await res.json();
+      if (json.code === 0 && json.data) {
+        mobileRecordingInfo.value.devices = json.data.devices || [];
+      }
+    }
+  } catch (err) {
+    console.error("Failed to load mobile recording info:", err);
+  } finally {
+    mobileRecordingInfo.value.loading = false;
+  }
+}
+
+async function bindMobileRecordingToCurrentRole(): Promise<void> {
+  const roleId = gateway.value?.agentRoleId;
+  if (!roleId) return;
+  try {
+    const res = await fetch(`/api/roles/${encodeURIComponent(roleId)}/all-day-recording`);
+    if (!res.ok) return;
+    const json = await res.json();
+    if (json.code !== 0 || !json.data) return;
+    const snapshot = json.data;
+    const devices: Array<{ id: string }> = snapshot.devices || [];
+    const currentDeviceIds: string[] = snapshot.settings?.mobileDeviceIds || [];
+    const allDeviceIds = [...new Set([...currentDeviceIds, ...devices.map(d => d.id)])];
+
+    if (allDeviceIds.length > currentDeviceIds.length) {
+      await fetch(`/api/roles/${encodeURIComponent(roleId)}/all-day-recording/settings`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ...snapshot.settings,
+          mobileDeviceIds: allDeviceIds
+        })
+      });
+    }
+    await loadMobileRecordingInfo();
+  } catch (err) {
+    console.error("Failed to bind mobile recording devices:", err);
+  }
+}
 
 watch(
   () => [gateway.value?.id, gateway.value?.messageAdapterType, JSON.stringify(gateway.value?.messageAdapters ?? [])] as const,
@@ -771,6 +868,9 @@ function addAdapter(type: MessageAdapterType): void {
   applyAdapterDefaults(gateway.value);
   adapterParamOpen.value[type] = true;
   void runMessageAdapterScan();
+  if (type === "rabilink") {
+    void bindMobileRecordingToCurrentRole();
+  }
   store.touch();
 }
 
@@ -3117,15 +3217,16 @@ const remoteAgentItems = computed(() => (gateway.value?.remoteAgentTargets || []
   const instance = agentInstances.value.find(item => item.instanceId === target.instanceId);
   const agent = instance?.agents.find(item => item.agentId === target.agentId);
   const definition = agentDefs.find(item => item.type === target.provider);
-  return { ...target, instance, agent, title: `远端 · ${definition?.title || target.provider} · ${agent?.name || target.agentId}（${instance?.address || target.instanceId}）` };
+  const agentLabel = agent?.name || (definition ? `${definition.title} · ${target.agentId}` : target.agentId);
+  return { ...target, instance, agent, title: `远端 · ${agentLabel}（${instance?.address || target.instanceId}）` };
 }));
 const availableAgentsToAdd = computed(() => [
   ...agentDefs.filter(agent => !agentTypes.value.includes(agent.type)).map(agent => ({ ...agent, key: localAgentTargetKey(agent.type), title: `本机 · ${agent.title}`, nodeId: undefined as string | undefined, agentId: undefined as string | undefined })),
   ...agentInstances.value.filter(instance => !instance.local).flatMap(instance => instance.agents.flatMap(remote => {
-    const def = agentDefs.find(agent => agent.type === (remote.provider === "codex-desktop" ? "codex" : remote.provider));
+    const def = agentDefs.find(agent => agent.type === (remote.provider === "codex-desktop" ? "codex" : remote.provider)) || agentDefs[0];
     const key = remoteAgentTargetKey({ instanceId: instance.instanceId, agentId: remote.agentId });
-    if (!def || remoteAgentItems.value.some(item => item.id === key)) return [];
-    return [{ ...def, key, title: `远端 · ${def.title} · ${remote.name}（${instance.address || instance.instanceId}）`, nodeId: instance.instanceId, agentId: remote.agentId }];
+    if (remoteAgentItems.value.some(item => item.id === key)) return [];
+    return [{ ...def, key, title: `远端 · ${remote.name}（${instance.address || instance.instanceId}）`, nodeId: instance.instanceId, agentId: remote.agentId }];
   }))
 ]);
 const primaryAgent = computed(() => gateway.value ? resolvePrimaryAgentTarget(gateway.value) : undefined);
@@ -5073,6 +5174,30 @@ watch(
                         </v-btn>
                         <v-btn size="small" variant="tonal" prepend-icon="mdi-refresh" @click="store.load">刷新状态</v-btn>
                         <v-btn size="small" variant="text" prepend-icon="mdi-text-box-search-outline" @click="openRuntimeLog">打开日志</v-btn>
+                      </div>
+                    </div>
+                  </template>
+                  <template v-else-if="choice.type === 'rabilink'">
+                    <div class="status-row"><span>绑定人员</span><b>{{ gateway?.agentRoleId || "未绑定" }}</b></div>
+                    <div class="status-row"><span>已关联手机设备</span>
+                      <b>
+                        <span v-if="mobileRecordingInfo.devices.length">
+                          {{ mobileRecordingInfo.devices.map(d => `手机 ${d.id.slice(0, 8)} (${new Date(d.lastReceivedAt).toLocaleString()})`).join('、') }}
+                        </span>
+                        <span v-else class="muted">尚未收到手机事件或暂无发现的设备</span>
+                      </b>
+                    </div>
+                    <div class="agent-action-bar mt-2">
+                      <div class="agent-action-status">
+                        <span class="section-note">移动端（手机、手环或眼镜）通过 RabiLink 上传的全天记录事件将汇流并绑定到当前人员。</span>
+                      </div>
+                      <div class="d-flex ga-2 flex-wrap">
+                        <v-btn size="small" variant="tonal" color="primary" prepend-icon="mdi-timeline-clock-outline" :to="`/routes/${encodeURIComponent(gateway?.agentRoleId || '')}/persona`">
+                          前往全天记录
+                        </v-btn>
+                        <v-btn size="small" variant="text" prepend-icon="mdi-refresh" :loading="mobileRecordingInfo.loading" @click="loadMobileRecordingInfo">
+                          刷新设备
+                        </v-btn>
                       </div>
                     </div>
                   </template>

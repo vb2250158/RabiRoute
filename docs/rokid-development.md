@@ -77,6 +77,18 @@
 
 ## 后续使用入口
 
+### 精简手机包自定义消息探针
+
+`RokidProbeActivity` 在精简包中提供 CXR-L 独立测试：连接、查询眼镜组件、显式安装随包组件、启动、发送一次 Ping、复制日志。目标为 `com.rabi.link.glass.video`，不会发送录像开始命令。必须同时确认 CXR/蓝牙连接、当前安装查询和启动回调；发送返回值只记为 SDK 接受，15 秒内匹配本次随机 requestId 的 Pong 才记为自有通道收发成功。断线或退出清除等待状态。
+
+此入口不依赖被精简包排除的本地 ASR/TTS 运行时。它只测试已知的 `rabi_video_control` / `rabi_video_status` 协议，不能给灵珠智能体投递正文，也不能据此认定深深被唤醒。安装、启动、发送与回包需分别进行本次真机验收。
+
+### 自有眼镜文字接收
+
+诊断页可开启“收到的文字显示到眼镜”。后台仍由 `RabiConversationService` 与既有 `RabiGlassPcBackend` 接收下行、保存手机记录和重试；不创建第二个账号、会话或 Relay 队列。每条文字经 CXR-L 查询安装、启动 `GlassTextActivity` 后发送，接收端在有焦点窗口绘制后回传匹配 `messageId + attempt` 的 `displayed`；手机才通过既有队列回报 `delivered`。该回执证明窗口绘制，不证明佩戴者阅读。断线、未安装、启动受阻、超时均不确认眼镜送达，保留原后台重试。后台启动能力仍须按具体固件真机验证。
+
+文字入口位于随包眼镜组件，独立于录像 Activity，不启动相机、麦克风或本地语音模型。当前仅文字，每条最多 8000 字符，超限拒绝而不截断；附件仍在手机。开启此输出时不请求 PC TTS，也不伪报播放完成。正在占用 CXR 的采集不被文字请求抢占。手机服务必须仍获系统允许运行；强行停止应用不能承诺继续收信。
+
 - [乐奇开发 Skill](../skills/rokid-development/SKILL.md)：下次开发或排障先读。
 - [离线录像与真机结果](rabilink-offline-recording.md)：当前使用方式和验收状态。
 - [历史语音调查](../apps/rabi-mobile-android/docs/rokid-ai-sdk-official-voice-plan.md)：仅按需查旧接口证据，涉及 CXR-M 的建议已被本页当前路线取代。

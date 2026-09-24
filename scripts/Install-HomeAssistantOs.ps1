@@ -23,6 +23,21 @@ function Write-Status([string]$State, [string]$Message, [string]$Version = '') {
     else { [IO.File]::Move($temporary, $statusPath) }
 }
 
+function Test-InstallationDisk([string]$AttachedPath, [string]$ExpectedPath) {
+    # Hyper-V may attach an automatic checkpoint instead of the base VHDX.
+    $expected = [IO.Path]::GetFullPath($ExpectedPath)
+    $directory = [IO.Path]::GetDirectoryName($expected)
+    $visited = @{}
+    while ($AttachedPath) {
+        $current = [IO.Path]::GetFullPath($AttachedPath)
+        if ($current -eq $expected) { return $true }
+        if ([IO.Path]::GetDirectoryName($current) -ne $directory -or $visited.ContainsKey($current) -or $visited.Count -ge 64) { return $false }
+        $visited[$current] = $true
+        $AttachedPath = (Get-VHD -Path $current -ErrorAction Stop).ParentPath
+    }
+    return $false
+}
+
 $administrator = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $administrator) {
     # Elevate only this fixed installer and its bounded arguments, never an HTTP-supplied command.
@@ -60,8 +75,11 @@ try {
     $owner = 'RabiRoute Home Assistant OS: ' + $Root
     $disk = Join-Path $Root 'home-assistant.vhdx'
     $vm = Get-VM -Name $vmName -ErrorAction SilentlyContinue
-    if ($vm -and ($vm.Notes -ne $owner -or @((Get-VMHardDiskDrive -VM $vm) | Where-Object Path -eq $disk).Count -ne 1)) {
-        throw 'A VM with this name already exists and is not owned by this installation. It was not changed.'
+    if ($vm) {
+        $attachedDisks = @(Get-VMHardDiskDrive -VM $vm)
+        if ($vm.Notes -ne $owner -or $attachedDisks.Count -ne 1 -or -not (Test-InstallationDisk $attachedDisks[0].Path $disk)) {
+            throw 'A VM with this name already exists and is not owned by this installation. It was not changed.'
+        }
     }
     $version = ''
     if (-not $vm) {
@@ -124,13 +142,15 @@ try {
     $proxyKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\PortProxy\v4tov4\tcp'
     $existing = (Get-ItemProperty -LiteralPath $proxyKey -ErrorAction SilentlyContinue).'127.0.0.1/8123'
     $previous = if (Test-Path -LiteralPath $proxyReceipt) { Get-Content -LiteralPath $proxyReceipt -Raw | ConvertFrom-Json } else { $null }
-    if ($existing -and (-not $previous -or $existing -ne ($previous.address + '/8123'))) { throw 'Local port 8123 has another port-proxy owner; it was not changed.' }
+    $previousPort = if ($previous -and $previous.port) { [int]$previous.port } else { 8123 }
+    if ($existing -and (-not $previous -or $existing -ne ($previous.address + '/' + $previousPort))) { throw 'Local port 8123 has another port-proxy owner; it was not changed.' }
     if (-not $existing -and (Get-NetTCPConnection -State Listen -LocalPort 8123 -ErrorAction SilentlyContinue)) { throw 'Local port 8123 is already occupied; it was not changed.' }
     # Only publish to local loopback. No firewall rule, LAN exposure or credential policy changes.
     Start-Service iphlpsvc
-    & netsh.exe interface portproxy add v4tov4 listenaddress=127.0.0.1 listenport=8123 connectaddress=$address connectport=8123 | Out-Null
+    # Current HA OS serves onboarding and Core on port 80; 8123 redirects there.
+    & netsh.exe interface portproxy add v4tov4 listenaddress=127.0.0.1 listenport=8123 connectaddress=$address connectport=80 | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not configure the loopback endpoint.' }
-    [IO.File]::WriteAllText($proxyReceipt, (@{ address = $address; vmId = [string]$vm.Id } | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($proxyReceipt, (@{ address = $address; port = 80; vmId = [string]$vm.Id } | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
     Write-Status 'installed' 'Home Assistant OS 已安装并启动。首次初始化仍可能需要几分钟，随后点击重新检测。' $version
 } catch {
     Write-Status 'error' ('安装未完成：' + $_.Exception.Message)

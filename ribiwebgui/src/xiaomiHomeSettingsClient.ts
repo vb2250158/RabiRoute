@@ -59,4 +59,23 @@ async function update(snapshot: XiaomiHomeSettingsSnapshot, settings: XiaomiHome
   }));
 }
 
-export const xiaomiHomeSettingsClient = { read, update };
+export type XiaomiHomeResource = Readonly<{
+  resourceId: string;
+  entityId: string;
+  kind: string;
+  displayName: string;
+  available: boolean;
+  stateVersion: string;
+  observedAt: string;
+  state: string;
+  attributes: Record<string, unknown>;
+  capabilities: readonly string[];
+}>;
+
+async function listResources(): Promise<readonly XiaomiHomeResource[]> {
+  return json(await fetch("/api/agent/xiaomi-home/resources", {
+    headers: { accept: "application/json" }
+  }));
+}
+
+export const xiaomiHomeSettingsClient = { read, update, listResources };

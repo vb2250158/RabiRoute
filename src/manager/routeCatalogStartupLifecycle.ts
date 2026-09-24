@@ -131,6 +131,12 @@ function reportObserverFailure(error: unknown): void {
 
 function cloneSnapshot(snapshot: RouteCatalogSnapshot): RouteCatalogSnapshot {
   return Object.freeze({
+    ...(snapshot.resolvedMutation ? {
+      resolvedMutation: {
+        operationId: snapshot.resolvedMutation.operationId,
+        state: snapshot.resolvedMutation.state
+      }
+    } : {}),
     requestId: snapshot.requestId,
     attemptToken: snapshot.attemptToken,
     contentHash: snapshot.contentHash,
@@ -151,6 +157,16 @@ function validateSnapshot(
     throw new Error("Route catalog child returned an invalid snapshot.");
   }
   const candidate = value as Partial<RouteCatalogSnapshot>;
+  if (candidate.resolvedMutation !== undefined) {
+    if (
+      !candidate.resolvedMutation
+      || typeof candidate.resolvedMutation !== "object"
+      || typeof (candidate.resolvedMutation as { operationId?: unknown }).operationId !== "string"
+      || !["committed", "not_committed"].includes((candidate.resolvedMutation as { state?: unknown }).state as string)
+    ) {
+      throw new Error("Route catalog child snapshot returned an invalid resolvedMutation.");
+    }
+  }
   if (typeof candidate.requestId !== "string" || !candidate.requestId.trim()) {
     throw new Error("Route catalog child snapshot is missing requestId.");
   }

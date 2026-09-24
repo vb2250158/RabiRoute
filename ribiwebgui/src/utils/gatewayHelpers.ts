@@ -24,7 +24,7 @@ import { SPEECH_ROUTE_AUTO_SUBMIT } from "../speech/speechDeliveryMode";
 /** Device setup belongs to mobile recording; remote execution belongs to Agent targets. Legacy keys remain readable
  * until existing clients migrate to recording events; see docs/mobile-recording-event-boundary.md. */
 export function isNonMessageEndpoint(type: MessageAdapterType): boolean {
-  return type === "rabilink" || type === "wearable" || type === "remoteAgent";
+  return type === "wearable" || type === "remoteAgent";
 }
 
 export const routeKindLabels: Record<string, string> = {
@@ -229,7 +229,7 @@ export function adapterLabel(type: string): string {
   if (type === "fennenote") return "FenneNote / 芬妮笔记";
   if (type === "xiaoai") return "小米音箱 / 小爱";
   if (type === "xiaomiHome") return "米家 / Xiaomi Home";
-  if (type === "rabilink") return "眼镜端（经 RabiLink）";
+  if (type === "rabilink") return "移动端（全天记录）";
   if (type === "wearable") return "智能手表/手环";
   if (type === "wecom") return "企业微信 / WeCom";
   if (type === "weixin") return "个人微信 / Weixin";
@@ -244,7 +244,7 @@ export function adapterRuntimeKey(type: string): string {
 }
 
 export function isWebhookLikeAdapter(type: string): boolean {
-  return type === "webhook" || type === "fennenote" || type === "xiaoai" || type === "rabilink";
+  return type === "webhook" || type === "fennenote" || type === "xiaoai";
 }
 
 export function adapterNeedsGatewayRuntime(type: MessageAdapterType): boolean {

@@ -52,6 +52,7 @@ class RabiMobileApplication : Application(), Application.ActivityLifecycleCallba
 
     override fun onActivityResumed(activity: Activity) {
         if (applied[activity] != RabiMobileTheme.style() && !activity.isFinishing) activity.recreate()
+        else if (!activity.isFinishing) RabiConversationService.resumeRecordingFromForeground(activity)
     }
 
     override fun onActivityDestroyed(activity: Activity) { applied.remove(activity) }

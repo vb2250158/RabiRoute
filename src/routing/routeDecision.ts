@@ -117,6 +117,13 @@ function routeMatchText(record: ForwardRecord, variables: Record<string, string>
   if (typeof extraValues.repliedMessage === "string" && extraValues.repliedMessage.trim()) {
     parts.push(routeTextFromRawMessage(extraValues.repliedMessage, variables));
   }
+  if ("sourceDeviceId" in record && record.sourceDeviceId) {
+    const rawDeviceId = String(record.sourceDeviceId);
+    parts.push(rawDeviceId);
+    if (rawDeviceId.startsWith("home:")) {
+      parts.push(rawDeviceId.slice("home:".length));
+    }
+  }
   return parts.join("\n");
 }
 

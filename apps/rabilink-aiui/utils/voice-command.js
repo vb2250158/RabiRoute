@@ -175,13 +175,38 @@ const commandPatterns = [
 
 export const CONFIGURATION_ACTION_TOOL = "execute_configuration_action";
 
+export function lingzhuLanguageModelOptions(options = {}) {
+  const agentName = (typeof options === "string" ? options : options.agentName) || "灵珠智能体";
+  const systemPrompt = (typeof options === "object" && options.systemPrompt)
+    ? options.systemPrompt
+    : `你是用户的随身 AR 智能体助手（${agentName}）。请用简洁自然、亲切聚焦的中文回答用户，一两句话内说清要点，适合眼镜语音播报。`;
+  return {
+    initialPrompts: [{
+      role: "system",
+      content: systemPrompt
+    }],
+    tools: [{
+      type: "function",
+      function: {
+        name: "close_app",
+        description: "用户明确要求退出时结束当前页面应用；不要把讨论、引用或否定当作退出命令。",
+        parameters: { type: "object", properties: {}, additionalProperties: false }
+      }
+    }]
+  };
+}
+
+export function yeyuLanguageModelOptions(model = "") {
+  return lingzhuLanguageModelOptions(model);
+}
+
 export function configurationLanguageModelOptions(model = "") {
   const samples = voiceCommandSamples();
   const commandIds = samples.map((item) => item.command);
   const commandCatalog = samples
     .map((item) => `${item.command}=${item.text}`)
     .join("；");
-  const options = {
+  return {
     initialPrompts: [{
       role: "system",
       content: [
@@ -215,7 +240,6 @@ export function configurationLanguageModelOptions(model = "") {
     }],
     ...(model && { model })
   };
-  return options;
 }
 
 export function configurationCommandFromToolCall(event = {}) {

@@ -36,7 +36,7 @@ public final class AllDayRecordingSettings {
         return new AllDayRecordingSettings(p.getBoolean("running", false), p.getString("mode", "audio"),
                 p.getString("source", "mobile"), p.getString("processingPolicy", "transcribe"),
                 p.getString("routeProfileId", ""), p.getBoolean("healthEnabled", false),
-                p.getBoolean("uploadEnabled", true), p.getBoolean("autoResume", false), p.getLong("windowStartedAt", 0));
+                p.getBoolean("uploadEnabled", true), (p.getBoolean("autoResume", false) || p.getBoolean("running", false)), p.getLong("windowStartedAt", 0));
     }
 
     public void save(Context context) {
@@ -69,6 +69,12 @@ public final class AllDayRecordingSettings {
             throw new IllegalStateException("Cannot save ASR enrollment");
         context.startForegroundService(new android.content.Intent(context, com.rabi.link.RabiConversationService.class)
                 .setAction(com.rabi.link.RabiConversationService.ACTION_ASR));
+    }
+
+    /** User preference survives runtime interruptions; only explicit user actions change it. */
+    public AllDayRecordingSettings withEnabled(boolean value, long now) {
+        return new AllDayRecordingSettings(value, mode, source, processingPolicy, routeProfileId,
+                healthEnabled, uploadEnabled, value, value && !running ? now : windowStartedAt);
     }
 
     public AllDayRecordingSettings withRunning(boolean value, long now) {

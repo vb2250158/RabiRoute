@@ -198,6 +198,16 @@ async function load(direction: -1 | 0 | 1 = 0, refresh = false) {
     if(statusPending.signal.aborted || disposed) return;
     state.value = snapshot; stateError.value = "";
     if(!settingsOpen.value) settings.value = structuredClone(snapshot.settings);
+    if(snapshot.devices?.length && (!snapshot.settings.mobileDeviceIds || snapshot.settings.mobileDeviceIds.length === 0)) {
+      const autoDeviceIds = snapshot.devices.map(d => d.id);
+      snapshot.settings.mobileDeviceIds = autoDeviceIds;
+      if(!settingsOpen.value) settings.value.mobileDeviceIds = autoDeviceIds;
+      void data("/settings", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(snapshot.settings)
+      }).catch(() => {});
+    }
   }).catch(failure => {
     if(!statusPending.signal.aborted && !disposed) stateError.value = failure instanceof Error ? failure.message : String(failure);
   });

@@ -39,6 +39,7 @@ export type XiaomiHomeEventMonitorConfig = XiaomiHomeManagerConfigInput & {
   eventMonitorEnabled?: boolean;
   eventDeliveryMode?: "significant" | "all";
   cameraMotionEntityIds?: readonly string[];
+  monitoredEntityIds?: readonly string[];
 };
 
 type XiaomiHomeEventMonitorDependencies = {
@@ -123,7 +124,11 @@ function isCameraMotionState(state: HomeAssistantState, configuredIds: ReadonlyS
 
 export function xiaomiHomeEventFromHomeAssistantStateChange(
   change: HomeAssistantStateChanged,
-  options: { deliveryMode?: "significant" | "all"; cameraMotionEntityIds?: readonly string[] } = {}
+  options: {
+    deliveryMode?: "significant" | "all";
+    cameraMotionEntityIds?: readonly string[];
+    monitoredEntityIds?: readonly string[];
+  } = {}
 ): XiaomiHomeEvent | undefined {
   if (change.event_type !== "state_changed") return undefined;
   const state = change.data?.new_state;
@@ -142,6 +147,11 @@ export function xiaomiHomeEventFromHomeAssistantStateChange(
   const occurredAt = change.time_fired || state.last_updated || state.last_changed || new Date().toISOString();
   const resourceName = String(state.attributes?.friendly_name || state.entity_id);
   const configuredIds = new Set((options.cameraMotionEntityIds ?? []).map(value => String(value ?? "").trim().toLowerCase()).filter(Boolean));
+  const monitoredIds = new Set((options.monitoredEntityIds ?? []).map(value => String(value ?? "").trim().toLowerCase()).filter(Boolean));
+  const normalizedEntityId = state.entity_id.toLowerCase();
+  const oldState = change.data?.old_state;
+  const isStateChanged = !oldState || oldState.state !== state.state;
+
   let kind: XiaomiHomeEvent["kind"];
   let summary: string;
   if (state.state === "unavailable") {
@@ -153,9 +163,18 @@ export function xiaomiHomeEventFromHomeAssistantStateChange(
   } else if (isMotionState(state) || state.entity_id.startsWith("event.")) {
     kind = "sensor_alert";
     summary = `${resourceName} 触发事件`;
-  } else if (options.deliveryMode === "all") {
+  } else if (
+    isStateChanged && (
+      options.deliveryMode === "all"
+      || monitoredIds.has(normalizedEntityId)
+      || state.entity_id.startsWith("sensor.")
+      || state.entity_id.startsWith("binary_sensor.")
+      || state.entity_id.startsWith("switch.")
+    )
+  ) {
+    const unit = state.attributes?.unit_of_measurement ? ` ${state.attributes.unit_of_measurement}` : "";
     kind = "device_state_changed";
-    summary = `${resourceName} 状态变为 ${state.state}`;
+    summary = `${resourceName} 状态变为 ${state.state}${unit}`;
   } else {
     return undefined;
   }
@@ -176,6 +195,7 @@ export class XiaomiHomeEventMonitor {
   private readonly enabled: boolean;
   private readonly deliveryMode: "significant" | "all";
   private readonly cameraMotionEntityIds: string[];
+  private readonly monitoredEntityIds: string[];
   private readonly createSocket: (url: string) => SocketLike;
   private readonly reconnectDelayMs: number;
   private socket?: SocketLike;
@@ -191,6 +211,7 @@ export class XiaomiHomeEventMonitor {
     this.enabled = config.eventMonitorEnabled !== false;
     this.deliveryMode = config.eventDeliveryMode === "all" ? "all" : "significant";
     this.cameraMotionEntityIds = Array.isArray(config.cameraMotionEntityIds) ? config.cameraMotionEntityIds : [];
+    this.monitoredEntityIds = Array.isArray(config.monitoredEntityIds) ? config.monitoredEntityIds : [];
     this.createSocket = dependencies.createSocket ?? (url => new WebSocket(url) as unknown as SocketLike);
     this.reconnectDelayMs = dependencies.reconnectDelayMs ?? 5000;
     this.connectionState = !this.enabled ? "disabled" : !this.token ? "authorization_required" : "stopped";
@@ -233,6 +254,7 @@ export class XiaomiHomeEventMonitor {
       connectionState: this.connectionState,
       deliveryMode: this.deliveryMode,
       cameraMotionEntityCount: this.cameraMotionEntityIds.length,
+      monitoredEntityCount: this.monitoredEntityIds.length,
       agentRoleConfigured: Boolean(this.agentRoleId)
     };
   }
@@ -297,7 +319,8 @@ export class XiaomiHomeEventMonitor {
     const motionClip = xiaomiMiotMotionClipFromStateChange(stateChange);
     const event = xiaomiHomeEventFromHomeAssistantStateChange(stateChange, {
       deliveryMode: this.deliveryMode,
-      cameraMotionEntityIds: this.cameraMotionEntityIds
+      cameraMotionEntityIds: this.cameraMotionEntityIds,
+      monitoredEntityIds: this.monitoredEntityIds
     });
     if (event) void this.dependencies.deliverEvent(event, { agentRoleId: this.agentRoleId }).catch(() => undefined);
     if (motionClip && this.dependencies.captureMotionClip) {

@@ -51,6 +51,10 @@ Read artifact metadata from `/api/agent/xiaomi-home/artifacts` and content from 
 
 ### HA OS installation boundaries
 
+Startup follows the Hyper-V checkpoint disk chain to verify ownership. Checkpoints in the installation directory that lead to the managed base disk are accepted; external disks and cyclic chains are rejected.
+
+Local `127.0.0.1:8123` forwards to the current HA OS default HTTP port `80`, including its first-run landing page. Existing managed forwarding is migrated using the installation receipt; another application's forwarding is never replaced.
+
 The preset directory must be on a fixed local disk without reparse points. Download requires at least 40 GiB of free space and accepts only an official GitHub stable release VHDX ZIP with SHA256. Existing disks and foreign VMs are never overwritten. An occupied local port stops installation. A dedicated mutex prevents concurrent creation. Windows is never rebooted automatically and no LAN firewall rule is added. Manager verifies HTTP readiness separately from installation. The user completes onboarding, the Home Assistant account and Xiaomi authorization.
 
 The Windows VM autostart option is applied by Hyper-V during installation or startup. If the VM address changes after reboot, use Start and check to refresh the loopback forwarding. Canceled administrator approval, download failure and unsupported environments remain visible. Cross-reboot recovery and physical VM startup still require acceptance on the target Windows host.

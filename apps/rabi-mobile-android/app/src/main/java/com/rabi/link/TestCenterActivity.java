@@ -79,6 +79,9 @@ public class TestCenterActivity extends Activity {
         );
 
         ScrollView scrollView = new ScrollView(this);
+        addTestCard(root, "眼镜 BLE 连通测试", "手机与 AIUI 的本地文字链路",
+                "前台交换随机 ping / pong，退出即停止；不传音视频或业务数据。",
+                () -> startActivity(new Intent(this, com.rabi.link.modules.rokid.RokidBlePingActivity.class)));
         scrollView.addView(root);
         setContentView(scrollView);
     }

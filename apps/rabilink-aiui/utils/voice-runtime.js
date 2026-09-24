@@ -56,6 +56,11 @@ function unavailableError(capability) {
 }
 
 function speechTextFromEvent(event) {
+  if (typeof event === "string") return normalizedText(event);
+  if (event?.text) return normalizedText(event.text);
+  if (event?.transcript) return normalizedText(event.transcript);
+  if (event?.detail?.text) return normalizedText(event.detail.text);
+  if (event?.detail?.transcript) return normalizedText(event.detail.transcript);
   const results = event?.results;
   if (!results || !results.length) return "";
   const preferredIndex = Number.isInteger(event?.resultIndex) ? event.resultIndex : 0;
@@ -200,6 +205,8 @@ export function createAiuiTtsOutputAdapter(options = {}) {
         || defaultId("tts", sequence, acceptedAt);
       const messageId = normalizedText(speakOptions.messageId) || attemptId;
       const utterance = new UtteranceCtor(value);
+      utterance.voice = speakOptions.voice || options.voice || "female-tianmei";
+      utterance.volume = typeof speakOptions.volume === "number" ? speakOptions.volume : 1;
       utterance.lang = locale;
       utterance.onstart = (event) => speakOptions.onStart?.(event);
       utterance.onend = (event) => speakOptions.onEnd?.(event);

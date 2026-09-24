@@ -12,6 +12,22 @@
         parameters: {
           type: "object",
           properties: {
+            agentId: {
+              type: "string",
+              description: "绑定的灵珠智能体 ID。设置后作为指定的灵珠智能体运行与交互。",
+            },
+            agentName: {
+              type: "string",
+              description: "绑定的灵珠智能体名称，例如“灵珠智能体”或自定义名称。",
+            },
+            systemPrompt: {
+              type: "string",
+              description: "灵珠智能体系统提示词，用于自定义智能体对话人设与回答风格。",
+            },
+            modelProbe: {
+              type: "boolean",
+              description: "仅测试宿主内置 LanguageModel：检查可用性并回答一道固定算术题；不连接PC、不启动录音或工具。",
+            },
             token: {
               type: "string",
               description: "仅用于无设备 SN 的 Craft 调试兼容。真眼镜忽略外层应用 token，未绑定时必须进入显示 SN 与管理后台地址的首次设置页。",
@@ -48,7 +64,7 @@
 
   const DEFAULTS = {
     agentName: "RabiLink",
-    version: "1.0.23",
+    version: "1.0.30",
     description: "AI glasses continuous Agent stream and native AIUI LanguageModel configuration surface through RabiLink Relay.",
     iconUrl: "https://basecloud.rokidcdn.com/basecloud/prod/coze/default_agent_icon.png",
     permissions: "RECORD_AUDIO,SPEECH_RECOGNITION,INTERNET",

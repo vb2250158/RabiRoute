@@ -161,7 +161,38 @@ export const GATEWAY_SCALAR_FIELDS = [
   { key: "heartbeatNotificationTemplate", label: "心跳模板", type: "string" },
   { key: "voiceTranscriptNotificationTemplate", label: "语音转写模板", type: "string" },
   { key: "recentMessageLimit", label: "最近消息数量", type: "number" },
-  { key: "speechPushMode", label: "Route 语音投递模式", type: "string" }
+  { key: "speechPushMode", label: "Route 语音投递模式", type: "string" },
+  { key: "weixinBaseUrl", label: "微信基础 URL", type: "string" },
+  { key: "weixinBotType", label: "微信 Bot 类型", type: "string" },
+  { key: "feishuAppId", label: "飞书 App ID", type: "string" },
+  { key: "feishuAppSecret", label: "飞书 App Secret", type: "string" },
+  { key: "feishuVerificationToken", label: "飞书验证 Token", type: "string" },
+  { key: "feishuEncryptKey", label: "飞书加密 Key", type: "string" },
+  { key: "feishuEventSubscriptionEnabled", label: "飞书事件订阅", type: "boolean" },
+  { key: "feishuWebhookPort", label: "飞书 Webhook 端口", type: "number" },
+  { key: "feishuWebhookPath", label: "飞书 Webhook 路径", type: "string" },
+  { key: "personaAutomationScriptsEnabled", label: "人格自动化脚本启用", type: "boolean" },
+  { key: "agentReasoningEffort", label: "Agent 思考力度", type: "string" },
+  { key: "dshSessionId", label: "DSH 会话 ID", type: "string" },
+  { key: "dshSessionName", label: "DSH 会话名", type: "string" },
+  { key: "dshCwd", label: "DSH 工作目录", type: "string" },
+  { key: "dshBaseUrl", label: "DSH 基础 URL", type: "string" },
+  { key: "dshModelProvider", label: "DSH 模型提供方", type: "string" },
+  { key: "dshModel", label: "DSH 模型", type: "string" },
+  { key: "dshReasoningEffort", label: "DSH 思考力度", type: "string" },
+  { key: "workbuddySessionId", label: "Workbuddy 会话 ID", type: "string" },
+  { key: "workbuddySessionName", label: "Workbuddy 会话名", type: "string" },
+  { key: "workbuddyCwd", label: "Workbuddy 工作目录", type: "string" },
+  { key: "workbuddyEndpoint", label: "Workbuddy 端点", type: "string" },
+  { key: "antigravityConversationId", label: "Antigravity 会话 ID", type: "string" },
+  { key: "antigravityConversationName", label: "Antigravity 会话名", type: "string" },
+  { key: "antigravityCwd", label: "Antigravity 工作目录", type: "string" },
+  { key: "codexPlanAssistantEnabled", label: "Codex 计划助手启用", type: "boolean" },
+  { key: "codexPlanAssistantModel", label: "Codex 计划助手模型", type: "string" },
+  { key: "codexMemoryConsolidationAgentEnabled", label: "Codex 记忆沉淀 Agent 启用", type: "boolean" },
+  { key: "codexMemoryConsolidationAgentModel", label: "Codex 记忆沉淀 Agent 模型", type: "string" },
+  { key: "primaryAgentTarget", label: "首选远端 Agent 目标", type: "string" },
+  { key: "primaryAgentAdapter", label: "首选 Agent 适配器", type: "string" }
 ];
 
 export const GATEWAY_JSON_FIELDS = [
@@ -179,7 +210,13 @@ export const GATEWAY_JSON_FIELDS = [
   { key: "speechTriggerKeywords", label: "人格语音触发关键词" },
   { key: "notificationRules", label: "通知规则" },
   { key: "roleNotificationRules", label: "角色通知规则" },
-  { key: "roleRouteNames", label: "角色 Route 名" }
+  { key: "roleRouteNames", label: "角色 Route 名" },
+  { key: "codexPlanAssistantSessions", label: "Codex 计划助手会话列表" },
+  { key: "agentInstanceBindings", label: "Agent 实例绑定" },
+  { key: "remoteAgentTargets", label: "远端 Agent 目标列表" },
+  { key: "messageProcessingAgents", label: "消息处理 Agent 策略" },
+  { key: "languageStyle", label: "语言文风绑定" },
+  { key: "automationRules", label: "自动化规则列表" }
 ];
 
 export function cloneJson(value) {

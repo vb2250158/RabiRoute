@@ -44,7 +44,8 @@ export class WindowsHomeAssistantOs implements HomeAssistantOsDriver {
   async run(operation: "Install" | "Start", autoStart: boolean): Promise<HomeAssistantOsStatus> {
     if (process.platform !== "win32") return this.inspect();
     if (this.root.startsWith("\\\\") || !fs.existsSync(this.script)) throw new Error("Home Assistant OS 安装器必须从本机安装包运行。");
-    await execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", this.script,
+    const powershell = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    await execute(powershell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", this.script,
       "-Operation", operation, "-Root", this.root, "-AutoStart", autoStart ? "yes" : "no"],
     { windowsHide: true, timeout: 30 * 60 * 1000, maxBuffer: 1024 * 1024 });
     return this.inspect();

@@ -46,8 +46,8 @@ function defaultRuntimeDir(): string {
 
 function localAbsolutePath(input: string, field: string): string {
   const resolved = path.resolve(input);
-  if (!path.isAbsolute(resolved) || resolved.startsWith("\\\\") || resolved.startsWith("//")) {
-    throw new Error(`${field} must be an absolute local path.`);
+  if (!path.isAbsolute(resolved)) {
+    throw new Error(`${field} must be an absolute path.`);
   }
   return resolved;
 }
@@ -72,16 +72,22 @@ export class XiaomiHomeArtifactStore {
   private readonly indexPath: string;
   private index: ArtifactIndex;
 
-  constructor(runtimeDir = defaultRuntimeDir()) {
+  constructor(runtimeDir = defaultRuntimeDir(), customMediaDir?: string) {
     this.runtimeDir = localAbsolutePath(runtimeDir, "runtimeDir");
     this.ledgerDir = path.join(this.runtimeDir, "artifacts", "ledger");
-    this.mediaDir = path.join(this.runtimeDir, "artifacts", "media");
+    this.mediaDir = customMediaDir
+      ? localAbsolutePath(customMediaDir, "mediaDir")
+      : path.join(this.runtimeDir, "artifacts", "media");
     this.accessDir = path.join(this.runtimeDir, "artifacts", "access");
     this.indexPath = path.join(this.runtimeDir, "artifacts", "index.json");
     fs.mkdirSync(this.ledgerDir, { recursive: true });
     fs.mkdirSync(this.mediaDir, { recursive: true });
     fs.mkdirSync(this.accessDir, { recursive: true });
     this.index = this.rebuildIndex();
+  }
+
+  getMediaDir(): string {
+    return this.mediaDir;
   }
 
   allocateMediaPath(sourceEventId: string, occurredAt: string, extension: ".mp4" | ".jpg"): string {

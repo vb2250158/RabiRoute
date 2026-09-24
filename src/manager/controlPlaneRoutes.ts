@@ -3726,6 +3726,27 @@ async function deliverXiaomiHomeEvent(
   event: XiaomiHomeEvent,
   context: XiaomiHomeEventDeliveryContext
 ): Promise<XiaomiHomeGatewayDeliveryResult[]> {
+  try {
+    const roleId = sanitizeRoleId(context.agentRoleId) || "YeYu";
+    const roleDir = roleDirForApi(roleId);
+    const eventsFile = path.join(roleDir, "xiaomi-home-events.jsonl");
+    fs.mkdirSync(path.dirname(eventsFile), { recursive: true });
+    const line = JSON.stringify({
+      time: Math.floor(Date.parse(event.occurredAt || new Date().toISOString()) / 1000),
+      isoTime: event.occurredAt || new Date().toISOString(),
+      id: event.id,
+      kind: event.kind,
+      resourceId: event.resourceId,
+      resourceName: event.resourceName,
+      summary: event.summary,
+      artifactId: event.artifactId,
+      areaName: event.areaName,
+      homeId: event.homeId
+    });
+    fs.appendFileSync(eventsFile, `${line}\n`, "utf8");
+  } catch {
+    // Non-blocking ledger append
+  }
   const candidates = xiaomiHomeGatewayRuntimes(context.agentRoleId);
   if (candidates.length === 0) {
     return [{ status: "missed", matchedRuleCount: 0, sentPacketCount: 0, reason: "no_matching_xiaomi_home_gateway" }];

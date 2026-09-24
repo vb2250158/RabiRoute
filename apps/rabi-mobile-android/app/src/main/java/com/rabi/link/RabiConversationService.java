@@ -113,20 +113,45 @@ public final class RabiConversationService extends Service {
         return (currentInstance != null && !currentInstance.shutdownComplete)
                 || android.os.SystemClock.elapsedRealtime() < recordingStartPendingUntil;
     }
+    /** Called only from a resumed Activity, where Android permits microphone foreground work. */
+    public static void resumeRecordingFromForeground(Context context) {
+        AllDayRecordingSettings settings = AllDayRecordingSettings.load(context);
+        if (!settings.autoResume && !settings.running) return;
+        RabiConversationService current = currentInstance;
+        if (android.os.SystemClock.elapsedRealtime() < recordingStartPendingUntil
+                || (current != null && !current.shutdownComplete && (current.captureTransition
+                    || current.voiceServiceActive || (current.videoController != null && current.videoController.getActive())
+                    || ("health".equals(settings.mode) && settings.running)))) return;
+        if ("audio".equals(settings.mode) && androidx.core.content.ContextCompat.checkSelfPermission(context,
+                android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            context.getSharedPreferences("rabi_conversation_runtime", Context.MODE_PRIVATE).edit()
+                    .putString("allDayStatus", "记录已开启，等待麦克风权限").apply();
+            return;
+        }
+        try {
+            startRecording(context);
+            android.app.NotificationManager notifications = context.getSystemService(android.app.NotificationManager.class);
+            if (notifications != null) notifications.cancel(701);
+        }
+        catch (RuntimeException error) {
+            context.getSharedPreferences("rabi_conversation_runtime", Context.MODE_PRIVATE).edit()
+                    .putString("allDayStatus", "记录已开启，恢复失败；请在记录页重试").apply();
+        }
+    }
     public static void startRecording(Context context) {
         AllDayRecordingSettings s = AllDayRecordingSettings.load(context);
-        s.withRunning(true, System.currentTimeMillis()).save(context);
+        s.withEnabled(true, System.currentTimeMillis()).save(context);
         recordingStartPendingUntil = android.os.SystemClock.elapsedRealtime() + 15000;
         try { context.startForegroundService(new Intent(context, RabiConversationService.class).setAction(ACTION_RECORD)); }
         catch (RuntimeException error) {
             recordingStartPendingUntil = 0;
-            s.withRunning(false, System.currentTimeMillis()).save(context);
+            AllDayRecordingSettings.load(context).withRunning(false, System.currentTimeMillis()).save(context);
             throw error;
         }
     }
     public static void pauseRecording(Context context) {
         AllDayRecordingSettings s = AllDayRecordingSettings.load(context);
-        s.withRunning(false, System.currentTimeMillis()).save(context);
+        s.withEnabled(false, System.currentTimeMillis()).save(context);
         context.startService(new Intent(context, RabiConversationService.class).setAction(ACTION_PAUSE_RECORD));
     }
     public static void syncHealth(Context context) {
@@ -168,6 +193,7 @@ public final class RabiConversationService extends Service {
     private RabiChatStore chatStore;
     private RokidCxrController glassController;
     private RabiGlassBridge glassBridge;
+    private volatile com.rabi.link.modules.rokid.RabiGlassTextOutput activeGlassTextOutput;
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
     private volatile boolean shutdownComplete;
@@ -336,6 +362,20 @@ public final class RabiConversationService extends Service {
                         ? "Agent 发来了 " + (attachments == null ? 0 : attachments.length()) + " 个附件"
                         : text;
                 updateRuntime("reply", replySummary); showAgentMessage(messageId, routeProfileId, replySummary);
+                if (com.rabi.link.modules.rokid.RabiGlassTextOutput.enabled(RabiConversationService.this)
+                        && text != null && !text.trim().isEmpty()) {
+                    // Capture owns its CXR session; text must not silently replace an active recorder.
+                    boolean displayed = false;
+                    if (glassController == null && (videoController == null || !videoController.getActive())) {
+                        com.rabi.link.modules.rokid.RabiGlassTextOutput output = new com.rabi.link.modules.rokid.RabiGlassTextOutput(RabiConversationService.this);
+                        activeGlassTextOutput = output;
+                        try { displayed = output.deliver(messageId, text); }
+                        finally { output.close(); activeGlassTextOutput = null; }
+                    }
+                    updateRuntime("glassText", displayed ? "眼镜已显示文字" : "眼镜未确认显示，等待重试或释放采集通道");
+                    return new RabiGlassPcBackend.ReplyDeliveryResult(displayed, false, false,
+                            RabiGlassPcBackend.SOURCE_GLASSES, "");
+                }
                 RabiConversationSettings settings = RabiConversationSettings.load(RabiConversationService.this);
                 if (inputMode == RabiConversationSettings.InputMode.GLASSES && glassBridge != null) {
                     glassBridge.sendGlassReplyText(replySummary);
@@ -524,7 +564,7 @@ public final class RabiConversationService extends Service {
         }
         updateRuntime("serviceAction", action == null ? ACTION_START : action);
         if (ACTION_STOP.equals(action)) {
-            AllDayRecordingSettings.load(RabiConversationService.this).withRunning(false, System.currentTimeMillis()).save(RabiConversationService.this);
+            AllDayRecordingSettings.load(RabiConversationService.this).withEnabled(false, System.currentTimeMillis()).save(RabiConversationService.this);
             RabiConversationServiceState.setRestoreEnabled(this, false);
             stopAfterCapture = true;
             if (!initialized) { shutdown(true); return START_NOT_STICKY; }
@@ -543,7 +583,7 @@ public final class RabiConversationService extends Service {
             return START_STICKY;
         }
         if (ACTION_PAUSE_RECORD.equals(action)) {
-            AllDayRecordingSettings.load(RabiConversationService.this).withRunning(false, System.currentTimeMillis()).save(RabiConversationService.this);
+            AllDayRecordingSettings.load(RabiConversationService.this).withEnabled(false, System.currentTimeMillis()).save(RabiConversationService.this);
             pauseRecordingInternal(null);
             return START_STICKY;
         }
@@ -724,7 +764,7 @@ public final class RabiConversationService extends Service {
         if (s.healthEnabled || "health".equals(s.mode)) {
             if (!s.healthEnabled && "health".equals(s.mode)) {
                 s = new AllDayRecordingSettings(s.running, s.mode, s.source, s.processingPolicy,
-                        s.routeProfileId, true, s.uploadEnabled, false, s.windowStartedAt);
+                        s.routeProfileId, true, s.uploadEnabled, s.autoResume, s.windowStartedAt);
                 s.save(this);
             }
             healthController.start();
@@ -1439,6 +1479,7 @@ public final class RabiConversationService extends Service {
     }
 
     @Override public void onDestroy() {
+        if (activeGlassTextOutput != null) activeGlassTextOutput.close();
         if (currentInstance == this) currentInstance = null;
         initializationExecutor.shutdown();
         shutdown(false);

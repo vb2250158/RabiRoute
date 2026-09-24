@@ -2,6 +2,8 @@
 
 # Media Workbench
 
+Video previews loop by default. The loop toggle sits between mute and fullscreen and can be turned off at any time.
+
 Image nodes support Z-Image Turbo text-to-image with PNG output and the official eight-step CFG 1 res_multistep/simple workflow, with AuraFlow shift 3. Images and H3 share the managed ComfyUI process and serial queue. Model management scans or downloads the diffusion model, Qwen 3 4B encoder and AE VAE on demand. A single model root is shared; stop the service before changing it. Image dimensions must be multiples of 32 between 256 and 2048. Generated images can become video references. Image editing, reference-conditioned image generation and batches are not implemented.
 
 Canvas nodes support dragging, left-button marquee selection, middle-button panning, a minimap, duplication and removal. Editors sit below selected nodes. Projects, cards and parameters save automatically on the server and restore by project ID after refresh. Save failures and concurrent conflicts display errors. Jobs and assets are persisted separately; see [media projects and autosave](video-projects_en.md).

@@ -31,12 +31,26 @@ const error = ref("");
 const ready = computed(() => !loading.value && !!snapshot.value && !!draft.value);
 let unregisterSaveAction: (() => void) | undefined;
 
+const RECOMMENDED_MEDIA_HOSTS = [
+  "fds.api.xiaomi.com",
+  "cn.fds.api.xiaomi.com",
+  "api.io.mi.com",
+  "cdn.fds.api.xiaomi.com"
+] as const;
+
 function lines(value: readonly string[]): string {
   return value.join("\n");
 }
 
 function parsedLines(value: string): readonly string[] {
   return [...new Set(value.split(/[,\n]/).map(item => item.trim()).filter(Boolean))];
+}
+
+function applyRecommendedHosts(): void {
+  const current = parsedLines(cameraAllowedHosts.value);
+  const merged = [...new Set([...current, ...RECOMMENDED_MEDIA_HOSTS])];
+  cameraAllowedHosts.value = lines(merged);
+  dirty.value = true;
 }
 
 function hydrate(value: XiaomiHomeSettingsSnapshot): void {
@@ -99,7 +113,8 @@ onBeforeUnmount(() => unregisterSaveAction?.());
   <v-card class="app-card glass-card section-card xiaomi-home-message-endpoint-settings">
     <div class="section-title-row">
       <div>
-        <div class="section-title">事件、设备控制与录像</div>
+        <div class="section-title">事件、设备控制与录像基础设置</div>
+        <div class="section-note">配置底层连接开关与媒体参数；具体摄像头的业务触发规则请前往「人格配置 → 自动化」添加。</div>
       </div>
       <v-chip v-if="snapshot" size="small" variant="tonal" :color="snapshot.source === 'runtime' ? 'success' : 'info'">
         {{ snapshot.source === "runtime" ? "本机设置" : "Profile 默认值" }}
@@ -130,10 +145,37 @@ onBeforeUnmount(() => unregisterSaveAction?.());
           <div class="section-note">{{ draft.cameraClipCaptureEnabled !== snapshot?.settings.cameraClipCaptureEnabled ? '尚未保存' : draft.cameraClipCaptureEnabled ? '已开启' : '已关闭' }}</div>
         </section>
       </div>
-      <div class="xiaomi-form-grid mt-3">
-        <v-textarea v-model="cameraMotionEntities" label="摄像头移动事件实体" placeholder="binary_sensor.living_room_camera_motion" rows="3" hint="每行一个 Home Assistant entity_id；先从真实设备枚举确认。" persistent-hint />
-        <v-textarea v-model="cameraAllowedHosts" label="录像媒体域名白名单" placeholder="example.xiaomi.com\n*.example.xiaomi.com" rows="3" hint="每行一个 HTTPS 主机；只登记真实事件录像 URL 使用的域名。" :error-messages="draft.cameraClipCaptureEnabled && !cameraAllowedHosts.trim() ? '录像抓取已开启，但媒体域名白名单为空，因此仍不会下载录像。' : ''" persistent-hint />
+
+      <div class="media-hosts-card mt-3 pa-4">
+        <div class="d-flex align-center justify-space-between mb-1">
+          <div>
+            <div class="text-subtitle-2 font-weight-bold">录像媒体域名白名单</div>
+            <div class="text-caption text-medium-emphasis">用于防止 SSRF；仅允许从白名单中的 HTTPS 主机下载切片视频。</div>
+          </div>
+          <v-btn
+            size="small"
+            variant="tonal"
+            color="info"
+            prepend-icon="mdi-playlist-check"
+            title="自动填入小米云端对象存储（FDS/CDN）常用域名"
+            @click="applyRecommendedHosts"
+          >
+            填入小米推荐 CDN
+          </v-btn>
+        </div>
+        <v-textarea
+          v-model="cameraAllowedHosts"
+          placeholder="fds.api.xiaomi.com&#10;cn.fds.api.xiaomi.com&#10;api.io.mi.com&#10;cdn.fds.api.xiaomi.com"
+          rows="3"
+          density="compact"
+          variant="outlined"
+          class="mt-2"
+          hint="每行一个 HTTPS 主机；只放行真实事件录像切片使用的域名。"
+          :error-messages="draft.cameraClipCaptureEnabled && !cameraAllowedHosts.trim() ? '录像抓取已开启，但媒体域名白名单为空，因此仍不会下载录像。' : ''"
+          persistent-hint
+        />
       </div>
+
       <v-expansion-panels variant="accordion" class="mt-3">
         <v-expansion-panel>
           <v-expansion-panel-title>高级设置</v-expansion-panel-title>
@@ -168,6 +210,11 @@ onBeforeUnmount(() => unregisterSaveAction?.());
 }
 .xiaomi-switch-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.media-hosts-card {
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 8px;
+  background: rgba(var(--v-theme-surface), 0.4);
 }
 @media (max-width: 760px) {
   .xiaomi-form-grid,

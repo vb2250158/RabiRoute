@@ -17,6 +17,7 @@
 
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.REQUEST_OBSERVE_COMPANION_DEVICE_PRESENCE" />
     <uses-permission
         android:name="android.permission.NEARBY_WIFI_DEVICES"
@@ -68,6 +69,7 @@
         tools:replace="android:allowBackup">
         <activity android:name=".recording.RabiRecordingHubActivity" android:exported="false" android:launchMode="singleTop" />
         <activity android:name=".modules.rokid.RabiLiveRecordingActivity" android:exported="false" />
+        <activity android:name=".modules.rokid.RokidBlePingActivity" android:exported="false" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.files"

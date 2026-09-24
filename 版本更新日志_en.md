@@ -6,6 +6,15 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.15 - 2026-09-25
+
+### Rokid BLE Ping protocol, AIUI mobile interaction and Xiaomi Home cascader enhancements
+
+- Add Rokid BLE Ping protocol implementation, server, and probe activity, with unit tests for glass text delivery and protocol packets; all-day recording and foreground conversation service gain boot startup and restoration test fixtures.
+- Enhance AIUI mobile client home page interaction, expand voice command handling, runtime policy and configuration surfaces, provide Craft browser upload helpers and runtime smoke checks, and introduce the standalone BLE Ping probe package.
+- Extend WebGUI Xiaomi Home settings with device cascader menus and responsive automation card grids; harden Xiaomi Home artifact storage and event logging, and update Home Assistant OS installation scripts with regression tests.
+- Expand WebGUI persona template and RabiLink pages with multi-device state and media video playback; Manager route catalog strengthens startup lifecycle and desktop control endpoints.
+
 ## 0.3.14 - 2026-09-23
 
 ### Plan-read performance and Agent API diagnostics

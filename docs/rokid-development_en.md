@@ -6,6 +6,18 @@ For RabiLink maintainers. Checked on 2026-09-08. This page records route constra
 
 ## Current route
 
+### Custom-command probe in the slim phone build
+
+`RokidProbeActivity` offers independent CXR-L diagnostics in the slim build: connect, query the glasses component, explicitly install the bundled component, start it, send one Ping, and copy logs. The target is `com.rabi.link.glass.video`; no recording-start command is sent. CXR/Bluetooth connectivity, a current installation query, and an application-start callback are required. A successful send return only means SDK acceptance; a Pong matching the current random requestId within 15 seconds proves the custom channel round trip. Disconnecting or leaving clears pending state.
+
+This entry does not load the local ASR/TTS runtimes omitted from slim builds. It only tests the known `rabi_video_control` / `rabi_video_status` protocol, not message delivery to a Lingzhu agent or awakening Shenshen. Installation, start, send, and reply each require current device evidence.
+
+### Text delivery to our glasses application
+
+The diagnostic page can enable glasses text output. `RabiConversationService` and the existing `RabiGlassPcBackend` still own incoming delivery, phone history and retries; no second account, session or Relay queue is created. CXR-L checks installation and starts `GlassTextActivity` before sending. The receiver acknowledges matching `messageId + attempt` only after a focused window draws the text; only then does the phone queue its existing `delivered` receipt. This proves drawing, not that the wearer read it. Disconnection, missing installation, blocked start and timeout remain unconfirmed and use the existing retry path. Background application start still needs firmware-specific device verification.
+
+The text entry is separate from the recorder Activity in the bundled glasses component. It starts no camera, microphone or local speech model. This version supports text only, up to 8000 characters per message; oversized text is rejected, not truncated, and attachments remain on the phone. Enabling this output skips PC TTS and does not claim playback. Text delivery does not preempt a capture session using CXR. The phone service must remain permitted to run; force-stopping the app cannot guarantee continued reception.
+
 **CXR-M is excluded.** The project does not pursue the commercial-cooperation route or request its CLIENT_SECRET or `.lc` credentials. Suggestions to try CXR-M in older research are historical and do not guide this implementation.
 
 The phone uses CXR-L through the Rokid app. The intended flow starts our glasses recorder automatically and sends video with audio to a private phone address. The phone owns live preview, local recording and replay. Installation, camera access and sustained streaming require separate device acceptance.

@@ -169,7 +169,7 @@ public final class RokidCxrController {
     }
 
     void queryGlassAsrApp() {
-        log("appIsInstalled target=" + GLASS_ASR_PACKAGE);
+        log("appIsInstalled target=" + targetPackage);
         cxrLink.appIsInstalled(glassAppCallback());
     }
 
@@ -187,6 +187,17 @@ public final class RokidCxrController {
     public void startGlassVideoApp() {
         closeCustomViewBeforeGlassAppStart();
         cxrLink.appStart(targetPackage + ".GlassVideoActivity", glassAppCallback());
+    }
+
+    void startGlassTextApp() {
+        cxrLink.appStart(com.rabi.link.protocol.RabiGlassTextProtocol.ENTRY, glassAppCallback());
+    }
+
+    boolean sendTextCommand(String payload) {
+        Caps caps = new Caps(); caps.write("protocol"); caps.write(payload);
+        Integer result = cxrLink.sendCustomCmd(com.rabi.link.protocol.RabiGlassTextProtocol.CHANNEL, caps);
+        log("sendTextCommand result=" + result);
+        return result != null && result == 0;
     }
 
     boolean sendVideoCommand(String payload) {
@@ -332,7 +343,8 @@ public final class RokidCxrController {
         cxrLink.setCXRCustomCmdCbk(new ICustomCmdCbk() {
             @Override
             public void onCustomCmdResult(String key, byte[] payload) {
-                if (!NATIVE_VOICE_REPLY_KEY.equals(key) && !com.rabi.link.protocol.RabiGlassVideoProtocol.REPLY.equals(key)) {
+                if (!NATIVE_VOICE_REPLY_KEY.equals(key) && !com.rabi.link.protocol.RabiGlassVideoProtocol.REPLY.equals(key)
+                        && !com.rabi.link.protocol.RabiGlassTextProtocol.REPLY.equals(key)) {
                     log("ignore custom cmd key=" + key + " bytes=" + (payload == null ? 0 : payload.length));
                     return;
                 }

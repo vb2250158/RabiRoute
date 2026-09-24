@@ -73,6 +73,10 @@ public final class GlassVideoActivity extends Activity {
         String id = data.optString("session");
         String action = data.optString("action");
         if (id.isEmpty() || id.length() > 80) return;
+        if ("ping".equals(action) && id.matches("[a-f0-9-]{36}")) {
+            report("pong:" + id);
+            return;
+        }
         if ("stop".equals(action)) {
             if (id.equals(session)) stop("手机已停止录像", true);
             return;

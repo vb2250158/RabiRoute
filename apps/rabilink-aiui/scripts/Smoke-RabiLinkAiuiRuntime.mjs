@@ -356,6 +356,37 @@ try {
   const pageModule = await import(`${pathToFileURL(path.join(stagingRoot, "pages", "home", "index.js")).href}?smoke=${Date.now()}`);
   const page = createPageInstance(pageModule);
 
+  // Lifecycle regression only: these stubs do not prove the real host model works.
+  const priorModel = globalThis.LanguageModel;
+  let probeCalls = 0;
+  let probeDestroyCalls = 0;
+  globalThis.LanguageModel = {
+    availability: async () => "available",
+    create: async () => ({ prompt: async () => { probeCalls++; return "391"; }, destroy() { probeDestroyCalls++; } })
+  };
+  const loadOnlyProbe = createPageInstance(pageModule);
+  loadOnlyProbe.onLoad({ modelProbe: true });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert(probeCalls === 1 && loadOnlyProbe.data.assistantReplyText === "391", "Probe must run from onLoad without onReady.");
+  loadOnlyProbe.onShow(); loadOnlyProbe.onReady(); loadOnlyProbe.onReady();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert(probeCalls === 1 && probeDestroyCalls === 1, "Repeated show/ready must not duplicate the model call.");
+  loadOnlyProbe.onUnload();
+  delete globalThis.LanguageModel;
+  const missingHostProbe = createPageInstance(pageModule);
+  missingHostProbe.onLoad({ modelProbe: true });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert(missingHostProbe.data.assistantReplyText.includes("未提供 LanguageModel"), "Missing host must render an error instead of waiting.");
+  missingHostProbe.onUnload();
+  globalThis.LanguageModel = { availability: async () => "available", create: async () => { throw new Error("host default model missing"); } };
+  const rejectedHostProbe = createPageInstance(pageModule);
+  rejectedHostProbe.onLoad({ modelProbe: true });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert(rejectedHostProbe.data.assistantReplyText === "host default model missing", "Creation rejection must be visible.");
+  rejectedHostProbe.onUnload();
+  globalThis.LanguageModel = priorModel;
+  console.log("Model probe lifecycle regression passed: no onReady, duplicate lifecycle, missing API, rejected creation (stubbed, not host acceptance).");
+
   const mutationPage = createPageInstance(pageModule);
   mutationPage.data.targetDeviceId = "pc-route-mutation";
   mutationPage.data.routeCatalogContentHash = "a".repeat(64);
