@@ -26,6 +26,8 @@ test("persona keys select distinct prompts without a status enum", () => {
     const policy = parseAdvancePolicy(f.policy, f.workflow);
     const item = evaluateAdvance({ ...f, policy, workspace: f.dir, feedback: [], trigger: "manual", now: 100000 });
     assert.equal(item.eligible, true); assert.match(item.prompt, /Custom instructions/); assert.equal(item.label, "Custom review");
+    assert.match(item.prompt, /当前计划状态：Custom review/);
+    assert.match(item.prompt, new RegExp(custom.description));
     assert.throws(() => parseAdvancePolicy({ ...f.policy, rules: { unknown: f.rule } }, f.workflow), /Invalid status/);
   } finally { f.cleanup(); }
 });
