@@ -1,6 +1,6 @@
 import { openCodexDesktopThread } from "../codexDesktopBridge.js";
 import { readCodexThread } from "../codexRuntime.js";
-import { openDshSession, readDshSession } from "../dshSessionBridge.js";
+import { listDshSessions, openDshSession, readDshSession } from "../dshSessionBridge.js";
 import { openAntigravitySession, readAntigravitySession } from "../antigravitySessionStore.js";
 import {
   agentAdapterManifest,
@@ -10,6 +10,7 @@ import type { PlanHistoryRecord, PlanItem, PlanSecretaryBinding, PlanTaskBinding
 import { normalizePathForComparison } from "../shared/pathPolicy.js";
 
 export const PLAN_AGENT_STATUS_TIMEOUT_MS = 2_800;
+export const PLAN_DSH_AGENT_STATUS_TIMEOUT_MS = 10_000;
 
 export type PlanAgentRole = "task" | "secretary";
 export type PlanAgentWorkStatus = "working" | "idle" | "unknown";
@@ -78,6 +79,7 @@ export type PlanAgentStatusDependencies = {
   readCodexThread?: (threadId: string) => Promise<unknown>;
   openCodexThread?: (threadId: string) => Promise<void>;
   readDshSession?: (sessionId: string, baseUrl?: string) => Promise<unknown>;
+  listDshSessions?: (baseUrl?: string) => Promise<unknown[]>;
   openDshSession?: (sessionId: string, baseUrl?: string) => Promise<void>;
   readAntigravitySession?: (conversationId: string) => Promise<unknown>;
   openAntigravitySession?: (conversationId: string) => Promise<void>;
@@ -271,12 +273,13 @@ export function createPlanAgentStatusService(
   const readCodex = dependencies.readCodexThread ?? dependencies.readThread ?? readCodexThread;
   const openCodex = dependencies.openCodexThread ?? dependencies.openThread ?? openCodexDesktopThread;
   const readDsh = dependencies.readDshSession ?? readDshSession;
+  const listDsh = dependencies.listDshSessions ?? (async (baseUrl?: string) => listDshSessions({ baseUrl, limit: Number.MAX_SAFE_INTEGER }));
   const openDsh = dependencies.openDshSession ?? openDshSession;
   const readAntigravity = dependencies.readAntigravitySession
     ?? (async (conversationId: string) => readAntigravitySession(conversationId));
   const openAntigravity = dependencies.openAntigravitySession
     ?? (async (conversationId: string) => { openAntigravitySession(conversationId); });
-  const timeoutMs = Math.max(1, dependencies.timeoutMs ?? PLAN_AGENT_STATUS_TIMEOUT_MS);
+  const timeoutMs = (binding: PlanAgentBinding) => Math.max(1, dependencies.timeoutMs ?? (binding.agentType === "dsh" ? PLAN_DSH_AGENT_STATUS_TIMEOUT_MS : PLAN_AGENT_STATUS_TIMEOUT_MS));
   const now = dependencies.now ?? (() => new Date());
 
   // Dispatch on the bound adapter, which is preserved verbatim on the binding.
@@ -298,10 +301,11 @@ export function createPlanAgentStatusService(
   async function inspectBinding(
     role: PlanAgentRole,
     binding: PlanAgentBinding,
-    checkedAt: string
+    checkedAt: string,
+    read: () => Promise<unknown> = () => readBinding(binding)
   ): Promise<PlanAgentBindingStatus> {
     try {
-      const value = await withTimeout(readBinding(binding), timeoutMs);
+      const value = await withTimeout(read(), timeoutMs(binding));
       const session = normalizeSession(value);
       if (!session) throw new Error(`${agentLabel(binding.agentType)} session status response is invalid.`);
       return statusFromSession(role, binding, session, checkedAt);
@@ -324,7 +328,7 @@ export function createPlanAgentStatusService(
         workspace: actor.workspace || "",
         ...(actor.baseUrl ? { baseUrl: actor.baseUrl } : {})
       };
-      const session = normalizeSession(await withTimeout(readBinding(binding), timeoutMs));
+      const session = normalizeSession(await withTimeout(readBinding(binding), timeoutMs(binding)));
       if (!session || session.id !== actor.sessionId) throw new Error("Original Agent session was not found.");
       if (session.archived) throw new Error("Original Agent session is archived.");
       await openBinding(binding, actor.sessionId);
@@ -333,11 +337,31 @@ export function createPlanAgentStatusService(
     async inspectPlans(plans) {
       const checkedAt = now().toISOString();
       const shared = new Map<string, Promise<PlanAgentBindingStatus>>();
+      const dshCatalogs = new Map<string, Promise<Map<string, unknown>>>();
+      const readDshFromCatalog = (binding: PlanAgentBinding): Promise<unknown> => {
+        const baseUrl = String(binding.baseUrl || "");
+        let catalog = dshCatalogs.get(baseUrl);
+        if (!catalog) {
+          catalog = listDsh(binding.baseUrl).then(rows => new Map(rows.flatMap(row => {
+            const session = normalizeSession(row);
+            return session ? [[session.id, row] as const] : [];
+          })));
+          dshCatalogs.set(baseUrl, catalog);
+        }
+        return catalog.then(rows => {
+          const row = rows.get(binding.sessionId);
+          if (!row) throw new Error(`DSH session was not found: ${binding.sessionId}`);
+          return row;
+        });
+      };
       const inspectShared = (role: PlanAgentRole, binding: PlanAgentBinding): Promise<PlanAgentBindingStatus> => {
         const key = bindingKey(binding);
         const existing = shared.get(key);
         if (existing) return existing.then((status) => ({ ...status, role }));
-        const request = inspectBinding(role, binding, checkedAt);
+        const read = binding.agentType === "dsh" && (!dependencies.readDshSession || dependencies.listDshSessions)
+          ? () => readDshFromCatalog(binding)
+          : () => readBinding(binding);
+        const request = inspectBinding(role, binding, checkedAt, read);
         shared.set(key, request);
         return request;
       };
@@ -352,7 +376,7 @@ export function createPlanAgentStatusService(
     async openPlanAgent(plan, role) {
       const binding = role === "secretary" ? plan.secretaryBinding : plan.taskBinding;
       if (!binding) throw new Error(role === "secretary" ? "Plan secretary Agent is not configured." : "Plan task Agent is not configured.");
-      const value = await withTimeout(readBinding(binding), timeoutMs);
+      const value = await withTimeout(readBinding(binding), timeoutMs(binding));
       const session = normalizeSession(value);
       const label = agentLabel(binding.agentType);
       if (!session) throw new Error(`${label} session status response is invalid.`);

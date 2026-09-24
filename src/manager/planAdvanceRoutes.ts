@@ -73,9 +73,14 @@ export function handlePlanAdvanceApi(request: http.IncomingMessage, url: URL, re
       if (!item.eligible || (expected as Record<string, unknown>)[item.planId] !== item.fingerprint) { results.push({ planId: item.planId, state: "skipped", reason: item.reason || "changed_since_check" }); continue; }
       const group = groups.get(item.sessionId!) || []; group.push(item); groups.set(item.sessionId!, group);
     }
+    const currentPlans = [...groups.values()].map(group => plans.find(plan => plan.id === group[0]!.planId)!);
+    const currentStatuses = await planAgentStatusService.inspectPlans(currentPlans);
+    const currentBySession = new Map(currentStatuses.map(status => [status.taskAgent.threadId, status.taskAgent]));
     // Each host session receives one combined work package; multiple windows share the reservation.
     for (const [sessionId, group] of groups) {
       if (busySessions.has(sessionId)) { for (const item of group) results.push({ planId: item.planId, state: "skipped", reason: "session_reserved" }); continue; }
+      const current = currentBySession.get(sessionId);
+      if (current?.sessionStatus !== "idle") { for (const item of group) results.push({ planId: item.planId, state: "skipped", reason: current?.working ? "session_running" : "session_unavailable" }); continue; }
       busySessions.add(sessionId);
       const reserved: Array<{ planId: string; id: string }> = [];
       let deliveryAttempted = false;
@@ -86,8 +91,6 @@ export function handlePlanAdvanceApi(request: http.IncomingMessage, url: URL, re
           const receipt = store.reserve(workspace, plan, item.fingerprint, item.rule!, Date.now()); reserved.push({ planId: item.planId, id: receipt.id });
         }
         const plan = plans.find(row => row.id === group[0]!.planId)!;
-        const current = (await planAgentStatusService.inspectPlans([plan]))[0]?.taskAgent;
-        if (current?.sessionStatus !== "idle") throw new Error("Session no longer idle.");
         const request: AgentThreadRequest = { action: "send", agentAdapter: "dsh", dshDeliveryMode: "queue", threadId: sessionId, cwd: workspace, dshBaseUrl: plan.taskBinding?.baseUrl,
           deliveryId: reserved[0]!.id, createIfMissing: false, prompt: group.map(item => `GET /api/roles/${encodeURIComponent(roleId)}/plans/${encodeURIComponent(item.planId)}\n${item.prompt}`).join("\n\n---\n\n"),
           messageSource: { type: "system", eventType: "plan_advance", eventName: "Rabi plan advance", eventId: reserved[0]!.id }, responsePolicy: "none" };

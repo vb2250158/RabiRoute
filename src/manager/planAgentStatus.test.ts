@@ -184,3 +184,24 @@ test("plan Agent status reads and opens the exact DSH session through its bound 
   assert.equal(result.agentType, "dsh");
   assert.deepEqual(opened, [{ sessionId: dshBinding.sessionId, baseUrl: dshBinding.baseUrl }]);
 });
+
+test("DSH plan statuses share one complete session catalog per host", async () => {
+  const reads: string[] = [];
+  const service = createPlanAgentStatusService({
+    listDshSessions: async baseUrl => {
+      reads.push(baseUrl || "");
+      return [
+        thread({ id: "session-idle", status: { type: "idle" } }),
+        thread({ id: "session-active", status: { type: "active" } })
+      ];
+    }
+  });
+  const binding = (sessionId: string) => ({ agentType: "dsh" as const, sessionId, workspace: "C:\\work", baseUrl: "http://127.0.0.1:3180" });
+  const statuses = await service.inspectPlans([
+    plan({ id: "idle", taskBinding: binding("session-idle") }),
+    plan({ id: "active", taskBinding: binding("session-active") }),
+    plan({ id: "missing", taskBinding: binding("session-missing") })
+  ]);
+  assert.deepEqual(reads, ["http://127.0.0.1:3180"]);
+  assert.deepEqual(statuses.map(item => item.taskAgent.sessionStatus), ["idle", "active", "missing"]);
+});
