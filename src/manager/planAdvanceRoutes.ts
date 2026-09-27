@@ -40,17 +40,18 @@ export function handlePlanAdvanceApi(request: http.IncomingMessage, url: URL, re
     const trigger = String(body.trigger || "manual") as AdvanceTrigger;
     if (!["manual", "startup", "change", "idle", "due"].includes(trigger)) throw new Error("Invalid trigger.");
     const { policy } = store.policy(workspace);
-    if (!Object.values(policy.rules).some(rule => rule.enabled)) { json(response, 200, { code: 0, data: { items: [], nextCursor: "" } }); return; }
-    let ids: string[]; let nextCursor = "";
+    if (!Object.values(policy.rules).some(rule => rule.enabled)) { json(response, 200, { code: 0, data: { items: [], total: 0, nextCursor: "" } }); return; }
+    let ids: string[]; let nextCursor = ""; let total = 0;
     if (body.planIds !== undefined) {
       if (!Array.isArray(body.planIds) || body.planIds.length > 20 || body.planIds.some(id => typeof id !== "string" || !id)) throw new Error("Invalid plan identities.");
       ids = [...new Set(body.planIds)] as string[];
+      total = ids.length;
     } else {
-      const page = await managerKnowledgePageWorkerPool.queryRolePlanPage<{ items: Array<{ id: string }>; nextCursor?: string }>(dir, parseWorkspacePlanQuery({
+      const page = await managerKnowledgePageWorkerPool.queryRolePlanPage<{ items: Array<{ id: string }>; total: number; nextCursor?: string }>(dir, parseWorkspacePlanQuery({
         cursor: body.cursor ?? "", limit: 20, statuses: Object.entries(policy.rules).filter(([, rule]) => rule.enabled).map(([key]) => key),
         bindingScope: { agentType: "dsh", workspace, sessionIds }
       }));
-      ids = page.items.map(item => item.id); nextCursor = page.nextCursor || "";
+      ids = page.items.map(item => item.id); total = page.total; nextCursor = page.nextCursor || "";
     }
     const doc = store.read();
     const plans = (await Promise.all(ids.map(id => getPlanAsync(dir, id)))).filter((plan): plan is PlanItem => !!plan);
@@ -64,7 +65,7 @@ export function handlePlanAdvanceApi(request: http.IncomingMessage, url: URL, re
       const status = statuses.find(row => row.planId === item.planId)?.taskAgent;
       if (status?.sessionStatus !== "idle" || status.agentStatus !== "idle") { item.eligible = false; item.reason = status?.working ? "session_running" : "session_unavailable"; }
     }
-    if (match[2] === "check") { json(response, 200, { code: 0, data: { items: evaluated, nextCursor } }); return; }
+    if (match[2] === "check") { json(response, 200, { code: 0, data: { items: evaluated, total, nextCursor } }); return; }
     const expected = body.expected;
     if (!expected || typeof expected !== "object" || Array.isArray(expected)) throw new Error("Checked fingerprints required.");
     const results: Array<{ planId: string; state: string; reason?: string }> = [];

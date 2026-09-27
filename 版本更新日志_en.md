@@ -6,6 +6,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.17 - 2026-09-28
+
+### Plan advancement check progress
+
+- Advancement checks now return `total`, the number of plans in the workspace matching enabled status rules. Clients can show search progress; per-item eligibility and the dispatch-time recheck remain authoritative.
+
 ## 0.3.14 - 2026-09-23
 
 ### Plan-read performance and Agent API diagnostics
