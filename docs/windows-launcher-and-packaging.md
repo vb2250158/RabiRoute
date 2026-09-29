@@ -198,6 +198,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-windows-release.ps1 `
   -OutputRoot C:\RabiRouteBuild
 ```
 
+GitHub Actions 通过 `RABIROUTE_RELEASE_OUTPUT` 显式指定 Runner 本机输出目录，并将同一目录传给打包脚本、构建产物上传和 Release 上传。依赖安装、完整构建、测试及公开配置检查分别执行；先构建 Agent runtime，再执行需要该产物的测试，任何步骤失败都阻止发布。
+
 发布包包含：
 
 - 单文件、自包含的 .NET 9 `RabiRouteHost.exe`；

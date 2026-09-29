@@ -14,6 +14,18 @@ const releaseWorkflow = fs.readFileSync(
   "utf8"
 );
 
+test("Windows workflow shares the explicit local artifact root and builds before isolated test gates", () => {
+  assert.match(releaseWorkflow, /RABIROUTE_RELEASE_OUTPUT: \$\{\{ runner\.temp \}\}\/rabiroute-windows-release/);
+  assert.match(releaseWorkflow, /build-windows-release\.ps1[^\r\n]*-OutputRoot \$env:RABIROUTE_RELEASE_OUTPUT/);
+  for (const file of ["*.exe", "*.zip", "SHA256SUMS.txt"]) {
+    assert.ok(releaseWorkflow.includes("${{ env.RABIROUTE_RELEASE_OUTPUT }}/" + file));
+  }
+  assert.match(releaseWorkflow, /Get-ChildItem -LiteralPath \$env:RABIROUTE_RELEASE_OUTPUT -File/);
+  assert.doesNotMatch(releaseWorkflow, /output\/windows/);
+  const commands = [...releaseWorkflow.matchAll(/^\s+run: (npm[^\r\n]+)$/gm)].map(match => match[1]);
+  assert.deepEqual(commands, ["npm ci", "npm run build", "npm test", "npm run check:config"]);
+});
+
 test("Windows release excludes the RabiSpeech runtime unless explicitly requested", () => {
   assert.match(releaseScript, /\[switch\]\$IncludeSpeech/);
   assert.match(releaseScript, /if \(\$IncludeSpeech -and -not \$SkipBuild\)/);

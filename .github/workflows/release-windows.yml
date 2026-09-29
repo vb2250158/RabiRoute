@@ -18,18 +18,20 @@ permissions:
 jobs:
   windows-x64:
     runs-on: windows-2022
+    env:
+      RABIROUTE_RELEASE_OUTPUT: ${{ runner.temp }}/rabiroute-windows-release
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22.17.1
           cache: npm
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
           cache: pip
@@ -54,28 +56,36 @@ jobs:
           }
           "version=$version" >> $env:GITHUB_OUTPUT
 
+      - name: Install Node dependencies
+        shell: pwsh
+        run: npm ci
+
+      - name: Build application
+        shell: pwsh
+        run: npm run build
+
       - name: Test
         shell: pwsh
-        run: |
-          npm ci
-          npm test
-          npm run check:config
-          npm run build
+        run: npm test
+
+      - name: Check public configuration
+        shell: pwsh
+        run: npm run check:config
 
       - name: Build installer and portable package
         shell: pwsh
         run: |
-          ./scripts/build-windows-release.ps1 -Version "${{ steps.version.outputs.version }}" -NodeVersion "22.17.1" -SkipBuild
+          ./scripts/build-windows-release.ps1 -Version "${{ steps.version.outputs.version }}" -NodeVersion "22.17.1" -OutputRoot $env:RABIROUTE_RELEASE_OUTPUT -SkipBuild
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: RabiRoute-${{ steps.version.outputs.version }}-windows-x64
           if-no-files-found: error
           path: |
-            output/windows/*.exe
-            output/windows/*.zip
-            output/windows/SHA256SUMS.txt
+            ${{ env.RABIROUTE_RELEASE_OUTPUT }}/*.exe
+            ${{ env.RABIROUTE_RELEASE_OUTPUT }}/*.zip
+            ${{ env.RABIROUTE_RELEASE_OUTPUT }}/SHA256SUMS.txt
 
       - name: Publish GitHub Release
         if: github.ref_type == 'tag' || inputs.publish_release == true
@@ -84,7 +94,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "v${{ steps.version.outputs.version }}" }
-          $files = Get-ChildItem output/windows -File | Where-Object { $_.Extension -in '.exe', '.zip', '.txt' } | ForEach-Object FullName
+          $files = Get-ChildItem -LiteralPath $env:RABIROUTE_RELEASE_OUTPUT -File | Where-Object { $_.Extension -in '.exe', '.zip', '.txt' } | ForEach-Object FullName
           gh release view $tag 2>$null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag @files --clobber

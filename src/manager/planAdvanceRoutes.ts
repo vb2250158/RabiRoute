@@ -40,17 +40,18 @@ export function handlePlanAdvanceApi(request: http.IncomingMessage, url: URL, re
     const trigger = String(body.trigger || "manual") as AdvanceTrigger;
     if (!["manual", "startup", "change", "idle", "due"].includes(trigger)) throw new Error("Invalid trigger.");
     const { policy } = store.policy(workspace);
-    if (!Object.values(policy.rules).some(rule => rule.enabled)) { json(response, 200, { code: 0, data: { items: [], nextCursor: "" } }); return; }
-    let ids: string[]; let nextCursor = "";
+    if (!Object.values(policy.rules).some(rule => rule.enabled)) { json(response, 200, { code: 0, data: { items: [], total: 0, nextCursor: "" } }); return; }
+    let ids: string[]; let nextCursor = ""; let total = 0;
     if (body.planIds !== undefined) {
       if (!Array.isArray(body.planIds) || body.planIds.length > 20 || body.planIds.some(id => typeof id !== "string" || !id)) throw new Error("Invalid plan identities.");
       ids = [...new Set(body.planIds)] as string[];
+      total = ids.length;
     } else {
-      const page = await managerKnowledgePageWorkerPool.queryRolePlanPage<{ items: Array<{ id: string }>; nextCursor?: string }>(dir, parseWorkspacePlanQuery({
+      const page = await managerKnowledgePageWorkerPool.queryRolePlanPage<{ items: Array<{ id: string }>; total: number; nextCursor?: string }>(dir, parseWorkspacePlanQuery({
         cursor: body.cursor ?? "", limit: 20, statuses: Object.entries(policy.rules).filter(([, rule]) => rule.enabled).map(([key]) => key),
         bindingScope: { agentType: "dsh", workspace, sessionIds }
       }));
-      ids = page.items.map(item => item.id); nextCursor = page.nextCursor || "";
+      ids = page.items.map(item => item.id); total = page.total; nextCursor = page.nextCursor || "";
     }
     const doc = store.read();
     const plans = (await Promise.all(ids.map(id => getPlanAsync(dir, id)))).filter((plan): plan is PlanItem => !!plan);
@@ -64,7 +65,7 @@ export function handlePlanAdvanceApi(request: http.IncomingMessage, url: URL, re
       const status = statuses.find(row => row.planId === item.planId)?.taskAgent;
       if (status?.sessionStatus !== "idle" || status.agentStatus !== "idle") { item.eligible = false; item.reason = status?.working ? "session_running" : "session_unavailable"; }
     }
-    if (match[2] === "check") { json(response, 200, { code: 0, data: { items: evaluated, nextCursor } }); return; }
+    if (match[2] === "check") { json(response, 200, { code: 0, data: { items: evaluated, total, nextCursor } }); return; }
     const expected = body.expected;
     if (!expected || typeof expected !== "object" || Array.isArray(expected)) throw new Error("Checked fingerprints required.");
     const results: Array<{ planId: string; state: string; reason?: string }> = [];
@@ -73,9 +74,14 @@ export function handlePlanAdvanceApi(request: http.IncomingMessage, url: URL, re
       if (!item.eligible || (expected as Record<string, unknown>)[item.planId] !== item.fingerprint) { results.push({ planId: item.planId, state: "skipped", reason: item.reason || "changed_since_check" }); continue; }
       const group = groups.get(item.sessionId!) || []; group.push(item); groups.set(item.sessionId!, group);
     }
+    const currentPlans = [...groups.values()].map(group => plans.find(plan => plan.id === group[0]!.planId)!);
+    const currentStatuses = await planAgentStatusService.inspectPlans(currentPlans);
+    const currentBySession = new Map(currentStatuses.map(status => [status.taskAgent.threadId, status.taskAgent]));
     // Each host session receives one combined work package; multiple windows share the reservation.
     for (const [sessionId, group] of groups) {
       if (busySessions.has(sessionId)) { for (const item of group) results.push({ planId: item.planId, state: "skipped", reason: "session_reserved" }); continue; }
+      const current = currentBySession.get(sessionId);
+      if (current?.sessionStatus !== "idle") { for (const item of group) results.push({ planId: item.planId, state: "skipped", reason: current?.working ? "session_running" : "session_unavailable" }); continue; }
       busySessions.add(sessionId);
       const reserved: Array<{ planId: string; id: string }> = [];
       let deliveryAttempted = false;
@@ -86,8 +92,6 @@ export function handlePlanAdvanceApi(request: http.IncomingMessage, url: URL, re
           const receipt = store.reserve(workspace, plan, item.fingerprint, item.rule!, Date.now()); reserved.push({ planId: item.planId, id: receipt.id });
         }
         const plan = plans.find(row => row.id === group[0]!.planId)!;
-        const current = (await planAgentStatusService.inspectPlans([plan]))[0]?.taskAgent;
-        if (current?.sessionStatus !== "idle") throw new Error("Session no longer idle.");
         const request: AgentThreadRequest = { action: "send", agentAdapter: "dsh", dshDeliveryMode: "queue", threadId: sessionId, cwd: workspace, dshBaseUrl: plan.taskBinding?.baseUrl,
           deliveryId: reserved[0]!.id, createIfMissing: false, prompt: group.map(item => `GET /api/roles/${encodeURIComponent(roleId)}/plans/${encodeURIComponent(item.planId)}\n${item.prompt}`).join("\n\n---\n\n"),
           messageSource: { type: "system", eventType: "plan_advance", eventName: "Rabi plan advance", eventId: reserved[0]!.id }, responsePolicy: "none" };

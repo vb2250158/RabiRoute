@@ -198,6 +198,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-windows-release.ps1 `
   -OutputRoot C:\RabiRouteBuild
 ```
 
+GitHub Actions explicitly sets a local Runner output directory through `RABIROUTE_RELEASE_OUTPUT` and uses it for packaging, workflow artifacts and Release uploads. Dependency installation, the full build, tests and public configuration checks run in separate steps. The Agent runtime is built before tests that require it, and any failed step blocks publication.
+
 The release contains:
 
 - a self-contained, single-file .NET 9 `RabiRouteHost.exe`;

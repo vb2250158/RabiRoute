@@ -6,6 +6,16 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.17 - 2026-09-29
+
+### Integrate plan advancement and repair the Windows release pipeline
+
+- Merge persona status descriptions, batched DSH session status reads and advancement-check totals, preserving dispatch-time checks and queue delivery to the original session.
+- Use one explicit local output directory for Windows packaging, workflow artifacts and Release uploads, fixing missing installer artifacts.
+- Upgrade official GitHub Actions to Node 24 runtimes and pin full commit SHAs, removing the Node 20 deprecation warning and mutable action references.
+- Build the Agent runtime before tests and separate dependency installation, build, tests and configuration checks so any failure blocks publication.
+- Preserve the mainline 0.3.15/0.3.16 recording archives, knowledge tools and fixes. Keep the historical v0.3.17 tag unchanged rather than repointing it to this integration.
+
 ## 0.3.16 - 2026-09-29
 
 ### Mobile recording archives, controlled knowledge MCP and glasses Agent configuration
