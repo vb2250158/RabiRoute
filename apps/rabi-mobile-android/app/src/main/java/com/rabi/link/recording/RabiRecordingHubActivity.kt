@@ -375,6 +375,7 @@ class RabiRecordingHubActivity : Activity() {
             addView(helpIcon { lineHelp.visibility = if(lineHelp.visibility == View.GONE) View.VISIBLE else View.GONE }.apply { contentDescription = "参考线说明" },LinearLayout.LayoutParams(dp(48),dp(48)))
         })
         panel.addView(lineHelp)
+        panel.addView(button("电脑长期保存") { RecordingArchiveSettingsPanel.show(this) })
         val dialog = AlertDialog.Builder(this).setTitle("记录设置").setView(ScrollView(this).apply { addView(panel) })
             .setPositiveButton("保存",null).setNegativeButton("取消",null)
             .setNeutralButton("恢复默认",null).create()

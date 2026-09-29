@@ -102,23 +102,79 @@ export function createAiuiAsrInputAdapter(options = {}) {
       if (!available) throw unavailableError(capability);
       const recognition = new RecognitionCtor();
       recognition.lang = locale;
-      recognition.continuous = false;
-      recognition.interimResults = false;
+      recognition.continuous = handlers.continuous !== undefined
+        ? Boolean(handlers.continuous)
+        : Boolean(options.continuous);
+      recognition.interimResults = handlers.interimResults !== undefined
+        ? Boolean(handlers.interimResults)
+        : Boolean(options.interimResults);
+      const segments = [];
+      let finalEmitted = false;
+
       recognition.onresult = (event) => {
-        const text = speechTextFromEvent(event);
+        const results = event?.results;
+        if (!results || !results.length) {
+          const fallbackText = speechTextFromEvent(event);
+          if (!fallbackText) return;
+          if (finalEmitted) return;
+          finalEmitted = true;
+          sequence += 1;
+          const capturedAt = Number(now());
+          const result = Object.freeze({
+            resultId: normalizedText(idFactory("asr", sequence, capturedAt)) || defaultId("asr", sequence, capturedAt),
+            text: fallbackText,
+            final: true,
+            capturedAt,
+            adapterId,
+            mode: AIUI_NATIVE_VOICE_MODE,
+            locale
+          });
+          handlers.onFinal?.(result, event);
+          return;
+        }
+
+        segments.length = results.length;
+        const startIndex = Number.isInteger(event?.resultIndex) ? event.resultIndex : 0;
+        for (let i = startIndex; i < results.length; i++) {
+          const item = results[i];
+          const alternative = item?.[0] || item?.item?.(0);
+          segments[i] = {
+            text: alternative?.transcript || "",
+            final: item?.isFinal !== false
+          };
+        }
+
+        const text = segments.map((s) => s?.text || "").join("").trim();
         if (!text) return;
-        sequence += 1;
-        const capturedAt = Number(now());
-        const result = Object.freeze({
-          resultId: normalizedText(idFactory("asr", sequence, capturedAt)) || defaultId("asr", sequence, capturedAt),
-          text,
-          final: true,
-          capturedAt,
-          adapterId,
-          mode: AIUI_NATIVE_VOICE_MODE,
-          locale
-        });
-        handlers.onFinal?.(result, event);
+
+        const isInterimMode = Boolean(recognition.interimResults);
+        const hasExplicitInterim = segments.some((s) => s?.final === false);
+        const allFinal = segments.length > 0 && !hasExplicitInterim;
+
+        if (!isInterimMode || allFinal) {
+          if (finalEmitted) return;
+          finalEmitted = true;
+          sequence += 1;
+          const capturedAt = Number(now());
+          const result = Object.freeze({
+            resultId: normalizedText(idFactory("asr", sequence, capturedAt)) || defaultId("asr", sequence, capturedAt),
+            text,
+            final: true,
+            capturedAt,
+            adapterId,
+            mode: AIUI_NATIVE_VOICE_MODE,
+            locale
+          });
+          handlers.onFinal?.(result, event);
+        } else {
+          handlers.onInterim?.(Object.freeze({
+            text,
+            final: false,
+            adapterId,
+            mode: AIUI_NATIVE_VOICE_MODE,
+            locale
+          }), event);
+        }
       };
       recognition.onerror = (event) => {
         const nativeCode = normalizedText(event?.error) || "unknown";
@@ -174,15 +230,20 @@ export function createAiuiTtsOutputAdapter(options = {}) {
   const UtteranceCtor = typeof options.SpeechSynthesisUtteranceCtor === "function"
     ? options.SpeechSynthesisUtteranceCtor
     : null;
+  const PlayerCtor = typeof options.SpeechAudioPlayerCtor === "function"
+    ? options.SpeechAudioPlayerCtor
+    : null;
   const now = typeof options.now === "function" ? options.now : Date.now;
   const idFactory = typeof options.idFactory === "function" ? options.idFactory : defaultId;
   const available = Boolean(synthesis && UtteranceCtor);
+  const supportsSynthesize = Boolean(available && typeof synthesis.synthesize === "function" && PlayerCtor);
   const capability = frozenCapability({
     adapterId,
     kind: "tts",
     available,
     locale,
     supportsCancel: Boolean(synthesis && typeof synthesis.cancel === "function"),
+    supportsSynthesize,
     reason: available ? "" : "AIUI native speechSynthesis is unavailable in this runtime."
   });
   let sequence = 0;
@@ -190,6 +251,10 @@ export function createAiuiTtsOutputAdapter(options = {}) {
   return Object.freeze({
     adapterId,
     mode: AIUI_NATIVE_VOICE_MODE,
+    supportsSynthesize,
+    canSynthesize() {
+      return supportsSynthesize;
+    },
     getCapability() {
       return capability;
     },
@@ -240,6 +305,55 @@ export function createAiuiTtsOutputAdapter(options = {}) {
         playbackReceipt: "not_supported"
       });
       return Object.freeze({ utterance, attempt });
+    },
+    async synthesize(text, synthesizeOptions = {}) {
+      if (!available) throw unavailableError(capability);
+      const value = normalizedText(text);
+      if (!value) {
+        throw new VoiceRuntimeError("tts_empty_text", "AIUI native TTS text is empty.", { adapterId });
+      }
+      if (!supportsSynthesize) {
+        throw new VoiceRuntimeError(
+          "tts_synthesize_unsupported",
+          "AIUI native speechSynthesis.synthesize is unavailable.",
+          { adapterId }
+        );
+      }
+      sequence += 1;
+      const acceptedAt = Number(now());
+      const attemptId = normalizedText(idFactory("tts", sequence, acceptedAt))
+        || defaultId("tts", sequence, acceptedAt);
+      const utterance = new UtteranceCtor(value);
+      utterance.voice = synthesizeOptions.voice || options.voice || "female-tianmei";
+      utterance.volume = typeof synthesizeOptions.volume === "number" ? synthesizeOptions.volume : 1;
+      utterance.lang = locale;
+
+      try {
+        const task = await synthesis.synthesize(utterance, {
+          subtitles: synthesizeOptions.subtitles || "word",
+          audio: synthesizeOptions.audio || { preferredFormat: "mp3" }
+        });
+        const player = new PlayerCtor(task, { trackMode: synthesizeOptions.trackMode || "hidden" });
+        if (player.textTrack && typeof player.textTrack.addEventListener === "function") {
+          player.textTrack.addEventListener("cuechange", (event) => {
+            const cue = (player.textTrack.activeCues && typeof player.textTrack.activeCues.item === "function"
+              ? player.textTrack.activeCues.item(0)
+              : null) || player.activeCue;
+            synthesizeOptions.onCue?.({
+              text: cue?.text || "",
+              startTime: cue?.startTime,
+              endTime: cue?.endTime
+            }, event);
+          });
+        }
+        return Object.freeze({ task, player, utterance, attemptId });
+      } catch (error) {
+        throw new VoiceRuntimeError(
+          "tts_synthesize_failed",
+          errorMessage(error, "AIUI native TTS synthesize failed."),
+          { adapterId, cause: error }
+        );
+      }
     },
     cancel() {
       if (!synthesis || typeof synthesis.cancel !== "function") return false;

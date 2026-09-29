@@ -18,7 +18,7 @@ import java.util.concurrent.Executors
 
 /** One player owns picture, sound and scrubbing. Audio-only records display their measured waveform. */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-class RecordingPlaybackPanel(private val context: Context, files: List<File>, video: Boolean, initialPosition: Long = 0, private val initialState: State = State(), private val onShare: () -> Unit = {}, private val onPosition: (Long) -> Unit = {}) {
+class RecordingPlaybackPanel(private val context: Context, files: List<File>, video: Boolean, initialPosition: Long = 0, private val initialState: State = State(), private val onShare: () -> Unit = {}, private val remoteSource: androidx.media3.exoplayer.source.MediaSource? = null, private val remoteDurationMs: Long = 0, private val onPosition: (Long) -> Unit = {}) {
     data class State(val playing: Boolean = false, val controlsVisible: Boolean = false, val speed: Float = 1f)
     fun state() = State(player.playWhenReady,overlay.visibility == View.VISIBLE,player.playbackParameters.speed)
     val view = FrameLayout(context)
@@ -111,7 +111,12 @@ class RecordingPlaybackPanel(private val context: Context, files: List<File>, vi
             }
             override fun onPlayerError(error: PlaybackException) { time.text = "播放失败，原文件保留"; picture?.visibility = View.GONE }
         })
-        worker.execute {
+        if(remoteSource != null) {
+            durations = listOf(remoteDurationMs.coerceAtLeast(1))
+            waveform?.state = "远端录音 · 按需加载"
+            player.setMediaSource(remoteSource); player.prepare(); seekTo(pendingPosition)
+            play.isEnabled = true; main.post(tick)
+        } else worker.execute {
             val result = runCatching {
                 require(files.isNotEmpty()) { "没有可播放文件" }
                 val lengths = files.map { RecordedMedia.duration(it) }

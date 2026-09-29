@@ -406,7 +406,7 @@ test("Manager publishes fenced READY before route catalog recovery and gates HTT
   assert.match(source, /await requireRouteCatalogLifecycle\(\)\.remove\(configName, expectedContentHash, operationId\)/);
   assert.match(source, /await requireRouteCatalogLifecycle\(\)\.ensurePersona\(roleId\)/);
   assert.match(source, /await requireRouteCatalogLifecycle\(\)\.ensureRoleFile\(roleId, roleFile\)/);
-  assert.match(source, /await requireRouteCatalogLifecycle\(\)\.ensureRoleFolder\(roleId\)/);
+  assert.match(source, /await requireRouteCatalogLifecycle\(\)\.ensureRoleFolder\(roleId, subfolder\)/);
   assert.match(source, /contentHash: snapshot\.routeConfigHash/);
   assert.match(transactionSource, /expected !== snapshot\.routeConfigHash/);
   assert.match(transactionSource, /presentationHash/);

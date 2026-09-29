@@ -21,6 +21,21 @@ test("durable resources survive path changes and restart; scope and checksum fai
   assert.deepEqual(await store.put("phone-a",id,bytes),{id,bytes:bytes.length,sha256:id,durable:true});
 });
 
+test("legacy directory updates preserve archive bindings and respect the shared settings lock", async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-resource-bindings-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const file = path.join(dir, "resource-cache.json");
+  const archiveBindings = { schemaVersion: 1, revision: 0, ownerRoleBindings: {} };
+  await fs.writeFile(file, JSON.stringify({ archiveBindings }));
+  const store = new ResourceCache(dir);
+  assert.equal((await store.settings()).directory, path.join(dir, "resource-cache"));
+  await store.configure(path.join(dir, "new"));
+  assert.deepEqual(JSON.parse(await fs.readFile(file, "utf8")).archiveBindings, archiveBindings);
+  await fs.writeFile(file + ".lock", "");
+  await assert.rejects(store.configure(path.join(dir, "blocked")), { code: "EEXIST" });
+  assert.equal(JSON.parse(await fs.readFile(file, "utf8")).directory, path.join(dir, "new"));
+});
+
 test("resource HTTP refuses untrusted requests and validates a complete round trip", async t => {
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),"rabi-resource-http-"));
   t.after(()=>fs.rm(dir,{recursive:true,force:true}));

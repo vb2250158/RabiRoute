@@ -3,6 +3,7 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type http from "node:http";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
+import { withResourceCacheSettingsLock } from "./recordingArchiveBindings.js";
 
 const digest = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
 const validId = (id: string) => /^[a-f0-9]{64}$/.test(id);
@@ -11,7 +12,13 @@ export class ResourceCache {
   constructor(private readonly stateDir: string) {}
   private configFile() { return path.join(this.stateDir, "resource-cache.json"); }
   async settings(): Promise<{ directory: string }> {
-    try { return JSON.parse(await fs.readFile(this.configFile(), "utf8")); }
+    try {
+      const value = JSON.parse(await fs.readFile(this.configFile(), "utf8"));
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid resource settings");
+      const directory = value.directory ?? path.join(this.stateDir, "resource-cache");
+      if (typeof directory !== "string" || !path.isAbsolute(directory)) throw new Error("Invalid resource directory");
+      return { ...value, directory };
+    }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; return { directory: path.join(this.stateDir, "resource-cache") }; }
   }
   private async atomic(file: string, body: Buffer) {
@@ -41,8 +48,16 @@ export class ResourceCache {
     await fs.mkdir(normalized, { recursive: true });
     const probe = path.join(normalized, ".rabi-write-test-" + randomUUID());
     try { await this.atomic(probe, Buffer.from("test")); } finally { await fs.rm(probe, { force: true }); }
-    await this.atomic(this.configFile(), Buffer.from(JSON.stringify({ directory: normalized })));
-    return this.settings();
+    await fs.mkdir(this.stateDir, { recursive: true });
+    return withResourceCacheSettingsLock(this.configFile(), async () => {
+      let previous: Record<string, unknown> = {};
+      try {
+        previous = JSON.parse(await fs.readFile(this.configFile(), "utf8"));
+        if (!previous || typeof previous !== "object" || Array.isArray(previous)) throw new Error("Invalid resource settings");
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      await this.atomic(this.configFile(), Buffer.from(JSON.stringify({ ...previous, directory: normalized })));
+      return this.settings();
+    });
   }
   private index(owner: string, id: string) {
     if (!owner || !validId(id)) throw new Error("Invalid resource identity");

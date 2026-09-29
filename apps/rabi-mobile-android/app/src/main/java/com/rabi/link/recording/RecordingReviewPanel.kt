@@ -30,7 +30,14 @@ import java.util.concurrent.Executors
 /** A read model of saved media. Scrubbing never starts or changes capture. */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class RecordingReviewPanel(private val context: Context, private val share: (RecordingStore.Entry) -> Unit) {
-    private data class Item(val entry: RecordingStore.Entry, val captureId: String, val spans: List<ReviewTimeline.Span>, val audio: Boolean, val parentCaptureId: String = "", val associatedIds: Set<String> = setOf(captureId), val eventTranscript: org.json.JSONObject? = null, val asrState: String = "")
+    private var archiveView = RecordingArchiveSession.load(context) != null
+    private var archiveAccess: RecordingArchiveReviewAccess? = null
+    private var archiveCursor: String? = null
+    private var archiveQuery: RecordingArchiveRepository.Query? = null
+    private var archivePending = emptyList<Item>()
+    private val archiveNext = RabiMobileUi.compactAction(context, "下一页（早→晚）") { loadArchive(true) }.apply { visibility = View.GONE }
+
+    private data class Item(val entry: RecordingStore.Entry, val captureId: String, val spans: List<ReviewTimeline.Span>, val audio: Boolean, val parentCaptureId: String = "", val associatedIds: Set<String> = setOf(captureId), val eventTranscript: org.json.JSONObject? = null, val asrState: String = "", val archiveRow: RecordingArchiveRepository.Row? = null)
     val view = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
@@ -148,12 +155,28 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
             textSize = 13f; setBackgroundColor(android.graphics.Color.TRANSPARENT)
         }
         eventColumn.addView(HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false; addView(navigation) })
+        eventColumn.addView(Spinner(context).apply {
+            adapter = ArrayAdapter(context,android.R.layout.simple_spinner_dropdown_item,listOf("全部本机记录（含仅本地和录像）","电脑归档录音"))
+            contentDescription = "切换本机记录与电脑归档"
+            setSelection(if(archiveView) 1 else 0)
+            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    val remote = position == 1
+                    if(remote == archiveView) return
+                    archiveView = remote; revision++; selection++; selected = null; releasePlayback()
+                    items = emptyList(); archivePending = emptyList(); archiveCursor = null; archiveQuery = null
+                    archiveAccess = null; reachedOlder = false; reachedNewer = false
+                    renderRows(); if(loading) reloadPending = true else load()
+                }
+            }
+        },LinearLayout.LayoutParams(-1,dp(48)))
         val filters = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
         filters.addView(Spinner(context).apply {
-            adapter = ArrayAdapter(context,android.R.layout.simple_spinner_dropdown_item,listOf("全部类型","ASR 事件","录像"))
+            adapter = ArrayAdapter(context,android.R.layout.simple_spinner_dropdown_item,listOf("全部类型","录音事件","录像"))
             contentDescription = "筛选事件类型"
             onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
                 override fun onNothingSelected(parent: AdapterView<*>?) = Unit
@@ -170,7 +193,8 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
         },LinearLayout.LayoutParams(0,dp(48),1f))
         eventColumn.addView(filters, LinearLayout.LayoutParams(-1,dp(48)))
         eventColumn.addView(listStatus)
-        listStatus.setOnClickListener { listDriving = true; live = false; load(true) }
+        eventColumn.addView(archiveNext)
+        listStatus.setOnClickListener { listDriving = true; live = false; if(archiveAccess != null) load() else load(true) }
         scroll.adapter = rowAdapter
         eventColumn.addView(scroll, LinearLayout.LayoutParams(-1,0,1f))
         val wide = context.resources.configuration.screenWidthDp >= 700
@@ -291,6 +315,20 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
     }
     private fun matchesFilter(item: Item) = (sourceFilter == 0 || (sourceFilter == 2) == (item.entry.source == "glasses")) && (typeFilter == 0 || (typeFilter == 1) == item.audio)
     private fun load(older: Boolean? = null, adjacent: Boolean = false) {
+        if(archiveView) {
+            if(!RecordingArchiveReviewAccess.useRemoteHistory(archiveView,RecordingArchiveSession.load(context) != null)) {
+                listStatus.text = "尚未配置电脑归档 · 全部本机记录仍可切换查看"
+                archiveNext.visibility = View.GONE; return
+            }
+            if(typeFilter == 2) {
+                items = emptyList(); renderRows(); archiveNext.visibility = View.GONE
+                listStatus.text = "此处为电脑归档录音 · 录像请切换全部本机记录"; return
+            }
+            if(older == null) loadArchive(false)
+            return
+        }
+        archiveAccess = null; archiveNext.visibility = View.GONE
+
         if(closed || (!adjacent && ((older == true && reachedOlder) || (older == false && reachedNewer)))) return
         if(older != null && loading) return
         val boundary = if(adjacent) selected?.takeIf { matchesFilter(it) } else if(older == true) displayedItems.lastOrNull() else displayedItems.firstOrNull()
@@ -318,11 +356,11 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
                     }
                     Item(entry, runCatching { store.captureId(entry.id) }.getOrDefault(entry.id), listOf(ReviewTimeline.Span(entry.started,duration)),false)
                 }
-                val audio = if(requestedType == 2) org.json.JSONArray() else if(older == null) RabiAudioRecordRepository.listAsrRecords(context,requestedRange.first,requestedRange.last) else RabiAudioRecordRepository.page(context,boundaryTime,boundaryId,older,requestedFilter,true)
+                val audio = if(requestedType == 2) org.json.JSONArray() else if(older == null) RabiAudioRecordRepository.listCaptureRecords(context,requestedRange.first,requestedRange.last) else RabiAudioRecordRepository.page(context,boundaryTime,boundaryId,older,requestedFilter)
                 val sound = (0 until audio.length()).map { index ->
                     val row = audio.getJSONObject(index); val id = row.getString("captureId")
                     val spans = row.getJSONArray("playbackSpans")
-                    Item(RecordingStore.Entry(row.getString("id"),"audio",row.optString("source"),row.optLong("startedAt"),row.optLong("endedAt"),"saved_segments",context.cacheDir,emptyList(),"ASR 事件"),
+                    Item(RecordingStore.Entry(row.getString("id"),"audio",row.optString("source"),row.optLong("startedAt"),row.optLong("endedAt"),"saved_segments",context.cacheDir,emptyList(),"录音事件"),
                         id,(0 until spans.length()).map { spans.getJSONObject(it).let { value -> ReviewTimeline.Span(value.getLong("startedAt"),value.getLong("durationMs"),value.getLong("offsetMs")) } },true,row.optString("parentCaptureId"),eventTranscript=row.optJSONObject("transcript"),asrState=row.optString("asrState"))
                 }
                 val combined = video.map { item -> item.copy(associatedIds = setOf(item.captureId) + sound.filter { it.parentCaptureId == item.captureId }.map { it.captureId }) }
@@ -331,7 +369,8 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
             }
             main.post {
                 loading = false; navigating = false
-                if(closed || version != revision) return@post
+                if(closed) return@post
+                if(version != revision) { if(reloadPending) { reloadPending = false; load() }; return@post }
                 result.onSuccess { (savedMarkers, records) ->
                     markers = savedMarkers
                     if(requestedFilter != sourceFilter || requestedType != typeFilter || (adjacent && selectedBefore != selected?.entry?.id)) return@onSuccess
@@ -360,6 +399,52 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
             }
         }
     }
+    private fun loadArchive(next: Boolean) {
+        if(closed || loading || next && archiveCursor == null) return
+        loading = true; listStatus.text = "正在读取电脑历史…"
+        val version = ++revision
+        val requestedSource = sourceFilter
+        val requestedType = typeFilter
+        val pageCursor = if(next) archiveCursor else null
+        val range = ruler.visibleRange()
+        val margin = maxOf(86_400_000L, ruler.window)
+        val query = if(next) requireNotNull(archiveQuery) else RecordingArchiveRepository.Query(31, maxOf(0,range.first-margin), range.last+margin,
+            when(requestedSource) { 1 -> "phone"; 2 -> "glasses"; else -> null })
+        if(!next) archiveQuery = query
+        worker.execute {
+            val result = runCatching {
+                val access = requireNotNull(RecordingArchiveReviewAccess.load(context))
+                access to access.repository.page(query,pageCursor)
+            }
+            main.post {
+                loading = false
+                if(closed) return@post
+                if(version != revision) { if(reloadPending) { reloadPending = false; load() }; return@post }
+                result.onSuccess { (access,page) ->
+                    if(requestedSource != sourceFilter || requestedType != typeFilter) { load(); return@onSuccess }
+                    archiveAccess = access
+                    archiveCursor = page.remoteCursor
+                    fun item(row: RecordingArchiveRepository.Row): Item = Item(
+                        RecordingStore.Entry(row.recordId,"audio",row.source,row.startedAt,row.endedAt,"archive",context.cacheDir,emptyList(),"电脑归档录音"),
+                        row.captureId,listOf(ReviewTimeline.Span(row.startedAt,row.totalBytes*1000/32000)),true,
+                        eventTranscript=if(row.asrState == "completed" || row.text.isNotEmpty()) JSONObject().put("text",row.text) else null,
+                        asrState=row.asrState,archiveRow=row)
+                    archivePending = if(!next) page.localPendingOverlay.map(::item) else emptyList()
+                    items = archivePending + page.remoteItems.map(::item)
+                    if(page.status == RecordingArchiveRepository.Status.STALE) { items = emptyList(); archivePending = emptyList(); archiveCursor = null }
+                    loadedRange = maxOf(0,range.first-margin)..(range.last+margin)
+                    listStatus.text = when(page.status) {
+                        RecordingArchiveRepository.Status.STALE -> "目录已更新 · 点击刷新重新读取"
+                        RecordingArchiveRepository.Status.UNKNOWN_OFFLINE -> "电脑不可达 · 此页历史未知（并非没有录音）"
+                        RecordingArchiveRepository.Status.OFFLINE_CACHED -> "离线目录 · 上次同步 ${clock(page.lastSyncedAt)}"
+                        else -> "电脑归档 ${page.remoteItems.size} 条 · 本页早→晚"
+                    } + (if(!access.pendingAvailable) " · 待上传索引暂不可用" else if(next) " · 待上传预览见首页" else " · 待上传预览 ${archivePending.size} 条（仅最多32条索引，非完整列表）") + if(page.pendingTruncated) " · 预览已截断" else ""
+                    archiveNext.visibility = View.VISIBLE; archiveNext.isEnabled = archiveCursor != null
+                    renderRows()
+                }.onFailure { listStatus.text = "电脑历史读取失败 · 保留当前列表，点击刷新重试" }
+            }
+        }
+    }
     private fun renderRows() {
         val anchor = displayedItems.getOrNull(scroll.firstVisiblePosition)?.entry?.id
         val offset = scroll.getChildAt(0)?.top ?: 0
@@ -384,13 +469,19 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
             }
             cards[entry.id] = card
             val heading = LinearLayout(context)
-            heading.addView(label("${clock(entry.started)} · ${if(entry.kind == "video") "录像" else "ASR 事件"} · ${if(entry.source == "glasses") "眼镜" else "手机"}",14f),LinearLayout.LayoutParams(0,-2,1f))
+            heading.addView(label("${clock(entry.started)} · ${if(entry.kind == "video") "录像" else "录音事件"} · ${if(entry.source == "glasses") "眼镜" else "手机"}",14f),LinearLayout.LayoutParams(0,-2,1f))
             if(entry.kind == "video") {
                 val image = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP; contentDescription = "录像缩略图，点击回看" }
                 heading.addView(image,LinearLayout.LayoutParams(dp(94),dp(65)))
                 thumbnail(entry.files.first(),image)
             }
             card.addView(heading)
+            item.archiveRow?.let { row -> card.addView(label(if(row.archived) "电脑已归档 · 按块播放" else when(row.uploadState) {
+                "blocked_missing_media" -> "归档受阻 · 本地音频不完整，暂不可播放"
+                "blocked" -> "归档受阻 · 请检查完整性或授权，记录已保留"
+                "retry_wait" -> "本地待上传 · 等待连接恢复"
+                else -> "本地待上传"
+            },12f)) }
             item.eventTranscript?.let { receipt ->
                 val text = receipt.optString("text").trim()
                 if(text.isNotEmpty()) card.addView(label(text,17f))
@@ -398,8 +489,11 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
             }
             if(item.eventTranscript == null) {
                 val status = when(item.asrState) {
-                    "processing" -> "转录中…"
-                    "pending" -> "待转录"
+                    "processing", "running" -> "转录中…"
+                    "pending", "queued" -> "待转录"
+                    "blocked", "failed" -> "电脑转录暂不可用 · 原音频已保留"
+                    "ambiguous" -> "转录结果待核对 · 不自动重转"
+                    "unavailable" -> "转录状态暂不可用"
                     "retry" -> "转录暂未完成 · 等待重试"
                     "local_only" -> "仅本地保存 · 未转录"
                     else -> ""
@@ -434,6 +528,9 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
         } else open(item,time)
     }
     private fun open(item: Item, at: Long) {
+        if(item.archiveRow?.uploadState == "blocked_missing_media") {
+            Toast.makeText(context,"本地音频不完整，记录保留等待核对",Toast.LENGTH_SHORT).show(); return
+        }
         live = false
         val time = at
         val offset = ReviewTimeline.mediaAt(item.spans,time) ?: 0L
@@ -442,8 +539,9 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
         if(selected?.entry?.id == item.entry.id && player != null) { player?.seekTo(offset); return }
         if(selected?.entry?.id == item.entry.id && player == null) return
         selected = item; val ticket = ++selection; releasePlayback(); showEmpty("正在缓冲…"); highlight(item.entry.id)
+        if(item.archiveRow?.archived == true) { openArchive(item,ticket,offset); return }
         mediaWorker.execute {
-            val result = runCatching { if(item.audio) item.entry.copy(files=listOf(RabiAudioRecordRepository.exportCaptureWave(context,item.entry.id))) else item.entry.copy(files=item.entry.files.map { RecordingResourceCache.materialize(context,it) }) }
+            val result = runCatching { if(item.audio) RabiConversationService.pinLocalEvents(listOf(item.entry.id)).use { item.entry.copy(files=listOf(RabiAudioRecordRepository.exportCaptureWave(context,item.entry.id))) } else item.entry.copy(files=item.entry.files.map { RecordingResourceCache.materialize(context,it) }) }
             main.post {
                 if(closed || ticket != selection || live) return@post
                 result.onSuccess { entry ->
@@ -462,6 +560,33 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
                         preview.addView(it.view,FrameLayout.LayoutParams(-1,-1))
                     }
                 }.onFailure { showEmpty("回看失败，原文件保留"); position.text = it.message ?: "媒体不可用" }
+            }
+        }
+    }
+    private fun openArchive(item: Item, ticket: Int, offset: Long) {
+        val access = archiveAccess ?: return
+        val row = requireNotNull(item.archiveRow)
+        mediaWorker.execute {
+            val result = runCatching {
+                val manifest = access.transport.getManifest(access.config.target,row.recordId)
+                require(RecordingArchiveContract.recordingManifestHash(manifest) == row.manifestHash) { "归档清单校验失败" }
+                val factory = ArchivePcmDataSource.Factory(RecordingArchiveReviewAccess.key(row)) {
+                    ArchivePcmDataSource.Session(ArchivePcmReader(manifest) { hash, bytes -> access.transport.readObject(access.config.target,hash,bytes) })
+                }
+                androidx.media3.exoplayer.source.ProgressiveMediaSource.Factory(factory)
+                    .createMediaSource(MediaItem.fromUri(factory.uri()))
+            }
+            main.post {
+                if(closed || ticket != selection || live) return@post
+                result.onSuccess { source ->
+                    preview.removeAllViews()
+                    player = RecordingPlaybackPanel(context,emptyList(),false,offset,playbackState.copy(controlsVisible=controlsVisible),
+                        { Toast.makeText(context,"远端原件保留在电脑，分享需显式导出",Toast.LENGTH_SHORT).show() },source,row.totalBytes*1000/32000) { mediaPosition ->
+                        if(!dragging && !live && ticket == selection) ReviewTimeline.timeFor(item.spans,mediaPosition)?.let { wall ->
+                            cursor = wall; ruler.setPosition(wall,false); position.text = "回看 · ${clock(wall)}"; updateRange()
+                        }
+                    }.also { it.onControlsVisibilityChanged = ::showControls; liveTap.visibility = View.GONE; preview.addView(it.view,FrameLayout.LayoutParams(-1,-1)) }
+                }.onFailure { selected = null; showEmpty("远端录音暂不可播放 · 原件保留"); position.text = "请检查电脑连接后重试" }
             }
         }
     }

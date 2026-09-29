@@ -1,4 +1,8 @@
+import { KNOWLEDGE_PATH, executeKnowledgeQueue, probeKnowledgeBridge, isCanonicalKnowledgeDeviceId, type KnowledgeRuntimeConfig, type KnowledgeQueueMetadata } from './rabiLinkKnowledgeRuntime.js';
+const knowledgeReady = new WeakMap<RabiLinkRelayRuntimeConfig, boolean>();
 type RelayProxyRequest = {
+  knowledge?: KnowledgeQueueMetadata;
+  nonReplayable?: boolean;
   id?: string;
   method?: string;
   path?: string;
@@ -19,11 +23,14 @@ export type RabiLinkRelayRuntimeConfig = {
   peerUrls?: string[];
   speechProxyEnabled: boolean;
   localSpeechUrl: string;
+  knowledgeBridge?: KnowledgeRuntimeConfig;
 };
 
 export type RabiLinkRelayRuntimeStatus = {
   state: "disabled" | "incomplete" | "connecting" | "online" | "error";
   message: string;
+  knowledgeBridgeReady?: boolean;
+  capabilities?: string[];
   lastConnectedAt?: string;
   lastSuccessAt?: string;
   error?: string;
@@ -384,7 +391,7 @@ async function refreshAsrAdvertisement(config: RabiLinkRelayRuntimeConfig, signa
 }
 
 function workerCapabilities(config: RabiLinkRelayRuntimeConfig): string {
-  return ["wearable-observation-policy-v1", "webgui", "video-direct", "peer-rpc-v1", "peer-tunnel-v1", config.speechProxyEnabled ? "speech" : "", asrAdvertisements.get(config)?.available ? "asr" : ""]
+  return ["wearable-observation-policy-v1", "webgui", "video-direct", "peer-rpc-v1", "peer-tunnel-v1", config.speechProxyEnabled ? "speech" : "", knowledgeReady.get(config) ? "knowledgebridge" : "", asrAdvertisements.get(config)?.available ? "asr" : ""]
     .filter(Boolean)
     .join(",");
 }
@@ -497,6 +504,17 @@ async function proxyWebguiRequest(
       throw new Error("SSE event streams must use the Relay event channel instead of the finite WebGUI response proxy.");
     }
     const requestBody = request.bodyBase64 ? Buffer.from(request.bodyBase64, "base64") : undefined;
+    if (localPath.split('?')[0].startsWith('/__rabilink/')) {
+      let result: unknown;
+      let statusCode = 200;
+      try {
+        if (localPath !== KNOWLEDGE_PATH || method !== 'POST' || !request.knowledge || !requestBody || requestBody.length > 65536) throw new Error('KNOWLEDGE_REQUEST_DENIED');
+        result = await executeKnowledgeQueue(config.knowledgeBridge, config.deviceId, request.knowledge, JSON.parse(requestBody.toString('utf8')), request.nonReplayable === true);
+        if ((result as { code?: string })?.code === 'KNOWLEDGE_TRANSPORT_FAILED' || (result as { uncertain?: boolean })?.uncertain) knowledgeReady.set(config, false);
+      } catch { statusCode = 403; result = { ok: false, code: 'KNOWLEDGE_REQUEST_DENIED', uncertain: false }; }
+      if (!signal.aborted) await finishWebguiRequest(config, requestId, { ok: true, statusCode, headers: { 'content-type': 'application/json' }, bodyBase64: Buffer.from(JSON.stringify(result)).toString('base64') }, options, signal);
+      return;
+    }
     const localUrl = safeLocalUrl(config, localPath);
     const requestAttempts = method === "GET" || method === "HEAD" ? options.localRequestAttempts : 1;
     let response: Response | null = null;
@@ -682,6 +700,7 @@ function normalizeConfig(config: RabiLinkRelayRuntimeConfig): RabiLinkRelayRunti
 }
 
 export class RabiLinkRelayRuntime {
+  private currentConfig: RabiLinkRelayRuntimeConfig | null = null;
   private signature = "";
   private generation = 0;
   private controller: AbortController | null = null;
@@ -716,11 +735,13 @@ export class RabiLinkRelayRuntime {
 
   private setStatus(status: RabiLinkRelayRuntimeStatus): void {
     this.runtimeStatus = status;
-    this.onStatus?.({ ...status });
+    this.onStatus?.(this.status());
   }
 
   status(): RabiLinkRelayRuntimeStatus {
-    return { ...this.runtimeStatus };
+    const config = this.currentConfig;
+    const ready = !!config?.enabled && config.knowledgeBridge?.enabled === true && knowledgeReady.get(config) === true;
+    return { ...this.runtimeStatus, knowledgeBridgeReady: ready, capabilities: config ? workerCapabilities(config).split(',').filter(Boolean) : [] };
   }
 
   sync(input: RabiLinkRelayRuntimeConfig): Promise<void> {
@@ -773,6 +794,7 @@ export class RabiLinkRelayRuntime {
       return previousDone;
     }
 
+    this.currentConfig = config;
     const generation = this.generation;
     const controller = new AbortController();
     this.controller = controller;
@@ -790,6 +812,7 @@ export class RabiLinkRelayRuntime {
   }
 
   private stopLoop(): Promise<void> | null {
+    this.currentConfig = null;
     this.generation += 1;
     this.controller?.abort(new Error("RabiLink Relay runtime stopped."));
     this.controller = null;
@@ -825,6 +848,8 @@ export class RabiLinkRelayRuntime {
   }
 
   private async run(config: RabiLinkRelayRuntimeConfig, generation: number, signal: AbortSignal): Promise<void> {
+    knowledgeReady.set(config, isCanonicalKnowledgeDeviceId(config.deviceId) && await probeKnowledgeBridge(config.knowledgeBridge));
+    if (signal.aborted) { knowledgeReady.set(config, false); return; }
     await refreshAsrAdvertisement(config, signal);
     if (!this.active(generation, signal)) return;
     let webguiDrain: Promise<void> | null = null;

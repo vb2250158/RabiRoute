@@ -6,6 +6,7 @@ import { useGatewayStore } from "../stores/gatewayStore";
 import { registerPageSaveAction } from "../pageSaveAction";
 import { rabiLinkDraftFromMeta, rabiLinkIdentityPatch } from "../rabiLinkPresentation";
 import { userFacingError } from "../userFacingError";
+import KnowledgeBridgeSettings from "./KnowledgeBridgeSettings.vue";
 
 const props = defineProps<{ ready: boolean }>();
 const emit = defineEmits<{ saving: [value: boolean] }>();
@@ -95,6 +96,7 @@ onBeforeUnmount(unregister);
         </v-expansion-panel>
       </v-expansion-panels>
     </fieldset>
+    <KnowledgeBridgeSettings v-if="ready" />
   </v-card>
 </template>
 

@@ -1,0 +1,16 @@
+[
+  "rabilink-relay-server.mjs",
+  "rabilink-device-log-store.mjs",
+  "rabilink-proxy-request-queue.mjs",
+  "rabilink-event-hub.mjs",
+  "lib/rabilink-tunnel-broker.mjs",
+  "lib/rabilink-asr-priority.mjs",
+  "rabilink-agent-profile.mjs",
+  "rabilink-agent-profile-ui-receipt.mjs",
+  "rabilink-agent-profile-state.mjs",
+  "rabilink-knowledge-grant.mjs",
+  "rabilink-knowledge-grant-ui.mjs",
+  "rabilink-knowledge-operations.mjs",
+  "rabilink-profile-skills-editor.mjs",
+  "rabilink-profile-mcp-editor.mjs"
+]

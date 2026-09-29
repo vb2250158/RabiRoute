@@ -1122,11 +1122,50 @@ def create_app(
         )
         return await synthesize(request, background_tasks)
 
+    def batch_selection(form: Any, model: str | None, provider: str | None,
+                        language: str | None, prompt: str | None) -> tuple[str, str | None, str | None]:
+        config = microphone.config
+        # Explicit provider selection retains the generic provider-default contract.
+        selected = model if "model" in form else ("asr-local" if "provider" in form else config.asr_model)
+        if not selected or not selected.strip():
+            raise HTTPException(status_code=422, detail="An explicit ASR model cannot be empty.")
+        return selected, language if "language" in form else config.language, prompt if "prompt" in form else config.prompt
+
+    @api.post("/v1/archive/transcriptions")
+    async def archive_transcriptions(
+        request: Request,
+        file: Annotated[UploadFile, File()],
+        job_key: Annotated[str, Form()],
+        model: Annotated[str | None, Form()] = None,
+        provider: Annotated[str | None, Form()] = None,
+        language: Annotated[str | None, Form()] = None,
+        prompt: Annotated[str | None, Form()] = None,
+        response_format: Annotated[str, Form()] = "verbose_json",
+        timestamp_granularities: Annotated[list[str] | None, Form()] = None,
+        speaker_count: Annotated[int | None, Form()] = None,
+    ) -> Response:
+        _require_loopback(request)
+        # Correlation only: the NAS job owner supplies leases and idempotent result commits.
+        if not (1 <= len(job_key) <= 128) or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for c in job_key):
+            raise HTTPException(status_code=422, detail="Invalid archive job key.")
+        if response_format != "verbose_json":
+            raise HTTPException(status_code=422, detail="Archive computation requires verbose_json.")
+        model, language, prompt = batch_selection(await request.form(), model, provider, language, prompt)
+        audio_path = await _store_upload(file, current)
+        try:
+            result = await _transcribe(providers, audio_path, model=model, provider=provider,
+                language=language, prompt=prompt, word_timestamps="word" in (timestamp_granularities or []),
+                speaker_count=speaker_count)
+            return _transcription_response(result, "verbose_json")
+        finally:
+            audio_path.unlink(missing_ok=True)
+
     @api.post("/v1/audio/transcriptions")
     async def audio_transcriptions(
+        request: Request,
         file: Annotated[UploadFile, File()],
         background_tasks: BackgroundTasks,
-        model: Annotated[str, Form()] = "asr-local",
+        model: Annotated[str | None, Form()] = None,
         language: Annotated[str | None, Form()] = None,
         prompt: Annotated[str | None, Form()] = None,
         response_format: Annotated[str, Form()] = "json",
@@ -1136,6 +1175,7 @@ def create_app(
         session_id: Annotated[str | None, Form()] = None,
         route_id: Annotated[str | None, Form()] = None,
     ) -> Response:
+        model, language, prompt = batch_selection(await request.form(), model, provider, language, prompt)
         audio_path = await _store_upload(file, current)
         background_tasks.add_task(audio_path.unlink, missing_ok=True)
         record_id = f"speech-{uuid4().hex}"

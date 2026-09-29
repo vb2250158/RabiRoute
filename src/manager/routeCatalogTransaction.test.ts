@@ -200,6 +200,53 @@ test("child transaction recaptures after each mutation and enforces the expected
   }
 });
 
+test("role subfolder transactions validate paths, reject read-only writes and distinguish replay targets", () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-subfolder-"));
+  try {
+    const input = transaction(rootDir, "media-folder", "attempt", {
+      kind: "ensure_role_folder", roleId: "example", subfolder: "xiaomi-media"
+    });
+    assert.throws(() => executeRouteCatalogTransaction({ ...input, readOnly: true }), /read.only/i);
+    const target = path.join(input.rolesRoot, "example", "xiaomi-media");
+    assert.equal(fs.existsSync(target), false);
+    const first = executeRouteCatalogTransaction(input);
+    assert.equal(fs.statSync(target).isDirectory(), true);
+    assert.equal(executeRouteCatalogTransaction(input).contentHash, first.contentHash);
+    assert.throws(() => executeRouteCatalogTransaction({ ...input, operation: {
+      kind: "ensure_role_folder", roleId: "example", subfolder: "other"
+    } }), RouteCatalogIdempotencyConflictError);
+    for (const subfolder of ["", "..", "../outside", "nested/child", "C:\\outside", "CON"]) {
+      assert.throws(() => executeRouteCatalogTransaction(transaction(rootDir, `invalid-${subfolder}`, "attempt", {
+        kind: "ensure_role_folder", roleId: "example", subfolder
+      })), /Invalid persona subfolder/);
+    }
+    assert.deepEqual(fs.readdirSync(path.dirname(target)), ["xiaomi-media"]);
+  } finally { fs.rmSync(rootDir, { recursive: true, force: true }); }
+});
+
+test("failed role subfolder capture rolls back the new directory but preserves the role", () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-subfolder-rollback-"));
+  const input = transaction(rootDir, "media-folder", "attempt", {
+    kind: "ensure_role_folder", roleId: "example", subfolder: "xiaomi-media"
+  });
+  const roleDir = path.join(input.rolesRoot, "example");
+  const target = path.join(roleDir, "xiaomi-media");
+  try {
+    fs.mkdirSync(roleDir, { recursive: true });
+    let captures = 0;
+    assert.throws(() => executeDurableRouteCatalogMutation(input, {
+      capture() {
+        if (++captures === 2) throw new Error("post-write capture failed");
+        return emptySnapshot(input);
+      },
+      prepare() {},
+      mutate() { fs.mkdirSync(target); }
+    }), /post-write capture failed/);
+    assert.equal(fs.existsSync(target), false);
+    assert.equal(fs.statSync(roleDir).isDirectory(), true);
+  } finally { fs.rmSync(rootDir, { recursive: true, force: true }); }
+});
+
 test("durable mutation rolls back newly-created files and nested directories when post-write capture fails", () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-catalog-rollback-"));
   const input = {

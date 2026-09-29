@@ -10,6 +10,20 @@ Rabi Agent 是一个没有界面的局域网工作进程，不是完整 RabiRout
 
 > 状态：experimental（实验集成）。接入、授权及上传后群文件发送已通过本机测试、完整构建和 `0.3.4-4b5d30118b40` 部署健康核验。上传集成使用真实 HTTP 与模拟 NapCat，真实双机群文件尚未验收。本轮发现指引与内容摘要更新修复须另核最终运行版本；Windows ZIP 整包尚未验收。
 
+## 本机计划与记忆 MCP（实验实现）
+
+知识 MCP 已分离到 [`../rabi-mcp`](../rabi-mcp/README.md)，不包含在远端 Agent 更新依赖中。下述环境配置用于独立 MCP 应用，不是本工作进程的启动参数。
+
+在 MCP 宿主的环境设置中配置：
+
+- `RABIROUTE_HOST_EXE`：可选，本机 Host 可执行文件；未设置时使用当前用户默认安装位置。
+- `RABI_MCP_ALLOWED_ROLES`：必填，JSON 字符串数组，例如 `["example"]`。只允许这些人格，工具参数不能扩权。
+- `RABI_MCP_ALLOW_WRITES`：默认 `false`；明确设置为 `true` 才开放创建、更新及会更新阅读时间的近期记忆详情。
+
+工具覆盖知识搜索、计划列表/详情/状态目录、记忆列表与沉淀详情；开启写入后增加计划及近期记忆创建/更新。更新必须传原样强 ETag，写操作必须提供已保存的稳定幂等键。近期详情也按当前 Manager 的 touch 写入回执合同核对；只读 Manager 缺少该回执时不确认成功。工具不提供删除、沉淀执行、归档写入、附件、任务绑定或任意 HTTP 请求。
+
+目前通过 35 项隔离模块、官方 SDK 内存及真实 stdio 子进程测试（正常退出，无日志混入协议），并已实测本机 Host 动态身份发现；测试未读写真实计划或记忆。尚未完成安装发布、外部 Agent 工具注册或手机/眼镜真机验收。手机的 Relay 管理页不是 MCP 宿主；此入口存在不代表眼镜所绑定的 Agent 已加载工具。
+
 ## 首次接入
 
 1. 在总控 WebGUI 的 **远端 Agent** 页面复制接入提示词，粘贴到目标电脑的私密 Codex/DSH 任务中。需要 Node.js 22.13+ 和已启动的目标宿主。
@@ -39,6 +53,8 @@ node rabi-agent.mjs --api GET "/api/lan-agent/resources/read?id=docs%2Frabi-agen
 ```
 
 通用语法：`--api METHOD /path --agent ID [--body-stdin] [--if-match ETAG] [--idempotency-key KEY]`。选择私有配置中的准确 Agent；CLI 自动读取 `nodeCredential`，不接受旧共享凭据。写入先读现行合同，JSON 通过标准输入传入，按要求提供强 ETag 与稳定幂等键。CLI 前后核对 Manager `/meta`；超时、503、`uncertain` 或写后切代先权威读回，不自动重放，412 重新读取并确认原意。
+
+传输层将近期记忆详情 GET 视为会更新阅读时间的操作：失败或代际变化时不自动重试，并报告 `uncertain`。模块调用方也可通过 `replaySafe: false` 禁止其他有副作用查询的重试；该选项不能让 POST/PATCH 自动重放。`/meta` 的直接对象与 `data` 包装响应均按同一身份核对。本次变更为源码与隔离测试验证，尚未部署。
 
 当前操作目录包含受控业务入口及别名，不是全部 Manager API，也不代表全部远端可用。管理员设置、任意 `file` 和宿主控制被拒绝；业务权限、Action Gate、来源身份和原有 loopback-only 限制仍生效。资源只允许公开文档、技能及其同包直接引用的受控文本，不开放任意文件系统。按需读取 Manager 当前发布的最新技能与合同，不复制计划、记忆或消息处理状态为第二份业务真源。
 

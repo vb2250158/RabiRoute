@@ -85,6 +85,74 @@ test("business readiness is strict but exact diagnostics and unrelated degradati
   assert.equal((await client.invoke("GET", "/api/example")).ok, true);
 });
 
+test("metadata envelopes preserve mutation identity", async () => {
+  const client = createManagerClient({ ...settings, fetchImpl: async url =>
+    new URL(url).pathname === "/meta" ? Response.json({ code: 0, data: meta }) : Response.json({ code: 0 }) });
+  const result = await client.invoke("PATCH", "/api/example", { body: {} });
+  assert.equal(result.identityChanged, false);
+  assert.equal(result.uncertain, false);
+});
+
+test("stateful GET never replays and reports uncertainty on failures", async () => {
+  for (const failure of ["transport", "server", "generation"]) {
+    let operations = 0;
+    let discoveries = 0;
+    const client = createManagerClient({ ...settings,
+      endpointSession: { ensure: async () => { discoveries++; return { managerUrl: settings.managerUrl, meta }; } },
+      fetchImpl: async url => {
+        if (new URL(url).pathname === "/meta") return Response.json(failure === "generation" ? { ...meta, managerInstanceId: "changed" } : meta);
+        operations++;
+        if (failure === "transport") throw new Error("transport failure");
+        return Response.json({ code: failure === "server" ? 1 : 0 }, { status: failure === "server" ? 503 : 200 });
+      }
+    });
+    const result = await client.invoke("GET", "/api/roles/example/memory/recent/one");
+    assert.equal(operations, 1);
+    assert.equal(discoveries, 1);
+    assert.equal(result.uncertain, true);
+  }
+});
+
+test("replaySafe only narrows replay and never enables mutation replay", async () => {
+  for (const [method, options] of [["GET", { replaySafe: false }], ["POST", { replaySafe: true, body: {} }]]) {
+    let operations = 0;
+    let discoveries = 0;
+    const client = createManagerClient({ ...settings,
+      endpointSession: { ensure: async () => { discoveries++; return { managerUrl: settings.managerUrl, meta }; } },
+      fetchImpl: async url => {
+        if (new URL(url).pathname === "/meta") return Response.json(meta);
+        operations++;
+        return Response.json({ code: 1 }, { status: 503 });
+      }
+    });
+    const result = await client.invoke(method, "/api/example", options);
+    assert.equal(operations, 1);
+    assert.equal(discoveries, 1);
+    assert.equal(result.uncertain, true);
+  }
+});
+
+test("local Host mode uses verified loopback without fabricated node credentials", async () => {
+  let calls = 0;
+  const endpointSession = { ensure: async () => ({ managerUrl: "http://127.0.0.1:1234", meta }) };
+  const client = createManagerClient({ managerUrl: "http://127.0.0.1:1234", localHost: true, endpointSession,
+    fetchImpl: async (url, options) => {
+      calls++;
+      assert.equal(options.headers.authorization, undefined);
+      assert.equal(options.headers["x-rabiroute-agent-id"], undefined);
+      return Response.json(new URL(url).pathname === "/meta" ? meta : { code: 0 });
+    }
+  });
+  assert.equal((await client.invoke("GET", "/api/example")).ok, true);
+  assert.equal(calls, 2);
+  assert.throws(() => createManagerClient({ ...settings, localHost: true, endpointSession }), /without remote credentials/);
+  assert.throws(() => createManagerClient({ managerUrl: settings.managerUrl, localHost: true }), /Host endpoint/);
+  const invalid = createManagerClient({ managerUrl: settings.managerUrl, localHost: true,
+    endpointSession: { ensure: async () => ({ managerUrl: settings.managerUrl, meta }) }, fetchImpl: async () => { throw new Error("Must not reach network"); }
+  });
+  await assert.rejects(invalid.invoke("GET", "/api/example"), /loopback/);
+});
+
 test("unready metadata prevents business request", async () => {
   let calls = 0;
   const client = createManagerClient({ ...settings, fetchImpl: async () => { calls++; return Response.json({ ...meta, health: { state: "starting" } }); } });

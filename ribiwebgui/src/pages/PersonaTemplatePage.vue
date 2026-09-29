@@ -608,7 +608,8 @@ async function openRecordingsFolder(): Promise<void> {
   if (openingRecordingsFolder.value) return;
   openingRecordingsFolder.value = true;
   try {
-    const roleId = gateway.value?.agentRoleId || "YeYu";
+    const roleId = gateway.value?.agentRoleId;
+    if (!roleId) return;
     await store.openConfigFile("xiaomi-recordings", "", roleId);
   } catch {
     // Graceful fallback if manager fails to open

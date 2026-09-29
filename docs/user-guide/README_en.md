@@ -48,6 +48,7 @@ In normal use, confirm **Manager connected**, then save and start your own Route
 | Connect QQ, schedules, webhooks, or RabiLink | [Routes and message adapters](routes-and-adapters_en.md) |
 | Call TTS / ASR on the target PC from another device | [Call TTS and ASR remotely](speech-api_en.md) |
 | Bind Codex or another handler | [Agents, projects, and tasks](agents-and-sessions_en.md) |
+| Read a persona's saved skill catalog and bodies | [View persona skills](persona-skills_en.md) |
 | Configure personas, matching rules, and schedules | [Personas and message rules](personas-and-rules_en.md) |
 | Diagnose or review missing messages and errors | [Operations, logs, and troubleshooting](operations-and-troubleshooting_en.md) |
 | Understand reply permissions, drafts, and local data | [Safety, replies, and data](safety-and-data_en.md) |

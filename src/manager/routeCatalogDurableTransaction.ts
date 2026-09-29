@@ -180,7 +180,7 @@ function operationSpecificDirectories(input: RouteCatalogTransactionInput): stri
   }
   if (operation.kind === "ensure_role_folder") {
     const roleId = sanitizeRoleId(operation.roleId);
-    return roleId ? directoryChainWithin(input.rolesRoot, roleFolderPath(input.rolesRoot, roleId)) : [];
+    return roleId ? directoryChainWithin(input.rolesRoot, roleFolderPath(input.rolesRoot, roleId, operation.subfolder)) : [];
   }
   return [];
 }
@@ -339,7 +339,7 @@ function operationForDigest(operation: RouteCatalogTransactionOperation): unknow
     case "ensure_role_file":
       return { kind: operation.kind, roleId: operation.roleId, roleFile: operation.roleFile };
     case "ensure_role_folder":
-      return { kind: operation.kind, roleId: operation.roleId };
+      return { kind: operation.kind, roleId: operation.roleId, ...(operation.subfolder === undefined ? {} : { subfolder: operation.subfolder }) };
     case "capture":
       return { kind: operation.kind };
   }

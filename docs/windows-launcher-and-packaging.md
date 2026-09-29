@@ -8,6 +8,12 @@
 
 Windows 安装版只有一个应用生命周期入口：`RabiRouteHost.exe`。Manager 是业务与状态 owner，托盘/任务窗口是表现层；二者都是 Host 创建的同代子程序。托盘不是 Manager 的监督器，也不是另一套桌面应用。
 
+## 无 Git 本机快照的受控文件清单
+
+`build-windows-release.ps1 -TrackedFilesManifest <local-json>` 可替代发布树的 `git ls-files` 枚举；省略参数仍用原 Git 行为。清单为非空 `{ "version": 1, "files": [{ "path": "scripts/example.mjs", "sha256": "<64 hex>" }] }`，仅收现有发布树中的相对文件路径。操作者必须从已核实源码的 `git ls-files` 导出相应发布树，再对实际快照内容计算哈希；清单是本机运行工件，不提交个人路径。它不是签名，也不能自行证明文件确实被 Git 跟踪或获得发布授权。
+
+清单模式拒绝重复、越界、私有数据/环境文件路径、reparse point、缺文件与哈希漂移，复制后再次核对哈希。不自动枚举未跟踪文件；新增运行依赖仍须独立审核并进入显式必需文件或运行依赖清单。不要用空清单或伪造 Git 仓库规避边界。完整性仍由最终 release manifest 与依赖闭包验收保证。本机测试入口为 `scripts/Test-ReleaseTrackedManifest.ps1`，不启动 Host 或安装器。打包与安装是不同动作；首次验证使用新的输出目录，不复用或清空现有运行目录。
+
 ## 安装、升级与恢复
 
 发布页同时提供便携 ZIP 和 `SHA256SUMS.txt`。便携 ZIP 使用 `RabiRouteHost.exe + current.json + versions/<releaseId>` 布局，只能解压到新的空目录，不能覆盖旧 RabiRoute 目录；升级既有安装必须运行 Setup。Setup 嵌入同一份便携 ZIP，先在安装盘暂存并逐清单校验哈希、大小、私有路径、reparse point 与 Host 自检，再按当前 application generation 执行 fenced quit；只有候选通过后才原子切换 `current.json` 与 bootstrap，失败会恢复上一指针和 bootstrap。经精确识别的旧生命周期入口会以 `.retired` 后缀移入安装器所有的非执行 quarantine；事务失败或断电恢复会把它们原位还原，foreign 和相似后缀文件不移动。`data/`、`logs/` 与 foreign 文件不参与覆盖或卸载。当前 Windows 包尚未签名，遇到 SmartScreen“未知发布者”提示时先核对校验和。

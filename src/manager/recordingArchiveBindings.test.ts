@@ -1,0 +1,96 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { RecordingArchiveBindings } from "./recordingArchiveBindings.js";
+const NS = "bcd82160-ab45-40bb-b986-cc127a11ec22";
+const OTHER = "cdd82160-ab45-40bb-b986-cc127a11ec22";
+async function fixture(t: import("node:test").TestContext) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "archive-bindings-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const state = path.join(root, "state"); await fs.mkdir(state);
+  for (const role of ["role-a", "role-b"]) await fs.mkdir(path.join(root, role, "all-day-recording"), { recursive: true });
+  const roleDirectory = (id: string) => path.join(root, id);
+  return { root, state, roleDirectory, store: new RecordingArchiveBindings(state, roleDirectory) };
+}
+test("explicit provision and CAS binding survive restart independently of credentials", async t => {
+  const f = await fixture(t);
+  await assert.rejects(f.store.resolveOwner("device-a"));
+  await assert.rejects(f.store.configure("device-a", "role-a", NS, 0));
+  await f.store.provisionNamespace("role-a", NS);
+  await fs.writeFile(path.join(f.state, "resource-cache.json"), JSON.stringify({ directory: "existing-cache", anotherSetting: { retained: true } }));
+  const first = await f.store.configure("device-a", "role-a", NS, 0);
+  assert.equal(first.bindingRevision, 1);
+  const saved = JSON.parse(await fs.readFile(path.join(f.state, "resource-cache.json"), "utf8"));
+  assert.equal(saved.directory, "existing-cache");
+  assert.deepEqual(saved.anotherSetting, { retained: true });
+  assert.deepEqual(await f.store.configure("device-a", "role-a", NS, 1), first);
+  const restarted = new RecordingArchiveBindings(f.state, f.roleDirectory);
+  assert.equal((await restarted.resolveOwner("device-a")).root, path.join(f.root, "role-a", "all-day-recording", "media-archive"));
+  await assert.rejects(restarted.resolveOwner("rotated-token"));
+  await assert.rejects(restarted.configure("device-a", "role-a", NS, 0), /revision conflict/);
+  const disabled = await restarted.configure("device-a", "role-a", NS, 1, false);
+  await assert.rejects(restarted.resolveOwner("device-a"));
+  await restarted.configure("device-a", "role-a", NS, disabled.bindingRevision, true);
+  assert.equal((await restarted.resolveOwner("device-a")).enabled, true);
+});
+test("missing NAS parent/root and marker mismatches fail closed without fallback", async t => {
+  const f = await fixture(t);
+  await assert.rejects(f.store.provisionNamespace("missing-role", NS));
+  await assert.rejects(fs.stat(path.join(f.root, "missing-role")));
+  const target = await f.store.provisionNamespace("role-a", NS);
+  await assert.rejects(f.store.provisionNamespace("role-a", OTHER), /mismatch/);
+  await f.store.configure("device-a", "role-a", NS, 0);
+  await fs.rename(target.root, target.root + "-offline");
+  await assert.rejects(f.store.resolveOwner("device-a"));
+  await assert.rejects(fs.stat(target.root));
+});
+test("owner cannot be rebound, namespace overwritten, or traversal injected", async t => {
+  const f = await fixture(t);
+  await f.store.provisionNamespace("role-a", NS);
+  await f.store.provisionNamespace("role-b", OTHER);
+  await f.store.configure("device-a", "role-a", NS, 0);
+  await assert.rejects(f.store.configure("device-a", "role-b", OTHER, 1), /migration/);
+  await assert.rejects(f.store.configure("device-a", "role-a", OTHER, 1), /migration/);
+  for (const role of ["../escape", "a/b", "__proto__"]) await assert.rejects(f.store.provisionNamespace(role, NS));
+  await assert.rejects(f.store.configure("../owner", "role-a", NS, 0));
+  await assert.rejects(f.store.configure("device-b", "role-a", "invalid", 0));
+});
+test("unknown stored fields and unsafe config are rejected rather than used", async t => {
+  const f = await fixture(t); await f.store.provisionNamespace("role-a", NS);
+  await f.store.configure("device-a", "role-a", NS, 0);
+  const file = path.join(f.state, "resource-cache.json");
+  const config = JSON.parse(await fs.readFile(file, "utf8"));
+  config.archiveBindings.ownerRoleBindings["device-a"].directory = "/arbitrary";
+  await fs.writeFile(file, JSON.stringify(config));
+  await assert.rejects(f.store.resolveOwner("device-a"), /configuration/);
+});
+test("offline lookups remain authorized and detached without touching missing NAS", async t => {
+  const f = await fixture(t); await f.store.provisionNamespace("role-a", NS);
+  const binding = await f.store.configure("device-a", "role-a", NS, 0);
+  await fs.rename(path.join(f.root, "role-a"), path.join(f.root, "role-offline"));
+  assert.equal(await f.store.lookupOwner("unknown-device"), null);
+  assert.deepEqual(await f.store.lookupOwner("device-a"), binding);
+  const snapshot = await f.store.listBindings();
+  snapshot.ownerRoleBindings["device-a"].roleId = "mutated";
+  assert.equal((await f.store.lookupOwner("device-a"))!.roleId, "role-a");
+  assert.equal((await f.store.describeOwner("device-a")).root, path.join(f.root, "role-a", "all-day-recording", "media-archive"));
+  await assert.rejects(f.store.resolveOwner("device-a"));
+  await assert.rejects(f.store.describeOwner("unknown-device"));
+  const unsafe = new RecordingArchiveBindings(f.state, () => "relative");
+  await assert.rejects(unsafe.describeOwner("device-a"), /absolute/);
+  await fs.rename(path.join(f.root, "role-offline"), path.join(f.root, "role-a"));
+  await f.store.configure("device-a", "role-a", NS, binding.bindingRevision, false);
+  assert.equal((await f.store.lookupOwner("device-a"))!.enabled, false);
+  await assert.rejects(f.store.describeOwner("device-a"), /not enabled/);
+});
+test("cross-instance CAS and existing lock cannot silently overwrite", async t => {
+  const f = await fixture(t); await f.store.provisionNamespace("role-a", NS);
+  const second = new RecordingArchiveBindings(f.state, f.roleDirectory);
+  const results = await Promise.allSettled([f.store.configure("device-a", "role-a", NS, 0), second.configure("device-a", "role-a", NS, 0)]);
+  assert.equal(results.filter(r => r.status === "fulfilled").length, 1);
+  await fs.writeFile(path.join(f.state, "resource-cache.json.lock"), "stale");
+  await assert.rejects(second.configure("device-a", "role-a", NS, 1, false));
+  assert.equal((await f.store.resolveOwner("device-a")).enabled, true);
+});

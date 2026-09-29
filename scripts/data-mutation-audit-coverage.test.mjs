@@ -8,7 +8,7 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const sourceRoot = path.join(repositoryRoot, "src");
 
 const mutationPattern = /\bfs(?:\.promises)?\.(?:writeFile|appendFile|rename|unlink|rm|copyFile|writeFileSync|appendFileSync|renameSync|unlinkSync|rmSync|copyFileSync|futimesSync|utimesSync|createWriteStream)\s*\(/;
-const auditPattern = /\brecordDataMutationAudit\s*\(|\batomicWriteFileSync\s*\(|\bappendAdapterLog\s*\(/;
+const auditPattern = /\bauditRecordingArchiveMutation\s*\(|\brecordDataMutationAudit\s*\(|\batomicWriteFileSync\s*\(|\bappendAdapterLog\s*\(/;
 
 const infrastructureExclusions = new Map([
   ["src/planPageCatalogCheckpoint.ts", "disposable plan projection cache; source JSON remains authoritative and is reconciled on restore; atomic temporary publication does not mutate business records"],

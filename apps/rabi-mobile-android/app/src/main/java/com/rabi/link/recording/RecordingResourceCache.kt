@@ -69,7 +69,16 @@ object RecordingResourceCache {
         val target=index(context,file); target.parentFile!!.mkdirs(); val atomic=AtomicFile(target); val output=atomic.startWrite()
         try { output.write(value.toString().toByteArray()); atomic.finishWrite(output) } catch(error: Exception) { atomic.failWrite(output); throw error }
     }
-    private data class Candidate(val file: File,val ended: Long,val duration: Long = 0)
+    private data class Candidate(val file: File,val ended: Long,val duration: Long = 0,val captureId: String? = null)
+    // Only the live backend owns authorization. Unknown is not permission to use legacy upload.
+    internal fun legacyOwnershipAllows(captureId: String?, extension: String, owned: Boolean?): Boolean =
+        // Only original independent MP4 files retain their existing video-cache lifecycle.
+        (captureId == null && extension == "mp4") || (!captureId.isNullOrBlank() && owned == false)
+    private fun legacyAllowed(candidate: Candidate): Boolean = legacyOwnershipAllows(candidate.captureId, candidate.file.extension,
+        if(candidate.captureId.isNullOrBlank()) null else com.rabi.link.RabiConversationService.archiveOwnership(candidate.captureId))
+    private fun requireLegacy(candidate: Candidate) {
+        check(legacyAllowed(candidate)) { "录音归档归属已变更或暂不可确认，本地保留" }
+    }
     private fun candidates(context: Context): List<Candidate> {
         val root=File(context.filesDir,"rabi-conversation/audio-spool/segments")
         val audio=root.listFiles { f -> f.extension=="json" }.orEmpty().mapNotNull { metadata -> runCatching {
@@ -77,7 +86,7 @@ object RecordingResourceCache {
             if(row.optString("captureId").isBlank() || row.optString("uploadState")!="acked" && row.optString("processingPolicy")!="local_only") return@runCatching null
             val file=File(root,row.getString("pcmFileName")).canonicalFile
             check(file.parentFile==root.canonicalFile)
-            Candidate(file,row.getLong("endedAt"))
+            Candidate(file,row.getLong("endedAt"),captureId=row.getString("captureId"))
         }.getOrNull() }
         val video=RecordingStore(context).list().filter { it.kind=="video" && it.state!="recording" }.flatMap { entry -> entry.files.map { file ->
             Candidate(file,entry.ended.takeIf { it>0 } ?: file.lastModified(),duration(context,file))
@@ -97,9 +106,15 @@ object RecordingResourceCache {
         val worker=state.selectedWorker ?: error("尚未选择电脑")
         val scope=AsrDirectory.accountIdentity(relay.baseUrl,relay.token)
         prefs(context).edit().putString("status","正在保存到电脑…").apply()
+        var deferred=false
         RabiSpeechTunnel(context,relay,worker,"resources").use { tunnel ->
             for(candidate in candidates(context)) {
                 if(!enabled(context)) break
+                if(!legacyAllowed(candidate)) {
+                    deferred=true
+                    prefs(context).edit().putString("status","录音已交归档处理或归属待确认，旧缓存暂停该段").apply()
+                    continue
+                }
                 val file=candidate.file
                 var value=receipt(context,file)
                 if(value==null) {
@@ -110,7 +125,9 @@ object RecordingResourceCache {
                         while(true) {
                             check(enabled(context)) { "电脑缓存已关闭" }; val count=input.read(buffer); if(count<0) break
                             val bytes=buffer.copyOf(count); val id=hash(bytes)
+                            requireLegacy(candidate)
                             val response=tunnel.request("PUT","/objects/$id","application/octet-stream",bytes)
+                            requireLegacy(candidate)
                             check(response.status==200) { "电脑保存失败 (${response.status})" }
                             val ack=JSONObject(String(response.body))
                             check(ack.optBoolean("durable") && ack.getString("sha256")==id && ack.getLong("bytes")==count.toLong())
@@ -120,6 +137,7 @@ object RecordingResourceCache {
                     check(total==expected && file.length()==expected)
                     value=JSONObject().put("path",relative(context,file)).put("bytes",total).put("chunks",chunks)
                         .put("scope",scope).put("worker",worker.rawJson).put("workerId",worker.id).put("duration",candidate.duration).put("savedAt",System.currentTimeMillis())
+                    requireLegacy(candidate)
                     persist(context,file,value)
                 }
                 val confirmed = requireNotNull(value)
@@ -128,16 +146,18 @@ object RecordingResourceCache {
                     if(confirmed.getString("scope")!=scope || confirmed.getString("workerId")!=worker.id) continue
                     val chunks=confirmed.getJSONArray("chunks")
                     for(i in 0 until chunks.length()) {
+                        requireLegacy(candidate)
                         val item=chunks.getJSONObject(i); val response=tunnel.request("GET","/objects/${item.getString("id")}","application/octet-stream",byteArrayOf())
                         check(response.status==200 && response.body.size.toLong()==item.getLong("bytes") && hash(response.body)==item.getString("id")) { "电脑文件校验失败，本地保留" }
                     }
                     check(file.length()==confirmed.getLong("bytes"))
-                    if(file.extension=="pcm") com.rabi.link.RabiConversationService.evictArchivedAudio(file)
+                    requireLegacy(candidate)
+                    if(file.extension=="pcm") check(com.rabi.link.RabiConversationService.evictArchivedAudio(file)) { "录音仍在使用或归属变更，本地保留" }
                     else check(file.delete()) { "本地文件正在使用，稍后清理" }
                 }
             }
         }
-        prefs(context).edit().putString("status","电脑缓存已同步").apply()
+        prefs(context).edit().putString("status",if(deferred) "部分录音已交归档处理或归属待确认，本地保留" else "电脑缓存已同步").apply()
     }
     fun duration(context: Context,file: File): Long = receipt(context,file)?.optLong("duration")?.takeIf { it>0 }
         ?: runCatching { RecordedMedia.duration(file) }.getOrDefault(0)

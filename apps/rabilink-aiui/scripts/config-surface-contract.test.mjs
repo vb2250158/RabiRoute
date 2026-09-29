@@ -1,0 +1,12 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { assertCurrentRemoteSurface, missingSharedFields } from './config-surface-contract.mjs';
+import { GATEWAY_JSON_FIELDS, GATEWAY_SCALAR_FIELDS } from '../utils/config-surface.js';
+const root=path.resolve(import.meta.dirname,'../../..');
+const read=p=>fs.readFileSync(path.join(root,p),'utf8');
+const input={webgui:read('ribiwebgui/src/pages/RouteConfigPage.vue'),aiui:read('apps/rabilink-aiui/utils/config-surface.js'),shared:read('src/shared/gatewayConfigModel.ts'),runtime:read('src/manager/controlPlaneRoutes.ts'),owner:read('apps/rabilink-aiui/utils/agent-runtime-mode.js')};
+test('current instance bindings and preserved defaults are explicit',()=>assertCurrentRemoteSurface(input));
+test('removing current UI binding fails',()=>assert.throws(()=>assertCurrentRemoteSurface({...input,webgui:input.webgui.replaceAll(':instance="target.instance"','')}),/Missing current remote UI binding/));
+test('unknown shared schema field is not exempted as compatibility',()=>assert.deepEqual(missingSharedFields(['unknownNewSchemaField'],new Set([...GATEWAY_JSON_FIELDS,...GATEWAY_SCALAR_FIELDS].map(f=>f.key))),['unknownNewSchemaField']));

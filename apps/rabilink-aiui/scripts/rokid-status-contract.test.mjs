@@ -1,0 +1,12 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import {assertStatusPublisher} from './rokid-status-contract.mjs';
+const root=path.resolve(import.meta.dirname,'../../..');
+const base=path.join(root,'apps/rabi-mobile-android/app/src/main');
+const input={publisher:fs.readFileSync(path.join(base,'java/com/rabi/link/modules/rokid/RabiGlassStatusPublisher.kt'),'utf8'),owner:fs.readFileSync(path.join(base,'java/com/rabi/link/RabiConversationService.java'),'utf8'),manifest:fs.readFileSync(path.join(base,'AndroidManifest.xml'),'utf8')};
+test('actual conversation-owned status publisher contract',()=>assertStatusPublisher(input));
+test('each consent and credential gate is mandatory',()=>{for(const marker of ['if (!settings.running) return','if (binding.isEmpty() || !relay.statusSyncEnabled) return','if (closed || !settings.running || !settings.uploadEnabled) return','if (closed || !latest.running || !latest.uploadEnabled) return','data.getString("binding") != identity(relay.baseUrl, relay.token)']) assert.throws(()=>assertStatusPublisher({...input,publisher:input.publisher.replace(marker,'')}),/missing/);});
+test('owner callback/drain/close cannot disappear',()=>{for(const marker of ['glassStatusPublisher.accept(info.batteryLevel, info.ischarging)','glassStatusPublisher.onNetworkAvailable()','glassStatusPublisher.close()']) assert.throws(()=>assertStatusPublisher({...input,owner:input.owner.replaceAll(marker,'')}),/missing/);});
+test('publisher cannot acquire CXR UI control',()=>assert.throws(()=>assertStatusPublisher({...input,publisher:input.publisher+'\ncustomViewOpen()'}),/must not own/));

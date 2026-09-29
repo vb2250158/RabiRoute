@@ -47,33 +47,35 @@ RabiLink Relay
 
 - 眼镜默认入口是 `GlassAudioClientActivity`；`glass-app/` 是眼镜应用模块，眼镜主链只负责音频、媒体、状态与 HUD，不在本地运行 ASR/TTS。
 - 手机底部为“记录、消息”；记录默认打开时间线，顶部开关控制开始／暂停，右上角进入记录设备卡片。原会话列表位于“消息”；所有已配置人格都会显示，未启用或尚无聊天能力的人格保留配置引导而不会消失。点一个已启用 RabiLink 消息端的人格进入聊天，返回后可继续选择其他人格；设置、健康和眼镜能力保持独立入口。
-- 手机后端通过受限 `audio-streams/rabilink/start|chunk|stop` 接口把手机/眼镜的连续 16 kHz mono PCM 送到所选 Rabi PC。Android 不做 VAD、切句、ASR 或声纹；RabiSpeech 在 PC 端切句和识别后自动写主机通用语音库，再按冻结的处理策略决定是否投给固定 `routeProfileId`；仅转写策略与 PC 能力/worker 围栏已接入源码，最终回归仍待，不支持时 deferred，不能降级为 Agent 投递。启动请求分别提交稳定 `source_device_id` 与临时 `stream_id`，普通回复只回稳定设备，不会发给带音频后缀的流 ID。`/api/rabilink/speech/messages` 只保留兼容与调试用途；需要播报时再由 Rabi PC TTS 合成并以 PCM 发回。
+- 本轮录音修正正在实施，尚未完成测试、部署或真机验收：Android 按 PC `MicrophoneConfig` 的 100 毫秒帧、1500 毫秒内存预录、启动/延续双阈值、自适应噪声、最短累计有声、尾静音及最长段规则切句，仅将声学有效段保存并调用 PC 转写，不在手机运行 ASR 或声纹。ASR 空文本不等于声学无效。暂停 `finish` 使用正常最短有效门槛，不能等同于 PC 可使用 `min=0` 的停止路径。旧 Agent 音频流仍使用受限 `audio-streams/rabilink/start|chunk|stop` 合同与冻结 `routeProfileId`，不是新录音全量上传的要求；仅转写策略与 PC 能力/worker 围栏已接入源码，最终回归仍待，不支持时 deferred，不能降级为 Agent 投递。启动请求分别提交稳定 `source_device_id` 与临时 `stream_id`，普通回复只回稳定设备，不会发给带音频后缀的流 ID。`/api/rabilink/speech/messages` 只保留兼容与调试用途；需要播报时再由 Rabi PC TTS 合成并以 PCM 发回。
 - 眼镜 HUD 使用“连接 / 聆听 / 上传 / 播报 / 暂停 / 异常”状态角标。手机通过同一条有序 Classic BT 通道发送 `PLAYBACK_BEGIN → PCM → PLAYBACK_END`；眼镜必须先在主线程确认暂停采集，播放线程才接受 PCM，避免 TTS 开头被麦克风回录。它会核对消息 ID/PCM 长度，并且只有 `AudioTrack` 播放头到达 marker 后才回 `played` 并恢复聆听；Activity 销毁会把未完成播放明确回为 `playback_failed`。旧版没有 BEGIN/END 的 PCM 仍可兼容播放，但不会冒充已确认播放。
 - 照片已接入消息附件上行。视频新增 [手机到电脑直连接入](../../docs/rabilink-direct-video.md)：手机真机数据通道已验证，眼镜 Phone SDK 蓝牙连接仍失败、未出帧；普通精简包不含视频 SDK，显式视频构建才启用此入口。视频不经过 Relay，不启用 TURN 兜底。
 - 人格头像通过 Manager 的受控头像接口提供给 Relay；手机只缓存 Relay 代理的二进制和不透明版本号。会话元数据和本地消息缓存先立即渲染，头像再独立异步加载，并明确显示加载中、缓存校验中、旧缓存或不可用。头像变化由 `persona_avatar_changed` SSE 事件只刷新对应人格；前台重连后的列表读取仅作恢复，不以轮询作为正确性机制。
-- `RabiConversationService` 持有消息 cursor、通知和手机/眼镜 I/O；发送目标在入队时固定，切换会话不会把排队消息改投给别人。手机录音由独立 `RabiPhoneAudioCapture` 管理 WakeLock、卡死检测、受控重启和运行指标。录音回调只进入有界接收队列，独立单写线程把连续 PCM 写入手机私有 `audio-spool`：按 5 秒/160 KiB/输入状态边界动态封口，`.partial` 经 fsync 后原子改名；每段有稳定单调序号、起止时间、字节数、SHA-256、来源、Route 和上传状态。网络与上传在另一执行器处理，不阻塞采集；只有 PC 回传匹配的 `sequence + chunkId + accepted_bytes + sha256` 后才确认传输；新记录分片不按旧传输保留期限自动清理，自动滚动删除尚未实现。文字、控制、媒体以及 `delivered/played/playback_failed` 回执也各自先写磁盘。
+- `RabiConversationService` 持有消息 cursor、通知和手机/眼镜 I/O；发送目标在入队时固定，切换会话不会把排队消息改投给别人。手机录音由独立 `RabiPhoneAudioCapture` 管理 WakeLock、卡死检测、受控重启和运行指标。录音回调只进入有界接收队列，本轮修正要求先在内存完成声学判定，仅将有效段交给独立单写线程写入手机私有 `audio-spool`，纯静音和不满足最短有声条件的段不落盘（实施中）：按 5 秒/160 KiB/输入状态边界动态封口，`.partial` 经 fsync 后原子改名；每段有稳定单调序号、起止时间、字节数、SHA-256、来源、Route 和上传状态。网络与上传在另一执行器处理，不阻塞采集；只有 PC 回传匹配的 `sequence + chunkId + accepted_bytes + sha256` 后才确认传输；新记录分片不按旧传输保留期限自动清理，自动滚动删除尚未实现。文字、控制、媒体以及 `delivered/played/playback_failed` 回执也各自先写磁盘。
 - 设置由 `AllDayRecordingSettings` 提供一个持久化真源：音频/音视频/仅健康、手机/眼镜来源和运行暂停分别配置。切到眼镜模式时先暂停手机麦克风；只有真实眼镜蓝牙连接事件到达后才启动眼镜 PCM，连接前或断线后保持暂停并显示原因，不会静默回退成双路采集。运行卡片由服务广播事件刷新，显示连接、目标 Route/人格、采集、眼镜、可靠队列和最近错误，不运行一秒一次的业务状态轮询。
-- 设置页的“查看录音与转写”按当前安装的稳定 `rabi-phone-*` 设备 ID 读取 RabiSpeech：分别显示已接收 PCM 分块/字节、仅在本机被选中时可归因的运行期识别计数，以及最近 24 小时带非空文字的成功 ASR 记录。预览只读按日语音账本，不刷新音频到期时间；断网或 PC 离线时明确提示无法刷新，不把缓存结果冒充实时状态。
+- 本轮回看修正要求事件列表和时间轴显示全部已保存录音，不以 ASR 非空文字筛选。有效段在仅本地、待转写、处理中、失败及空文本状态均可回放；失败应显示原因，空文本不作为删除或隐藏依据。历史已存录音保留，不批量删除。仅调用 PC 转写，不把录音有效性交给 ASR 文本决定；此修正仍待测试与设备验收，断网或 PC 离线不得冒充实时成功。
 - 用户可设置“由 Agent 人格综合决定 / 偏安静 / 均衡 / 偏主动”。该值作为明确偏好 observation 可靠入队，并附在手机文字、控制、媒体和音频流元数据中；App 与 Relay 不把它解释成固定介入规则。最终不打扰、准备、提示、建议、请求确认或行动仍由 PC 状态/情景上下文、Route 安全边界和目标 Agent 人格共同决定。
 - 手机私有可靠队列使用 fsync 后原子替换；启动时清理未完成临时文件，坏 JSON、缺失媒体二进制等毒化项目移入隔离目录并给出可见错误，后续队列项目仍可继续发送。
 - AIUI 暂停新增功能，旧 ASR/TTS 探针只保留为历史调试入口。
 
 眼镜端构建产物仍由手机 APK 的 CXR 工作流安装，用户只需安装一个手机 APK。
 
-需要诊断常驻录音健康度时，可选运行：
+本轮后续完整性修正仍在本机构建，尚未部署验收：完整有效段须通过 `expectedBytes` / hash 校验及 `prepared` / `committed` 门槛，partial 保留 `deferred` 而不自动 ASR。视频派生音轨使用同一 splitter，以源偏移确定稳定事件 ID；v2 冻结 policy，legacy complete 保留，legacy incomplete 需显式恢复。空闲参数在 100 毫秒边界采用，活动句参数冻结；事件时间由首帧锚定的 sample clock 推导，不在结束时用 wall clock 反算。早期已部署包的 179 项单测及使用 205 条录音的可见性／分页夹具测试不覆盖这些后续修改，详见[切句与恢复合同](../../docs/rabilink-mobile-recording-ui.md#录音事件拆分)。
+
+诊断须区分采集健康与有效段落盘，见[移动音频健康证据](../../docs/mobile-audio-health-evidence.md)。需要诊断常驻录音健康度时，可选运行：
 
 ```powershell
 .\scripts\Test-RabiMobileDurableAudioSoak.ps1 -Serial <adb-serial> -Mode Offline -DurationHours 24
 .\scripts\Test-RabiMobileDurableAudioSoak.ps1 -Serial <adb-serial> -Mode Online -DurationHours 72
 ```
 
-断网验收以手机私有 `state.json` 的 `lastWrittenAt/nextSequence/rejectedBytes` 为证据，联网验收再同时要求 `lastUploadedAt` 和 RabiSpeech 序号推进；脚本只读取元数据、文件计数、服务状态，不读取 token 或 PCM 内容。`Start-RabiMobileDurableSoak.ps1` 可顺序运行 24 小时断网与 72 小时联网，并把原网络开关状态写入本机证据目录后在 `finally` 恢复。每个阶段的 `run.json` 保存固定 deadline，同一目录重启脚本会续跑剩余时长。短时故障注入使用 `Test-RabiMobileDurableAudioFaults.ps1`，不能替代这两段长稳结果。
+本轮声学过滤验收须使用包含有效声音与静音的已知输入；纯静音期间落盘序号不增长是预期，不能据此判定采集停滞。断网保存验收以手机私有 `state.json` 的 `lastWrittenAt/nextSequence/rejectedBytes` 为证据，联网验收再同时要求 `lastUploadedAt` 和 RabiSpeech 序号推进；脚本只读取元数据、文件计数、服务状态，不读取 token 或 PCM 内容。`Start-RabiMobileDurableSoak.ps1` 可顺序运行 24 小时断网与 72 小时联网，并把原网络开关状态写入本机证据目录后在 `finally` 恢复。每个阶段的 `run.json` 保存固定 deadline，同一目录重启脚本会续跑剩余时长。短时故障注入使用 `Test-RabiMobileDurableAudioFaults.ps1`，不能替代这两段长稳结果。
 
 每台安装首次运行时生成自己的稳定 `rabi-phone-*` 设备 ID，重连沿用稳定音频流 ID，并在建立音频流时一并上报 Android 设备型号；多台手机会自动登记到 RabiSpeech，语音服务页面以“型号 + 稳定 ID 后缀”区分它们，后来连接的设备不会抢占已选择的输入。多台可同时在线，但只把用户选中的一路送入 VAD/ASR；所选设备短暂离线时保留选择，网络恢复后自动续接。
 
 新 `AllDayRecordingSettings` 统一 `mode=audio|video|health`、`source=auto`（音频自动选源；音视频固定眼镜）、`processingPolicy=local_only|transcribe|agent`、`running/healthEnabled/uploadEnabled/autoResume/windowStartedAt`。升级默认 `running=false`；默认转写策略不会自动开启录音。旧启动语音开关不再作为第二份采集真源；`autoResume` 保存用户开关；`running` 表示本次采集请求，运行失败不会取消保存的开关。关闭记录取消自动恢复。开机广播恢复后台服务并提供通知入口；应用进入前台且已有麦克风权限后恢复记录，避免绕过 Android 的开机麦克风限制。系统或厂商禁止自启动时需要允许应用自启动；不会强行弹出界面。
 
-当前实现持续采集且不在 Android 做 VAD。录音设备不按零点或固定 24 小时重启；分片由时长、大小、输入/Route 切换、暂停、播放抑制、进程停止等边界触发。崩溃后启动扫描残留 `.partial` 及其归属 sidecar，偶数字节分片原子封口并保留原序号；归属缺失、metadata 损坏、PCM 缺失或 SHA 不符会将关联文件一起隔离、写带稳定 ID 和相邻序号的 gap，再继续后项。隔离区计入存储水位且不会自动删除，只能在“录音与转写”页由用户确认清理。来电/麦克风占用、卡死退避、播放抑制、写入背压和存储不足也写本机轮转审计。传输队列仍有容量与剩余空间水位；新记录即使 ACK 也不按旧传输保留小时自动回收。未确认或隔离分片不自动删除，无法落盘时累计 `rejectedBytes` 并显示缺口；自动滚动删除及全天容量管理仍待完成。断网时上传线程休眠而录音继续落盘，联网后按本地序号逐段切换到该分片自己的来源/Route 流补传。RabiSpeech 的本机持久幂等账本以稳定设备、chunk ID、字节数和 SHA-256 记录处理结果；即使 ACK 响应丢失并重启 RabiSpeech，重放也不会再次送入 ASR。
+本轮正在将旧全量保存路径改为 Android 声学切句后仅保存有效段；持续采集不等于持续保存，预录仅在内存保留。以下可靠存储与恢复规则针对已接受的有效段和已有历史分片，不要求静音持续落盘。录音设备不按零点或固定 24 小时重启；分片由时长、大小、输入/Route 切换、暂停、播放抑制、进程停止等边界触发。崩溃后启动扫描残留 `.partial` 及其归属 sidecar，偶数字节分片原子封口并保留原序号；归属缺失、metadata 损坏、PCM 缺失或 SHA 不符会将关联文件一起隔离、写带稳定 ID 和相邻序号的 gap，再继续后项。隔离区计入存储水位且不会自动删除，只能在“录音与转写”页由用户确认清理。来电/麦克风占用、卡死退避、播放抑制、写入背压和存储不足也写本机轮转审计。传输队列仍有容量与剩余空间水位；新记录即使 ACK 也不按旧传输保留小时自动回收。未确认或隔离分片不自动删除，无法落盘时累计 `rejectedBytes` 并显示缺口；自动滚动删除及全天容量管理仍待完成。断网时上传线程休眠而声学有效录音继续落盘，联网后按本地序号逐段切换到该分片自己的来源/Route 流补传。RabiSpeech 的本机持久幂等账本以稳定设备、chunk ID、字节数和 SHA-256 记录处理结果；即使 ACK 响应丢失并重启 RabiSpeech，重放也不会再次送入 ASR。
 
 手机首页现在还提供“智能手表 / 手环”配置页：可选择 Health Connect 或“小米运动健康（PC ADB Companion）”，并设置稳定设备 ID、同步/回看周期、心率高低阈值、告警冷却和睡眠状态告警。Health Connect 来源同时采集心率、睡眠和步数；步数按本地自然日聚合当天累计值并使用与分段无关的稳定 ID，同一天的回看重读会被下游按 ID 去重，不会重复累加，也不参与心率/睡眠告警。已取得的小米认证秘钥使用 Android Keystore AES-GCM 加密，仅保存在手机。Health Connect 优先使用手动、启动恢复或平台事件；小米 ADB Provider 没有可靠变更通知，因此用户显式启用的 PC Companion 保留低频轮询，默认按手机配置的分钟级周期运行。PC Companion 由唯一 `RabiRouteHost.exe` 下的 Manager 插件和 generation process lease 持有，动态 READY 身份经 `/meta` 与双 header 围栏，不创建登录计划任务，也不保存或猜测 Manager 端口。结构化样本经 Relay 或可信本机 Manager 进入 RabiRoute 健康时间线，不写入普通聊天账本。完整说明见 [`../../docs/rabilink-wearable-health.md`](../../docs/rabilink-wearable-health.md)。
 
@@ -88,6 +90,8 @@ RabiLink Relay
 - 测试中心、RabiRoute SDK、小米 BLE/云、Provider 边界和 OAuth 页面统一使用 Rabi 视觉组件。它们被明确标为高级诊断，原始日志默认收起，普通用户不需要通过这些页面完成首次配置。
 
 ### 日常聊天与导航
+
+- 设置页的“电脑与 Agent 设置”在浏览器打开 Relay `/manage` 管理首页，不会直接进入手机当前选择的 PC。先登录 Relay 管理账号，选择目标电脑，再进入该电脑的 WebGUI 配置其支持的 Agent 模型、会话等；浏览器登录与手机移动端登录码不是同一授权。Skill / MCP 配置及加载需要实际 Agent 宿主支持，手机当前不提供直接管理，也不因打开网页就表示工具已生效。此项仅修正文案与引导，不新增手机端 PC 设置副本、不扩大移动代理权限；尚未完成本轮 APK 构建和真机页面验收。
 
 - 消息页列出 Rabi PC 返回的全部已配置人格，不再按 Route 是否启用或是否已有 `rabilink` 聊天能力隐藏。智能手表/手环健康 Route 不会被误当成人格；未启用聊天的人格会给出原因和修复入口。
 - 会话行先从端点隔离的本机缓存显示人格名、最后消息、时间和未读数；头像独立异步加载。点击可聊天的人格进入独立聊天详情，系统返回和页内“返回”都回到原会话列表位置。

@@ -236,13 +236,14 @@ try {
   result = await page.evaluate(() => globalThis.__interactiveResize);
   await page.locator("#ink").screenshot({ path: screenshotPath });
   const runtimeDiagnostics = logs.filter((line) => /apply_ops is still spinning|child_sync_parents|Attempted to add node as its own child|LayoutEngine::set_children/i.test(line));
-  const sharedHudComplete = result?.firstLitY >= 240
-    && result?.lastLitY >= 330
-    && result?.rowBands?.header > 150
-    && result?.rowBands?.mode > 750
-    && result?.rowBands?.status > 250
-    && result?.rowBands?.message > 350
-    && result?.rowBands?.footer > 150;
+  const regions = await page.evaluate(() => {
+    const c=document.querySelector('#ink'), d=c.getContext('2d').getImageData(0,0,c.width,c.height).data;
+    function check(inject=false){const p=new Uint8ClampedArray(d);if(inject)p[(100*c.width+100)*4+1]=255;let top=0,bottom=0,middle=0,unsafe=0;
+      for(let y=0;y<c.height;y++)for(let x=0;x<c.width;x++){const i=(y*c.width+x)*4;if(Math.max(p[i],p[i+1],p[i+2])<=8)continue;if(x<12||x>=c.width-12||y<8||y>=c.height-8)unsafe++;if(y<60)top++;else if(y>=190)bottom++;else middle++;}
+      return {top,bottom,middle,unsafe,ok:top>100&&bottom>300&&middle===0&&unsafe===0};}
+    return {...check(),faultRejected:!check(true).ok};
+  });
+  const sharedHudComplete = regions.ok && regions.faultRejected && result?.firstLitY>=8 && result?.lastLitY<344;
   if (!result?.ok || result.closeRequested || result.modeRoundTrips !== 20 || result.width !== 480 || result.height !== 352 || result.resizeReturnMs > 1000 || result.maxHeartbeatGapMs > 1500 || result.litPixels < 500 || !sharedHudComplete || runtimeDiagnostics.length || errors.length) {
     throw new Error(`Interactive resize failed: ${JSON.stringify({ resizeMode, result, runtimeDiagnostics, errors })}`);
   }

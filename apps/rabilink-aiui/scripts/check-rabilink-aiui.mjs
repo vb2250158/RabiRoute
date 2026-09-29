@@ -203,7 +203,7 @@ assert(
 const agentsMd = read(files.agentsMd);
 assert(agentsMd.includes("mode=transcription") && agentsMd.includes("mode=configuration"), "Agent instructions must route both product modes through the same page tool.");
 assert(agentsMd.includes("不需要额外导入 RabiLinkMessage"), "Agent instructions must explicitly remove the separate RabiLinkMessage plugin requirement.");
-assert(agentsMd.includes("同一个 AIUI 页面内切换") && !agentsMd.includes("this.finish()"), "Agent instructions must preserve in-page bidirectional mode switching without finish().");
+assert(agentsMd.includes("pages/home/index") && agentsMd.includes("同一页面内部操作状态") && agentsMd.includes("禁止") && agentsMd.includes("finish()"), "Agent instructions must preserve the single-page operation-state boundary and forbid finish() on mode changes; real lifecycle checks run in the Ink smoke.");
 assert(agentsMd.includes("连接对话") && agentsMd.includes("LanguageModel") && agentsMd.includes("SpeechRecognition"), "Agent instructions must document AIUI ASR plus native LanguageModel configuration understanding.");
 
 const setupSource = extractBlock(pageInk, "script", "setup");

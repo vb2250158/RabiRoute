@@ -880,9 +880,9 @@ class MainActivity : Activity() {
 
     private fun toolsCard(): View = card().apply {
         addView(title("6. 管理与诊断"))
-        addView(note("知道字段时直接使用远程 WebGUI；不知道字段名时再进入独立配置助手。配置不会混进普通聊天输入框。"))
+        addView(note("电脑与 Agent 设置：先登录 Relay 管理，再选择目标电脑，进入其 WebGUI 配置 Agent 模型、会话等。此入口不会直接打开当前电脑。Skill / MCP 需实际 Agent 宿主支持并确认加载；手机当前不提供直接管理。不了解字段时可使用下方配置助手。"))
         val row = row()
-        row.addView(secondary("打开远程配置") { openRemoteConfig() }, LinearLayout.LayoutParams(0, -2, 1f)); row.addView(space(), LinearLayout.LayoutParams(dp(8), 1))
+        row.addView(secondary("电脑与 Agent 设置") { openRemoteConfig() }, LinearLayout.LayoutParams(0, -2, 1f)); row.addView(space(), LinearLayout.LayoutParams(dp(8), 1))
         row.addView(secondary("接口测试中心") { startActivity(Intent(this@MainActivity, TestCenterActivity::class.java)) }, LinearLayout.LayoutParams(0, -2, 1f))
         addView(row)
         addView(secondary("不知道填什么？打开配置助手") { showConfigurationAssistant() }, full(0, 8, 0, 0))

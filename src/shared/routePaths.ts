@@ -22,11 +22,17 @@ export function adapterConfigPath(routeRoot: string, configName: unknown): strin
   return path.join(routeFolderPath(routeRoot, configName), "adapterConfig.json");
 }
 
-export function roleFolderPath(rolesRoot: string, roleId: unknown): string {
+export function roleFolderPath(rolesRoot: string, roleId: unknown, subfolder?: string): string {
   const safeRoleId = sanitizeRoleId(roleId);
   if (!safeRoleId) throw new Error("Missing role folder name");
   const root = path.resolve(rolesRoot);
-  const target = path.resolve(root, safeRoleId);
+  if (subfolder !== undefined && (
+    !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(subfolder)
+    || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(subfolder)
+  )) throw new Error("Invalid persona subfolder name");
+  const target = subfolder === undefined
+    ? path.resolve(root, safeRoleId)
+    : path.resolve(root, safeRoleId, subfolder);
   return assertPathWithinRoot(root, target, { allowRoot: false, label: "Persona folder" });
 }
 

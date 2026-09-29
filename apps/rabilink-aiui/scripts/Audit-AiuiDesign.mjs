@@ -30,7 +30,7 @@ function parseRules(css) {
   return rules;
 }
 
-const rules = parseRules(style);
+const rules = parseRules(style.replace(/\/\*[\s\S]*?\*\//g, ''));
 
 function blockFor(selector) {
   return rules.get(selector) || "";
@@ -48,6 +48,24 @@ function pxValue(selector, property) {
   return values[0] || 0;
 }
 
+if (!process.argv.includes('--legacy-hud')) {
+  assert(/<view class="pageScroll"(?:\s|>)/.test(source), 'A bounded root is required.');
+  for (const selector of ['.pageScroll', '.page', '.unifiedModeHud', '.hudAgentReplyCard', '.agentProfileStatus']) assert(hasDeclaration(selector, 'overflow', 'hidden'), selector+' must bound paint.');
+  assert(hasDeclaration('.unifiedModeHud', 'height', '100%') && hasDeclaration('.unifiedModeHud', 'top', '0'), 'HUD must occupy the bounded surface, not the retired 87px container.');
+  assert(pxValue('.hudTopBar','left') >= 12 && pxValue('.hudBottomArea','left') >= 12, 'HUD needs safe horizontal insets.');
+  assert(pxValue('.hudTopBar','width') <= 416 && pxValue('.hudBottomArea','width') <= 416, 'HUD widths must fit both surfaces.');
+  assert(hasDeclaration('.hudBottomArea','flex-direction','column'), 'Reply, controls and profile need separate rows.');
+  assert(hasDeclaration('.agentProfileStatus','flex','none') && !hasDeclaration('.agentProfileStatus','text-align','right'), 'Profile status must not inherit version compression.');
+  assert((source.match(/class="releaseVersion"/g)||[]).length===1, 'One visible version required.');
+  assert(source.includes('class="hudTopBar"') && source.includes('class="hudBottomArea"') && source.includes('class="agentProfileStatus"'), 'Required HUD regions missing.');
+  assert(/@media\s*\(max-height:\s*180px\)/.test(style), 'Compact layout required.');
+  assert(!source.includes('<scroll-view') && !source.includes('<button') && !/ink:(?:if|elif|else)\b/.test(source), 'Stable single HUD required.');
+  for (const handler of ['onShow','onHide','onKeyDown','onKeyUp','cleanupChatModel','refreshAgentAndKnowledgeTools']) assert(source.includes(handler), handler+' required.');
+  assert(!source.includes('saveSettings({ token })'), 'Do not persist raw token in settings.');
+  console.log('AIUI current HUD structural audit passed; real region/edge/fault checks run in Smoke-RabiLinkAiuiInkRuntime.mjs.');
+  process.exit(0);
+}
+// Explicit historical diagnostic only: the current product no longer uses the 87px two-mode rail.
 assert(!source.includes("<scroll-view"), "AIUI page must avoid Ink 0.13 scroll-view nodes during Craft card-to-immersive resize.");
 assert(source.includes('<view class="pageScroll">'), "AIUI page must use a stable bounded root view.");
 assert(hasDeclaration(".pageScroll", "width", "var\\(--app-width,\\s*480px\\)"), "AIUI surface must follow the 480px host width token.");

@@ -1,3 +1,4 @@
+# Evidence contract: ../../../docs/mobile-audio-health-evidence.md
 param(
     [Parameter(Mandatory = $true)][string]$Serial,
     [ValidateSet("Offline", "Online")][string]$Mode = "Online",
@@ -9,6 +10,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'MobileCaptureEvidence.ps1')
 $packageName = "com.rabi.link"
 $localAdb = Join-Path $env:LOCALAPPDATA "RabiRoute\android-sdk\platform-tools\adb.exe"
 $adb = if (Test-Path -LiteralPath $localAdb) { $localAdb } else { (Get-Command adb -ErrorAction Stop).Source }
@@ -284,21 +286,25 @@ while ([DateTimeOffset]::Now -lt $deadline) {
     $state = Read-SpoolState
     $counts = Read-SpoolCounts
     $manifest = Read-SpoolManifest
-    $server = Read-OnlineAck
+    $capture = Read-MobileCaptureEvidence
+    $hasStoredAudio = [long]$state.totalCapturedBytes -gt 0
+    $server = if ($hasStoredAudio) { Read-OnlineAck } else { $null }
     $lastWrittenAt = if ($null -ne $state) { [long]$state.lastWrittenAt } else { 0L }
     $lastUploadedAt = if ($null -ne $state) { [long]$state.lastUploadedAt } else { 0L }
-    $writeAge = if ($lastWrittenAt -gt 0) { [Math]::Max(0, $now.ToUnixTimeMilliseconds() - $lastWrittenAt) } else { [long]::MaxValue }
     $service = Invoke-AdbText @("shell", "dumpsys", "activity", "services", $packageName)
     $manifestHealthy = $manifest.duplicateMetadataIds -eq 0 -and
         ($null -eq $manifest.head -or $manifest.head.hashMatches) -and
         ($null -eq $manifest.tail -or $manifest.tail.hashMatches) -and
         $manifest.metadataCount -eq $counts.metadata -and $counts.metadata -eq $counts.sealed
-    $healthy = $null -ne $state -and $writeAge -le [Math]::Max(30000, $SampleIntervalSeconds * 2000) -and
+    $captureHealthy = Test-MobileCaptureFresh $capture $now.ToUnixTimeMilliseconds() ([Math]::Max(30000, $SampleIntervalSeconds * 2000))
+    $healthy = $null -ne $state -and $captureHealthy -and
         $service -match "RabiConversationService" -and $manifestHealthy
-    if ($Mode -eq "Online") { $healthy = $healthy -and $lastUploadedAt -gt 0 }
+    # Persistence/upload freshness is not microphone freshness: silence creates no event.
     if (-not $healthy) { $unhealthy += 1 }
     $row = [ordered]@{
         capturedAt = $now.ToString("o"); mode = $Mode; healthy = $healthy
+        captureEvidence = $capture; captureHealthy = $captureHealthy
+        captureEvidenceStatus = if ($null -eq $capture) { 'insufficient_evidence' } else { 'phone_read_metrics' }
         lastCapturedAt = if ($null -ne $state) { $state.lastCapturedAt } else { $null }
         lastWrittenAt = $lastWrittenAt; lastUploadedAt = $lastUploadedAt
         nextSequence = if ($null -ne $state) { $state.nextSequence } else { $null }
@@ -338,8 +344,10 @@ while ([DateTimeOffset]::Now -lt $deadline) {
 }
 
 $completed = [DateTimeOffset]::Now -ge $deadline.AddSeconds(-1)
-$captureAdvanced = $null -ne $first -and $null -ne $last -and [long]$last.nextSequence -gt [long]$first.nextSequence
-$uploadAdvanced = $Mode -eq "Offline" -or ($null -ne $first -and $null -ne $last -and [long]$last.lastUploadedAt -gt [long]$first.lastUploadedAt)
+$captureAdvanced = Test-MobileCaptureAdvanced $first.captureEvidence $last.captureEvidence
+$validEventsObserved = $null -ne $first -and $null -ne $last -and [long]$last.totalCapturedBytes -gt [long]$first.totalCapturedBytes
+$uploadRequired = $Mode -eq 'Online' -and ($validEventsObserved -or [long]$first.pendingSegments -gt 0)
+$uploadAdvanced = -not $uploadRequired -or ($null -ne $first -and $null -ne $last -and [long]$last.lastUploadedAt -gt [long]$first.lastUploadedAt)
 $pendingZero = $Mode -eq "Offline" -or ($null -ne $last -and [long]$last.pendingSegments -eq 0L)
 $finalManifestProof = Read-FinalManifestProof
 $runAckJournal = Read-AckJournal $ackJournalWatermark
@@ -360,13 +368,13 @@ $accountedCapturedBytes = if ($null -ne $last) {
 $byteConservation = $null -ne $last -and [bool]$last.accountingBalanced -and
     [long]$last.totalCapturedBytes -eq $accountedCapturedBytes -and
     [long]$finalManifestProof.pendingBytes -eq [long]$last.pendingBytes
-$serverExactlyOnce = $Mode -eq "Offline" -or ($null -ne $last -and
+$serverExactlyOnce = $Mode -eq "Offline" -or -not $uploadRequired -or ($null -ne $last -and
     $null -ne $last.serverProcessedChunks -and $null -ne $last.serverProcessedBytes -and
     [long]$last.serverAmbiguousChunks -eq 0L -and
     [long]$last.serverProcessedChunks -eq [long]$last.totalAcknowledgedSegments -and
     [long]$last.serverProcessedBytes -eq [long]$last.totalAcknowledgedBytes)
 $tupleParity = $null
-if ($Mode -eq "Online") {
+if ($uploadRequired) {
     if ($phoneAcknowledgedTuples.Count -eq 0) { throw "Final phone manifest has no acknowledged tuples to compare." }
     $actualSourceDeviceId = "$($last.serverSourceDeviceId)"
     if (-not $actualSourceDeviceId) { throw "Final server source device id is null." }
@@ -384,7 +392,7 @@ if ($Mode -eq "Online") {
     }
     if ($null -eq $tupleParity -or -not [bool]$tupleParity.matched) { throw "Tuple parity validator returned null or unmatched." }
 }
-$perTupleExactlyOnce = $Mode -eq "Offline" -or ($null -ne $tupleParity -and [bool]$tupleParity.matched)
+$perTupleExactlyOnce = -not $uploadRequired -or ($null -ne $tupleParity -and [bool]$tupleParity.matched)
 $manifestConservation = $finalManifestProof.orderValid -and $finalManifestProof.hashesValid -and
     ($Mode -eq "Offline" -or [long]$finalManifestProof.pending -eq 0L)
 $passed = $completed -and $captureAdvanced -and $uploadAdvanced -and $unhealthy -eq 0 -and
@@ -394,6 +402,10 @@ $passed = $completed -and $captureAdvanced -and $uploadAdvanced -and $unhealthy 
     startedAt = $startedAt.ToString("o"); endedAt = [DateTimeOffset]::Now.ToString("o")
     deadline = $deadline.ToString("o"); samples = $samples; unhealthySamples = $unhealthy
     captureAdvanced = $captureAdvanced; uploadAdvanced = $uploadAdvanced
+    validEventsObserved = $validEventsObserved; uploadRequired = $uploadRequired
+    audioQualityVerified = $false
+    eventPipelineStatus = if ($validEventsObserved) { 'observed' } else { 'not_exercised_no_new_valid_events' }
+    captureEvidenceStatus = if ($null -eq $first.captureEvidence -or $null -eq $last.captureEvidence) { 'insufficient_evidence' } else { 'phone_read_metrics' }
     pendingZero = $pendingZero; byteConservation = $byteConservation; serverExactlyOnce = $serverExactlyOnce
     perTupleExactlyOnce = $perTupleExactlyOnce; tupleParity = $tupleParity
     ackJournal = [ordered]@{

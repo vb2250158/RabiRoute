@@ -79,7 +79,57 @@ public final class RabiGlassPcBackend {
     private final ScheduledExecutorService uploadExecutor = Executors.newSingleThreadScheduledExecutor();
     private final ExecutorService eventExecutor = Executors.newSingleThreadExecutor();
     private final ScheduledExecutorService audioStreamExecutor = Executors.newSingleThreadScheduledExecutor();
-    private final ExecutorService audioWriteExecutor = Executors.newSingleThreadExecutor();
+    private volatile Thread audioWriterThread;
+    private volatile com.rabi.link.recording.RecordingArchiveSession archiveSession;
+    private final ExecutorService audioWriteExecutor = Executors.newSingleThreadExecutor(task -> {
+        Thread thread = new Thread(task, "rabi-audio-writer"); audioWriterThread = thread; return thread;
+    });
+    public void attachArchiveSession(com.rabi.link.recording.RecordingArchiveSession session) { archiveSession = session; }
+    private <T> T archiveOnWriter(java.util.concurrent.Callable<T> action) throws Exception {
+        if (Thread.currentThread() == audioWriterThread) return action.call();
+        if (audioSpoolClosed.get()) throw new IllegalStateException("audio writer closed");
+        try { return audioWriteExecutor.submit(action).get(); }
+        catch (java.util.concurrent.ExecutionException e) { Throwable cause=e.getCause(); if(cause instanceof Exception) throw (Exception)cause; throw new IllegalStateException(cause); }
+    }
+    public void archiveAuthorize(String captureId, com.rabi.link.recording.RecordingArchiveCoordinator.Target target) throws Exception {
+        archiveOnWriter(() -> { audioSpool.authorizeArchive(captureId,target); return null; });
+    }
+    public java.util.List<String> archiveCandidates(com.rabi.link.recording.RecordingArchiveCoordinator.Target target,int limit) throws Exception {
+        return archiveOnWriter(() -> audioSpool.nextArchiveCandidates(target,limit));
+    }
+    /** Independent cleanup candidates; never feed these IDs back into upload. */
+    public java.util.List<String> archiveEvictionCandidates(com.rabi.link.recording.RecordingArchiveCoordinator.Target target, int limit) throws Exception {
+        return archiveOnWriter(() -> audioSpool.nextArchiveEvictions(target, Math.min(32, Math.max(1, limit))));
+    }
+    public org.json.JSONObject archiveEvictionReceipt(com.rabi.link.recording.RecordingArchiveCoordinator.Target target, String recordId) throws Exception {
+        return archiveOnWriter(() -> audioSpool.archiveEvictionReceipt(target, recordId));
+    }
+    public org.json.JSONArray archivePendingSummaries(com.rabi.link.recording.RecordingArchiveCoordinator.Target target, int limit) throws Exception {
+        return archiveOnWriter(() -> audioSpool.archivePendingSummaries(target, Math.min(32, Math.max(1, limit))));
+    }
+    public AutoCloseable pinLocalEvents(java.util.Collection<String> eventIds) throws Exception {
+        AutoCloseable pin = archiveOnWriter(() -> audioSpool.pinLocalEvents(eventIds));
+        return () -> archiveOnWriter(() -> { pin.close(); return null; });
+    }
+    public Boolean archiveOwnership(String captureId) {
+        try { return archiveOnWriter(() -> audioSpool.isArchiveAuthorizedCapture(captureId)); } catch(Exception unavailable) { return null; }
+    }
+    public com.rabi.link.recording.RecordingArchiveCoordinator.Snapshot archiveSnapshot(String id,com.rabi.link.recording.RecordingArchiveCoordinator.Target target) throws Exception {
+        com.rabi.link.recording.RecordingArchiveCoordinator.Snapshot value=archiveOnWriter(() -> audioSpool.acquireArchiveSnapshot(id,target));
+        return new com.rabi.link.recording.RecordingArchiveCoordinator.Snapshot() {
+            public org.json.JSONObject manifest() throws Exception { return value.manifest(); }
+            public com.rabi.link.recording.RecordingArchiveCoordinator.Target target() { return value.target(); }
+            public boolean complete() { return value.complete(); }
+            public java.io.InputStream openObject(String hash) throws Exception { return value.openObject(hash); }
+            public void close() throws Exception { archiveOnWriter(() -> { value.close(); return null; }); }
+        };
+    }
+    public void archivePersist(com.rabi.link.recording.RecordingArchiveCoordinator.Target target,org.json.JSONObject manifest,org.json.JSONObject receipt) throws Exception {
+        archiveOnWriter(() -> { audioSpool.persistArchiveReceipt(target,manifest,receipt); return null; });
+    }
+    public boolean archiveEvict(com.rabi.link.recording.RecordingArchiveCoordinator.Target target,org.json.JSONObject manifest,org.json.JSONObject receipt) throws Exception {
+        return archiveOnWriter(() -> audioSpool.evictArchive(target,manifest,receipt,false));
+    }
     private final RabiBoundedAudioWriteQueue audioWriteQueue =
             new RabiBoundedAudioWriteQueue(AUDIO_CAPTURE_QUEUE_CAPACITY, AUDIO_CAPTURE_QUEUE_MAX_BYTES);
     private final AtomicBoolean audioWriteDrainActive = new AtomicBoolean();
@@ -94,6 +144,9 @@ public final class RabiGlassPcBackend {
     private final android.content.SharedPreferences preferences;
     private final android.content.Context context;
     private final com.rabi.link.recording.AudioEventSplitter eventSplitter;
+    // Writer-owned attribution for buffered speech; never use the current UI selection when sealing.
+    private RabiBoundedAudioWriteQueue.Entry bufferedAudioOwner;
+    private final RabiAudioSampleClock audioSampleClock = new RabiAudioSampleClock();
     private final File replyQueueDirectory;
     private final File mediaQueueDirectory;
     private final File controlQueueDirectory;
@@ -187,6 +240,12 @@ public final class RabiGlassPcBackend {
             throw new IllegalArgumentException("unknown audio processing policy");
         if (captureId == null || !captureId.matches("[A-Za-z0-9_-]{1,100}")) throw new IllegalArgumentException("invalid capture id");
         source = normalizeCaptureSource(source);
+        com.rabi.link.recording.RecordingArchiveSession session = archiveSession;
+        if (session != null && "transcribe".equals(processingPolicy)) {
+            com.rabi.link.recording.RecordingArchiveCoordinator.Target target = session.targetForNewCapture();
+            if (target != null) try { archiveAuthorize(captureId,target); }
+            catch (Exception error) { throw new IllegalStateException("cannot freeze archive authorization",error); }
+        }
         synchronized (captureLock) {
             if (captureContext != null || importingCapture || captureEnding) throw new IllegalStateException("previous capture/import is still active");
             if (audioSpoolClosed.get() || !audioWriteQueue.isAccepting()) throw new IllegalStateException("backend is closed");
@@ -204,6 +263,7 @@ public final class RabiGlassPcBackend {
         synchronized (captureLock) { captureContext = null; captureEnding = true; }
         enqueueAudioWriteControl(() -> {
             try {
+                finishBufferedAudioEvent();
                 audioSpool.sealCapture();
                 synchronized (captureLock) { captureEnding = false; }
                 if (onDrained != null) onDrained.run();
@@ -251,7 +311,8 @@ public final class RabiGlassPcBackend {
                     durableId = "derived-" + suffix;
                     audioSpool.bindDerivedEndpoint(durableId, parent);
                 } else audioSpool.bindCaptureEndpoint(durableId, "");
-                complete = audioSpool.importCapture(normalizedSourceKind(source), clean(route), policy, durableId, pcmFile, capturedAt);
+                complete = audioSpool.importCapture(normalizedSourceKind(source), clean(route), policy, durableId, pcmFile, capturedAt,
+                        com.rabi.link.recording.EventSplitSettings.load(context));
             }
             if (complete) requestAudioStreamDrain();
             return complete;
@@ -464,6 +525,7 @@ public final class RabiGlassPcBackend {
             return;
         }
         enqueueAudioWriteControl(() -> {
+            finishBufferedAudioEvent();
             audioSpool.boundary(reason);
             audioSpool.recordGap(reason, estimatedBytes, source, route);
         });
@@ -490,27 +552,49 @@ public final class RabiGlassPcBackend {
         synchronized (audioWriteIoLock) {
             RabiBoundedAudioWriteQueue.Entry item;
             while ((item = audioWriteQueue.poll()) != null) {
-                for (com.rabi.link.recording.AudioEventSplitter.Part part : eventSplitter.accept(
-                        item.captureId + "/" + item.source + "/" + item.route + "/" + item.processingPolicy, item.pcm)) {
-                RabiDurableAudioSpool.AppendResult written = audioSpool.append(part.pcm, item.source, item.route, item.captureId, item.processingPolicy,
-                        item.capturedAt + part.offset * 1000L / 32000L, "received", part.eventId);
-                if (!written.accepted) {
-                    blockCapture(written.failure);
-                    if (!audioStorageFailureReported) {
-                        audioStorageFailureReported = true;
-                        listener.onError("手机录音未能落盘 · 已留下缺口记录，请检查存储水位");
-                    }
-                    continue;
+                if (bufferedAudioOwner != null && !audioEventOwner(bufferedAudioOwner).equals(audioEventOwner(item))) {
+                    finishBufferedAudioEvent();
                 }
-                audioStorageFailureReported = false;
-                if (part.completed) {
-                    audioSpool.boundary("event_boundary");
-                    try { audioSpool.completeEvent(part.eventId); }
-                    catch (Exception error) { blockCapture("event_seal_failure"); listener.onError("录音事件封口失败，文件已保留"); }
-                }
-                requestAudioStreamDrain();
-                }
+                bufferedAudioOwner = item;
+                long referenceTime = audioSampleClock.accept(item.capturedAt, item.pcm.length);
+                persistAudioEvents(eventSplitter.accept(audioEventOwner(item), item.pcm), item, referenceTime);
             }
+        }
+    }
+
+    private static String audioEventOwner(RabiBoundedAudioWriteQueue.Entry item) {
+        return item.captureId + "/" + item.source + "/" + item.route + "/" + item.processingPolicy;
+    }
+
+    private void persistAudioEvents(java.util.List<com.rabi.link.recording.AudioEventSplitter.Part> parts,
+                                    RabiBoundedAudioWriteQueue.Entry owner, long referenceTime) {
+        for (com.rabi.link.recording.AudioEventSplitter.Part part : parts) {
+            RabiDurableAudioSpool.AppendResult written = audioSpool.appendCompleteEvent(part.pcm, owner.source, owner.route,
+                    owner.captureId, owner.processingPolicy, referenceTime + part.offset * 1000L / 32000L,
+                    "received", part.eventId);
+            if (!written.accepted) {
+                blockCapture(written.failure);
+                if (!audioStorageFailureReported) {
+                    audioStorageFailureReported = true;
+                    listener.onError("手机录音未能落盘 · 已留下缺口记录，请检查存储水位");
+                }
+                continue;
+            }
+            audioStorageFailureReported = false;
+            com.rabi.link.recording.RecordingArchiveSession session = archiveSession;
+            if (session != null) session.kick();
+            requestAudioStreamDrain();
+        }
+    }
+
+    private void finishBufferedAudioEvent() {
+        synchronized (audioWriteIoLock) {
+            java.util.List<com.rabi.link.recording.AudioEventSplitter.Part> parts = eventSplitter.finish();
+            if (bufferedAudioOwner != null) {
+                persistAudioEvents(parts, bufferedAudioOwner, audioSampleClock.endTime());
+            }
+            bufferedAudioOwner = null;
+            audioSampleClock.reset();
         }
     }
 
@@ -518,6 +602,7 @@ public final class RabiGlassPcBackend {
         synchronized (audioWriteIoLock) {
             List<RabiBoundedAudioWriteQueue.Gap> gaps = audioWriteQueue.takeRejected();
             if (gaps.isEmpty()) return;
+            finishBufferedAudioEvent();
             audioSpool.boundary("capture_backpressure");
             for (RabiBoundedAudioWriteQueue.Gap gap : gaps) {
                 String reason = audioWriteQueue.isAccepting() ? "capture_backpressure" : "capture_after_backend_stop";
@@ -529,21 +614,18 @@ public final class RabiGlassPcBackend {
     private void closeAudioSpoolDurably() {
         synchronized (audioWriteIoLock) {
             if (audioSpoolClosed.compareAndSet(false, true)) {
-                drainAudioWritesNow();
-                drainAndCloseAudioQueue(audioWriteQueue, audioSpool);
+                closeAudioWriter(this::drainAudioWritesNow, this::finishBufferedAudioEvent,
+                        this::flushAudioBackpressureGaps, audioSpool::close);
             }
         }
     }
 
-    static void drainAndCloseAudioQueue(RabiBoundedAudioWriteQueue queue, RabiDurableAudioSpool spool) {
-        RabiBoundedAudioWriteQueue.Entry entry;
-        while ((entry = queue.poll()) != null) spool.append(entry.pcm, entry.source, entry.route, entry.captureId, entry.processingPolicy, entry.capturedAt, "received");
-        List<RabiBoundedAudioWriteQueue.Gap> gaps = queue.takeRejected();
-        if (!gaps.isEmpty()) spool.boundary("capture_after_backend_stop");
-        for (RabiBoundedAudioWriteQueue.Gap gap : gaps) {
-            spool.recordGap("capture_after_backend_stop", gap.bytes, gap.source, gap.route);
-        }
-        spool.close();
+    /** The shutdown path must use the same acoustic writer as live capture, never a raw PCM drain. */
+    static void closeAudioWriter(Runnable drain, Runnable finish, Runnable gaps, Runnable close) {
+        drain.run();
+        finish.run();
+        gaps.run();
+        close.run();
     }
 
     static boolean awaitDrainOrTakeOver(CountDownLatch completed, long timeout, TimeUnit unit,
@@ -565,6 +647,7 @@ public final class RabiGlassPcBackend {
 
     private void enqueueAudioBoundary(String reason, Runnable afterBoundary) {
         enqueueAudioWriteControl(() -> {
+            finishBufferedAudioEvent();
             audioSpool.boundary(reason);
             if (afterBoundary != null) afterBoundary.run();
         });
@@ -629,6 +712,11 @@ public final class RabiGlassPcBackend {
                 }
                 String policy = head.processingPolicy;
                 String captureId = head.captureId;
+                if ("transcribe".equals(policy) && audioSpool.isArchiveAuthorizedCapture(captureId)) {
+                    com.rabi.link.recording.RecordingArchiveSession session = archiveSession;
+                    if (session != null) session.kick();
+                    return; // Archive owns this capture; never feed it through legacy ASR/ACK.
+                }
                 if ("transcribe".equals(policy) && !head.eventId.isEmpty()) {
                     final long processingGeneration = endpointGeneration;
                     if (!eventAsr.process(audioSpool, head, () -> processingEnabled && processingGeneration == endpointGeneration)) return;

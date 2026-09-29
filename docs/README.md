@@ -94,6 +94,16 @@
 - [移动端记录与事件边界](mobile-recording-event-boundary.md) — 开发维护：设备配置归属、统一事件方向与旧协议退出条件。
 - [RabiLink 智能手表 / 手环健康消息端](rabilink-wearable-health.md) — **实验集成**。手机配置、结构化健康时间线、Agent 查询 API、阈值告警和小米 ADB 过渡桥。
 - [AIUI 到手机 / 原生眼镜方案的功能等价清单](rabilink-aiui-native-parity.md) — 按代码、自动化与真机证据逐项记录迁移完成度。
+- [AIUI 手机设备配置 HTTP](aiui-agent-profile-http.md) — **实验实现**：手机设置页、设备归属、版本冲突和眼镜应用回执；尚未整体验收。
+- [AIUI 配置应用生命周期](../apps/rabilink-aiui/docs/agent-profile-runtime.md) — 缓存、当前对话结束后应用与模型状态说明。
+- [AIUI 工具合同核对](../apps/rabilink-aiui/docs/agent-tool-contract.md) — 官方工具调用事件与尚未证实的结果续轮接口。
+- [RabiPC 知识 MCP](../apps/rabi-mcp/README.md) — 计划、记忆查询写入及受控 HTTP/stdio 接入；默认只读。
+- [本机知识桥设置](user-guide/knowledge-bridge-settings.md) — 设置 PC 工具连接和设备授权，分别确认保存与连接结果。
+- [手机知识授权](knowledge-grant-phone-ui.md) — 为眼镜选择可用角色和工具，核对权限是否就绪。
+- [PC 知识桥运行配置](rabilink-knowledge-runtime.md) — 本机 MCP 连接、密钥脱敏、设备授权交集与就绪确认。
+- [知识写入回执查询](rabilink-knowledge-operation-receipts.md) — 开发维护：冻结发布后的源码扩展，鉴权恢复已持久化回执；未部署，未知结果不重放。
+- [AIUI Agent 验收矩阵](aiui-agent-acceptance.md) — 开发维护：分清构建、运行与真机证据，查看未完成能力和验收出口。
+- [AIUI 单步知识工具](../apps/rabilink-aiui/docs/knowledge-single-step.md) — 只读工具、显式角色选择、真实结果与不自动续轮边界。
 - [RabiLink AIUI 常驻边界](rabilink-aiui-residency-plan.md) — 已实现链路与常驻能力限制混合文档，阅读时区分代码事实和计划。
 - [RabiLink 主动智能需求](rabilink-active-intelligence-requirements.md) — 用户状态、情景识别、群消息命中计划/记忆后的处理闭环和主动介入的目标合同与实施追踪，不等同于全部完成。
 - [RabiLink 原生应用设计](rabilink-glasses-app-design.md) — 手机/眼镜体验设计。

@@ -6,6 +6,19 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.16 - 2026-09-29
+
+### Mobile recording archives, controlled knowledge MCP and glasses Agent configuration
+
+- Add recording archive contracts, immutable audio objects, strong receipts, owner-scoped catalogs and asynchronous ASR jobs. Integrate sample clocks, durable audio chunks, archive coordination, chunk-based playback and settings on Android. Preserve local originals, keep automatic cleanup disabled and do not migrate historical recordings automatically.
+- Add an experimental knowledge MCP using dynamic Manager identity checks and shared plan/memory contracts. Keep the PC knowledge bridge disabled by default, enforce device/role/tool/write permissions, and retain stable idempotency keys and reconciliation for uncertain writes.
+- Extend Relay mobile management with glasses Agent profiles, Skill/MCP references and knowledge grants. Add AIUI profile application state, paginated and spoken tool results, write confirmation and bounded HUD text; saving a profile does not prove that a device applied it.
+- Add WebGUI knowledge bridge settings and persona Skill browsing. Preserve strong ETags, idempotency keys and exact receipt states in the remote Agent client, with denial-path regression coverage.
+- Complete Windows and Relay runtime dependency manifests for knowledge contracts and modules, support reviewed source hash manifests, and synchronize bilingual documentation, operational limits and regression tests.
+- Fix ordinary device changes leaking through Xiaomi Home significant-event mode while preserving explicit monitoring. Create recording folders through asynchronous catalog transactions with read-only, replay and rollback coverage, and remove the fixed-persona fallback when opening recordings.
+- Add privacy-bounded mutation audits for recording archives, bindings, catalog caches and ASR job publication. Move Xiaomi event history to a bounded asynchronous append port while preserving its file and timestamps; update portable Windows dependency assertions.
+- This is a source commit, not installation, deployment or physical phone/glasses and LAN/P2P/Relay acceptance. See the feature documents for experimental status and migration limits.
+
 ## 0.3.15 - 2026-09-25
 
 ### Rokid BLE Ping protocol, AIUI mobile interaction and Xiaomi Home cascader enhancements

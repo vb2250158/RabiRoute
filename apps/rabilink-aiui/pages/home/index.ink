@@ -58,6 +58,7 @@
 
 <script setup>
 import wx from "wx";
+import { resolveAgentRuntimeMode, usesRemoteAgent, agentTurnDestination } from "../../utils/agent-runtime-mode.js";
 import {
   claimRabiLinkDeviceToken,
   getRabiLinkMessageStream,
@@ -142,6 +143,9 @@ import {
   toggleMessageAdapterPayload
 } from "../../utils/config-surface.js";
 import { rabiLinkDefaults } from "../../utils/rabilink-defaults.js";
+import { agentProfilePageMethods } from "../../utils/agent-profile-page.js";
+import { knowledgeToolPageMethods } from "../../utils/knowledge-tool-page.js";
+import { installHudDisplay } from "../../utils/hud-text.js";
 import {
   loadAgentMessageQueue,
   loadCloudLogQueue,
@@ -450,49 +454,6 @@ function estimatedSpeechPlaybackMs(text) {
   return Math.max(TTS_PLAYBACK_MIN_MS, Math.min(TTS_PLAYBACK_MAX_MS, estimate));
 }
 
-function generateIntelligentFallbackReply(userText, currentAgentName) {
-  const query = String(userText || "").trim();
-  const agentName = String(currentAgentName || "灵珠智能体").trim();
-
-  if (/^(在吗|在不在|你在吗|有人吗|在嘛|hello|hi|嗨|你好|在呀|在呢|喂)$/i.test(query)
-      || /^(你?在吗|你?在不在|听得到吗|能听到吗)$/i.test(query)) {
-    return `在的！我是你的随身 AR 智能体${agentName}，随时为你服务。请问有什么我可以帮你的吗？`;
-  }
-
-  if (/^(你是谁|你叫什么|你叫什么名字|介绍一下你自己|介绍自己|自我介绍|你的名字)$/i.test(query)) {
-    return `我是你的随身 AR 智能体${agentName}，可以在眼镜上为你提供实时问答、语音备忘和信息助手服务。`;
-  }
-
-  if (/^(你能做什么|你有什么功能|你会什么|你能干嘛|功能介绍|帮我做什么)$/i.test(query)) {
-    return `我可以为你实时回答问题、记录语音备忘、播报信息，也能协助管理设备与快捷设置。有什么想问的都可以直接对我说。`;
-  }
-
-  if (/^(几点了|现在几点|现在几点了|今天几号|今天星期几|今天几月几号|今天日期|现在时间)$/i.test(query)) {
-    const now = new Date();
-    const weekDays = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"];
-    const month = now.getMonth() + 1;
-    const date = now.getDate();
-    const day = weekDays[now.getDay()];
-    const hours = String(now.getHours()).padStart(2, "0");
-    const minutes = String(now.getMinutes()).padStart(2, "0");
-    return `现在是${month}月${date}日 ${day} ${hours}:${minutes}。`;
-  }
-
-  if (/^(今天天气|天气怎么样|今天下雨吗|现在的天气)$/i.test(query)) {
-    return `当前眼镜未绑定外网天气插件，你可以查看手机天气，或稍后通过 RabiLink PC 端扩展网络技能。`;
-  }
-
-  if (/订单/i.test(query)) {
-    return `关于你问的“${query}”，已为你核对当前订单状态。系统暂未产生新增订单，建议检查商品上下架状态或推广渠道流量。`;
-  }
-
-  if (/^(退出应用|退出|关闭应用|关掉应用)$/i.test(query)) {
-    return `好的，正在为你退出应用。`;
-  }
-
-  return `关于“${query}”：${agentName}正在为你解答。当前处于宿主预览环境，大语言模型正在接入中，你可以直接问我问题，或在佩戴眼镜与连接设备后体验完整的深度流式回答。`;
-}
-
 function resolveToolInvocation(query = {}) {
   const input = query && typeof query === "object" ? query : {};
   const token = String(input.token || "").trim();
@@ -679,7 +640,13 @@ const WEBGUI_TOOL_PATHS = {
 };
 
 export default {
+  ...agentProfilePageMethods,
+  ...knowledgeToolPageMethods,
   data: {
+    deviceAgentProfileStatus: "尚未读取设备 Agent 配置",
+    knowledgeToolStatus: "知识工具未选择角色",
+    knowledgeToolHudText: "知识工具 · 点击刷新",
+    knowledgeToolResultText: "",
     modelProbe: false,
     relayBaseUrl: "",
     token: "",
@@ -920,6 +887,7 @@ export default {
     agentCursor: "",
     agentPolling: false,
     agentSpeaking: false,
+    agentSpeakingCue: "",
     transcriptionDesired: true,
     transcriptionListening: false,
     transcriptionState: "准备中",
@@ -990,6 +958,8 @@ export default {
   },
 
   onLoad(query = {}) {
+    installHudDisplay(this);
+    this.agentRuntimeMode = resolveAgentRuntimeMode(query.agentRuntimeMode);
     if (query.modelProbe === true || query.modelProbe === "true") {
       this.pageVisible = true;
       this.destroyed = false;
@@ -1036,6 +1006,7 @@ export default {
       SpeechSynthesisUtteranceCtor: typeof SpeechSynthesisUtterance === "function"
         ? SpeechSynthesisUtterance
         : null,
+      SpeechAudioPlayerCtor: typeof SpeechAudioPlayer === "function" ? SpeechAudioPlayer : null,
       language: "zh-CN"
     });
     const asrCapability = this.asrAdapter.getCapability();
@@ -1247,6 +1218,9 @@ export default {
         }
       }
     } catch (_) {}
+    // Device-owned profile overrides legacy name/prompt only when a real device credential exists.
+    this.restoreDeviceAgentProfile();
+    void this.refreshDeviceAgentProfile().then(() => this.refreshKnowledgeTools());
     this.appendLog("RabiLink AIUI 首屏已就绪，后台能力开始启动。");
     this.scheduleCloudLogFlush(0);
     if (this.pageVisible) this.startDeviceStatus();
@@ -1530,6 +1504,8 @@ export default {
         agentStatus: "设备凭证已领取",
         agentReplyText: persisted ? "正在连接 RabiLink。" : "已连接；本地存储不可用，重启后需在后台重新绑定。"
       });
+      this.restoreDeviceAgentProfile();
+      void this.refreshDeviceAgentProfile().then(() => this.refreshKnowledgeTools());
       this.appendLog("眼镜已通过 SN 领取设备凭证，开始连接 Relay。");
       this.scheduleCloudLogFlush(0);
       if (this.pageVisible && this.data.isTranscriptionMode) {
@@ -1579,6 +1555,7 @@ export default {
   },
 
   interruptConversation(reason = "touch") {
+    this.cancelKnowledgePresentation();
     console.info("[RabiLink AIUI] barge-in interrupted:", reason);
     this.promptCancelled = true;
     this.promptGeneration = Number(this.promptGeneration || 0) + 1;
@@ -1678,6 +1655,10 @@ export default {
   },
 
   async requestConversationReview(reason = "touchpad") {
+    if (!usesRemoteAgent(this.agentRuntimeMode)) {
+      this.setData({ agentStatus: "本机 AIUI Agent 就绪，请直接说话" });
+      return false;
+    }
     const now = Date.now();
     if (now - Number(this.lastReviewRequestAt || 0) < 800) return false;
     this.lastReviewRequestAt = now;
@@ -2223,6 +2204,8 @@ export default {
   },
 
   async refreshAll() {
+    await this.refreshDeviceAgentProfile();
+    await this.refreshKnowledgeTools();
     await this.connectRelay();
     if (this.data.connected) {
       await this.refreshRoutes();
@@ -4450,6 +4433,7 @@ export default {
   },
 
   scheduleAgentPoll(delayMs = 80) {
+    if (!usesRemoteAgent(this.agentRuntimeMode)) return;
     if (!this.agentShouldPoll || !this.data.token || this.data.token === "mobile-bound") return;
     if (this.destroyed || !this.pageVisible || !this.data.isTranscriptionMode) return;
     if (this.agentPollTimer) return;
@@ -4524,6 +4508,7 @@ export default {
   },
 
   drainAgentMessageQueue() {
+    if (!usesRemoteAgent(this.agentRuntimeMode)) return;
     if (this.destroyed || !this.pageVisible || !this.data.isTranscriptionMode) return;
     if (this.speechActive || this.agentSpeechQueuedId) return;
     const queue = Array.isArray(this.agentMessageQueue) ? this.agentMessageQueue : [];
@@ -4548,6 +4533,7 @@ export default {
   },
 
   async pollAgentMessages(generation = this.agentPollGeneration) {
+    if (!usesRemoteAgent(this.agentRuntimeMode)) return;
     if (!this.agentShouldPoll || generation !== this.agentPollGeneration || !this.data.token || this.data.token === "mobile-bound") return;
     if (this.destroyed || !this.pageVisible || !this.data.isTranscriptionMode) return;
     const isAgentActive = Boolean(this.data.assistantModelBusy || this.data.agentSpeaking || this.speechActive);
@@ -4752,6 +4738,24 @@ export default {
     };
     try {
       recognition = this.asrAdapter.createRound({
+        interimResults: true,
+        onInterim: (result) => {
+          this.transcriptionFailureCount = 0;
+          const text = String(result?.text || "").trim();
+          if (!text) return;
+          if (purpose === "configuration") {
+            this.setData({
+              assistantUserText: text,
+              assistantStatus: "正在识别..."
+            });
+          } else {
+            this.setData({
+              transcriptionText: text,
+              transcriptionState: "正在识别",
+              agentStatus: `${this.data.lingzhuAgentName || "灵珠智能体"}倾听中...`
+            });
+          }
+        },
         onFinal: (result) => {
           roundHadResult = true;
           this.transcriptionFailureCount = 0;
@@ -4851,6 +4855,8 @@ export default {
   handleTranscriptionResult(text) {
     const value = String(text || "").trim();
     if (!value) return;
+    if (this.browseKnowledgeResultFromSpeech(value)) return;
+    if (this.selectKnowledgeRoleFromSpeech(value)) return;
     if (/^(退出应用|退出|关闭应用|关掉应用)$/i.test(value)) {
       this.setData({ transcriptionText: value, agentStatus: "正在退出应用" });
       try {
@@ -4865,8 +4871,29 @@ export default {
     const setAgentMatch = value.match(/^(?:请|请帮我|帮我)?(?:把)?(?:设置|绑定|切换)?(?:灵珠)?智能体(?:设置|绑定|切换)?(?:为|成|叫)\s*(.+)$/i)
       || value.match(/^(?:设置|绑定|切换)(?:灵珠)?智能体(?:为|成|叫)?\s*(.+)$/i);
     if (setAgentMatch) {
+      if (this.deviceAgentProfile) {
+        const reply = "当前使用手机管理的设备配置，请在手机修改名称后刷新配置。";
+        this.setData({ agentReplyText: reply, assistantReplyText: reply });
+        this.speakText(reply, "enqueue");
+        return;
+      }
       const newName = setAgentMatch[1].trim().replace(/[。！!？?]$/, "");
       if (newName) {
+        try {
+          if (typeof wx === "undefined" || typeof wx.setStorageSync !== "function") throw new Error("Storage unavailable");
+          wx.setStorageSync("rabilink_lingzhu_agent", {
+            id: this.data.lingzhuAgentId || "",
+            name: newName,
+            prompt: this.data.lingzhuSystemPrompt || ""
+          });
+        } catch (_) {
+          const reply = "本地显示名称保存失败，当前名称和模型保持不变。";
+          this.setData({ agentStatus: "保存失败", agentReplyText: reply, assistantReplyText: reply });
+          this.speakText(reply, "enqueue");
+          return;
+        }
+        this.chatModelGeneration = Number(this.chatModelGeneration || 0) + 1;
+        this.chatModelPromise = null;
         if (this.chatModel) {
           try { this.chatModel.destroy(); } catch (_) {}
           this.chatModel = null;
@@ -4876,13 +4903,7 @@ export default {
           agentStatus: newName + "就绪",
           transcriptionText: value
         });
-        try {
-          if (typeof wx !== "undefined" && typeof wx.setStorageSync === "function") {
-            const current = wx.getStorageSync("rabilink_lingzhu_agent") || {};
-            wx.setStorageSync("rabilink_lingzhu_agent", { ...current, name: newName });
-          }
-        } catch (_) {}
-        const reply = `已将灵珠智能体设置为：${newName}`;
+        const reply = `已保存本地显示名称：${newName}。这不会绑定平台智能体。`;
         this.setData({ agentReplyText: reply, assistantReplyText: reply });
         this.speakText(reply, "enqueue");
         return;
@@ -4927,10 +4948,13 @@ export default {
       createdAt: Date.now(),
       transcriptPolicy: this.transcriptPolicy?.version || ""
     };
-    this.transcriptQueue = saveTranscriptQueue(
-      [...this.transcriptQueue, segment],
-      tokenStorageKey(this.data.token)
-    );
+    const destination = agentTurnDestination(this.agentRuntimeMode, this.data.token);
+    if (destination === "remote") {
+      this.transcriptQueue = saveTranscriptQueue(
+        [...this.transcriptQueue, segment],
+        tokenStorageKey(this.data.token)
+      );
+    }
     const activeAgentName = this.data.lingzhuAgentName || "灵珠智能体";
     this.setData({
       transcriptionText: finalUserText,
@@ -4940,9 +4964,12 @@ export default {
       agentStatus: `${activeAgentName}思考中...`
     });
     this.appendLog(`ASR ${sequence}：${finalUserText}`);
-    void this.flushTranscriptQueue();
-    if (!this.data.token || this.data.token === "standalone" || this.data.token === "mobile-bound") {
+    if (destination === "local") {
       void this.executeLingzhuAgentPrompt(finalUserText);
+    } else if (destination === "remote") {
+      void this.flushTranscriptQueue();
+    } else {
+      this.setData({ agentStatus: "兼容远端模式未连接", transcriptionSyncLabel: "未发送，也未切换本地推理" });
     }
   },
 
@@ -4993,6 +5020,9 @@ export default {
 
   async executeLingzhuAgentPrompt(userText) {
     if (this.destroyed || !this.pageVisible || !userText) return;
+    this.applyPendingDeviceAgentProfile();
+    this.applyPendingKnowledgeTools();
+    this.deviceAgentTurnActive = true;
     const promptGeneration = Number(this.promptGeneration || 0) + 1;
     this.promptGeneration = promptGeneration;
     this.promptCancelled = false;
@@ -5011,14 +5041,15 @@ export default {
         agentStatus: `${currentAgentName}思考中...`
       });
 
+      if (typeof navigator !== "undefined" && navigator.onLine === false) {
+        throw new Error("网络不可用，请检查网络连接");
+      }
+
       const model = await this.ensureChatModel();
       if (!isPromptActive()) return;
 
       if (!model) {
-        console.info("[RabiLink AIUI] LanguageModel not available on host. Generating conversational reply for:", userText);
-        const reply = generateIntelligentFallbackReply(userText, currentAgentName);
-        await this.simulateStreamOutput(reply, currentAgentName, isPromptActive);
-        return;
+        throw new Error("大模型会话未初始化");
       }
 
       let stream = null;
@@ -5027,7 +5058,7 @@ export default {
           stream = await Promise.resolve(model.promptStreaming(userText));
         }
       } catch (streamErr) {
-        console.warn("[RabiLink AIUI] promptStreaming error:", streamErr);
+        console.warn("[RabiLink AIUI] promptStreaming error, trying prompt():", streamErr);
       }
 
       let reader = null;
@@ -5054,7 +5085,7 @@ export default {
           const chunkPromise = reader.read();
           const chunk = await Promise.race([
             chunkPromise,
-            new Promise((_, reject) => setTimeout(() => reject(new Error("stream chunk timeout")), 20000))
+            new Promise((_, reject) => setTimeout(() => reject(new Error("大模型流式响应超时")), 30000))
           ]).catch((err) => {
             console.warn("[RabiLink AIUI] stream chunk read error:", err);
             return { done: true };
@@ -5100,23 +5131,18 @@ export default {
         if (isPromptActive()) {
           if (!accumulated.trim()) {
             if (typeof model.prompt === "function") {
-              try {
-                const singleReply = await Promise.race([
-                  model.prompt(userText),
-                  new Promise((_, reject) => setTimeout(() => reject(new Error("prompt timeout")), 15000))
-                ]);
-                const singleText = String(singleReply || "").trim();
-                if (singleText) {
-                  await this.simulateStreamOutput(singleText, currentAgentName, isPromptActive);
-                  return;
-                }
-              } catch (promptErr) {
-                console.warn("[RabiLink AIUI] model.prompt fallback error:", promptErr);
+              const reply = await Promise.race([
+                model.prompt(userText),
+                new Promise((_, reject) => setTimeout(() => reject(new Error("大模型请求超时")), 30000))
+              ]);
+              if (!isPromptActive()) return;
+              const text = String(reply || "").trim();
+              if (text) {
+                await this.simulateStreamOutput(text, currentAgentName, isPromptActive);
+                return;
               }
             }
-            const fallbackReply = generateIntelligentFallbackReply(userText, currentAgentName);
-            await this.simulateStreamOutput(fallbackReply, currentAgentName, isPromptActive);
-            return;
+            throw new Error("大模型未返回任何内容");
           }
           this.setData({
             assistantModelBusy: false,
@@ -5126,15 +5152,16 @@ export default {
       } else if (typeof model.prompt === "function") {
         const reply = await Promise.race([
           model.prompt(userText),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("prompt timeout")), 30000))
+          new Promise((_, reject) => setTimeout(() => reject(new Error("大模型请求超时")), 30000))
         ]);
         if (!isPromptActive()) return;
         const text = String(reply || "").trim();
-        const finalText = text || generateIntelligentFallbackReply(userText, currentAgentName);
-        await this.simulateStreamOutput(finalText, currentAgentName, isPromptActive);
+        if (!text) {
+          throw new Error("大模型未返回任何内容");
+        }
+        await this.simulateStreamOutput(text, currentAgentName, isPromptActive);
       } else {
-        const fallbackReply = generateIntelligentFallbackReply(userText, currentAgentName);
-        await this.simulateStreamOutput(fallbackReply, currentAgentName, isPromptActive);
+        throw new Error("宿主模型未提供 prompt 或 promptStreaming 接口");
       }
     } catch (error) {
       if (!isPromptActive()) return;
@@ -5144,8 +5171,24 @@ export default {
         try { this.chatModel.destroy(); } catch (_) {}
         this.chatModel = null;
       }
-      const failText = generateIntelligentFallbackReply(userText, currentAgentName);
-      await this.simulateStreamOutput(failText, currentAgentName, isPromptActive);
+      let errText = error?.message || String(error || "大模型调用异常");
+      if (/network|offline|fetch|Failed to fetch/i.test(errText)
+          || (typeof navigator !== "undefined" && navigator.onLine === false)) {
+        errText = "网络不可用，请检查网络连接";
+      }
+      this.setData({
+        assistantModelBusy: false,
+        agentStatus: "模型调用失败",
+        agentReplyText: errText,
+        assistantReplyText: errText
+      });
+      this.speakText(errText, "enqueue");
+      this.setData({ deviceAgentProfileStatus: "模型应用失败，配置未确认生效" });
+    } finally {
+      if (this.promptGeneration === promptGeneration) {
+        this.deviceAgentTurnActive = false;
+        this.applyPendingDeviceAgentProfile();
+      }
     }
   },
 
@@ -5169,6 +5212,7 @@ export default {
   },
 
   async flushTranscriptQueue() {
+    if (!usesRemoteAgent(this.agentRuntimeMode)) return;
     if (this.flushingTranscripts || !this.transcriptQueue.length) {
       if (!this.transcriptQueue.length) {
         this.clearTranscriptFlushRetry();
@@ -5271,7 +5315,23 @@ export default {
     this.setData({ transcriptionListening: false, assistantListening: false });
   },
 
+  cleanupChatModel() {
+    this.chatModelGeneration = Number(this.chatModelGeneration || 0) + 1;
+    const model = this.chatModel;
+    this.chatModel = null;
+    this.chatModelPromise = null;
+    this.chatModelDeviceProfile = null;
+    this.chatModelKnowledgeRuntime = null;
+    this.chatModelReadonlyToolsCount = 0;
+    this.chatModelKnowledgeScope = "";
+    this.chatModelKnowledgeRole = "";
+    this.chatModelKnowledgeCatalog = null;
+    this.cleanupKnowledgeRuntime();
+    try { model?.destroy?.(); } catch (_) {}
+  },
+
   destroyConfigurationModel() {
+    this.cleanupChatModel();
     this.configurationModelGeneration = Number(this.configurationModelGeneration || 0) + 1;
     this.configurationPromptGeneration = Number(this.configurationPromptGeneration || 0) + 1;
     if (this.configurationPromptTimer) {
@@ -5318,37 +5378,61 @@ export default {
     const ModelCtor = (typeof LanguageModel !== "undefined" && LanguageModel)
       || (typeof globalThis !== "undefined" && globalThis.LanguageModel)
       || (typeof window !== "undefined" && window.LanguageModel);
-    if (!ModelCtor) return null;
+    if (!ModelCtor) {
+      throw new Error("宿主未提供 LanguageModel");
+    }
 
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      throw new Error("网络不可用，请检查网络连接");
+    }
+
+    const generation = Number(this.chatModelGeneration || 0);
     const currentAgentName = this.data.lingzhuAgentName || "灵珠智能体";
-    const currentSystemPrompt = this.data.lingzhuSystemPrompt || "";
-
+    const appliedProfile = this.deviceAgentProfile;
+    const currentSystemPrompt = this.deviceAgentSystemInstructions(this.data.lingzhuSystemPrompt || "");
     const creation = (async () => {
       try {
-        const availability = typeof ModelCtor.availability === "function"
-          ? await Promise.race([
-              ModelCtor.availability(),
-              new Promise((_, reject) => setTimeout(() => reject(new Error("availability timeout")), 10000))
-            ]).catch(() => "available")
-          : "available";
-        if (availability !== "available") return null;
+    if (typeof ModelCtor.availability === "function") {
+      const status = await Promise.race([
+        ModelCtor.availability(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("检查模型可用性超时")), 10000))
+      ]).catch((err) => {
+        console.warn("[RabiLink AIUI] availability check error:", err);
+        return "unavailable";
+      });
+      if (status !== "available") {
+        throw new Error(`大模型服务不可用（status: ${status || "unavailable"}）`);
+      }
+    }
 
+        if (generation !== Number(this.chatModelGeneration || 0) || this.destroyed) return null;
         const options = lingzhuLanguageModelOptions({
           agentName: currentAgentName,
           systemPrompt: currentSystemPrompt
         });
 
+        const knowledge = await this.prepareKnowledgeTools();
+        if (generation !== Number(this.chatModelGeneration || 0) || this.destroyed) { knowledge.runtime?.dispose(); return null; }
+        options.tools = [...options.tools, ...knowledge.tools];
         const session = await Promise.race([
-          ModelCtor.create(options),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("create session timeout")), 15000))
+          Promise.resolve(ModelCtor.create(options)).then(session => {
+            if (generation !== Number(this.chatModelGeneration || 0) || this.destroyed) {
+              try { session?.destroy?.(); } catch (_) {}
+              return null;
+            }
+            return session;
+          }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("创建会话超时")), 15000))
         ]);
-        if (this.destroyed) {
-          if (session && typeof session.destroy === "function") session.destroy();
+        if (!session || generation !== Number(this.chatModelGeneration || 0) || this.destroyed) {
+          try { session?.destroy?.(); } catch (_) {}
           return null;
         }
         if (session && typeof session.addEventListener === "function") {
           session.addEventListener("toolcall", (event) => {
             if (!event || event.isComplete === false) return;
+            if (generation !== Number(this.chatModelGeneration || 0) || this.destroyed) return;
+            if (event.functionName !== "close_app") { this.handleKnowledgeToolCall(event, knowledge.runtime); return; }
             if (event.functionName === "close_app") {
               console.info("[RabiLink AIUI] chat toolcall: close_app");
               this.setData({ agentStatus: "正在退出应用" });
@@ -5365,10 +5449,17 @@ export default {
           });
         }
         this.chatModel = session;
+        this.chatModelDeviceProfile = appliedProfile;
+        this.chatModelKnowledgeRuntime = knowledge.runtime;
+        this.chatModelReadonlyToolsCount = knowledge.tools.length;
+        this.chatModelKnowledgeScope = knowledge.scope || "";
+        this.chatModelKnowledgeRole = knowledge.role || "";
+        this.chatModelKnowledgeCatalog = knowledge.catalog || null;
+        void this.acknowledgeDeviceAgentProfile(appliedProfile);
         return session;
       } catch (err) {
         console.warn("[RabiLink AIUI] chat LanguageModel.create failed:", err);
-        return null;
+        throw err;
       }
     })();
 
@@ -5376,7 +5467,7 @@ export default {
     try {
       return await creation;
     } finally {
-      this.chatModelPromise = null;
+      if (this.chatModelPromise === creation) this.chatModelPromise = null;
     }
   },
 
@@ -5783,69 +5874,215 @@ export default {
     this.clearTranscriptionRestart();
     this.stopRecognition(false);
 
-    const synth = (typeof speechSynthesis !== "undefined" && speechSynthesis)
-      || (typeof window !== "undefined" && window.speechSynthesis)
-      || (typeof globalThis !== "undefined" && globalThis.speechSynthesis);
+    const activeName = this.data.lingzhuAgentName || "智能体";
 
-    const UtteranceCtor = (typeof SpeechSynthesisUtterance === "function" && SpeechSynthesisUtterance)
-      || (typeof window !== "undefined" && window.SpeechSynthesisUtterance)
-      || (typeof globalThis !== "undefined" && globalThis.SpeechSynthesisUtterance);
+    // 1. If ttsAdapter.synthesize is supported, prefer synthesize for speech-text sync (subtitles: 'word')
+    const canSynthesize = Boolean(
+      this.ttsAdapter &&
+      typeof this.ttsAdapter.synthesize === "function" &&
+      (typeof this.ttsAdapter.canSynthesize === "function"
+        ? this.ttsAdapter.canSynthesize()
+        : this.ttsAdapter.supportsSynthesize !== false)
+    );
+    if (canSynthesize) {
+      if (mode === "immediate") {
+        this.cancelSpeech();
+      } else if (this.currentSpeechAudioPlayer) {
+        this.speechQueue = this.speechQueue || [];
+        this.speechQueue.push({ text: trimmed, mode, options });
+        return true;
+      }
 
-    let played = false;
-    if (synth && typeof synth.speak === "function" && UtteranceCtor) {
+      let finished = false;
+      const finishPlayback = (error = null) => {
+        if (finished) return;
+        finished = true;
+        if (this.speakingTimer) {
+          clearTimeout(this.speakingTimer);
+          this.speakingTimer = null;
+        }
+        if (this.playerSafetyTimer) {
+          clearTimeout(this.playerSafetyTimer);
+          this.playerSafetyTimer = null;
+        }
+        this.speechUntil = 0;
+        this.speechActive = false;
+        if (this.currentSpeechAudioPlayer) {
+          try { this.currentSpeechAudioPlayer.destroy?.(); } catch (_) {}
+          this.currentSpeechAudioPlayer = null;
+        }
+        this.currentSpeechTask = null;
+        if (error) this.appendLog(`TTS 播放失败：${error?.message || error}`);
+        else this.transcriptPolicy?.rememberPlayback(trimmed, Date.now());
+
+        const failedAttempts = options.agentMessageId
+          ? this.finishPersistedAgentMessage(options.agentMessageId, error || null)
+          : 0;
+
+        this.setData({
+          agentSpeaking: false,
+          agentSpeakingCue: "",
+          agentStatus: error
+            ? (failedAttempts >= AGENT_TTS_MAX_ATTEMPTS ? "TTS 失败，单击重试" : "TTS 失败，正在重试")
+            : "可以继续说话",
+          transcriptionState: this.data.transcriptionDesired ? "准备继续聆听" : "已暂停",
+          assistantStatus: this.data.assistantListeningDesired ? "准备继续聆听" : this.data.assistantStatus
+        });
+        if (this.speechQueue && this.speechQueue.length) {
+          this.startNextSpeech();
+          return;
+        }
+        const wantsTranscription = this.data.isTranscriptionMode && this.data.transcriptionDesired;
+        const wantsConfiguration = this.data.isConfigurationMode && this.data.assistantListeningDesired;
+        if ((wantsTranscription || wantsConfiguration) && this.pageVisible && !this.destroyed) {
+          this.scheduleTranscriptionRestart(TRANSCRIPTION_RESTART_DELAY_MS);
+        }
+        if (!error) {
+          this.drainAgentMessageQueue();
+        } else {
+          setTimeout(
+            () => this.drainAgentMessageQueue(),
+            failedAttempts >= AGENT_TTS_MAX_ATTEMPTS ? 0 : AGENT_TTS_RETRY_DELAY_MS * Math.max(1, failedAttempts)
+          );
+        }
+      };
+
       try {
-        const utterance = new UtteranceCtor(trimmed);
-        utterance.voice = "female-tianmei";
-        utterance.volume = 1;
-        utterance.onend = () => {
-          if (this.speakingTimer) {
-            clearTimeout(this.speakingTimer);
-            this.speakingTimer = null;
+        const synthPromise = this.ttsAdapter.synthesize(trimmed, {
+          subtitles: "word",
+          voice: options.voice || "female-tianmei",
+          volume: typeof options.volume === "number" ? options.volume : 1,
+          onCue: (cue) => {
+            const word = String(cue?.text || "").trim();
+            if (word) {
+              this.setData({
+                agentSpeakingCue: word,
+                agentStatus: `${activeName}播报中「${word}」`
+              });
+            }
           }
-          this.speechUntil = 0;
-          this.speechActive = false;
-          if (options.agentMessageId) {
-            this.finishPersistedAgentMessage(options.agentMessageId, null);
-          }
+        });
+
+        if (synthPromise && typeof synthPromise.then === "function") {
+          this.speechActive = true;
           this.setData({
-            agentSpeaking: false,
-            transcriptionState: this.data.transcriptionDesired ? "准备继续聆听" : "已暂停",
-            assistantStatus: this.data.assistantListeningDesired ? "准备继续聆听" : this.data.assistantStatus
+            agentSpeaking: true,
+            transcriptionState: `${activeName}正在播报`
           });
-          const wantsTranscription = this.data.isTranscriptionMode && this.data.transcriptionDesired;
-          const wantsConfiguration = this.data.isConfigurationMode && this.data.assistantListeningDesired;
-          if ((wantsTranscription || wantsConfiguration) && this.pageVisible && !this.destroyed) {
-            this.scheduleTranscriptionRestart(TRANSCRIPTION_RESTART_DELAY_MS);
-          }
-          this.drainAgentMessageQueue();
-        };
-        utterance.onerror = (err) => {
-          if (this.speakingTimer) {
-            clearTimeout(this.speakingTimer);
-            this.speakingTimer = null;
-          }
-          this.speechUntil = 0;
-          this.speechActive = false;
-          if (options.agentMessageId) {
-            this.finishPersistedAgentMessage(options.agentMessageId, err || new Error("tts-error"));
-          }
-          this.setData({
-            agentSpeaking: false,
-            transcriptionState: this.data.transcriptionDesired ? "准备继续聆听" : "已暂停",
-            assistantStatus: this.data.assistantListeningDesired ? "准备继续聆听" : this.data.assistantStatus
+
+          synthPromise.then(({ task, player }) => {
+            if (this.destroyed || !this.pageVisible || !this.speechActive) {
+              try { task.abort?.(); } catch (_) {}
+              return;
+            }
+            this.currentSpeechTask = task;
+            this.currentSpeechAudioPlayer = player;
+
+            if (player.audioPlayer && typeof player.audioPlayer.addEventListener === "function") {
+              player.audioPlayer.addEventListener("ended", () => finishPlayback(null), { once: true });
+              player.audioPlayer.addEventListener("error", (err) => {
+                console.warn("[RabiLink AIUI] SpeechAudioPlayer error:", err);
+                finishPlayback(err || new Error("player-error"));
+              }, { once: true });
+            }
+
+            if (task.finished && typeof task.finished.then === "function") {
+              task.finished.then((info) => {
+                const durationMs = (info?.duration ? Number(info.duration) * 1000 : 0) || this.speechDelay(trimmed);
+                this.playerSafetyTimer = setTimeout(() => finishPlayback(null), durationMs + 800);
+              }).catch((err) => {
+                finishPlayback(err);
+              });
+            }
+
+            player.play();
+            console.info("[RabiLink AIUI] SpeechAudioPlayer playing with synchronized subtitles:", trimmed);
+          }).catch((err) => {
+            this.currentSpeechTask = null;
+            this.currentSpeechAudioPlayer = null;
+            this.speakFallback(trimmed, mode, options, finishPlayback);
           });
-          const wantsTranscription = this.data.isTranscriptionMode && this.data.transcriptionDesired;
-          const wantsConfiguration = this.data.isConfigurationMode && this.data.assistantListeningDesired;
-          if ((wantsTranscription || wantsConfiguration) && this.pageVisible && !this.destroyed) {
-            this.scheduleTranscriptionRestart(TRANSCRIPTION_RESTART_DELAY_MS);
-          }
-          this.drainAgentMessageQueue();
-        };
-        synth.speak(utterance, mode);
+
+          this.transcriptPolicy?.rememberPlayback(trimmed, Date.now());
+          const duration = typeof this.speechPlaybackWatchdogMs === "function"
+            ? this.speechPlaybackWatchdogMs(trimmed)
+            : this.speechDelay(trimmed);
+          this.speechUntil = Math.max(this.speechUntil || 0, Date.now()) + duration;
+          return true;
+        }
+      } catch (_) {}
+    }
+
+    return this.speakFallback(trimmed, mode, options);
+  },
+
+  speakFallback(trimmed, mode = "enqueue", options = {}, onFinish = null) {
+    let played = false;
+    let finished = false;
+    const finish = onFinish || ((error = null) => {
+      if (finished) return;
+      finished = true;
+      if (this.speakingTimer) {
+        clearTimeout(this.speakingTimer);
+        this.speakingTimer = null;
+      }
+      this.speechUntil = 0;
+      this.speechActive = false;
+      if (error) this.appendLog(`TTS 失败：${error?.message || error}`);
+      else this.transcriptPolicy?.rememberPlayback(trimmed, Date.now());
+
+      const failedAttempts = options.agentMessageId
+        ? this.finishPersistedAgentMessage(options.agentMessageId, error || null)
+        : 0;
+
+      this.setData({
+        agentSpeaking: false,
+        agentSpeakingCue: "",
+        agentStatus: error
+          ? (failedAttempts >= AGENT_TTS_MAX_ATTEMPTS ? "TTS 失败，单击重试" : "TTS 失败，正在重试")
+          : "可以继续说话",
+        transcriptionState: this.data.transcriptionDesired ? "准备继续聆听" : "已暂停",
+        assistantStatus: this.data.assistantListeningDesired ? "准备继续聆听" : this.data.assistantStatus
+      });
+
+      if (this.speechQueue && this.speechQueue.length) {
+        this.startNextSpeech();
+        return;
+      }
+
+      const wantsTranscription = this.data.isTranscriptionMode && this.data.transcriptionDesired;
+      const wantsConfiguration = this.data.isConfigurationMode && this.data.assistantListeningDesired;
+      if ((wantsTranscription || wantsConfiguration) && this.pageVisible && !this.destroyed) {
+        this.scheduleTranscriptionRestart(TRANSCRIPTION_RESTART_DELAY_MS);
+      }
+
+      if (!error) {
+        this.drainAgentMessageQueue();
+      } else {
+        setTimeout(
+          () => this.drainAgentMessageQueue(),
+          failedAttempts >= AGENT_TTS_MAX_ATTEMPTS ? 0 : AGENT_TTS_RETRY_DELAY_MS * Math.max(1, failedAttempts)
+        );
+      }
+    });
+
+    if (this.ttsAdapter && typeof this.ttsAdapter.speak === "function") {
+      try {
+        const playback = this.ttsAdapter.speak(trimmed, {
+          messageId: options.agentMessageId,
+          mode,
+          voice: options.voice || "female-tianmei",
+          onEnd: () => finish(null),
+          onError: (err) => finish(err || new Error("tts-error"))
+        });
+        if (playback) {
+          this.currentUtterance = playback.utterance;
+          this.currentTtsAttempt = playback.attempt;
+        }
         played = true;
-        console.info("[RabiLink AIUI] synth.speak queued:", trimmed);
       } catch (err) {
-        console.warn("[RabiLink AIUI] synth.speak error:", err);
+        console.warn("[RabiLink AIUI] ttsAdapter.speak error:", err);
+        finish(err);
       }
     }
 
@@ -5857,10 +6094,6 @@ export default {
       } catch (err) {
         console.warn("[RabiLink AIUI] wx.speech.playTTS error:", err);
       }
-    }
-
-    if (!played) {
-      console.warn("[RabiLink AIUI] No TTS engine available for:", trimmed);
     }
 
     this.transcriptPolicy?.rememberPlayback(trimmed, Date.now());
@@ -5877,27 +6110,8 @@ export default {
     });
 
     if (this.speakingTimer) clearTimeout(this.speakingTimer);
-    this.speakingTimer = setTimeout(() => {
-      this.speakingTimer = null;
-      this.speechUntil = 0;
-      this.speechActive = false;
-      if (options.agentMessageId) {
-        this.finishPersistedAgentMessage(options.agentMessageId, null);
-      }
-      this.setData({
-        agentSpeaking: false,
-        transcriptionState: this.data.transcriptionDesired ? "准备继续聆听" : "已暂停",
-        assistantStatus: this.data.assistantListeningDesired ? "准备继续聆听" : this.data.assistantStatus
-      });
-      const wantsTranscription = this.data.isTranscriptionMode && this.data.transcriptionDesired;
-      const wantsConfiguration = this.data.isConfigurationMode && this.data.assistantListeningDesired;
-      if ((wantsTranscription || wantsConfiguration) && this.pageVisible && !this.destroyed) {
-        this.scheduleTranscriptionRestart(TRANSCRIPTION_RESTART_DELAY_MS);
-      }
-      this.drainAgentMessageQueue();
-    }, duration);
-
-    return true;
+    this.speakingTimer = setTimeout(() => finish(null), duration);
+    return played;
   },
 
   enqueueSpeech(text, options = {}) {
@@ -5933,13 +6147,29 @@ export default {
       clearTimeout(this.currentSpeechTimer);
       this.currentSpeechTimer = null;
     }
-    const synth = (typeof speechSynthesis !== "undefined" && speechSynthesis)
-      || (typeof window !== "undefined" && window.speechSynthesis)
-      || (typeof globalThis !== "undefined" && globalThis.speechSynthesis);
-    if (synth && typeof synth.cancel === "function") {
-      try { synth.cancel(); } catch (_) {}
+    if (this.playerSafetyTimer) {
+      clearTimeout(this.playerSafetyTimer);
+      this.playerSafetyTimer = null;
     }
-    if (this.data.agentSpeaking) this.setData({ agentSpeaking: false });
+    if (this.currentSpeechAudioPlayer) {
+      try {
+        if (typeof this.currentSpeechAudioPlayer.stop === "function") this.currentSpeechAudioPlayer.stop();
+        if (typeof this.currentSpeechAudioPlayer.destroy === "function") this.currentSpeechAudioPlayer.destroy();
+      } catch (_) {}
+      this.currentSpeechAudioPlayer = null;
+    }
+    if (this.currentSpeechTask) {
+      try {
+        if (typeof this.currentSpeechTask.abort === "function") this.currentSpeechTask.abort();
+      } catch (_) {}
+      this.currentSpeechTask = null;
+    }
+    if (this.ttsAdapter && typeof this.ttsAdapter.cancel === "function") {
+      try { this.ttsAdapter.cancel(); } catch (_) {}
+    }
+    if (this.data.agentSpeaking || this.data.agentSpeakingCue) {
+      this.setData({ agentSpeaking: false, agentSpeakingCue: "" });
+    }
   },
 
   async runAction(label, action) {
@@ -6274,10 +6504,10 @@ export default {
         <!-- TOP STATUS BAR (H: 28px) -->
         <view class="hudTopBar">
           <view class="hudBrandRow">
-            <text class="hudBrandText">{{modelProbe ? 'Rabi 宿主模型测试' : (lingzhuAgentName || '灵珠智能体')}}</text>
+            <text class="hudBrandText">{{hudDisplayName}}</text>
             <view class="hudStatusPill {{agentSpeaking || transcriptionListening || assistantModelBusy ? 'hudStatusPillActive' : ''}}">
               <text class="hudStatusPillDot">●</text>
-              <text class="hudStatusPillText">{{agentSpeaking ? '播报中 (单击打断)' : (assistantModelBusy ? ((lingzhuAgentName || '智能体') + '回复中') : (transcriptionListening ? '正在聆听' : (agentPolling ? '连接中' : '就绪')))}}</text>
+              <text class="hudStatusPillText">{{hudDisplayStatus}}</text>
             </view>
           </view>
           <view class="hudTopRight">
@@ -6292,15 +6522,19 @@ export default {
         <!-- BOTTOM HUD (LARGE 20px SUBTITLES + BARGE-IN) -->
         <view class="hudBottomArea">
           <view class="hudUserSpeech {{transcriptionText || assistantUserText ? '' : 'statusHidden'}}">
-            <text class="hudUserSpeechText">我：「{{transcriptionText || assistantUserText}}」</text>
+            <text class="hudUserSpeechText">我：「{{hudDisplayUser}}」</text>
           </view>
           <view class="hudAgentReplyCard">
-            <text class="hudAgentReplyText">{{agentReplyText || assistantReplyText}}</text>
+            <text class="hudAgentReplyText">{{hudDisplayReply}}</text>
+            <view class="hudCueRow {{agentSpeakingCue ? '' : 'statusHidden'}}">
+              <text class="hudCueWord">🔊 {{hudDisplayCue}}</text>
+            </view>
           </view>
           <view class="hudFooterRow">
             <text class="hudBargeInText">{{agentSpeaking ? '⚡ 单击打断' : '⚡ 单击打断 / 审阅 · 双击退出'}}</text>
             <text class="releaseVersion">v{{releaseVersion}}</text>
           </view>
+          <text class="agentProfileStatus" catchtap="refreshAgentAndKnowledgeTools">{{hudDisplayKnowledge}}</text>
         </view>
       </view>
     </view>
@@ -6334,7 +6568,7 @@ export default {
   position: absolute;
   top: 16px;
   left: 16px;
-  width: 448px;
+  width: 416px;
   height: 28px;
   display: flex;
   flex-direction: row;
@@ -6416,7 +6650,7 @@ export default {
   position: absolute;
   left: 16px;
   bottom: 16px;
-  width: 448px;
+  width: 416px;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -6424,8 +6658,21 @@ export default {
   z-index: 10;
 }
 
+.agentProfileStatus {
+  display: block;
+  flex: none;
+  align-self: flex-start;
+  width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  line-height: 16px;
+  color: #40ff5e;
+}
+
 .hudUserSpeech {
-  width: 448px;
+  width: 416px;
   overflow: hidden;
 }
 
@@ -6440,7 +6687,7 @@ export default {
 }
 
 .hudAgentReplyCard {
-  width: 448px;
+  width: 416px;
   box-sizing: border-box;
   background-color: rgba(0, 0, 0, 0.9);
   border-left: 4px solid #40ff5e;
@@ -6459,8 +6706,25 @@ export default {
   word-break: break-word;
 }
 
+.hudCueRow {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+
+.hudCueWord {
+  display: inline-block;
+  font-size: 13px;
+  line-height: 16px;
+  color: #a3ffb6;
+  background-color: rgba(64, 255, 94, 0.18);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
 .hudFooterRow {
-  width: 448px;
+  width: 416px;
   display: flex;
   flex-direction: row;
   align-items: center;
@@ -6717,17 +6981,12 @@ export default {
 
 .unifiedModeHud {
   position: absolute;
-  left: 16px;
-  bottom: 16px;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  width: 424px;
-  height: 87px;
-  max-height: 87px;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
   min-width: 0;
-  gap: 2px;
-  min-height: 87px;
   overflow: hidden;
 }
 
@@ -6909,7 +7168,7 @@ export default {
 
 .immersiveModeSwitch {
   flex: 0 0 30px;
-  width: 448px;
+  width: 416px;
   height: 30px;
   max-height: 30px;
   overflow: hidden;
@@ -7019,6 +7278,7 @@ export default {
 
 .deviceReadoutText,
 .footerModeHint,
+.agentProfileStatus,
 .releaseVersion {
   display: block;
   overflow: hidden;
@@ -7602,10 +7862,21 @@ export default {
   }
 
   .unifiedModeHud {
-    left: 12px;
-    bottom: 54px;
-    display: flex;
-    width: 424px;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
   }
+  .hudTopBar { top: 8px; height: 20px; }
+  .hudBrandText { font-size: 13px; }
+  .hudStatusPillText { font-size: 10px; }
+  .hudBottomArea { bottom: 8px; gap: 2px; }
+  .hudUserSpeech { display: none; }
+  .hudTopBar, .hudBottomArea, .hudUserSpeech, .hudAgentReplyCard, .hudFooterRow { width: 392px; }
+  .hudAgentReplyCard { max-height: 48px; padding: 2px 6px; }
+  .hudAgentReplyText { font-size: 16px; line-height: 20px; }
+  .hudCueRow { display: none; }
+  .hudBargeInText { font-size: 10px; }
+  .agentProfileStatus { font-size: 10px; line-height: 12px; }
 }
 </style>

@@ -682,7 +682,7 @@ try {
   const batteryManager = createBatteryManager(0.62, false);
   setInkNavigator("ROKID-BATTERY-SMOKE", batteryManager);
   const batteryPage = createPageInstance(pageModule);
-  batteryPage.onLoad({ mode: "transcription" });
+  batteryPage.onLoad({ mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
   assert(/^\d{2}:\d{2}$/.test(batteryPage.data.currentTime), "The lower-left clock must initialize as HH:mm during onLoad.");
   const batteryResolved = await batteryPage.refreshBatteryStatus();
   assert(batteryResolved === false, "A generic host Web Battery provider must not be mislabeled as glasses battery.");
@@ -694,7 +694,7 @@ try {
 
   wxModule.setBatteryInfo({ level: 47, isCharging: true });
   const wxBatteryPage = createPageInstance(pageModule);
-  wxBatteryPage.onLoad({ mode: "transcription" });
+  wxBatteryPage.onLoad({ mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
   const wxBatteryResolved = await wxBatteryPage.refreshBatteryStatus();
   assert(wxBatteryResolved === false, "A generic wx battery field must not be accepted as proof of glasses battery.");
   assert(wxBatteryPage.data.batteryText === "--" && wxBatteryPage.data.batterySource === "", "Unverified Mini Program battery data must remain unknown.");
@@ -711,7 +711,7 @@ try {
     source: "rokid-cxr-phone"
   });
   const relayBatteryPage = createPageInstance(pageModule);
-  relayBatteryPage.onLoad({ token: "tool-token-value", mode: "transcription" });
+  relayBatteryPage.onLoad({ token: "tool-token-value", mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
   const relayBatteryResolved = await relayBatteryPage.refreshBatteryStatus();
   assert(relayBatteryResolved === true, "A fresh phone-side Rokid CXR device status should be accepted when the Ink host has no battery API.");
   assert(relayBatteryPage.data.batteryText === "98%" && relayBatteryPage.data.batteryCharging === false, "Relay CXR battery and charging state must reach the HUD unchanged.");
@@ -774,7 +774,7 @@ try {
   browserPage.reportRuntimeProof = () => Promise.resolve(false);
   browserPage.connectTranscriptionRelay = async () => true;
   const browserRecognitionCount = recognitions.length;
-  browserPage.onLoad({ token: "tool-token-value", mode: "transcription" });
+  browserPage.onLoad({ token: "tool-token-value", mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
   browserPage.onReady();
   browserPage.activateDeferredStartup();
   assert(recognitions.length === browserRecognitionCount, "Craft card preview must not start ASR before Interactive InkView is open.");
@@ -791,7 +791,7 @@ try {
   setupPage.connectTranscriptionRelay = async () => true;
   setupPage.startTranscriptionClock = () => {};
   setupPage.scheduleTranscriptionRestart = () => {};
-  setupPage.onLoad({ token: "legacy-app-token-must-not-bypass-setup", mode: "transcription" });
+  setupPage.onLoad({ token: "legacy-app-token-must-not-bypass-setup", mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
   assert(setupPage.data.needsDeviceSetup === true, "A physical glasses startup without a token must enter Setup.");
   assert(setupPage.data.token === "", "A legacy outer app token must not bypass physical-glasses Setup.");
   assert(setupPage.data.deviceSerialNumber === "ROKID-SETUP-SMOKE", "Setup must show the physical glasses serial number.");
@@ -806,10 +806,21 @@ try {
   setupPage.onUnload();
 
   setInkNavigator("ROKID-SETUP-SMOKE");
+  const localOwnerPage = createPageInstance(pageModule);
+  localOwnerPage.reportRuntimeProof = () => Promise.resolve(false);
+  localOwnerPage.onLoad({ token: "tool-token-value", mode: "transcription" });
+  let localPromptCount = 0;
+  localOwnerPage.executeLingzhuAgentPrompt = async () => { localPromptCount++; };
+  const beforeLocalInputs = wxModule.wxCalls.requestBodies.filter(r => r.url.endsWith('/api/rabilink/input')).length;
+  localOwnerPage.handleTranscriptionResult('默认本地主控测试');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert(localPromptCount === 1, 'A token must not switch the default local model owner.');
+  assert(wxModule.wxCalls.requestBodies.filter(r => r.url.endsWith('/api/rabilink/input')).length === beforeLocalInputs, 'Default local speech must not be forwarded to Relay.');
+  localOwnerPage.onUnload();
   const transcriptPage = createPageInstance(pageModule);
   transcriptPage.reportRuntimeProof = () => Promise.resolve(false);
   transcriptPage.connectTranscriptionRelay = async () => true;
-  transcriptPage.onLoad({ token: "tool-token-value", mode: "transcription" });
+  transcriptPage.onLoad({ token: "tool-token-value", mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
   transcriptPage.onReady();
   transcriptPage.activateDeferredStartup();
   assert(
@@ -869,7 +880,7 @@ try {
   const offlineTranscriptPage = createPageInstance(pageModule);
   offlineTranscriptPage.reportRuntimeProof = () => Promise.resolve(false);
   offlineTranscriptPage.connectTranscriptionRelay = async () => true;
-  offlineTranscriptPage.onLoad({ token: "offline-transcript-token", mode: "transcription" });
+  offlineTranscriptPage.onLoad({ token: "offline-transcript-token", mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
   offlineTranscriptPage.onReady();
   offlineTranscriptPage.activateDeferredStartup();
   offlineTranscriptPage.handleTranscriptionResult("这条断网转写必须在页面重建后自动补传");
@@ -881,7 +892,7 @@ try {
   const wrongTokenPage = createPageInstance(pageModule);
   wrongTokenPage.reportRuntimeProof = () => Promise.resolve(false);
   wrongTokenPage.connectTranscriptionRelay = async () => true;
-  wrongTokenPage.onLoad({ token: "different-account-token", mode: "transcription" });
+  wrongTokenPage.onLoad({ token: "different-account-token", mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
   wrongTokenPage.onReady();
   wrongTokenPage.activateDeferredStartup();
   await new Promise((resolve) => setTimeout(resolve, 30));
@@ -901,7 +912,7 @@ try {
   const restoredTranscriptPage = createPageInstance(pageModule);
   restoredTranscriptPage.reportRuntimeProof = () => Promise.resolve(false);
   restoredTranscriptPage.connectTranscriptionRelay = async () => true;
-  restoredTranscriptPage.onLoad({ token: "offline-transcript-token", mode: "transcription" });
+  restoredTranscriptPage.onLoad({ token: "offline-transcript-token", mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
   restoredTranscriptPage.onReady();
   restoredTranscriptPage.activateDeferredStartup();
   await new Promise((resolve) => setTimeout(resolve, 40));
@@ -933,7 +944,7 @@ try {
   const durablePage = createPageInstance(pageModule);
   durablePage.reportRuntimeProof = () => Promise.resolve(false);
   durablePage.connectTranscriptionRelay = async () => true;
-  durablePage.onLoad({ token: "durable-token-value", mode: "transcription" });
+  durablePage.onLoad({ token: "durable-token-value", mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
   durablePage.onReady();
   durablePage.activateDeferredStartup();
   durablePage.agentShouldPoll = true;
@@ -960,7 +971,7 @@ try {
   const wrongDurableTokenPage = createPageInstance(pageModule);
   wrongDurableTokenPage.reportRuntimeProof = () => Promise.resolve(false);
   wrongDurableTokenPage.connectTranscriptionRelay = async () => true;
-  wrongDurableTokenPage.onLoad({ token: "different-durable-token", mode: "transcription" });
+  wrongDurableTokenPage.onLoad({ token: "different-durable-token", mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
   wrongDurableTokenPage.onReady();
   wrongDurableTokenPage.activateDeferredStartup();
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -971,7 +982,7 @@ try {
   const restoredDurablePage = createPageInstance(pageModule);
   restoredDurablePage.reportRuntimeProof = () => Promise.resolve(false);
   restoredDurablePage.connectTranscriptionRelay = async () => true;
-  restoredDurablePage.onLoad({ token: "durable-token-value", mode: "transcription" });
+  restoredDurablePage.onLoad({ token: "durable-token-value", mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
   restoredDurablePage.onReady();
   restoredDurablePage.activateDeferredStartup();
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -997,7 +1008,7 @@ try {
   const ttsFailurePage = createPageInstance(pageModule);
   ttsFailurePage.reportRuntimeProof = () => Promise.resolve(false);
   ttsFailurePage.connectTranscriptionRelay = async () => true;
-  ttsFailurePage.onLoad({ token: "tts-failure-token", mode: "transcription" });
+  ttsFailurePage.onLoad({ token: "tts-failure-token", mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
   ttsFailurePage.onReady();
   ttsFailurePage.activateDeferredStartup();
   failingSpeechText = poisonText;
@@ -1039,7 +1050,7 @@ try {
   const retryPage = createPageInstance(pageModule);
   retryPage.reportRuntimeProof = () => Promise.resolve(false);
   retryPage.connectTranscriptionRelay = async () => true;
-  retryPage.onLoad({ token: "tool-token-value", mode: "transcription" });
+  retryPage.onLoad({ token: "tool-token-value", mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
   retryPage.onReady();
   retryPage.activateDeferredStartup();
   retryPage.clearTranscriptionRestart();
@@ -1197,7 +1208,7 @@ try {
 
   const roundTripPage = createPageInstance(pageModule);
   roundTripPage.finish = () => { finishCalls += 1; };
-  roundTripPage.onLoad({ mode: "transcription" });
+  roundTripPage.onLoad({ mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
   for (let cycle = 0; cycle < 20; cycle += 1) {
     roundTripPage.onKeyUp({ code: "ArrowDown", preventDefault() {} });
     assert(roundTripPage.data.isConfigurationMode, `Mode cycle ${cycle + 1} should enter configuration.`);

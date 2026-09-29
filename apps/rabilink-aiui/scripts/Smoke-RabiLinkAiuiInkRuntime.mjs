@@ -103,6 +103,18 @@ function applyTestFontScaleFixture(stagingRoot) {
   fs.writeFileSync(stylePath, scaled, "utf8");
 }
 
+function applyLongTextFixture(stagingRoot) {
+  const kind = process.env.RABILINK_AIUI_TEST_LONG_TEXT;
+  if (!kind) return;
+  if (!['zh','ascii'].includes(kind)) fail('Unknown long text fixture.');
+  const file = path.join(stagingRoot,'pages/home/index.js');
+  const text = kind === 'zh' ? '这是用于验证长文本边界的名称与回复。'.repeat(12) : 'UnbrokenAgentNameAndResponse'.repeat(18);
+  const source = fs.readFileSync(file,'utf8');
+  const marker = 'installHudDisplay(this);';
+  if (source.split(marker).length !== 2) fail('Long text fixture marker missing.');
+  fs.writeFileSync(file,source.replace(marker, marker + '\nconst original = this.setData.bind(this); this.setData = patch => original({...patch, lingzhuAgentName:'+JSON.stringify(text)+', agentReplyText:'+JSON.stringify(text)+', assistantReplyText:'+JSON.stringify(text)+', knowledgeToolHudText:'+JSON.stringify(text)+'});'));
+}
+
 function contentType(file) {
   if (file.endsWith(".js")) return "text/javascript; charset=utf-8";
   if (file.endsWith(".wasm")) return "application/wasm";
@@ -591,6 +603,7 @@ try {
     await buildPackageStaging(stagingRoot);
     applyTestBatteryFixture(stagingRoot);
     applyTestFontScaleFixture(stagingRoot);
+    applyLongTextFixture(stagingRoot);
     encoded = collectBundleFiles(stagingRoot);
   }
   server = await startServer(harnessHtml(encoded));
@@ -639,6 +652,28 @@ try {
   const compactSwipeReturnResult = await page.evaluate(() => globalThis.__dispatchCompactSwipeUp());
   const modeStressResult = await page.evaluate(() => globalThis.__dispatchModeStress(20));
 
+  const regions = await page.evaluate(() => {
+    const inspect = (canvas, inject = false) => {
+      const width = canvas.width, height = canvas.height;
+      const data = canvas.getContext('2d').getImageData(0, 0, width, height).data;
+      if (inject) data[inject === 'middle' ? (100 * width + 100) * 4 + 1 : 1] = 255;
+      let top = 0, bottom = 0, middle = 0, unsafe = 0;
+      const compact = height <= 180, margin = compact ? 6 : 12;
+      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+        const p = (y * width + x) * 4;
+        if (Math.max(data[p], data[p+1], data[p+2]) <= 8) continue;
+        if (x < margin || x >= width-margin || y < (compact ? 4 : 8) || y >= height-(compact ? 6 : 8)) unsafe++;
+        if (y < (compact ? 32 : 60)) top++;
+        else if (y >= (compact ? 50 : 190)) bottom++;
+        else middle++;
+      }
+      return {top,bottom,middle,unsafe,ok:top>100 && bottom>300 && middle===0 && unsafe===0};
+    };
+    const normal = document.querySelector('#ink'), compact = document.querySelector('#compact');
+    return {normal:inspect(normal),compact:inspect(compact),faultRejected:!inspect(normal,true).ok && !inspect(normal,'middle').ok};
+  });
+  if (!regions.normal.ok || !regions.compact.ok || !regions.faultRejected) fail('HUD region safety failed: '+JSON.stringify(regions));
+  console.log('HUD region safety: '+JSON.stringify(regions));
   const joined = [...logs, ...pageErrors].join("\n");
   const required = [
     "JsRuntime::eval_module namespace success module='/__ink_bundle__/rabilink-aiui/app.js'",
@@ -646,16 +681,14 @@ try {
     "InkWebView::open_bundle completed"
   ];
   const forbidden = /Module not found|Builtin module not found|Error running (?:page|component)|Exported default must be an object|Failed to execute page|JsRuntime::eval_module declare failed/;
-  const asrContractOk = runtimeToken
-    ? result?.asrStarts >= 2
-      && result?.firstAsrRequest?.continuous === false
-      && result?.firstAsrRequest?.interimResults === false
-    : result?.asrStarts === 0 && result?.firstAsrRequest === null;
+  const asrContractOk = result?.asrStarts >= 1
+    && result?.firstAsrRequest?.continuous === false
+    && result?.firstAsrRequest?.interimResults === true;
   const tokenInvocationOk = result?.invocationHasToken === Boolean(runtimeToken);
-  const hudLayoutOk = result?.firstLitY >= 240
+  const hudLayoutOk = regions.normal.ok && result?.firstLitY >= 8
     && result?.lastLitY >= 330
     && result?.litPixels > 500;
-  const compactSafeLastLitY = 132;
+  const compactSafeLastLitY = 143; // Six-pixel bottom inset; full region safety is checked above.
   const compactLayoutOk = result?.compactRunning === true
     && result?.compactAsrStarts === 0
     && result?.compactPngLength > 1000
@@ -663,12 +696,12 @@ try {
     && result?.compactLastLitY <= compactSafeLastLitY
     && result?.compactLitPixels > 300;
   const compactInteractiveAsrOk = compactWakeupResult?.handled === true
-    && (runtimeToken ? compactWakeupResult?.asrStarts >= 1 : compactWakeupResult?.asrStarts === 0);
+    && compactWakeupResult?.asrStarts >= 1;
   const assistantGestureOk = result?.toolsRunning === true
     && result?.toolsPageOneLitPixels > 500
     && toolsPageDownResult?.running === true
     && toolsPageDownResult?.changedPixels > 300
-    && toolsPageDownResult?.changedPixels < 3000
+    && regions.normal.ok && regions.compact.ok
     && toolsPageDownResult?.litPixels > 500
     && toolsPageDownResult?.pngLength > 1000
     && toolsPageDownResult?.asrStarts === 0
@@ -683,14 +716,14 @@ try {
     && swipeResult?.asrStarts > result?.asrStarts
     && swipeResult?.firstLitX >= 12
     && swipeResult?.lastLitX <= 467
-    && swipeResult?.firstLitY >= 240
+    && swipeResult?.firstLitY >= 8 && swipeResult?.firstLitY < 60
     && swipeResult?.changedPixels > 300
     && swipeResult?.litPixels > 500
     && swipeResult?.modeProductLitPixels > 250
     && swipeResult?.unsafeEdgeLitPixels === 0;
   const returnedToTranscription = swipeReturnResult?.running === true
     && swipeReturnResult?.closeRequested === false
-    && swipeReturnResult?.firstLitY >= 240
+    && swipeReturnResult?.firstLitY >= 8 && swipeReturnResult?.firstLitY < 60
     && swipeReturnResult?.lastLitY >= 330
     && swipeReturnResult?.litPixels > 500;
   const compactConfigurationOk = compactSwipeResult?.running === true

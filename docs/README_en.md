@@ -95,6 +95,16 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Mobile recording ownership](mobile-recording-event-boundary_en.md) — Developer reference for device configuration, recording events, and legacy retirement.
 - [RabiLink wearable health endpoint](rabilink-wearable-health_en.md) — **Experimental integration** for phone settings, structured health history, Agent queries, alert thresholds, and the Xiaomi ADB fallback.
 - [AIUI-to-phone/native-glasses parity checklist](rabilink-aiui-native-parity_en.md) — migration status separated by code, automation, and real-device evidence.
+- [AIUI phone/device profile HTTP](aiui-agent-profile-http_en.md) — **Experimental** phone settings, device ownership, revision conflicts and application receipts; end-to-end acceptance pending.
+- [AIUI profile lifecycle](../apps/rabilink-aiui/docs/agent-profile-runtime_en.md) — Cache, deferred application after the current turn, and model status.
+- [AIUI tool contract review](../apps/rabilink-aiui/docs/agent-tool-contract_en.md) — Official tool events and the unverified result-continuation interface.
+- [RabiPC knowledge MCP](../apps/rabi-mcp/README_en.md) — Plan and memory tools through controlled HTTP/stdio; read-only by default.
+- [Local knowledge bridge settings](user-guide/knowledge-bridge-settings_en.md) — Configure the PC tool connection and device grants; distinguish saved settings from connection readiness.
+- [Phone knowledge permissions](knowledge-grant-phone-ui_en.md) — Select permitted roles and tools for glasses and check authorization readiness.
+- [PC knowledge bridge configuration](rabilink-knowledge-runtime_en.md) — Local MCP connection, secret redaction, device permission intersection and readiness checks.
+- [Knowledge write receipt lookup](rabilink-knowledge-operation-receipts_en.md) — Maintenance: post-release source extension for authorized recovery of persisted receipts; not deployed, unknown outcomes are never replayed.
+- [AIUI Agent acceptance matrix](aiui-agent-acceptance_en.md) — Maintenance: distinguish build, runtime and device evidence; track unfinished capabilities and acceptance criteria.
+- [AIUI single-step knowledge tools](../apps/rabilink-aiui/docs/knowledge-single-step_en.md) — Read-only tools, explicit role selection, actual results and no automatic model continuation.
 - [RabiLink AIUI residency boundaries](rabilink-aiui-residency-plan_en.md)
 - [RabiLink proactive-intelligence requirements](rabilink-active-intelligence-requirements_en.md) — target contract and implementation tracker for user state, scenario recognition, plan/memory closure after group-message recall, and intervention decisions.
 - [RabiLink native app design](rabilink-glasses-app-design_en.md)

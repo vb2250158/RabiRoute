@@ -84,6 +84,45 @@ try {
   assert.equal(recognition.stopped, true);
   assert.equal(endCount, 1);
 
+  let interimText = "";
+  let finalStreamResult = null;
+  const streamingRecognition = asr.createRound({
+    interimResults: true,
+    onInterim: (result) => { interimText = result.text; },
+    onFinal: (result) => { finalStreamResult = result; }
+  });
+  asr.start(streamingRecognition);
+  assert.equal(streamingRecognition.interimResults, true);
+
+  streamingRecognition.onresult?.({
+    resultIndex: 0,
+    results: [
+      Object.assign([{ transcript: "今天" }], { isFinal: false })
+    ]
+  });
+  assert.equal(interimText, "今天");
+  assert.equal(finalStreamResult, null);
+
+  streamingRecognition.onresult?.({
+    resultIndex: 0,
+    results: [
+      Object.assign([{ transcript: "今天天气" }], { isFinal: false })
+    ]
+  });
+  assert.equal(interimText, "今天天气");
+  assert.equal(finalStreamResult, null);
+
+  streamingRecognition.onresult?.({
+    resultIndex: 0,
+    results: [
+      Object.assign([{ transcript: "今天天气怎么样" }], { isFinal: true })
+    ]
+  });
+  assert.equal(interimText, "今天天气");
+  assert.equal(finalStreamResult?.text, "今天天气怎么样");
+  assert.equal(finalStreamResult?.final, true);
+  asr.stop(streamingRecognition, { graceful: true });
+
   const unavailableAsr = createAiuiAsrInputAdapter();
   assert.equal(unavailableAsr.getCapability().available, false);
   assert.equal(unavailableAsr.getCapability().mode, "aiui_native");
@@ -149,6 +188,56 @@ try {
   assert.equal(ttsError.nativeCode, "synthesis-failed");
   assert.equal(tts.cancel(), true);
   assert.equal(cancelled, 1);
+
+  // Test synthesize with subtitles: 'word' and SpeechAudioPlayer speech-text sync
+  let syncedCueText = "";
+  class MockSpeechAudioPlayer {
+    constructor(task, playerOptions) {
+      this.task = task;
+      this.playerOptions = playerOptions;
+      this.textTrack = {
+        addEventListener(event, handler) {
+          if (event === "cuechange") this._cueHandler = handler;
+        },
+        activeCues: {
+          item(index) { return { text: "你好呀", startTime: 0, endTime: 0.5 }; }
+        }
+      };
+      this.audioPlayer = {
+        addEventListener(event, handler) {}
+      };
+    }
+    play() {
+      if (this.textTrack._cueHandler) this.textTrack._cueHandler();
+    }
+    stop() {}
+    destroy() {}
+  }
+  const syncSynthesis = {
+    speak() {},
+    cancel() {},
+    async synthesize(utterance, synthOptions) {
+      assert.equal(synthOptions.subtitles, "word");
+      return {
+        id: "task-1",
+        audioConfig: { format: "mp3" },
+        finished: Promise.resolve({ duration: 1.5 }),
+        abort() {}
+      };
+    }
+  };
+  const syncTts = createAiuiTtsOutputAdapter({
+    speechSynthesisApi: syncSynthesis,
+    SpeechSynthesisUtteranceCtor: MockUtterance,
+    SpeechAudioPlayerCtor: MockSpeechAudioPlayer,
+    language: "zh-CN"
+  });
+  const syncResult = await syncTts.synthesize("你好呀", {
+    subtitles: "word",
+    onCue: (cue) => { syncedCueText = cue.text; }
+  });
+  syncResult.player.play();
+  assert.equal(syncedCueText, "你好呀");
 
   const unavailableTts = createAiuiTtsOutputAdapter();
   assert.equal(unavailableTts.getCapability().available, false);

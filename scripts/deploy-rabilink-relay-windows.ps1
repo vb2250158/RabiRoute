@@ -124,11 +124,16 @@ New-Item -ItemType Directory -Path $bundleRoot -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $bundleRoot "logs") -Force | Out-Null
 $bundleDataRoot = Join-Path $bundleRoot "data"
 New-Item -ItemType Directory -Path $bundleDataRoot -Force | Out-Null
-Copy-Item -LiteralPath $relayScript -Destination (Join-Path $bundleRoot "rabilink-relay-server.mjs") -Force
-Copy-Item -LiteralPath $deviceLogStoreScript -Destination (Join-Path $bundleRoot "rabilink-device-log-store.mjs") -Force
-Copy-Item -LiteralPath $proxyRequestQueueScript -Destination (Join-Path $bundleRoot "rabilink-proxy-request-queue.mjs") -Force
-# Relay signalling, ASR directory and binary tunnel dependencies must travel together.
-foreach ($relative in @("rabilink-event-hub.mjs", "lib/rabilink-tunnel-broker.mjs", "lib/rabilink-asr-priority.mjs")) {
+# One explicit runtime closure drives staging and remote backup; never copy only the entry.
+$runtimeManifest = Join-Path $PSScriptRoot "rabilink-relay-runtime-files.json"
+$relayRuntimeFiles = @(Get-Content -LiteralPath $runtimeManifest -Raw | ConvertFrom-Json)
+if ($relayRuntimeFiles.Count -eq 0) { throw "Relay runtime manifest is empty." }
+foreach ($relative in $relayRuntimeFiles) {
+    if ($relative -notmatch '^(?:lib/)?[A-Za-z0-9_-]+\.mjs$') { throw "Invalid Relay runtime manifest entry." }
+    if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot $relative) -PathType Leaf)) { throw "Required Relay runtime module is missing: $relative" }
+}
+Copy-Item -LiteralPath $runtimeManifest -Destination (Join-Path $bundleRoot "rabilink-relay-runtime-files.json") -Force
+foreach ($relative in $relayRuntimeFiles) {
     $destination = Join-Path $bundleRoot $relative
     New-Item -ItemType Directory -Force -Path (Split-Path $destination) | Out-Null
     Copy-Item -LiteralPath (Join-Path (Join-Path $repoRoot "scripts") $relative) -Destination $destination -Force
@@ -367,6 +372,7 @@ try {
     }
 }
 
+$relayRuntimeLiteral = ($relayRuntimeFiles | ForEach-Object { "'$_'" }) -join ", "
 $remoteSetup = @"
 `$ErrorActionPreference = "Stop"
 `$remoteRoot = "$RemoteRoot"
@@ -375,10 +381,13 @@ $remoteSetup = @"
 New-Item -ItemType Directory -Force -Path `$remoteRoot | Out-Null
 `$backupRoot = Join-Path `$remoteRoot ("backups\code-" + [DateTime]::Now.ToString("yyyyMMdd-HHmmss"))
 New-Item -ItemType Directory -Force -Path `$backupRoot | Out-Null
-foreach (`$name in @("rabilink-relay-server.mjs", "rabilink-device-log-store.mjs", "rabilink-proxy-request-queue.mjs", "rabilink-event-hub.mjs", "Caddyfile", "package.json")) {
+`$runtimeFiles = @($relayRuntimeLiteral)
+foreach (`$name in (`$runtimeFiles + @("rabilink-relay-runtime-files.json", "Caddyfile", "package.json"))) {
     `$source = Join-Path `$remoteRoot `$name
     if (Test-Path -LiteralPath `$source) {
-        Copy-Item -LiteralPath `$source -Destination `$backupRoot -Force
+        `$backupFile = Join-Path `$backupRoot `$name
+        New-Item -ItemType Directory -Force -Path (Split-Path `$backupFile) | Out-Null
+        Copy-Item -LiteralPath `$source -Destination `$backupFile -Force
     }
 }
 if (Test-Path -LiteralPath (Join-Path `$remoteRoot "ribiwebgui")) {
@@ -387,6 +396,9 @@ if (Test-Path -LiteralPath (Join-Path `$remoteRoot "ribiwebgui")) {
 try {
     New-Item -ItemType Directory -Path `$stagingRoot | Out-Null
     Expand-Archive -Path `$zipPath -DestinationPath `$stagingRoot
+    foreach (`$relative in `$runtimeFiles) {
+        if (-not (Test-Path -LiteralPath (Join-Path `$stagingRoot `$relative) -PathType Leaf)) { throw "Relay runtime module missing from staged archive: `$relative" }
+    }
     Get-ChildItem -LiteralPath `$stagingRoot -Force | ForEach-Object {
         Copy-Item -LiteralPath `$_.FullName -Destination `$remoteRoot -Recurse -Force
     }

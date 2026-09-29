@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { compatibilityDefaults, assertCurrentRemoteSurface, missingSharedFields } from './config-surface-contract.mjs';
 import {
   GATEWAY_JSON_FIELDS,
   GATEWAY_SCALAR_FIELDS
@@ -38,7 +39,7 @@ function assertHas(source, needles, label, side) {
 function assertFieldCoverage(field) {
   const webguiNeedles = field.webgui || [field.key];
   const aiuiNeedles = field.aiui || [field.key];
-  if (!field.aiuiOnly) assertHas(webguiSource, webguiNeedles, field.key, "RibiWebGUI");
+  if (!field.aiuiOnly && !compatibilityDefaults.includes(field.key)) assertHas(webguiSource, webguiNeedles, field.key, "RibiWebGUI");
   assertHas(aiuiSource, aiuiNeedles, field.key, "RabiLink AIUI");
 }
 
@@ -54,7 +55,7 @@ function extractTypeFields(source, typeName) {
 }
 
 function assertSharedTypeCoveredByFields(typeName, fields, fieldSet, label) {
-  const missing = fields.filter((field) => !fieldSet.has(field));
+  const missing = missingSharedFields(fields, fieldSet);
   assert(
     missing.length === 0,
     `${label} does not expose every ${typeName} field: ${missing.join(", ")}`
@@ -68,6 +69,9 @@ const sharedConfigSource = read(files.gatewayConfigModel);
 const aiuiPageSource = read(files.aiuiPage);
 const configSurfaceSource = read(files.configSurface);
 const aiuiSource = `${aiuiPageSource}\n${configSurfaceSource}`;
+assertCurrentRemoteSurface({ webgui: routeConfigSource, aiui: aiuiSource, shared: sharedConfigSource,
+  runtime: read(path.join(repoRoot, 'src/manager/controlPlaneRoutes.ts')),
+  owner: read(path.join(projectRoot, 'utils/agent-runtime-mode.js')) });
 const sharedGatewayFields = extractTypeFields(sharedConfigSource, "GatewayDefinition");
 const aiuiGatewayFieldSet = new Set([
   ...GATEWAY_SCALAR_FIELDS.map((field) => field.key),

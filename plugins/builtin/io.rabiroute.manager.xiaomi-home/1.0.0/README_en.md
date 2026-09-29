@@ -43,7 +43,9 @@ Each device action binds its complete intent to a durable `Idempotency-Key` rece
 
 ## Events and camera recordings
 
-`eventDeliveryMode=significant` emits offline, event, and motion alerts only. Add camera motion entities to `cameraMotionEntityIds` only after enumerating real Home Assistant resources.
+`eventDeliveryMode=significant` emits offline, event, and motion alerts by default; entities explicitly listed in `monitoredEntityIds` also emit actual state changes. `all` mode enables actual state changes for other entities; ordinary attribute refreshes do not emit state-change events. Add camera motion entities to `cameraMotionEntityIds` only after enumerating real Home Assistant resources.
+
+Event history remains in the owning persona's `xiaomi-home-events.jsonl`, using event `occurredAt` for `time`/`isoTime`. Manager appends asynchronously through one writer queue (up to 64 pending events, at most 256 KiB per record), without recreating missing role directories. Failed writes emit privacy-bounded audits while event routing continues. History retains append semantics without cross-restart deduplication guarantees; this change adds no automatic rotation, archival, deletion or historical migration.
 
 The official Xiaomi Home integration does not expose camera images or streams. The community path can consume Xiaomi Miot Auto `motion_video_*` attributes: the capture worker downloads HTTPS HLS only from `cameraClipAllowedHosts`, handles AES-128 segments, merges MP4 locally, and registers an artifact. Capture is disabled by default and the host allowlist must come from a real event URL.
 

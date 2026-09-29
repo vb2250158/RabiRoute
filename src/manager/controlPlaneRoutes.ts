@@ -1,4 +1,8 @@
 import { ResourceCache, resourceCacheHandler } from "./resourceCache.js";
+import { RecordingArchiveRuntime } from "./recordingArchiveRuntime.js";
+import { RecordingArchiveAsrRuntime } from "./recordingArchiveAsrRuntime.js";
+import { recordingArchiveAdminHandler } from "./recordingArchiveAdminRoutes.js";
+import { recordingManifestHash } from "./recordingArchiveContract.js";
 import { createAllDayRecording, allDayRecordingHandler } from "./allDayRecordingRoutes.js";
 import { normalizeRouteAgentTargets, resolvePrimaryAgentTarget, primaryAgentInstanceBindings } from "../shared/routeAgentTargets.js";
 import { PeerTunnelRuntime } from "../peerTunnel/runtime.js";
@@ -299,6 +303,7 @@ import { XiaomiHomeArtifactAccess } from "../integrations/xiaomiHome/artifactAcc
 import { XiaomiHomeRuntimeController, XiaomiHomeSettingsStore } from "../integrations/xiaomiHome/settingsRuntime.js";
 import { createXiaomiHomeManagerRouteHandler } from "../integrations/xiaomiHome/managerRoutes.js";
 import type { XiaomiHomeEvent, XiaomiHomeEventDeliveryContext } from "../xiaomiHomeEventDelivery.js";
+import { XiaomiHomeEventLedger } from "../integrations/xiaomiHome/eventLedger.js";
 import { createDiagnosticsRoutes } from "./diagnosticsRoutes.js";
 import { handleGatewayControlApi } from "./gatewayControlRoutes.js";
 import { handleRemoteAgentApi as handleRemoteAgentPluginApi } from "./remoteAgentRoutes.js";
@@ -1066,7 +1071,7 @@ const handleAllDayRecordingApi = allDayRecordingHandler(allDayRecording, {
   readBody: request => readJsonBody(request)
 });
 const resourceCache = new ResourceCache(path.join(rootDir, "data"));
-const handleResourceCacheApi = resourceCacheHandler(resourceCache, {
+const handleLegacyResourceCacheApi = resourceCacheHandler(resourceCache, {
   local: request => isLocalMachineRemoteAddress(request.socket.remoteAddress, localIpv4AddressEntries().map(item => item.address)),
   tunnelKey: () => resourceCacheKey,
   readOnly: () => managerReadOnly,
@@ -1078,6 +1083,68 @@ const handleResourceCacheApi = resourceCacheHandler(resourceCache, {
     publishManagerEvent("all_day_recording", { mobile: true });
   }
 });
+let recordingArchiveAsrRuntime: RecordingArchiveAsrRuntime | undefined;
+const recordingArchiveRuntime = new RecordingArchiveRuntime({
+  stateDir: path.join(rootDir, "data"),
+  roleDirectory: roleId => roleDirForApi(roleId),
+  workerId: () => rabiLinkRelayConfigForMeta().deviceId,
+  authorizeResources: request => {
+    if (!isLocalMachineRemoteAddress(request.socket.remoteAddress, [])
+      || request.headers["x-rabilink-resource-key"] !== resourceCacheKey) return null;
+    const owner = request.headers["x-rabilink-resource-owner"];
+    return typeof owner === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(owner) ? owner : null;
+  },
+  localAdmin: request => isLocalMachineRemoteAddress(request.socket.remoteAddress, [])
+    && request.headers["x-rabilink-tunnel-local"] === undefined,
+  readOnly: () => managerReadOnly,
+  onCommitted: async (owner, manifest, receipt) => {
+    if (!managerReadOnly) await recordingArchiveAsrRuntime?.onCommitted(owner, manifest, receipt);
+  },
+  readProcessing: async (owner, recordId, manifestHash) => {
+    if (!recordingArchiveAsrRuntime) return null;
+    const record = await recordingArchiveRuntime.store.getRecord(owner, recordId);
+    if (record.receipt.manifestHash !== manifestHash || recordingManifestHash(record.manifest) !== manifestHash) {
+      throw new Error("archive_processing_manifest_mismatch");
+    }
+    const result = await recordingArchiveAsrRuntime.readResult({ owner, ...record, processingVersion: "initial" });
+    const state = result.state;
+    if (state !== "not_requested" && state !== "queued" && state !== "running" && state !== "completed"
+      && state !== "failed" && state !== "blocked" && state !== "ambiguous") throw new Error("archive_processing_state_invalid");
+    return { state, jobKey: result.jobKey, processingVersion: "initial",
+      ...(result.state === "completed" && result.result ? { text: result.result.text } : {}) };
+  }
+});
+const handleRecordingArchiveAdminApi = recordingArchiveAdminHandler({
+  bindings: recordingArchiveRuntime.bindings,
+  receiptRoot: path.join(rootDir, "data"),
+  identity: () => ({ applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, managerInstanceId }),
+  workerId: () => rabiLinkRelayConfigForMeta().deviceId,
+  readOnly: () => managerReadOnly,
+  changed: async () => {
+    await recordingArchiveRuntime.restore();
+    if (!managerReadOnly) await recordingArchiveAsrRuntime?.restore();
+  }
+});
+// The core plugin consumes this capability with synchronous || dispatch. Never return a Promise.
+const handleResourceCacheApi = (request: http.IncomingMessage, url: URL, response: http.ServerResponse): boolean => {
+  if (!url.pathname.startsWith("/api/resource-cache/")) return false;
+  if (handleRecordingArchiveAdminApi(request, url, response)) return true;
+  void (async () => {
+    if (!await recordingArchiveRuntime.handle(request, url, response)
+      && !handleLegacyResourceCacheApi(request, url, response)) {
+      response.writeHead(404, { "content-type": "application/json" });
+      response.end(JSON.stringify({ code: "resource_route_not_found" }));
+    }
+  })().catch(() => {
+    console.error(JSON.stringify({ event: "recording_archive_request_failed", code: "archive_unavailable" }));
+    if (!response.headersSent) {
+      request.resume();
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end(JSON.stringify({ code: "archive_unavailable" }));
+    } else response.destroy();
+  });
+  return true;
+};
 const managerHostIdentity = managerHostIdentityFromEnvironment();
 const managerPortPolicy = parseManagerPortPolicy(process.env.GATEWAY_MANAGER_PORT);
 let managerPort = managerPortPolicy.mode === "fixed" ? managerPortPolicy.port : 0;
@@ -1935,7 +2002,8 @@ function rabiLinkRelayConfigFor(definition: GatewayDefinition): RabiLinkRelayGlo
     claimWaitMs: definition.rabiLinkRelayClaimWaitMs ?? globalRelay.claimWaitMs,
     replyIdleTimeoutMs: definition.rabiLinkRelayReplyIdleTimeoutMs ?? globalRelay.replyIdleTimeoutMs,
     speechProxyEnabled: globalRelay.speechProxyEnabled,
-    speechServiceUrl: globalRelay.speechServiceUrl
+    speechServiceUrl: globalRelay.speechServiceUrl,
+    knowledgeBridge: globalRelay.knowledgeBridge
   };
 }
 
@@ -1954,7 +2022,8 @@ function firstRouteLevelRabiLinkRelayConfig(): RabiLinkRelayGlobalConfig | null 
       claimWaitMs: definition.rabiLinkRelayClaimWaitMs ?? globalConfig.rabiLinkRelay.claimWaitMs,
       replyIdleTimeoutMs: definition.rabiLinkRelayReplyIdleTimeoutMs ?? globalConfig.rabiLinkRelay.replyIdleTimeoutMs,
       speechProxyEnabled: globalConfig.rabiLinkRelay.speechProxyEnabled,
-      speechServiceUrl: globalConfig.rabiLinkRelay.speechServiceUrl
+      speechServiceUrl: globalConfig.rabiLinkRelay.speechServiceUrl,
+      knowledgeBridge: globalConfig.rabiLinkRelay.knowledgeBridge
     };
   }
   return null;
@@ -2223,10 +2292,10 @@ async function ensureRoleFile(roleId: string, roleFile: string): Promise<string>
   return target;
 }
 
-async function ensureRoleFolder(roleId: string): Promise<string> {
-  const target = roleFolderPath(rolesRoot, roleId);
+async function ensureRoleFolder(roleId: string, subfolder?: string): Promise<string> {
+  const target = roleFolderPath(rolesRoot, roleId, subfolder);
   try {
-    await requireRouteCatalogLifecycle().ensureRoleFolder(roleId);
+    await requireRouteCatalogLifecycle().ensureRoleFolder(roleId, subfolder);
   } catch (error) {
     throw routeCatalogMutationFailure(error);
   }
@@ -3722,30 +3791,16 @@ function deliverXiaomiHomeEventViaGateway(
   });
 }
 
+const xiaomiHomeEventLedger = new XiaomiHomeEventLedger(roleId => roleDirForApi(roleId));
+
 async function deliverXiaomiHomeEvent(
   event: XiaomiHomeEvent,
   context: XiaomiHomeEventDeliveryContext
 ): Promise<XiaomiHomeGatewayDeliveryResult[]> {
   try {
-    const roleId = sanitizeRoleId(context.agentRoleId) || "YeYu";
-    const roleDir = roleDirForApi(roleId);
-    const eventsFile = path.join(roleDir, "xiaomi-home-events.jsonl");
-    fs.mkdirSync(path.dirname(eventsFile), { recursive: true });
-    const line = JSON.stringify({
-      time: Math.floor(Date.parse(event.occurredAt || new Date().toISOString()) / 1000),
-      isoTime: event.occurredAt || new Date().toISOString(),
-      id: event.id,
-      kind: event.kind,
-      resourceId: event.resourceId,
-      resourceName: event.resourceName,
-      summary: event.summary,
-      artifactId: event.artifactId,
-      areaName: event.areaName,
-      homeId: event.homeId
-    });
-    fs.appendFileSync(eventsFile, `${line}\n`, "utf8");
+    await xiaomiHomeEventLedger.append(sanitizeRoleId(context.agentRoleId), event);
   } catch {
-    // Non-blocking ledger append
+    // Ledger failure is audited by its owner; event routing remains available.
   }
   const candidates = xiaomiHomeGatewayRuntimes(context.agentRoleId);
   if (candidates.length === 0) {
@@ -10065,6 +10120,29 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     gatewayDiagnosticsSnapshotService?.stop();
     gatewayDiagnosticsSnapshotService = undefined;
     closeManagerEventClients();
+  }
+  managerRuntimeOwner.register("recording_archive", () => recordingArchiveRuntime.dispose());
+  if (!managerReadOnly) {
+    // The instance identity is assigned before plugin startup; never freeze the initial empty value.
+    if (!managerInstanceId) throw new Error("archive_asr_instance_identity_missing");
+    const archiveAsr = new RecordingArchiveAsrRuntime({
+      archive: recordingArchiveRuntime,
+      localSpeechUrl: () => speechServiceUrl(),
+      workerId: () => rabiLinkRelayConfigForMeta().deviceId,
+      instanceId: managerInstanceId,
+      changed: () => publishManagerEvent("all_day_recording", { mobile: true })
+    });
+    recordingArchiveAsrRuntime = archiveAsr;
+    // RuntimeOwner disposes in reverse registration order: stop ASR before its archive store.
+    managerRuntimeOwner.register("recording_archive_asr", () => archiveAsr.dispose());
+    // NAS recovery is optional business readiness, not a Manager READY prerequisite.
+    void recordingArchiveRuntime.restore().then(async outcomes => {
+      console.log(JSON.stringify({ event: "recording_archive_restore", ready: outcomes.filter(item => item.ready).length, unavailable: outcomes.filter(item => !item.ready).length }));
+      const asr = await archiveAsr.restore();
+      console.log(JSON.stringify({ event: "recording_archive_asr_restore", ready: asr.filter(item => item.ready).length, unavailable: asr.filter(item => !item.ready).length }));
+    }).catch(() => {
+      console.error(JSON.stringify({ event: "recording_archive_restore_failed", code: "archive_unavailable" }));
+    });
   }
   managerRuntimeOwner.register("all_day_recording", () => allDayRecording.service.dispose());
   if (!managerReadOnly) {

@@ -47,6 +47,10 @@ export class SkillDownloadError extends Error {
 }
 
 
+function metadataIdentity(raw) {
+  return raw?.data && typeof raw.data === "object" ? raw.data : raw;
+}
+
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
 const UPLOAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -134,7 +138,7 @@ async function boundedResponse(response) {
 }
 
 /** Transport only: Manager owns authorization, business state and mutation receipts. */
-export function createManagerClient({ managerUrl, credential, agentId, config, configPath, endpointSession, discover, fetchImpl = fetch, timeoutMs = 30_000, uploadTimeoutMs = 30 * 60_000, downloadTimeoutMs = 120_000 }) {
+export function createManagerClient({ managerUrl, credential, agentId, config, configPath, endpointSession, discover, localHost = false, fetchImpl = fetch, timeoutMs = 30_000, uploadTimeoutMs = 30 * 60_000, downloadTimeoutMs = 120_000 }) {
   let origin = managerOrigin(config?.managerUrl || managerUrl);
   credential ||= config?.nodeCredential;
   // Explicit legacy origins retain their existing contract; enrolled configs
@@ -142,12 +146,15 @@ export function createManagerClient({ managerUrl, credential, agentId, config, c
   const session = endpointSession || ((configPath && config?.managerGuid) || discover
     ? createEndpointSession({ config: config || { managerUrl, nodeCredential: credential }, configPath, fetchImpl, discover, timeoutMs: Math.min(timeoutMs, 5000) })
     : null);
-  if (!credential || !agentId) throw new Error("A node credential and Agent identity are required.");
+  if (localHost) {
+    if (!endpointSession || credential || agentId || config || discover) throw new Error("Local Host transport requires an explicit Host endpoint session without remote credentials.");
+  } else if (!credential || !agentId) throw new Error("A node credential and Agent identity are required.");
   async function request(method, target, { body, headers = {} } = {}, upload, requestOrigin = origin) {
     method = String(method).toUpperCase();
     if (!["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"].includes(method)) throw new Error("Unsupported Manager method.");
     const url = relativeTarget(requestOrigin, target);
-    const outgoing = {
+    if (localHost && (url.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname))) throw new Error("Local Host transport requires HTTP loopback.");
+    const outgoing = localHost ? { accept: "application/json" } : {
       authorization: `Bearer ${credential}`,
       "x-rabiroute-agent-id": agentId,
       accept: "application/json"
@@ -195,14 +202,17 @@ export function createManagerClient({ managerUrl, credential, agentId, config, c
   }
   async function verifiedRequest(method, target, options = {}, upload) {
     const diagnostic = target === "/meta" && String(method).toUpperCase() === "GET";
-    const read = ["GET", "HEAD"].includes(String(method).toUpperCase());
+    // Some GET operations touch persisted state (for example recent-memory views).
+    // Callers may disable replay, but cannot enable replay for a mutation method.
+    const touchesRecentMemory = /^\/(?:api\/)?roles\/[^/]+\/memory\/recent\/[^/]+$/.test(new URL(target, origin).pathname);
+    const read = ["GET", "HEAD"].includes(String(method).toUpperCase()) && options.replaySafe !== false && !touchesRecentMemory;
     relativeTarget(origin, target);
     let endpoint;
     if (session) endpoint = await session.ensure({ diagnostic });
     else {
       const meta = await request("GET", "/meta");
       if (!meta.ok) return meta;
-      let identity; try { identity = JSON.parse(meta.body); } catch { throw new Error("Manager metadata is not valid JSON."); }
+      let identity; try { identity = metadataIdentity(JSON.parse(meta.body)); } catch { throw new Error("Manager metadata is not valid JSON."); }
       if (!identity.applicationGenerationId || !identity.managerInstanceId) throw new Error("Manager generation is not ready or has no identity.");
       if (!diagnostic && !businessReady(identity)) throw new Error("Manager generation is not ready or has no identity.");
       endpoint = { managerUrl: origin, meta: identity, generation: identity.applicationGenerationId, instance: identity.managerInstanceId };
@@ -213,12 +223,12 @@ export function createManagerClient({ managerUrl, credential, agentId, config, c
       // Authenticated exact /meta remains an Agent authorization check; public preflight is credential-free.
       const result = await request(method, target, options, upload, requestOrigin);
       let current;
-      try { const response = await request("GET", "/meta", {}, undefined, requestOrigin); current = response.ok ? JSON.parse(response.body) : undefined; } catch { current = undefined; }
+      try { const response = await request("GET", "/meta", {}, undefined, requestOrigin); current = response.ok ? metadataIdentity(JSON.parse(response.body)) : undefined; } catch { current = undefined; }
       const identityChanged = !current || !sameIdentity(current, identity);
       if (read && session && attempt === 0 && (identityChanged || result.statusCode === 0 || result.statusCode >= 500)) {
         try { endpoint = await session.ensure({ diagnostic, forceDiscovery: true }); continue; } catch { /* Return the original failed read; never replay a mutation. */ }
       }
-      return { ...result, uncertain: result.uncertain || (identityChanged && !read), identityChanged,
+      return { ...result, uncertain: result.uncertain || (!read && (identityChanged || result.statusCode === 0 || result.statusCode >= 500)), identityChanged,
         identity: { applicationGenerationId: identity.applicationGenerationId, managerInstanceId: identity.managerInstanceId } };
     }
   }

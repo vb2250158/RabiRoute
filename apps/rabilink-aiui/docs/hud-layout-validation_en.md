@@ -1,0 +1,11 @@
+# HUD layout validation notes
+
+English | [简体中文](hud-layout-validation.md)
+
+The HUD keeps top status, bottom replies and a transparent central area. The old 87px `.unifiedModeHud` limit conflicted with the new absolutely positioned children and has been removed. Profile status now occupies its own row instead of competing with the version and gesture hint. Compact cards hide user transcription and word cues, reduce reply font size and bound reply height.
+
+Local Ink SDK renders at 480×352 and 448×150 were inspected. Explicit bounded widths are currently used; successful CSS compilation does not establish device clipping safety. The default Ink check now requires visible top status and bottom replies, zero central painting and four safe edges at both sizes. Injecting an out-of-bounds pixel into a pixel copy is rejected by the same predicate. Visible state changes, no black/partial frames and 20 same-page transitions remain mandatory. Tokenless ASR follows the local Agent contract. The structural audit defaults to the current HUD; the retired 87px diagnostic is available only through explicit `--legacy-hud`. The standard central clear region is y=60..189 (130px), with bottom content beginning at y=190; the compact clear region is y=32..49. Painting injected at y=100 must also fail. The AIX is a test artifact, not an accepted installation package.
+
+Test-only raw input injection now covers long names, status and replies in Chinese and unbroken ASCII at both sizes (four scenarios). Inputs pass through production display conversion without overriding bounded display fields. Result pagination/display unit tests verify preservation of raw data. Touch targets and real devices still require acceptance. The local artifact uses `https://example.invalid` and an empty token; it does not connect to a real Relay.
+
+The final local full `npm run check` passed, including nine Agent regression scripts, 11 endpoint/configuration/status contract tests, real Ink, interactive resize in both operation states and AIX validation. Legacy observer cases explicitly select the compatibility owner; a separate assertion verifies that a token does not forward default local speech to Relay. Host voice/model services are mocked in these tests. This is not phone or glasses device acceptance.

@@ -186,6 +186,33 @@ public final class RabiConversationService extends Service {
     private RabiPhoneAudioCapture phoneAudioCapture;
     private RabiMobileSpeechArchive speechArchive;
     private volatile RabiGlassPcBackend backend;
+    private volatile com.rabi.link.recording.RecordingArchiveSession archiveSession;
+    private static volatile java.util.concurrent.CompletableFuture<Void> archiveShutdownBarrier = java.util.concurrent.CompletableFuture.completedFuture(null);
+    /** null means ownership unavailable; legacy workers must defer rather than guess. */
+    public static Boolean archiveOwnership(String captureId) {
+        RabiConversationService service = currentInstance;
+        return service == null || service.backend == null ? null : service.backend.archiveOwnership(captureId);
+    }
+    public static org.json.JSONArray archivePendingSummaries(com.rabi.link.recording.RecordingArchiveCoordinator.Target target, int limit) {
+        RabiConversationService service = currentInstance;
+        if (service == null || service.backend == null) return null;
+        try { return service.backend.archivePendingSummaries(target, limit); }
+        catch (Exception unavailable) { return null; }
+    }
+    public static AutoCloseable pinLocalEvents(java.util.Collection<String> ids) throws Exception {
+        RabiConversationService service = currentInstance;
+        if (service == null || service.backend == null) throw new IllegalStateException("recording writer unavailable");
+        return service.backend.pinLocalEvents(ids);
+    }
+    public static void kickArchive() {
+        RabiConversationService service = currentInstance;
+        if (service != null && service.archiveSession != null) service.archiveSession.kick();
+    }
+    public static void authorizeArchiveHistory(String captureId) throws Exception {
+        RabiConversationService service = currentInstance;
+        if (service == null || service.archiveSession == null) throw new IllegalStateException("recording writer unavailable");
+        service.archiveSession.authorizeHistory(captureId);
+    }
     private final java.util.concurrent.ExecutorService initializationExecutor = java.util.concurrent.Executors.newSingleThreadExecutor();
     private final java.util.ArrayDeque<Runnable> pendingStarts = new java.util.ArrayDeque<>();
     private boolean initialized;
@@ -334,6 +361,9 @@ public final class RabiConversationService extends Service {
 
     /** Queue recovery can inspect many files. It must never run on Android's main thread. */
     private void initializeBackend() {
+        // This method runs on initializationExecutor, not main. Never overlap spool owners.
+        archiveShutdownBarrier.join();
+        if (shutdownComplete) return;
         speechArchive = RabiMobileSpeechArchive.tryCreate(this);
         com.rabi.link.modules.rokid.RabiRecordingEventSync.wake(this);
         if (speechArchive != null) try { speechArchive.cleanup(); }
@@ -429,6 +459,9 @@ public final class RabiConversationService extends Service {
                 if (backend != null) backend.queueDiagnostic("conversation.error", "error", "conversation backend error");
             }
         });
+        archiveSession = new com.rabi.link.recording.RecordingArchiveSession(this, backend);
+        backend.attachArchiveSession(archiveSession);
+        archiveSession.kick();
     }
 
     public static void updateProactivityPreference(Context context, String preference) {
@@ -1469,10 +1502,28 @@ public final class RabiConversationService extends Service {
         RabiAudioShutdownSequence.run(
                 () -> { if (phoneAudioCapture != null) phoneAudioCapture.close(explicitStop); },
                 this::stopGlassesBackend,
-                () -> { if (backend != null) backend.stop(); });
+                () -> {
+                    com.rabi.link.recording.RecordingArchiveSession session = archiveSession;
+                    RabiGlassPcBackend target = backend;
+                    if (session != null) session.close();
+                    // Publish before starting the closer so a new service cannot open a second spool.
+                    java.util.concurrent.CompletableFuture<Void> barrier = new java.util.concurrent.CompletableFuture<>();
+                    archiveShutdownBarrier = barrier;
+                    new Thread(() -> {
+                        try {
+                            if (session != null) session.awaitStopped();
+                            if (target != null) target.stop();
+                            com.rabi.link.recording.CaptureOwnership.release("conversation");
+                            barrier.complete(null);
+                        } catch (Throwable failed) {
+                            com.rabi.link.recording.CaptureOwnership.release("conversation");
+                            barrier.completeExceptionally(failed);
+                        }
+                    }, "rabi-archive-shutdown").start();
+                });
         inputMode = RabiConversationSettings.InputMode.PAUSED;
         stopForeground(STOP_FOREGROUND_REMOVE);
-        com.rabi.link.recording.CaptureOwnership.release("conversation");
+        // Capture ownership is released only after the old spool writer has stopped.
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager != null) manager.cancel(REVIEW_NOTIFICATION_ID);
         if (explicitStop) stopSelf();

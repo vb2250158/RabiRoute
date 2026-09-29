@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type http from "node:http";
@@ -22,7 +20,7 @@ export type DesktopConfigFileContext = {
   findRoute: (gatewayId: string) => DesktopConfigFileRoute | undefined;
   ensurePersonaConfigFile: (roleId: string) => Promise<string>;
   ensureRoleFile: (roleId: string, roleFile: string) => Promise<string>;
-  ensureRoleFolder: (roleId: string) => Promise<string>;
+  ensureRoleFolder: (roleId: string, subfolder?: string) => Promise<string>;
   adapterConfigPath: (configName: string) => string;
   writeAdapterConfigFile: (route: DesktopConfigFileRoute) => Promise<void>;
   openPath?: (target: string) => void;
@@ -78,10 +76,9 @@ export async function desktopConfigFilePayload(
   }
 
   if (type === "xiaomi-recordings" || type === "xiaomi-media" || type === "camera-clips") {
-    const safeRoleId = sanitizeRoleId(roleId ?? route?.agentRoleId) || "YeYu";
-    const roleDir = await context.ensureRoleFolder(safeRoleId);
-    const mediaDir = path.join(roleDir, "xiaomi-media");
-    fs.mkdirSync(mediaDir, { recursive: true });
+    const safeRoleId = sanitizeRoleId(roleId ?? route?.agentRoleId);
+    if (!safeRoleId) throw new Error("请先选择一个路由人格，再打开录像文件夹。");
+    const mediaDir = await context.ensureRoleFolder(safeRoleId, "xiaomi-media");
     openPath(mediaDir);
     return { code: 0, data: { path: mediaDir } };
   }

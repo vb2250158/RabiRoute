@@ -21,6 +21,7 @@ test("event monitor exposes authorization and subscription state without exposin
     connectionState: "authorization_required",
     deliveryMode: "significant",
     cameraMotionEntityCount: 0,
+    monitoredEntityCount: 0,
     agentRoleConfigured: true
   });
 
@@ -68,6 +69,25 @@ test("significant mode drops ordinary state churn but retains offline state", ()
     data: { entity_id: "light.desk", new_state: { entity_id: "light.desk", state: "unavailable" } }
   });
   assert.equal(offline?.kind, "device_offline");
+});
+
+test("ordinary changes require all mode or an explicit monitored entity and skip unchanged states", () => {
+  for (const entityId of ["sensor.temperature", "binary_sensor.door", "switch.desk"]) {
+    const change = {
+      event_type: "state_changed",
+      data: {
+        entity_id: entityId,
+        old_state: { entity_id: entityId, state: "off" },
+        new_state: { entity_id: entityId, state: "on" }
+      }
+    };
+    assert.equal(xiaomiHomeEventFromHomeAssistantStateChange(change), undefined);
+    assert.equal(xiaomiHomeEventFromHomeAssistantStateChange(change, { deliveryMode: "all" })?.kind, "device_state_changed");
+    assert.equal(xiaomiHomeEventFromHomeAssistantStateChange(change, { monitoredEntityIds: [entityId] })?.kind, "device_state_changed");
+    assert.equal(xiaomiHomeEventFromHomeAssistantStateChange(change, { monitoredEntityIds: ["switch.other"] }), undefined);
+    change.data.old_state.state = "on";
+    assert.equal(xiaomiHomeEventFromHomeAssistantStateChange(change, { deliveryMode: "all", monitoredEntityIds: [entityId] }), undefined);
+  }
 });
 
 test("recognizes a new Xiaomi Miot motion video without exposing it in the routed event", () => {

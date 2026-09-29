@@ -4,6 +4,7 @@ param(
     [string]$OutputRoot,
     [string]$DesktopRuntimeRoot,
     [string]$HostRuntimeRoot,
+    [string]$TrackedFilesManifest,
     [switch]$SkipBuild,
     [switch]$SkipDesktopBuild,
     [switch]$IncludeSpeech,
@@ -80,21 +81,54 @@ $requiredPortableRuntimeFiles = @(
     "scripts/Resolve-RabiRouteManagerUrl.ps1",
     "scripts/lib/discover-manager-url.mjs",
     "apps/rabi-agent/lib/manager-client.mjs",
-    "apps/rabi-agent/lib/manager-cli.mjs"
+    "apps/rabi-agent/lib/manager-cli.mjs",
+    # The compiled runtime imports ../../packages from dist/manager; copy even in untracked local snapshots.
+    "packages/rabi-knowledge-contract/schema.mjs",
+    "scripts/lib/release-tracked-manifest.ps1",
+    "scripts/rabilink-relay-runtime-files.json",
+    "docs/aiui-agent-profile-http.md",
+    "docs/aiui-agent-profile-http_en.md",
+    "docs/rabilink-knowledge-operation-receipts.md",
+    "docs/rabilink-knowledge-operation-receipts_en.md",
+    "docs/knowledge-grant-phone-ui.md",
+    "docs/knowledge-grant-phone-ui_en.md"
 )
+$relayRuntimeFiles = Get-Content -LiteralPath (Join-Path $repo 'scripts/rabilink-relay-runtime-files.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+foreach ($relative in $relayRuntimeFiles) {
+    if ($relative -notmatch '^(lib/)?[a-z0-9-]+\.mjs$') { throw 'Unsafe Relay runtime manifest path' }
+    $requiredPortableRuntimeFiles += "scripts/$relative"
+}
+
+$trackedManifestEntries = $null
+if ($TrackedFilesManifest) {
+    . (Join-Path $scriptDir 'lib/release-tracked-manifest.ps1')
+    $trackedManifestEntries = Read-ReleaseTrackedManifest $TrackedFilesManifest $repo
+}
 
 function Copy-TrackedTree([string]$RelativeRoot) {
     $prefix = ($RelativeRoot.TrimEnd("\", "/") -replace "\\", "/") + "/"
-    $files = & git -C $repo ls-files -- "$prefix*"
-    if ($LASTEXITCODE -ne 0) { throw "git ls-files failed for $RelativeRoot" }
+    if ($null -ne $trackedManifestEntries) {
+        $files = @($trackedManifestEntries | Where-Object { $_.path.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { $_.path })
+    } else {
+        $files = & git -C $repo ls-files -- "$prefix*"
+        if ($LASTEXITCODE -ne 0) { throw "git ls-files failed for $RelativeRoot" }
+    }
     foreach ($relative in $files) {
         if (-not $relative.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
         if ($excludedRuntimeFiles.Contains($relative)) { continue }
         $source = Join-Path $repo ($relative -replace "/", "\")
-        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { continue }
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+            if ($null -ne $trackedManifestEntries) { throw "Missing tracked file: $relative" }
+            continue
+        }
+        if ($null -ne $trackedManifestEntries) {
+            $expectedHash = ($trackedManifestEntries | Where-Object path -EQ $relative).sha256
+            if ((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -ne $expectedHash) { throw "Tracked hash changed before copy: $relative" }
+        }
         $destination = Join-Path $payload ($relative -replace "/", "\")
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
         Copy-Item -LiteralPath $source -Destination $destination -Force
+        if ($null -ne $trackedManifestEntries -and (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash -ne $expectedHash) { throw "Tracked copy hash mismatch: $relative" }
     }
 }
 

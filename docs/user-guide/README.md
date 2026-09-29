@@ -48,6 +48,7 @@ RabiRoute 是消息分诊和调度层。它接收消息、记录事件、判断�
 | 接 QQ、定时器、Webhook 或 RabiLink | [Route 与消息端](routes-and-adapters.md) |
 | 从其他设备调用目标 PC 的 TTS / ASR | [从远端调用 TTS 与 ASR](speech-api.md) |
 | 绑定 Codex 或其他处理端 | [Agent、项目与任务](agents-and-sessions.md) |
+| 查看人格保存的技能目录与正文 | [查看角色技能](persona-skills.md) |
 | 配置人格、命中规则和定时计划 | [人格与消息规则](personas-and-rules.md) |
 | 消息没到、状态异常或需要复盘 | [运行、日志与排障](operations-and-troubleshooting.md) |
 | 理解回复权限、草稿和本地数据 | [安全、回传与数据](safety-and-data.md) |

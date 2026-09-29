@@ -10,6 +10,20 @@ Rabi Agent is a headless LAN worker, not a full RabiRoute client. It opens an ou
 
 > Status: experimental. Setup, authorization and upload-to-group-file delivery passed local tests, a full build, and deployment health checks for `0.3.4-4b5d30118b40`. Upload integration used real HTTP and simulated NapCat; real two-computer group delivery remains unverified. This discovery-guidance and content-digest update audit requires separate verification of its final running version. Full Windows ZIP acceptance remains pending.
 
+## Local plan and memory MCP (experimental)
+
+Knowledge MCP now lives in the separate [`../rabi-mcp`](../rabi-mcp/README_en.md) application and is excluded from remote Agent update dependencies. The environment settings below apply to that separate application, not this worker's startup.
+
+Configure the MCP host environment:
+
+- `RABIROUTE_HOST_EXE`: optional local Host executable; defaults to the current user's standard installation.
+- `RABI_MCP_ALLOWED_ROLES`: required JSON string array, for example `["example"]`. Tool arguments cannot expand this allowlist.
+- `RABI_MCP_ALLOW_WRITES`: defaults to `false`. Only explicit `true` enables creation, updates, and recent-memory detail reads that update view timestamps.
+
+Tools cover knowledge search, plan lists/details/status catalogs, memory lists and consolidated details. Writes add plan and recent-memory creation/updates. Updates require the exact strong ETag; mutations require a previously saved stable idempotency key. Recent details follow the current Manager touch receipt contract; a read-only Manager without that receipt is not confirmed successful. No deletion, consolidation execution, archival writes, attachments, task bindings or arbitrary HTTP requests are exposed.
+
+35 isolated module, official SDK in-memory and real stdio subprocess tests pass, including clean exit and protocol-only stdout. Local Host dynamic identity discovery has also been checked against a running Host; no real plans or memories were read or written in these tests. Installation/release, actual Agent tool registration, and phone/glasses acceptance remain pending. The phone's Relay management page is not an MCP host; this entry does not mean the glasses' bound Agent has loaded these tools.
+
 ## First connection
 
 1. In the controlling WebGUI, copy the setup prompt from **Remote Agent** and paste it into a private Codex/DSH task on the target computer. Requires Node.js 22.13+ and a running supported host.
@@ -39,6 +53,8 @@ node rabi-agent.mjs --api GET "/api/lan-agent/resources/read?id=docs%2Frabi-agen
 ```
 
 General syntax: `--api METHOD /path --agent ID [--body-stdin] [--if-match ETAG] [--idempotency-key KEY]`. Select the exact Agent from private configuration. The CLI reads `nodeCredential` automatically and rejects old shared credentials. Read the current contract before mutations, supply JSON through standard input, and provide the required strong ETag and stable idempotency key. The CLI checks Manager `/meta` before and after calls. On timeout, 503, `uncertain` or a generation change after a write, read authoritative state before acting and never replay automatically. On 412, read again and reconfirm intent.
+
+The transport treats recent-memory detail GET requests as stateful operations because they update view timestamps: failures or generation changes are not replayed automatically and are reported as `uncertain`. Module callers can also use `replaySafe: false` to disable replay for other stateful queries; this option cannot enable automatic POST/PATCH replay. Both direct and `data`-wrapped `/meta` responses undergo the same identity check. This change has source and isolated-test verification only; it is not deployed yet.
 
 The current operation catalog contains controlled business entry points and aliases. It is not every Manager API or a guarantee of remote availability. Administrator settings, arbitrary `file` access and host control are denied; business permissions, Action Gate, source identity and existing loopback-only restrictions still apply. Resources are limited to public documents, skills and controlled text directly referenced within the same skill package, not an arbitrary filesystem. Fetch the latest skills and contracts published by Manager on demand. Do not copy plans, memories or message-processing state into a second business-state authority.
 

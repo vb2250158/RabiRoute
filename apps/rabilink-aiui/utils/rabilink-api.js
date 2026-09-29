@@ -157,6 +157,20 @@ function safeParseJson(text) {
   }
 }
 
+export function getDeviceAgentProfile(config) {
+  return requestJson(config, "/api/rabilink/device/agent-profile", { timeoutMs: 12000 }).then(result => {
+    if (result?.code !== 0 || !result.data || typeof result.data !== "object") throw new Error("Invalid device profile response");
+    return result.data;
+  });
+}
+
+export function reportDeviceAgentProfileApplied(config, body) {
+  return requestJson(config, "/api/rabilink/device/agent-profile/applied", { method: "POST", body, timeoutMs: 12000 }).then(result => {
+    if (result?.code !== 0 || !result.data || typeof result.data !== "object") throw new Error("Device profile receipt not confirmed");
+    return result.data;
+  });
+}
+
 export function getMobileState(config, timeoutMs = DEFAULT_TIMEOUT_MS) {
   return requestJson(config, "/api/rabilink/mobile/state", { timeoutMs });
 }
@@ -291,6 +305,24 @@ export function publishRabiLinkDeviceLogs(config, payload = {}) {
     },
     timeoutMs: 8000
   });
+}
+
+export async function requestDeviceKnowledge(config, body) {
+  if (!body || typeof body !== "object" || Array.isArray(body) || !["list", "call"].includes(body.operation)
+    || Object.keys(body).some(key => !["operation", "name", "args"].includes(key))) throw new Error("INVALID_KNOWLEDGE_REQUEST");
+  if (JSON.stringify(body).length > 16384) throw new Error("KNOWLEDGE_REQUEST_TOO_LARGE");
+  try {
+    const response = await requestJson(config, "/api/rabilink/device/knowledge", { method: "POST", body, timeoutMs: 20000 });
+    if (response.code !== 0 || !response.data || typeof response.data !== "object" || response.uncertain === true) {
+      const error = new Error("KNOWLEDGE_RESPONSE_NOT_CONFIRMED");
+      error.response = response; error.uncertain = response.uncertain === true;
+      throw error;
+    }
+    return response.data;
+  } catch (error) {
+    error.uncertain = error.uncertain === true || error.response?.uncertain === true;
+    throw error;
+  }
 }
 
 export function getRabiLinkMessageStream(config, after = "", waitMs = 25000) {

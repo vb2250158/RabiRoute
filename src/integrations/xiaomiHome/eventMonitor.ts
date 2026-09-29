@@ -167,9 +167,6 @@ export function xiaomiHomeEventFromHomeAssistantStateChange(
     isStateChanged && (
       options.deliveryMode === "all"
       || monitoredIds.has(normalizedEntityId)
-      || state.entity_id.startsWith("sensor.")
-      || state.entity_id.startsWith("binary_sensor.")
-      || state.entity_id.startsWith("switch.")
     )
   ) {
     const unit = state.attributes?.unit_of_measurement ? ` ${state.attributes.unit_of_measurement}` : "";

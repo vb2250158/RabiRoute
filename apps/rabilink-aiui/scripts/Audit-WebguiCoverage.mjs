@@ -1,130 +1,102 @@
-import fs from "node:fs";
-import path from "node:path";
-
-const projectRoot = path.resolve(import.meta.dirname, "..");
-const repoRoot = path.resolve(projectRoot, "..", "..");
-
-const webguiSrcDir = path.join(repoRoot, "ribiwebgui", "src");
-const aiuiPagePath = path.join(projectRoot, "pages", "home", "index.ink");
-const relayPath = path.join(repoRoot, "scripts", "rabilink-relay-server.mjs");
-
-const intentionallyBlockedEndpoints = new Map([
-  [
-    "/api/agent/threads",
-    "Creates or sends Codex tasks and must remain behind the PC-side Agent and approval boundary."
-  ],
-  [
-    "/api/role-panel/messages",
-    "Sends a real role-panel message and must remain behind the PC-side messaging and approval boundary."
-  ],
-  [
-    "/api/roles/:param/plans/:param/feedback",
-    "Records approval feedback and notifies a real Agent, so AIUI must not expose it without a dedicated plan-review surface and explicit user confirmation."
-  ],
-  [
-    "/api/message/napcat-ensure-ready",
-    "Starts or repairs a local NapCat login and must remain an explicit local WebGUI action."
-  ],
-  [
-    "/api/speech/asr",
-    "Uploads a manual host ASR file; Android uses the ordered PCM stream and AIUI uses native ASR instead."
-  ],
-  [
-    "/api/speech/tts",
-    "Runs the host manual TTS/FIFO action; remote speech clients use the restricted RabiSpeech API and AIUI uses native TTS."
-  ]
-]);
-
-function read(file) {
-  return fs.readFileSync(file, "utf8");
+import fs from 'node:fs';
+import path from 'node:path';
+import vm from 'node:vm';
+import { fileURLToPath } from 'node:url';
+import { contracts, METHODS } from './webgui-coverage-contract.mjs';
+const projectRoot = path.resolve(import.meta.dirname, '..');
+export const repoRoot = path.resolve(projectRoot, '../..');
+const read = file => fs.readFileSync(file, 'utf8');
+function files(dir) { return fs.readdirSync(dir, { withFileTypes: true }).flatMap(e => e.isDirectory() ? files(path.join(dir,e.name)) : /\.(vue|ts|js)$/.test(e.name) ? [path.join(dir,e.name)] : []); }
+// Scan template expressions with balanced braces and nested quoted/template strings.
+function quoted(source, start) {
+  const quote = source[start]; let text = '', i = start + 1;
+  while (i < source.length) {
+    if (source[i] === '\\') { text += source.slice(i,i+2); i += 2; continue; }
+    if (source[i] === quote) return { text, end: i + 1 };
+    if (quote === '`' && source.slice(i,i+2) === '${') {
+      const begin = i; i += 2; let depth = 1;
+      while (depth && i < source.length) {
+        if (['"', "'", '`'].includes(source[i])) { i = quoted(source,i).end; continue; }
+        if (source[i] === '{') depth++;
+        if (source[i] === '}') depth--;
+        i++;
+      }
+      text += source.slice(begin,i); continue;
+    }
+    text += source[i++];
+  }
+  throw new Error('Unterminated endpoint string');
 }
-
-function walkSourceFiles(dir) {
-  const files = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...walkSourceFiles(fullPath));
-    } else if (/\.(vue|ts|js)$/.test(entry.name)) {
-      files.push(fullPath);
+export function normalizeEndpoint(raw) {
+  let result = '', i = 0;
+  while (i < raw.length) {
+    if (raw[i] === '?') break;
+    if (raw.slice(i,i+2) !== '${') { result += raw[i++]; continue; }
+    let depth = 1, start = i + 2; i = start;
+    while (depth && i < raw.length) {
+      if (['"', "'", '`'].includes(raw[i])) { i = quoted(raw,i).end; continue; }
+      if (raw[i] === '{') depth++; if (raw[i] === '}') depth--; i++;
+    }
+    const expression = raw.slice(start,i-1);
+    if (!result && expression.trim() === 'apiBase') continue;
+    if (/params\.size|["'`]\?/.test(expression) || (expression.trim() === 'suffix' && result.endsWith('/agents'))) break;
+    result += result.endsWith('/') ? ':param' : ':dynamic';
+  }
+  return result;
+}
+export function discover(source) {
+  const result = [];
+  const re = /\bfetch\s*\(\s*([`'"])/g; let match;
+  while ((match = re.exec(source))) {
+    const value = quoted(source, re.lastIndex - 1); re.lastIndex = value.end;
+    let endpoint = normalizeEndpoint(value.text);
+    if (endpoint === '/api/rabilink/peer/') endpoint += ':dynamic';
+    if (!endpoint.startsWith('/')) continue;
+    const tail = source.slice(value.end, source.indexOf('\n', value.end) < 0 ? value.end+250 : value.end+600);
+    const method = /^\s*,\s*\{[\s\S]*?\bmethod\s*:\s*['"]([A-Z]+)['"]/.exec(tail)?.[1] || 'GET';
+    result.push({endpoint,method});
+  }
+  return result;
+}
+export function relayPolicy(source) {
+  const start = source.indexOf('function mobileWebguiPathAllowed(');
+  const end = source.indexOf('\n}',start);
+  if (start < 0 || end < 0) throw new Error('Missing actual Relay permission function');
+  return vm.runInNewContext('(' + source.slice(start,end+2) + ')', Object.create(null), {timeout:1000});
+}
+export function audit(root = repoRoot, policyOverride, extraDiscovered = []) {
+  const relay = read(path.join(root,'scripts/rabilink-relay-server.mjs'));
+  const allowed = policyOverride || relayPolicy(relay);
+  const page = read(path.join(root,'apps/rabilink-aiui/pages/home/index.ink'));
+  const found = files(path.join(root,'ribiwebgui/src')).flatMap(file => discover(read(file)).map(e => ({...e,file:path.relative(root,file)})));
+  const errors = [];
+  for (const item of [...found, ...extraDiscovered]) {
+    const candidates = contracts.filter(c => c.endpoint === item.endpoint);
+    if (!candidates.length) errors.push(`Unknown discovered endpoint: ${item.endpoint} (${item.file})`);
+    // Method extraction is advisory for dynamic helper methods; actual permissions are
+    // exhaustively checked below against the explicit method contract.
+  }
+  for (const c of contracts) {
+    const sample = c.endpoint.replaceAll(':param','fixture').replaceAll(':dynamic','/fixture');
+    const expected = contracts.filter(row => row.endpoint === c.endpoint && row.classification === 'required').flatMap(row => row.methods);
+    for (const method of METHODS) if (allowed(method,sample) !== expected.includes(method)) errors.push(`Relay permission mismatch ${method} ${c.endpoint}`);
+    if (c.classification === 'required') {
+      const markers = c.endpoint.startsWith('/gateways/') ? ['gatewayActionPath'] : ({'/gateways':['loadWebguiConfigData'],'/manager-config':['loadManagerConfig'],'/open-config-file':['openPcConfigFile'],'/api/scan/agents':['runAgentScan'],'/api/scan/message-adapters':['runMessageScan']})[c.endpoint] || [c.endpoint];
+      if (!page.includes(c.endpoint) && !(c.endpoint === '/api/gateways' && page.includes('loadWebguiConfigData')) && !markers.some(m => page.includes(m))) errors.push(`Missing legacy implementation: ${c.endpoint}`);
+    }
+    if (c.evidence.includes('/')) {
+      const file = path.join(root,c.evidence);
+      if (!fs.existsSync(file)) errors.push(`Missing dedicated fixture: ${c.evidence}`);
     }
   }
-  return files;
+  // Request-helper paths are explicit: fetch(path) cannot expose their URL to literal extraction.
+  const skill = read(path.join(root,'ribiwebgui/src/roleSkillClient.ts'));
+  if (!skill.includes('export function roleSkillPath') || !skill.includes('/skills${') || !skill.includes('await request(path, { signal })')) errors.push('Skill helper manifest drift');
+  const api = read(path.join(root,'apps/rabilink-aiui/utils/rabilink-api.js'));
+  for (const c of contracts.filter(c => c.owner === 'Relay' && c.endpoint.startsWith('/api/'))) if (!api.includes(c.endpoint)) errors.push(`Dedicated client missing: ${c.endpoint}`);
+  // Additional dedicated/helper endpoint literals must be classified, not silently ignored.
+  for (const match of api.matchAll(/requestJson\(config,\s*["'](\/api\/rabilink\/device\/[^"']+)["']/g)) if (!contracts.some(c => c.endpoint === match[1])) errors.push(`Unknown dedicated helper endpoint: ${match[1]}`);
+  if (errors.length) throw new Error(errors.join('\n'));
+  return { discovered:found.length, contracts:contracts.length, unsupported:contracts.filter(c=>c.classification==='unsupported').length };
 }
-
-function addEndpoint(endpoints, endpoint, file) {
-  if (!endpoint.startsWith("/")) return;
-  if (!endpoints.has(endpoint)) endpoints.set(endpoint, new Set());
-  endpoints.get(endpoint).add(path.relative(repoRoot, file).replaceAll("\\", "/"));
-}
-
-function extractFetchEndpoints() {
-  const endpoints = new Map();
-  for (const file of walkSourceFiles(webguiSrcDir)) {
-    const source = read(file);
-    for (const match of source.matchAll(/fetch\(\s*(?:`\$\{apiBase\}([^`$]+)|[`'"]([^`'"]+))/g)) {
-      const raw = match[1] || match[2] || "";
-      const endpoint = raw.replace(/\$\{[^}]+\}/g, ":param").split("?")[0];
-      addEndpoint(endpoints, endpoint, file);
-    }
-  }
-  return endpoints;
-}
-
-function endpointCoveredByAiui(endpoint, aiuiSource) {
-  if (aiuiSource.includes(endpoint)) return true;
-  if (endpoint === "/gateways") return aiuiSource.includes("loadWebguiConfigData");
-  if (endpoint === "/manager-config") return aiuiSource.includes("loadManagerConfig");
-  if (endpoint === "/open-config-file") return aiuiSource.includes("openPcConfigFile");
-  if (endpoint.startsWith("/gateways/")) return aiuiSource.includes("gatewayActionPath");
-  if (endpoint.startsWith("/api/scan/message-adapters")) return aiuiSource.includes("runMessageScan");
-  return false;
-}
-
-function endpointAllowedByRelay(endpoint, relaySource) {
-  if (relaySource.includes(`pathname === "${endpoint}"`)) return true;
-  if (endpoint.startsWith("/gateways/")) return relaySource.includes("\\/gateways\\/[^/]+\\/");
-  if (endpoint.startsWith("/api/scan/message-adapters")) return relaySource.includes('pathname === "/api/scan/message-adapters"');
-  return false;
-}
-
-const aiuiSource = read(aiuiPagePath);
-const relaySource = read(relayPath);
-const endpoints = extractFetchEndpoints();
-const misses = [];
-const blocked = [];
-
-for (const [endpoint, files] of [...endpoints.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-  const coveredByAiui = endpointCoveredByAiui(endpoint, aiuiSource);
-  const allowedByRelay = endpointAllowedByRelay(endpoint, relaySource);
-  const blockedReason = intentionallyBlockedEndpoints.get(endpoint);
-  if (blockedReason) {
-    if (coveredByAiui || allowedByRelay) {
-      misses.push({ endpoint, coveredByAiui, allowedByRelay, files: [...files], blockedReason });
-    } else {
-      blocked.push({ endpoint, files: [...files], reason: blockedReason });
-    }
-    continue;
-  }
-  if (!coveredByAiui || !allowedByRelay) {
-    misses.push({
-      endpoint,
-      coveredByAiui,
-      allowedByRelay,
-      files: [...files]
-    });
-  }
-}
-
-if (misses.length) {
-  for (const miss of misses) {
-    console.error(
-      `${miss.coveredByAiui ? "AIUI" : "MISS"} ${miss.allowedByRelay ? "ALLOW" : "BLOCK"} ${miss.endpoint} <= ${miss.files.join(", ")}`
-    );
-  }
-  throw new Error(`RabiLink AIUI misses ${misses.length} RibiWebGUI fetch endpoint(s).`);
-}
-
-console.log(
-  `RabiLink AIUI WebGUI coverage passed (${endpoints.size} endpoint patterns, ${blocked.length} explicitly blocked).`
-);
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) console.log('AIUI endpoint boundary audit passed', audit());

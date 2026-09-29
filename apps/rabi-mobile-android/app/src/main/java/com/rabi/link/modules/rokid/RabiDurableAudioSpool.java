@@ -329,6 +329,68 @@ final class RabiDurableAudioSpool {
         }
     }
 
+    /** New whole-event writes are fail-closed: only a durable commit may publish their ASR boundary. */
+    synchronized AppendResult appendCompleteEvent(byte[] pcm, String source, String route, String captureId,
+                                                  String processingPolicy, long capturedAt, String timeBasis, String eventId) {
+        if (eventId == null || !eventId.matches("[A-Za-z0-9_-]{1,120}"))
+            throw new IllegalArgumentException("invalid event id");
+        if (pcm == null || pcm.length == 0 || (pcm.length & 1) != 0)
+            return new AppendResult(false, 0L, "invalid_event_pcm");
+        File intentFile = new File(root, "event-intent-" + eventId + ".json");
+        try {
+            String digest = sha256(pcm);
+            if (intentFile.exists()) {
+                JSONObject prior = readJson(intentFile);
+                if (prior.getLong("expectedBytes") != pcm.length || !digest.equals(prior.getString("sha256"))
+                        || !captureId.equals(prior.getString("captureId")) || !source.equals(prior.getString("source"))
+                        || !route.equals(prior.getString("route")) || !processingPolicy.equals(prior.getString("processingPolicy")))
+                    return new AppendResult(false, 0L, "event_identity_conflict");
+                if (!"committed".equals(prior.optString("state")))
+                    return new AppendResult(false, 0L, "event_incomplete");
+                completeEvent(eventId);
+                return new AppendResult(true, prior.optLong("sequence"), "");
+            }
+            if (new File(root, "event-" + eventId + ".json").exists())
+                return new AppendResult(false, 0L, "legacy_event_identity_conflict");
+            JSONObject intent = new JSONObject().put("version", 1).put("state", "prepared")
+                    .put("eventId", eventId).put("captureId", captureId).put("source", source).put("route", route)
+                    .put("processingPolicy", processingPolicy).put("expectedBytes", pcm.length).put("sha256", digest);
+            writeJson(intentFile, intent);
+            long firstSequence = nextSequence;
+            AppendResult result = append(pcm, source, route, captureId, processingPolicy, capturedAt, timeBasis, eventId);
+            // Keep partial PCM for diagnosis; endCapture/recovery must not promote it to a complete event.
+            if (!result.accepted) return result;
+            sealActive("event_commit");
+            long bytes = 0;
+            java.io.ByteArrayOutputStream retained = new java.io.ByteArrayOutputStream(pcm.length);
+            java.util.List<Segment> eventSegments = new ArrayList<>();
+            for (long sequence = firstSequence; sequence < nextSequence; sequence++) {
+                Segment segment = readSegment(metadataForSequence(sequence));
+                if (segment != null && eventId.equals(segment.eventId) && captureId.equals(segment.captureId)) eventSegments.add(segment);
+            }
+            eventSegments.sort(Comparator.comparingLong(item -> item.sequence));
+            for (Segment segment : eventSegments) {
+                if (segment != null && eventId.equals(segment.eventId) && captureId.equals(segment.captureId)) {
+                    byte[] body = Files.readAllBytes(segment.pcmFile.toPath());
+                    if (body.length != segment.bytes || !sha256(body).equals(segment.sha256))
+                        return new AppendResult(false, result.segmentSequence, "event_integrity_failed");
+                    retained.write(body); bytes += body.length;
+                }
+            }
+            if (bytes != pcm.length || !digest.equals(sha256(retained.toByteArray())))
+                return new AppendResult(false, result.segmentSequence, "event_integrity_failed");
+            writeJson(intentFile, intent.put("state", "committed").put("sequence", result.segmentSequence));
+            completeEvent(eventId);
+            if ("transcribe".equals(processingPolicy)) {
+                archiveCandidates.put(eventId,captureId);
+                for(Segment item:eventSegments)indexArchiveSummary(readJson(item.metadataFile));
+            }
+            return result;
+        } catch (Exception error) {
+            return new AppendResult(false, 0L, "event_commit_" + error.getClass().getSimpleName());
+        }
+    }
+
     synchronized void updatePolicy(Policy policy) {
         if (policy == null) return;
         this.policy = policy;
@@ -340,13 +402,22 @@ final class RabiDurableAudioSpool {
     synchronized void completeEvent(String eventId) throws Exception {
         if (eventId == null || eventId.isEmpty()) return;
         if (!eventId.matches("[A-Za-z0-9_-]{1,120}")) throw new IllegalArgumentException("invalid event id");
+        if (!eventCommitted(eventId)) return;
         writeJson(new File(root, "event-" + eventId + ".json"), new JSONObject().put("complete", true));
+    }
+
+    private boolean eventCommitted(String eventId) {
+        if (eventId == null || eventId.isEmpty()) return true;
+        File intent = new File(root, "event-intent-" + eventId + ".json");
+        if (!intent.exists()) return true; // Historical events retain their existing contract.
+        try { return "committed".equals(readJson(intent).getString("state")); }
+        catch (Exception error) { return false; }
     }
 
     /** A complete VAD event may span several storage shards. Never transcribe a partial event. */
     synchronized List<Segment> transcriptionEvent(Segment head) throws Exception {
         List<Segment> result = new ArrayList<>();
-        if (head.eventId.isEmpty() || !new File(root, "event-" + head.eventId + ".json").isFile()) return result;
+        if (head.eventId.isEmpty() || !eventCommitted(head.eventId) || !new File(root, "event-" + head.eventId + ".json").isFile()) return result;
         long bytes = 0;
         for (long sequence : new ArrayList<>(pendingSequences)) {
             Segment item = readSegment(metadataForSequence(sequence));
@@ -360,6 +431,14 @@ final class RabiDurableAudioSpool {
             result.add(item);
         }
         result.sort(Comparator.comparingLong(item -> item.sequence));
+        File intentFile = new File(root, "event-intent-" + head.eventId + ".json");
+        if (intentFile.exists()) {
+            JSONObject intent = readJson(intentFile);
+            if (bytes != intent.getLong("expectedBytes")) return new ArrayList<>();
+            java.io.ByteArrayOutputStream body = new java.io.ByteArrayOutputStream((int) bytes);
+            for (Segment item : result) body.write(Files.readAllBytes(item.pcmFile.toPath()));
+            if (!sha256(body.toByteArray()).equals(intent.getString("sha256"))) return new ArrayList<>();
+        }
         return result;
     }
 
@@ -419,6 +498,11 @@ final class RabiDurableAudioSpool {
         return importCapture(source, route, processingPolicy, captureId, pcm, 0L);
     }
     synchronized boolean importCapture(String source, String route, String processingPolicy, String captureId, File pcm, long capturedAt) throws Exception {
+        return importCapture(source, route, processingPolicy, captureId, pcm, capturedAt,
+                new com.rabi.link.recording.AudioEventSplitter.Policy(500, 60000));
+    }
+    synchronized boolean importCapture(String source, String route, String processingPolicy, String captureId, File pcm,
+                                       long capturedAt, com.rabi.link.recording.AudioEventSplitter.Policy requestedPolicy) throws Exception {
         if (captureId == null || !captureId.matches("[A-Za-z0-9_-]{1,100}")) throw new IllegalArgumentException("invalid capture id");
         if (!java.util.Arrays.asList("local_only", "transcribe", "agent").contains(processingPolicy)) throw new IllegalArgumentException("invalid policy");
         long length = pcm.length();
@@ -435,34 +519,64 @@ final class RabiDurableAudioSpool {
                     || !source.equals(state.getString("source")) || !route.equals(state.getString("routeProfileId"))
                     || !processingPolicy.equals(state.getString("processingPolicy"))) throw new IllegalStateException("import identity changed");
             if (state.optBoolean("complete")) return true;
+            if (state.optInt("version") != 2) throw new IllegalStateException("legacy incomplete import requires explicit recovery");
+            if (state.getLong("capturedAt") != capturedAt) throw new IllegalStateException("import timestamp changed");
         } else {
-            state = new JSONObject().put("sha256", hash.toString()).put("bytes", length).put("source", source)
-                    .put("routeProfileId", route).put("processingPolicy", processingPolicy).put("complete", false);
+            state = new JSONObject().put("version", 2).put("sha256", hash.toString()).put("bytes", length).put("source", source)
+                    .put("routeProfileId", route).put("processingPolicy", processingPolicy).put("complete", false)
+                    .put("capturedAt", capturedAt).put("inputProcessedBytes", 0L).put("acousticPolicy", acousticPolicyJson(requestedPolicy));
             writeJson(descriptor, state);
         }
+        final com.rabi.link.recording.AudioEventSplitter.Policy frozen = acousticPolicyFromJson(state.getJSONObject("acousticPolicy"));
+        com.rabi.link.recording.AudioEventSplitter splitter = new com.rabi.link.recording.AudioEventSplitter(() -> frozen);
         sealActive("import_boundary");
+        // Replay source from zero to reconstruct adaptive/pre-roll state. Committed event IDs make this idempotent.
+        // inputProcessedBytes is source progress only; retained output bytes may omit arbitrary silent intervals.
         long offset = 0;
-        for (File metadata : metadataFiles()) {
-            Segment segment = readSegment(metadata);
-            if (segment != null && captureId.equals(segment.captureId)) {
-                readPcm(segment); // Verify bytes and checksum before treating a shard as durable progress.
-                offset += segment.bytes;
-            }
-        }
-        if (offset > length) throw new IllegalStateException("import exceeds source bytes");
+        MessageDigest processedDigest = MessageDigest.getInstance("SHA-256");
         try (FileInputStream input = new FileInputStream(pcm)) {
-            input.getChannel().position(offset);
-            byte[] buffer = new byte[32768]; int count;
+            byte[] buffer = new byte[32000]; int count;
             while ((count = input.read(buffer)) != -1) {
-                AppendResult result = append(Arrays.copyOf(buffer, count), source, route, captureId, processingPolicy,
-                        capturedAt > 0 ? capturedAt + offset * 1000L / 32000L : 0L, capturedAt > 0 ? "media" : "imported");
+                processedDigest.update(buffer, 0, count);
+                if (!persistImportedEvents(splitter.accept(captureId, Arrays.copyOf(buffer, count)), offset,
+                        hash.toString(), source, route, captureId, processingPolicy, capturedAt)) return false;
                 offset += count;
-                sealActive("import_chunk");
-                if (!result.accepted) return false;
+                state.put("inputProcessedBytes", offset); writeJson(descriptor, state);
             }
         }
+        StringBuilder processedHash = new StringBuilder();
+        for (byte b : processedDigest.digest()) processedHash.append(String.format(Locale.US, "%02x", b & 255));
+        if (offset != length || !hash.toString().equals(processedHash.toString()))
+            throw new IllegalStateException("import source changed during processing");
+        if (!persistImportedEvents(splitter.finish(), offset, hash.toString(), source, route, captureId, processingPolicy, capturedAt)) return false;
         state.put("complete", true); writeJson(descriptor, state);
         return true;
+    }
+
+    private boolean persistImportedEvents(java.util.List<com.rabi.link.recording.AudioEventSplitter.Part> parts,
+                                          long origin, String inputHash, String source, String route, String captureId,
+                                          String processingPolicy, long capturedAt) throws Exception {
+        for (com.rabi.link.recording.AudioEventSplitter.Part part : parts) {
+            long start = origin + part.offset, end = start + part.pcm.length;
+            String eventId = "import-" + sha256((captureId + ":" + inputHash + ":" + start + ":" + end).getBytes(StandardCharsets.UTF_8));
+            AppendResult result = appendCompleteEvent(part.pcm, source, route, captureId, processingPolicy,
+                    capturedAt > 0 ? capturedAt + start * 1000L / 32000L : 0L,
+                    capturedAt > 0 ? "media" : "imported", eventId);
+            if (!result.accepted) return false;
+        }
+        return true;
+    }
+
+    private static JSONObject acousticPolicyJson(com.rabi.link.recording.AudioEventSplitter.Policy p) throws Exception {
+        return new JSONObject().put("silenceMs", p.silenceMs).put("maxMs", p.maxMs).put("preRollMs", p.preRollMs)
+                .put("minUtteranceMs", p.minUtteranceMs).put("recordThreshold", p.recordThreshold)
+                .put("transcribeThreshold", p.transcribeThreshold).put("adaptiveThreshold", p.adaptiveThreshold)
+                .put("adaptiveMultiplier", p.adaptiveMultiplier).put("adaptiveMargin", p.adaptiveMargin).put("inputGain", p.inputGain);
+    }
+    private static com.rabi.link.recording.AudioEventSplitter.Policy acousticPolicyFromJson(JSONObject p) throws Exception {
+        return new com.rabi.link.recording.AudioEventSplitter.Policy(p.getInt("silenceMs"), p.getInt("maxMs"),
+                p.getInt("preRollMs"), p.getInt("minUtteranceMs"), p.getDouble("recordThreshold"), p.getDouble("transcribeThreshold"),
+                p.getBoolean("adaptiveThreshold"), p.getDouble("adaptiveMultiplier"), p.getDouble("adaptiveMargin"), p.getDouble("inputGain"));
     }
 
     private String currentEndpointIdentity = "";
@@ -560,7 +674,9 @@ final class RabiDurableAudioSpool {
                 Segment segment = readSegment(metadata);
                 // Local-only and unbound recordings are retained, never guessed into a destination.
                 if (segment != null && !"acked".equals(segment.uploadState)) {
-                    if (!importComplete(segment.captureId) || !endpointMatches(segment.captureId)) continue;
+                    // Archive-authorized transcription has its own coordinator. Leave bytes pending, but do not block legacy ASR.
+                    if ("transcribe".equals(segment.processingPolicy) && isArchiveAuthorizedCapture(segment.captureId)) continue;
+                    if (!eventCommitted(segment.eventId) || !importComplete(segment.captureId) || !endpointMatches(segment.captureId)) continue;
                     if ("local_only".equals(segment.processingPolicy)
                             || (!segment.captureId.isEmpty() && segment.routeProfileId.isEmpty() && !("transcribe".equals(segment.processingPolicy) && !segment.eventId.isEmpty()))) continue;
                     if (!"agent".equals(segment.processingPolicy) && !"transcribe".equals(segment.processingPolicy)) continue;
@@ -689,11 +805,330 @@ final class RabiDurableAudioSpool {
         writeJson(segment.metadataFile, value);
     }
 
+    private final java.util.Map<String,JSONObject> archiveSummaries = new java.util.HashMap<>();
+    private final java.util.Map<String,java.util.List<File>> archiveSummaryFiles = new java.util.HashMap<>();
+    private final java.util.LinkedHashMap<String,String> archiveCandidates = new java.util.LinkedHashMap<>();
+    private void indexArchiveSummary(JSONObject row) throws Exception {
+        String id=row.optString("eventId"); if(!archiveCandidates.containsKey(id))return;
+        String capture=archiveCandidates.get(id);
+        if(!capture.equals(row.optString("captureId")) || !"transcribe".equals(row.optString("processingPolicy")))return;
+        JSONObject summary=archiveSummaries.get(id);
+        if(summary==null) {
+            summary=new JSONObject().put("recordId",id).put("eventId",id).put("captureId",capture)
+                    .put("source",row.getString("source")).put("startedAt",row.getLong("startedAt"))
+                    .put("endedAt",row.getLong("endedAt")).put("totalBytes",0L);
+            archiveSummaries.put(id,summary);archiveSummaryFiles.put(id,new ArrayList<>());
+        }
+        if(!summary.getString("source").equals(row.getString("source")))throw new IllegalArgumentException("archive summary source mismatch");
+        summary.put("startedAt",Math.min(summary.getLong("startedAt"),row.getLong("startedAt")))
+                .put("endedAt",Math.max(summary.getLong("endedAt"),row.getLong("endedAt")))
+                .put("totalBytes",summary.getLong("totalBytes")+row.getLong("bytes"));
+        archiveSummaryFiles.get(id).add(new File(segmentsDirectory,new File(row.getString("pcmFileName")).getName()));
+    }
+    /** Metadata projection only. Media presence is not a checksum verification or upload approval. */
+    synchronized JSONArray archivePendingSummaries(com.rabi.link.recording.RecordingArchiveCoordinator.Target target,int limit) throws Exception {
+        JSONArray rows=new JSONArray();
+        for(String id:nextArchiveCandidates(target,limit)) {
+            JSONObject cached=archiveSummaries.get(id);if(cached==null)continue;
+            JSONObject intent=readJson(new File(root,"event-intent-"+id+".json"));
+            if(cached.getLong("totalBytes")!=intent.getLong("expectedBytes"))continue;
+            boolean present=true;for(File file:archiveSummaryFiles.get(id))if(!file.isFile()){present=false;break;}
+            rows.put(new JSONObject(cached.toString()).put("owner",target.owner).put("workerId",target.workerId)
+                    .put("storageNamespaceId",target.namespace).put("localMediaPresent",present)
+                    .put("archiveState",present?"pending":"blocked").put("reason",present?"":"missing_local_media")
+                    .put("uploadable",present));
+        }
+        return rows;
+    }
+    synchronized boolean isArchiveAuthorizedCapture(String captureId) {
+        try { JSONObject t=readJson(new File(root,"archive-target-"+archiveId(captureId)+".json"));
+            return t.getLong("bindingRevision")>0 && !t.getString("owner").isEmpty(); }
+        catch(Exception invalid){return false;}
+    }
+    synchronized java.util.List<String> nextArchiveCandidates(com.rabi.link.recording.RecordingArchiveCoordinator.Target target,int limit) {
+        java.util.List<String> result=new ArrayList<>();
+        for(java.util.Map.Entry<String,String> item:archiveCandidates.entrySet()) {
+            if(result.size()>=Math.max(0,Math.min(limit,32)))break;
+            try {requireArchiveTarget(item.getValue(),target);result.add(item.getKey());}catch(Exception unauthorized){}
+        }
+        return result;
+    }
+    private void recoverArchiveCandidates() throws Exception {
+        archiveCandidates.clear(); archiveSummaries.clear(); archiveSummaryFiles.clear();
+        File[] intents=root.listFiles((dir,name)->name.startsWith("event-intent-")&&name.endsWith(".json"));
+        if(intents==null)return;
+        for(File file:intents)try { JSONObject row=readJson(file); String id=row.getString("eventId");
+            if("committed".equals(row.optString("state")) && "transcribe".equals(row.optString("processingPolicy"))) {
+                try{validatedArchive(id);}catch(Exception absent){archiveCandidates.put(id,row.getString("captureId"));}
+            }
+        }catch(Exception invalid){}
+    }
+    private final java.util.LinkedHashMap<String,String> pendingArchiveEvictions = new java.util.LinkedHashMap<>();
+    private final java.util.Set<Long> archivedLedgerSequences = new java.util.HashSet<>();
+    private boolean recoveringArchiveEvictions;
+    synchronized java.util.List<String> nextArchiveEvictions(com.rabi.link.recording.RecordingArchiveCoordinator.Target target,int limit) {
+        java.util.List<String> ids=new ArrayList<>();
+        for(java.util.Map.Entry<String,String> item:pendingArchiveEvictions.entrySet()) {
+            if(ids.size()>=Math.max(0,Math.min(32,limit)))break;
+            try{requireArchiveTarget(item.getValue(),target);ids.add(item.getKey());}catch(Exception unauthorized){}
+        }
+        return ids;
+    }
+    synchronized JSONObject archiveEvictionReceipt(com.rabi.link.recording.RecordingArchiveCoordinator.Target target,String id) throws Exception {
+        JSONObject saved=validatedArchive(id);requireArchiveTarget(saved.getJSONObject("manifest").getString("captureId"),target);
+        return new JSONObject().put("manifest",saved.getJSONObject("manifest")).put("receipt",saved.getJSONObject("receipt"));
+    }
+    private void recoverPendingArchiveEvictions() {
+        pendingArchiveEvictions.clear();
+        File[] receipts=root.listFiles((dir,name)->name.startsWith("archive-receipt-")&&name.endsWith(".json"));
+        if(receipts==null)return;
+        for(File file:receipts)try {
+            String id=file.getName().substring("archive-receipt-".length(),file.getName().length()-5);
+            JSONObject saved=validatedArchive(id);File intent=new File(root,"archive-eviction-"+id+".json");
+            if(intent.exists() && "complete".equals(readJson(intent).optString("state")))continue;
+            pendingArchiveEvictions.put(id,saved.getJSONObject("manifest").getString("captureId"));
+        }catch(Exception invalid){lastFailure="archive_receipt_invalid";}
+    }
+    private void accountArchivedRow(JSONObject row) throws Exception {
+        long sequence=row.getLong("sequence");
+        if(archivedLedgerSequences.add(sequence)) {
+            long bytes=Math.max(0L,row.getLong("bytes"));archivedBytes+=bytes;
+            if(!"acked".equals(row.optString("uploadState")))archivedUnacknowledgedBytes+=bytes;
+        }
+        removePending(sequence);
+    }
+    private long archivedBytes, archivedUnacknowledgedBytes;
+    /** Pin every event touched by a local reader before resolving/opening any PCM; close after its last read. */
+    synchronized AutoCloseable pinLocalEvents(java.util.Collection<String> eventIds) {
+        final java.util.Set<String> ids = new java.util.HashSet<>();
+        for (String id : eventIds) ids.add(archiveId(id));
+        for (String id : ids) archivePins.put(id, archivePins.getOrDefault(id, 0) + 1);
+        return new AutoCloseable() {
+            private boolean closed;
+            public void close() { synchronized (RabiDurableAudioSpool.this) {
+                if (closed) return; closed = true;
+                for (String id : ids) { int n = archivePins.getOrDefault(id, 1) - 1;
+                    if (n <= 0) archivePins.remove(id); else archivePins.put(id, n); }
+            } }
+        };
+    }
+    private final java.util.Map<String,Integer> archivePins = new java.util.HashMap<>();
+    private static String archiveId(String id) {
+        if (id == null || !id.matches("[A-Za-z0-9_-]{1,120}")) throw new IllegalArgumentException("archive id");
+        return id;
+    }
+    private JSONObject archiveTarget(com.rabi.link.recording.RecordingArchiveCoordinator.Target target) throws Exception {
+        if (target == null || !target.uploadAllowed || target.bindingRevision < 1) throw new IllegalArgumentException("archive authorization required");
+        return new JSONObject().put("workerId", target.workerId).put("namespace", target.namespace)
+                .put("owner", target.owner).put("bindingRevision", target.bindingRevision);
+    }
+    synchronized void authorizeArchive(String captureId, com.rabi.link.recording.RecordingArchiveCoordinator.Target target) throws Exception {
+        File file = new File(root,"archive-target-" + archiveId(captureId) + ".json");
+        JSONObject value = archiveTarget(target);
+        if (file.exists()) { requireArchiveTarget(captureId,target); return; }
+        writeJson(file,value);
+    }
+    private void requireArchiveTarget(String captureId, com.rabi.link.recording.RecordingArchiveCoordinator.Target target) throws Exception {
+        JSONObject saved = readJson(new File(root,"archive-target-" + archiveId(captureId) + ".json"));
+        JSONObject expected = archiveTarget(target);
+        for (String key : new String[]{"workerId","namespace","owner","bindingRevision"})
+            if (!saved.get(key).toString().equals(expected.get(key).toString())) throw new IllegalArgumentException("archive target changed");
+    }
+    private final java.util.Map<String,String> verifiedArchiveManifests=new java.util.HashMap<>();
+    private final java.util.Map<String,Integer> archiveSnapshotRefs=new java.util.HashMap<>();
+    synchronized com.rabi.link.recording.RecordingArchiveCoordinator.Snapshot acquireArchiveSnapshot(String eventId,
+            com.rabi.link.recording.RecordingArchiveCoordinator.Target target) throws Exception {
+        archiveId(eventId);
+        JSONObject transaction = readJson(new File(root,"event-intent-" + eventId + ".json"));
+        if (!"committed".equals(transaction.getString("state")) || !"transcribe".equals(transaction.getString("processingPolicy"))
+                || eventId.equals(activeEventId) && activeOutput != null) throw new IllegalArgumentException("archive event not sealed");
+        String capture = transaction.getString("captureId"); requireArchiveTarget(capture,target);
+        java.util.List<Segment> segments = new ArrayList<>();
+        java.util.List<File> indexed=archiveSummaryFiles.get(eventId);
+        if(indexed==null)throw new IllegalStateException("archive event index missing");
+        for (File pcmReference : new ArrayList<>(indexed)) {
+            File file=metadataForSequence(sequenceFromName(pcmReference.getName()));
+            JSONObject row = readJson(file);
+            if (eventId.equals(row.optString("eventId"))) {
+                if (!capture.equals(row.optString("captureId")) || !transaction.getString("source").equals(row.optString("source"))
+                        || !"transcribe".equals(row.optString("processingPolicy"))) throw new IllegalArgumentException("archive attribution");
+                Segment segment = readSegment(file); if (segment == null || !segment.pcmFile.isFile()) throw new IllegalStateException("archive media absent");
+                segments.add(segment);
+            }
+        }
+        segments.sort(Comparator.comparingLong(s -> s.sequence));
+        archivePins.put(eventId,archivePins.getOrDefault(eventId,0)+1);
+        return new com.rabi.link.recording.RecordingArchiveCoordinator.Snapshot() {
+            private volatile boolean closed;
+            private JSONObject cachedManifest;
+            private String publishedHash;
+            private final java.util.Map<String,long[]> objectRanges=new java.util.HashMap<>();
+            private String digestHex(byte[] digest) {
+                StringBuilder hex=new StringBuilder();for(byte b:digest)hex.append(String.format(Locale.US,"%02x",b&255));return hex.toString();
+            }
+            private synchronized void prepare() throws Exception {
+                if(closed)throw new IllegalStateException("snapshot closed");
+                if(cachedManifest!=null)return;
+        JSONArray objects=new JSONArray();objectRanges.clear();
+        byte[] buffer=new byte[1048576];cutpoint.reached("archive_buffer_1048576");
+        int objectBytes=0;long totalBytes=0,objectOffset=0;
+        MessageDigest eventDigest=MessageDigest.getInstance("SHA-256"),objectDigest=MessageDigest.getInstance("SHA-256");
+        JSONArray items = new JSONArray(); long start = Long.MAX_VALUE, end = 0; String basis = "received";
+        for (Segment s : segments) {
+            MessageDigest segmentDigest=MessageDigest.getInstance("SHA-256");long segmentBytes=0;
+            try(FileInputStream input=new FileInputStream(s.pcmFile)) {
+                int n;while((n=input.read(buffer,0,1048576-objectBytes))!=-1) {
+                    if(closed)throw new IllegalStateException("snapshot closed");
+                    segmentBytes+=n;totalBytes+=n;
+                    if(segmentBytes>s.bytes || totalBytes>com.rabi.link.recording.RecordingArchiveContract.MAX_BYTES)throw new IllegalArgumentException("archive size");
+                    segmentDigest.update(buffer,0,n);eventDigest.update(buffer,0,n);objectDigest.update(buffer,0,n);objectBytes+=n;
+                    if(objectBytes==1048576) {
+                        String digest=digestHex(objectDigest.digest());
+                        objects.put(new JSONObject().put("sha256",digest).put("bytes",objectBytes).put("offset",objectOffset));
+                        objectRanges.putIfAbsent(digest,new long[]{objectOffset,objectBytes});objectOffset+=objectBytes;objectBytes=0;
+                    }
+                }
+            }
+            if(segmentBytes!=s.bytes || !digestHex(segmentDigest.digest()).equals(s.sha256))throw new IllegalArgumentException("archive segment integrity");
+            JSONObject row = readJson(s.metadataFile); String nextBasis = row.getString("timeBasis");
+            if (items.length()>0 && !basis.equals(nextBasis)) throw new IllegalArgumentException("archive time basis mismatch");
+            basis = nextBasis;
+            start = Math.min(start,s.startedAt); end = Math.max(end,s.startedAt + (s.bytes + 31) / 32);
+            items.put(new JSONObject().put("sequence",s.sequence).put("bytes",s.bytes).put("sha256",s.sha256).put("startedAt",s.startedAt));
+        }
+        if (totalBytes != transaction.getLong("expectedBytes") || !digestHex(eventDigest.digest()).equals(transaction.getString("sha256"))) throw new IllegalArgumentException("archive event integrity");
+        if(objectBytes>0) {
+            String digest=digestHex(objectDigest.digest());
+            objects.put(new JSONObject().put("sha256",digest).put("bytes",objectBytes).put("offset",objectOffset));
+            objectRanges.putIfAbsent(digest,new long[]{objectOffset,objectBytes});
+        }
+        final JSONObject manifest = com.rabi.link.recording.RecordingArchiveContract.validateRecordingManifest(new JSONObject()
+                .put("schemaVersion",1).put("recordId",eventId).put("captureId",capture).put("eventId",eventId).put("deviceId",target.owner)
+                .put("source",transaction.getString("source")).put("startedAt",start).put("endedAt",end).put("timeBasis",basis)
+                .put("format",new JSONObject().put("codec","pcm_s16le").put("sampleRate",16000).put("channels",1))
+                .put("segments",items).put("objects",objects).put("gaps",new JSONArray()).put("processingPolicy","transcribe")
+                .put("totalBytes",totalBytes).put("sealed",true));
+        String verifiedHash=com.rabi.link.recording.RecordingArchiveContract.recordingManifestHash(manifest);
+        synchronized(RabiDurableAudioSpool.this) {
+            if(closed)throw new IllegalStateException("snapshot closed");
+            String existing=verifiedArchiveManifests.get(eventId);
+            if(existing!=null && !existing.equals(verifiedHash))throw new IllegalArgumentException("snapshot identity changed");
+            verifiedArchiveManifests.put(eventId,verifiedHash);
+            archiveSnapshotRefs.put(eventId,archiveSnapshotRefs.getOrDefault(eventId,0)+1);
+            publishedHash=verifiedHash;
+        }
+        cachedManifest=manifest;
+            }
+            public JSONObject manifest() throws Exception { prepare(); return new JSONObject(cachedManifest.toString()); }
+            public com.rabi.link.recording.RecordingArchiveCoordinator.Target target() { return target; }
+            public boolean complete() { return !closed; }
+            public synchronized java.io.InputStream openObject(String sha) throws Exception {
+                prepare();long[] range=objectRanges.get(sha);if(range==null)throw new IllegalArgumentException("snapshot object");
+                byte[] body=new byte[(int)range[1]];long segmentStart=0;int written=0;
+                for(Segment s:segments) {
+                    long from=Math.max(range[0],segmentStart),to=Math.min(range[0]+range[1],segmentStart+s.bytes);
+                    if(from<to) {
+                        if(closed)throw new IllegalStateException("snapshot closed");
+                        try(java.io.RandomAccessFile input=new java.io.RandomAccessFile(s.pcmFile,"r")) {
+                            if(input.length()!=s.bytes)throw new IllegalArgumentException("archive source length changed");
+                            input.seek(from-segmentStart);int count=(int)(to-from);input.readFully(body,written,count);written+=count;
+                        }
+                    }
+                    segmentStart+=s.bytes;
+                }
+                if(closed || written!=body.length || !sha256(body).equals(sha))throw new IllegalArgumentException("archive object integrity");
+                return new java.io.ByteArrayInputStream(body);
+            }
+            public void close() { synchronized(RabiDurableAudioSpool.this) {
+                if(closed)return; closed=true;
+                int n=archivePins.getOrDefault(eventId,1)-1; if(n==0)archivePins.remove(eventId);else archivePins.put(eventId,n);
+                if(publishedHash!=null) {
+                    int refs=archiveSnapshotRefs.getOrDefault(eventId,1)-1;
+                    if(refs<=0) {archiveSnapshotRefs.remove(eventId);verifiedArchiveManifests.remove(eventId,publishedHash);}
+                    else archiveSnapshotRefs.put(eventId,refs);
+                }
+            } }
+        };
+    }
+    synchronized void persistArchiveReceipt(com.rabi.link.recording.RecordingArchiveCoordinator.Target target, JSONObject manifest, JSONObject receipt) throws Exception {
+        manifest = com.rabi.link.recording.RecordingArchiveContract.validateRecordingManifest(manifest);
+        requireArchiveTarget(manifest.getString("captureId"),target);
+        if(!target.owner.equals(manifest.getString("deviceId")))throw new IllegalArgumentException("archive owner");
+        JSONObject verified=com.rabi.link.recording.RecordingArchiveContract.validateArchiveReceipt(receipt,target.workerId,target.namespace,manifest);
+        String recordId=archiveId(manifest.getString("recordId"));
+        if(!com.rabi.link.recording.RecordingArchiveContract.recordingManifestHash(manifest).equals(verifiedArchiveManifests.get(recordId)))
+            throw new IllegalArgumentException("archive manifest has no verified snapshot");
+        JSONObject committed=readJson(new File(root,"event-intent-"+recordId+".json"));
+        if(!"committed".equals(committed.getString("state")) || committed.getLong("expectedBytes")!=manifest.getLong("totalBytes")
+                || !committed.getString("captureId").equals(manifest.getString("captureId")))throw new IllegalArgumentException("archive event changed");
+        writeJson(new File(root,"archive-receipt-"+archiveId(manifest.getString("recordId"))+".json"),
+                new JSONObject().put("manifest",manifest).put("receipt",verified).put("target",archiveTarget(target)));
+        archiveCandidates.remove(recordId); archiveSummaries.remove(recordId); archiveSummaryFiles.remove(recordId);
+        pendingArchiveEvictions.put(recordId,manifest.getString("captureId"));
+    }
+    synchronized boolean evictArchive(com.rabi.link.recording.RecordingArchiveCoordinator.Target target, JSONObject manifest, JSONObject receipt, boolean remoteReady) throws Exception {
+        if(!remoteReady)return false;
+        String id=archiveId(manifest.getString("recordId"));
+        if(archivePins.getOrDefault(id,0)>0 || id.equals(activeEventId) && activeOutput!=null || !eventCommitted(id))return false;
+        requireArchiveTarget(manifest.getString("captureId"),target);
+        com.rabi.link.recording.RecordingArchiveContract.validateArchiveReceipt(receipt,target.workerId,target.namespace,manifest);
+        JSONObject saved=validatedArchive(id);
+        if(!com.rabi.link.recording.RecordingArchiveContract.recordingManifestHash(saved.getJSONObject("manifest")).equals(com.rabi.link.recording.RecordingArchiveContract.recordingManifestHash(manifest)))throw new IllegalArgumentException("archive receipt not persisted");
+        writeJson(new File(root,"archive-eviction-"+id+".json"),new JSONObject().put("recordId",id).put("state","pending"));
+        cutpoint.reached("archive_before_delete");
+        return finishArchiveEviction(id);
+    }
+    private JSONObject validatedArchive(String id) throws Exception {
+        JSONObject saved=readJson(new File(root,"archive-receipt-"+archiveId(id)+".json"));
+        JSONObject t=saved.getJSONObject("target"), m=saved.getJSONObject("manifest");
+        com.rabi.link.recording.RecordingArchiveCoordinator.Target target=new com.rabi.link.recording.RecordingArchiveCoordinator.Target(t.getString("workerId"),t.getString("namespace"),t.getString("owner"),t.getLong("bindingRevision"),true);
+        requireArchiveTarget(m.getString("captureId"),target);
+        if(!id.equals(m.getString("recordId")) || !target.owner.equals(m.getString("deviceId")))throw new IllegalArgumentException("archive identity");
+        com.rabi.link.recording.RecordingArchiveContract.validateArchiveReceipt(saved.getJSONObject("receipt"),target.workerId,target.namespace,m);
+        return saved;
+    }
+    private boolean finishArchiveEviction(String id) throws Exception {
+        if(archivePins.getOrDefault(id,0)>0)return false;
+        JSONObject saved=validatedArchive(id), manifest=saved.getJSONObject("manifest");
+        JSONArray segments=manifest.getJSONArray("segments");
+        for(int i=0;i<segments.length();i++) {
+            JSONObject expected=segments.getJSONObject(i); File metadata=metadataForSequence(expected.getLong("sequence")); JSONObject row=readJson(metadata);
+            if(!id.equals(row.optString("eventId")) || !manifest.getString("captureId").equals(row.optString("captureId"))
+                    || row.getLong("bytes")!=expected.getLong("bytes") || !row.getString("sha256").equals(expected.getString("sha256")))throw new IllegalArgumentException("eviction segment identity");
+            String name=row.getString("pcmFileName");
+            if(!name.equals(new File(name).getName()) || name.contains("/") || name.contains("\\") || !name.endsWith(".pcm")
+                    || sequenceFromName(name)!=expected.getLong("sequence"))throw new IllegalArgumentException("eviction PCM path");
+            File file=new File(segmentsDirectory,name);
+            if(!file.getCanonicalFile().getParentFile().equals(segmentsDirectory.getCanonicalFile()))throw new IllegalArgumentException("eviction PCM path");
+            if(file.exists() && (file.length()!=expected.getLong("bytes") || !sha256(Files.readAllBytes(file.toPath())).equals(expected.getString("sha256"))))throw new IllegalArgumentException("eviction media integrity");
+            row.put("localMediaState","eviction_pending").put("remoteRef",id); writeJson(metadata,row);
+            if(!recoveringArchiveEvictions)accountArchivedRow(row);
+            if(file.exists()) {
+                long removed=file.length();
+                if(!file.delete())return false;
+                if(!recoveringArchiveEvictions)totalStoredBytes=Math.max(0L,totalStoredBytes-removed);
+            }
+            cutpoint.reached("archive_after_delete");
+            writeJson(metadata,row.put("localMediaState","evicted"));
+        }
+        writeJson(new File(root,"archive-eviction-"+id+".json"),new JSONObject().put("recordId",id).put("state","complete"));
+        pendingArchiveEvictions.remove(id);
+        if(!recoveringArchiveEvictions)persistState(); return true;
+    }
+    private void recoverArchiveEvictions() {
+        File[] intents=root.listFiles((dir,name)->name.startsWith("archive-eviction-")&&name.endsWith(".json"));
+        if(intents==null)return;
+        for(File file:intents)try { JSONObject intent=readJson(file); if(!"complete".equals(intent.optString("state")))finishArchiveEviction(intent.getString("recordId")); }
+        catch(Exception failure){lastFailure="archive_recovery_blocked";}
+    }
+
     synchronized boolean evictArchived(File file) throws Exception {
         if (!file.getCanonicalFile().getParentFile().equals(segmentsDirectory.getCanonicalFile())
                 || !com.rabi.link.recording.RecordingResourceCache.isArchived(file)) return false;
-        Segment item = readSegment(metadataForSequence(sequenceFromName(file.getName())));
-        if (item == null || !("acked".equals(item.uploadState) || "local_only".equals(item.processingPolicy))) return false;
+        File metadata = metadataForSequence(sequenceFromName(file.getName()));
+        if (metadata.isFile() && isArchiveAuthorizedCapture(readJson(metadata).optString("captureId"))) return false;
+        Segment item = readSegment(metadata);
+        if (item == null || isArchiveAuthorizedCapture(item.captureId) || archivePins.getOrDefault(item.eventId,0)>0 || !("acked".equals(item.uploadState) || "local_only".equals(item.processingPolicy))) return false;
         if (!file.exists()) return true;
         byte[] bytes = RabiReliableQueueFiles.read(file);
         if (bytes.length != item.bytes || !sha256(bytes).equals(item.sha256)) return false;
@@ -718,7 +1153,7 @@ final class RabiDurableAudioSpool {
         try {
             long pendingAudioBytes = pendingAudioBytes();
             long accountedCapturedBytes = totalAcknowledgedBytes + pendingAudioBytes + activeBytes
-                    + quarantinedAudioBytes + capturedGapBytes;
+                    + quarantinedAudioBytes + capturedGapBytes + archivedUnacknowledgedBytes;
             value.put("lastCapturedAt", lastCapturedAt)
                     .put("lastWrittenAt", lastWrittenAt)
                     .put("lastUploadedAt", lastUploadedAt)
@@ -732,6 +1167,8 @@ final class RabiDurableAudioSpool {
                     .put("rejectedBytes", rejectedBytes)
                     .put("uncapturedGapBytes", uncapturedGapBytes)
                     .put("totalCapturedBytes", totalCapturedBytes)
+                    .put("archivedBytes", archivedBytes)
+                    .put("archivedUnacknowledgedBytes", archivedUnacknowledgedBytes)
                     .put("totalAcknowledgedBytes", totalAcknowledgedBytes)
                     .put("totalAcknowledgedSegments", totalAcknowledgedSegments)
                     .put("ackJournalRecords", ackJournalRecords)
@@ -780,6 +1217,12 @@ final class RabiDurableAudioSpool {
         recoverAckJournal();
         recoverAckReceipts();
         recoverAcknowledgedCleanupTransactions();
+        recoveringArchiveEvictions=true;
+        try { recoverArchiveEvictions(); } finally { recoveringArchiveEvictions=false; }
+        recoverPendingArchiveEvictions();
+        archivedBytes=archivedUnacknowledgedBytes=0;archivedLedgerSequences.clear();
+        recoverArchiveCandidates();
+        totalStoredBytes = 0;
         long maximumSequence = 0L;
         File[] files = segmentsDirectory.listFiles();
         if (files == null) files = new File[0];
@@ -854,7 +1297,9 @@ final class RabiDurableAudioSpool {
         for (File metadata : metadataFiles()) {
             try {
                 JSONObject value = readJson(metadata);
+                indexArchiveSummary(value);
                 long sequence = value.optLong("sequence", sequenceFromName(metadata.getName()));
+                if (value.has("remoteRef")) { accountArchivedRow(value); continue; } // Rebuild once in the startup metadata pass.
                 if ("acked".equals(value.optString("uploadState", "sealed"))) {
                     try {
                         ensureAckJournal(value);
@@ -1298,6 +1743,11 @@ final class RabiDurableAudioSpool {
         File pcm = pcmFileName.isEmpty()
                 ? pcmForSequence(sequence)
                 : new File(segmentsDirectory, new File(pcmFileName).getName());
+        if (value.has("remoteRef")) {
+            try { validatedArchive(value.getString("remoteRef")); }
+            catch (Exception invalid) { lastFailure = "archive_receipt_invalid"; }
+            return null; // Never poison or retransmit remote-owned media, including blocked damaged receipts.
+        }
         if (!pcm.exists() && !com.rabi.link.recording.RecordingResourceCache.isArchived(pcm)) {
             if (!poisonSequence(sequence, metadata, "missing_pcm",
                     value.optString("source", "unknown"), value.optString("routeProfileId", ""),
@@ -1320,7 +1770,7 @@ final class RabiDurableAudioSpool {
     private void persistState() throws Exception {
         long pendingAudioBytes = pendingAudioBytes();
         long accountedCapturedBytes = totalAcknowledgedBytes + pendingAudioBytes + activeBytes
-                + quarantinedAudioBytes + capturedGapBytes;
+                + quarantinedAudioBytes + capturedGapBytes + archivedUnacknowledgedBytes;
         writeJson(stateFile, new JSONObject()
                 .put("schemaVersion", 1)
                 .put("nextSequence", nextSequence)
@@ -1337,7 +1787,9 @@ final class RabiDurableAudioSpool {
                 .put("rejectedBytes", rejectedBytes)
                 .put("uncapturedGapBytes", uncapturedGapBytes)
                 .put("totalCapturedBytes", totalCapturedBytes)
-                .put("totalAcknowledgedBytes", totalAcknowledgedBytes)
+                .put("archivedBytes", archivedBytes)
+                    .put("archivedUnacknowledgedBytes", archivedUnacknowledgedBytes)
+                    .put("totalAcknowledgedBytes", totalAcknowledgedBytes)
                 .put("totalAcknowledgedSegments", totalAcknowledgedSegments)
                 .put("acknowledgedAccountingSequence", acknowledgedAccountingSequence)
                 .put("ackJournalRecords", ackJournalRecords)
@@ -1648,7 +2100,7 @@ final class RabiDurableAudioSpool {
 
     private void reconcileCapturedAccounting() {
         long minimumCaptured = totalAcknowledgedBytes + pendingAudioBytes() + activeBytes
-                + quarantinedAudioBytes + capturedGapBytes;
+                + quarantinedAudioBytes + capturedGapBytes + archivedUnacknowledgedBytes;
         totalCapturedBytes = Math.max(totalCapturedBytes, minimumCaptured);
     }
 

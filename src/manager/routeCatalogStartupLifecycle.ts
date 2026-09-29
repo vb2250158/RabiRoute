@@ -479,8 +479,8 @@ export class RouteCatalogStartupLifecycle {
     return this.enqueue({ kind: "ensure_role_file", roleId, roleFile });
   }
 
-  ensureRoleFolder(roleId: string): Promise<RouteCatalogSnapshot> {
-    return this.enqueue({ kind: "ensure_role_folder", roleId });
+  ensureRoleFolder(roleId: string, subfolder?: string): Promise<RouteCatalogSnapshot> {
+    return this.enqueue({ kind: "ensure_role_folder", roleId, ...(subfolder === undefined ? {} : { subfolder }) });
   }
 
   stop(): Promise<void> {

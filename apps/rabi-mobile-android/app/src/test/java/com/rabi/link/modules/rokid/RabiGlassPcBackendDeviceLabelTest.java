@@ -89,7 +89,7 @@ public final class RabiGlassPcBackendDeviceLabelTest {
     }
 
     @Test
-    public void realShutdownDrainPersistsEveryAcceptedByteAndRecordsEveryRejectedByte() throws Exception {
+    public void realShutdownUsesAcousticWriterAndDiscardsSilenceButAccountsRejectedBytes() throws Exception {
         RabiBoundedAudioWriteQueue queue = new RabiBoundedAudioWriteQueue(256, 2L * 1024L * 1024L);
         byte[] pcm = new byte[8 * 1024];
         for (int index = 0; index < 256; index++) assertTrue(queue.offer(pcm, "phone", "route-a"));
@@ -101,11 +101,26 @@ public final class RabiGlassPcBackendDeviceLabelTest {
                         4L * 1024L * 1024L, 0L, 60_000L),
                 () -> 10_000L, file -> Long.MAX_VALUE);
 
-        RabiGlassPcBackend.drainAndCloseAudioQueue(queue, spool);
+        com.rabi.link.recording.AudioEventSplitter splitter = new com.rabi.link.recording.AudioEventSplitter(
+                () -> new com.rabi.link.recording.AudioEventSplitter.Policy(500, 60000));
+        java.util.List<String> steps = new java.util.ArrayList<>();
+        RabiGlassPcBackend.closeAudioWriter(() -> {
+            steps.add("drain");
+            RabiBoundedAudioWriteQueue.Entry entry;
+            while ((entry = queue.poll()) != null) assertTrue(splitter.accept("capture", entry.pcm).isEmpty());
+        }, () -> {
+            steps.add("finish");
+            assertTrue("Silence must not become a recording at shutdown", splitter.finish().isEmpty());
+        }, () -> {
+            steps.add("gaps");
+            for (RabiBoundedAudioWriteQueue.Gap gap : queue.takeRejected())
+                spool.recordGap("capture_after_backend_stop", gap.bytes, gap.source, gap.route);
+        }, () -> { steps.add("close"); spool.close(); });
+        assertEquals(java.util.Arrays.asList("drain", "finish", "gaps", "close"), steps);
 
         JSONObject health = spool.health();
-        assertEquals(2L * 1024L * 1024L, health.getLong("totalCapturedBytes"));
-        assertEquals(2L * 1024L * 1024L, health.getLong("pendingBytes"));
+        assertEquals(0L, health.getLong("totalCapturedBytes"));
+        assertEquals(0L, health.getLong("pendingBytes"));
         assertEquals(2L, health.getLong("uncapturedGapBytes"));
         assertTrue(health.getBoolean("accountingBalanced"));
         assertEquals(0L, queue.queuedBytes());

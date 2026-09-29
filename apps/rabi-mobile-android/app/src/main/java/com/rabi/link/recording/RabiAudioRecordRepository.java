@@ -28,14 +28,6 @@ public final class RabiAudioRecordRepository {
             return id.equals(receipt.optString("eventId")) && captureId.equals(receipt.optString("captureId")) ? receipt : null;
         } catch (Exception ignored) { return null; }
     }
-    public static JSONArray listAsrRecords(Context context, long from, long to) {
-        JSONArray records = listCaptureRecords(context, from, to), result = new JSONArray();
-        for (int i = 0; i < records.length(); i++) {
-            JSONObject row = records.optJSONObject(i), receipt = row.optJSONObject("transcript");
-            if (receipt != null && !receipt.optString("text").trim().isEmpty()) result.put(row);
-        }
-        return result;
-    }
     private static final class CachedMetadata {
         final long modified, length;
         final JSONObject row;
@@ -79,19 +71,13 @@ public final class RabiAudioRecordRepository {
         return listCaptureRecords(context, Integer.MAX_VALUE, from, to);
     }
     public static JSONArray page(Context context, long time, String cursorId, boolean older, int sourceFilter) {
-        return page(context,time,cursorId,older,sourceFilter,false);
-    }
-    public static JSONArray page(Context context, long time, String cursorId, boolean older, int sourceFilter, boolean asrOnly) {
+        // Saved audio remains visible independently of transcription progress or text.
         Map<String, Long> starts = new HashMap<>();
         for (JSONObject row : metadata(context)) {
             if (row.optLong("bytes") < 32) continue;
             if (sourceFilter != 0 && (sourceFilter == 2) != "glasses".equals(row.optString("source"))) continue;
             String id = row.optString("eventId");
             if (id.isEmpty()) id = row.optString("captureId");
-            if (asrOnly) {
-                JSONObject receipt = transcript(context,id,row.optString("captureId"));
-                if (receipt == null || receipt.optString("text").trim().isEmpty()) continue;
-            }
             starts.merge(id, row.optLong("startedAt"), Math::min);
         }
         List<String> ids = new ArrayList<>(starts.keySet());

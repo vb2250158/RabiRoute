@@ -21,7 +21,7 @@ export type RouteCatalogTransactionOperation =
   | Readonly<{ kind: "remove"; routeId: string; expectedContentHash?: string }>
   | Readonly<{ kind: "ensure_persona"; roleId: string }>
   | Readonly<{ kind: "ensure_role_file"; roleId: string; roleFile: string }>
-  | Readonly<{ kind: "ensure_role_folder"; roleId: string }>;
+  | Readonly<{ kind: "ensure_role_folder"; roleId: string; subfolder?: string }>;
 
 export type RouteCatalogTransactionInput = Readonly<{
   requestId: string;
@@ -474,7 +474,7 @@ export function executeRouteCatalogTransaction(input: RouteCatalogTransactionInp
       return executeDurableRouteCatalogMutation(input, {
         capture: () => capture(repository, false, input),
         prepare() {},
-        mutate: () => { fs.mkdirSync(roleFolderPath(repository.rolesRoot, roleId), { recursive: true }); }
+        mutate: () => { fs.mkdirSync(roleFolderPath(repository.rolesRoot, roleId, operation.subfolder), { recursive: true }); }
       });
     }
   }

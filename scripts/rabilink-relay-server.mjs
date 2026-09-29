@@ -1,6 +1,14 @@
 #!/usr/bin/env node
 import { attachTunnelBroker } from "./lib/rabilink-tunnel-broker.mjs";
 import { orderedAsrWorkers, selectAsrWorker, validateAsrPriority } from "./lib/rabilink-asr-priority.mjs";
+import { createAgentProfileService } from './rabilink-agent-profile.mjs';
+import { createProfileReceiptPolicy } from './rabilink-agent-profile-ui-receipt.mjs';
+import { createProfileSkillsEditor } from './rabilink-profile-skills-editor.mjs';
+import { createProfileMcpEditor } from './rabilink-profile-mcp-editor.mjs';
+import { createKnowledgeGrantEditor } from './rabilink-knowledge-grant-ui.mjs';
+import { normalizeAgentProfileState, assertProfileManagementCsrf } from './rabilink-agent-profile-state.mjs';
+import { createKnowledgeGrantService, normalizeKnowledgeGrantState, authorizeKnowledgeRequest, rejectReservedKnowledgePath } from './rabilink-knowledge-grant.mjs';
+import { normalizeKnowledgeIntents, knowledgeOutcome, readKnowledgeOperation } from './rabilink-knowledge-operations.mjs';
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -617,6 +625,7 @@ function deviceSerialPreview(value) {
   return `${serialNumber.slice(0, 4)}...${serialNumber.slice(-4)}`;
 }
 
+
 function normalizeDeviceBinding(binding) {
   if (!binding || typeof binding !== "object" || Array.isArray(binding)) return null;
   const serialHash = String(binding.serialHash || "").trim();
@@ -630,7 +639,10 @@ function normalizeDeviceBinding(binding) {
     createdAt: String(binding.createdAt || nowIso()),
     updatedAt: String(binding.updatedAt || binding.createdAt || nowIso()),
     claimedAt: String(binding.claimedAt || ""),
-    claimExpiresAt: String(binding.claimExpiresAt || "")
+    claimExpiresAt: String(binding.claimExpiresAt || ""),
+    ...(binding.knowledgeIntents === undefined ? {} : { knowledgeIntents: normalizeKnowledgeIntents(binding.knowledgeIntents) }),
+    ...(binding.knowledgeGrantState === undefined ? {} : { knowledgeGrantState: normalizeKnowledgeGrantState(binding.knowledgeGrantState) }),
+    ...(binding.agentProfileState === undefined ? {} : { agentProfileState: normalizeAgentProfileState(binding.agentProfileState) })
   };
 }
 
@@ -779,18 +791,28 @@ function readAppStore() {
     };
   } catch (error) {
     writeEvent("app_store_read_failed", { path: appStorePath, message: error instanceof Error ? error.message : String(error) });
-    return { accounts: [], apps: [], workers: [] };
+    throw new Error('App store is unreadable; refusing to replace existing data.');
   }
 }
 
 function writeAppStore(store) {
   fs.mkdirSync(path.dirname(appStorePath), { recursive: true });
-  fs.writeFileSync(appStorePath, JSON.stringify({
-    accounts: store.accounts,
-    apps: store.apps,
-    workers: store.workers || []
-  }, null, 2), "utf8");
+  const temporary = `${appStorePath}.${randomUUID()}.tmp`;
+  let descriptor;
+  try {
+    descriptor = fs.openSync(temporary, 'wx', 0o600);
+    fs.writeFileSync(descriptor, JSON.stringify({ accounts: store.accounts, apps: store.apps, workers: store.workers || [] }, null, 2), 'utf8');
+    fs.fsyncSync(descriptor);
+    fs.closeSync(descriptor); descriptor = undefined;
+    fs.renameSync(temporary, appStorePath);
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+    if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
+  }
 }
+
+const agentProfileService = createAgentProfileService({ readStore: readAppStore, writeStore: writeAppStore });
+const knowledgeGrantService = createKnowledgeGrantService({ readStore: readAppStore, writeStore: writeAppStore });
 
 function hasEnabledRabiLinkApps() {
   return readAppStore().apps.some((app) => app.enabled !== false && app.token);
@@ -1886,7 +1908,8 @@ function webguiRequestForResponse(request) {
     path: request.path,
     headers: request.headers,
     bodyBase64: request.bodyBase64 || "",
-    error: request.error || ""
+    error: request.error || "",
+    ...(request.knowledge ? { knowledge: request.knowledge, nonReplayable: request.nonReplayable === true } : {})
   };
 }
 
@@ -1941,10 +1964,25 @@ function claimWebguiRequests(limit, deviceId, appId = "", deviceGuid = "") {
     if (result.length >= limit) break;
     if (!canWorkerClaimWebguiRequest(request, appId, deviceId, deviceGuid)) continue;
     if (request.status === "leased" && request.leaseUntil <= now) {
+      if (request.nonReplayable) { request.status = 'failed'; request.error = 'KNOWLEDGE_OUTCOME_UNCERTAIN'; finishWebguiWaiters(request); continue; }
       request.status = "queued";
       request.leaseUntil = 0;
     }
     if (request.status !== "queued") continue;
+    if (request.knowledge) {
+      try {
+        const currentApp = readAppStore().apps.find(a => a.id === request.appId && a.enabled !== false);
+        const currentBinding = currentApp?.deviceBindings?.find(b => b.id === request.knowledge.deviceBindingId && b.enabled !== false);
+        if (!currentBinding || currentBinding.credentialHash !== request.knowledgeCredentialHash || currentApp.ownerAccountId !== request.knowledge.ownerAccountId) throw new Error('KNOWLEDGE_GRANT_REVOKED');
+        const currentWorker = { id: request.targetDeviceId, appId: request.appId };
+        const authorized = authorizeKnowledgeRequest(currentApp, currentBinding, currentWorker, JSON.parse(Buffer.from(request.bodyBase64, 'base64').toString('utf8')));
+        request.knowledge = { ...authorized.metadata, grant: authorized.grant };
+      } catch {
+        request.status = 'failed'; request.error = 'KNOWLEDGE_GRANT_REVOKED';
+        request.response = { statusCode: 403, bodyBase64: Buffer.from(JSON.stringify({ ok: false, code: 'KNOWLEDGE_GRANT_REVOKED', uncertain: false })).toString('base64') };
+        finishWebguiWaiters(request); continue;
+      }
+    }
     request.status = "leased";
     request.updatedAt = now;
     request.leaseUntil = now + leaseMs;
@@ -2084,6 +2122,7 @@ function normalizeProxyResponseHeaders(headers) {
 }
 
 function createWebguiRequest(req, target, localPath, rawBody) {
+  rejectReservedKnowledgePath(localPath);
   const now = Date.now();
   const request = {
     id: `rabilink-webgui-${now}-${randomUUID().slice(0, 8)}`,
@@ -2123,6 +2162,7 @@ function createWebguiRequest(req, target, localPath, rawBody) {
 }
 
 function createMobileWebguiRequest(app, worker, method, localPath, body = null, mutationHeaders = {}) {
+  rejectReservedKnowledgePath(localPath);
   const now = Date.now();
   const bodyBuffer = body == null ? Buffer.alloc(0) : Buffer.from(JSON.stringify(body), "utf8");
   const request = {
@@ -4108,6 +4148,7 @@ function adminPageHtml() {
     }
 
     async function load() {
+      if (pendingProfileWrites.size) { flash("alert", "存在待确认的设备配置，请在 Agent 设置中回读后再刷新列表。"); return; }
       flash("alert", "");
       try {
         const body = await request(apiBase + "/state");
@@ -4595,7 +4636,111 @@ function adminPageHtml() {
       }
     }
 
+    const createProfileReceiptPolicy = ${createProfileReceiptPolicy.toString()};
+    const createProfileSkillsEditor = ${createProfileSkillsEditor.toString()};
+    const createProfileMcpEditor = ${createProfileMcpEditor.toString()};
+    const createKnowledgeGrantEditor = ${createKnowledgeGrantEditor.toString()};
+    const pendingProfileWrites = new Set();
+    window.addEventListener("beforeunload", event => { if (pendingProfileWrites.size) { event.preventDefault(); event.returnValue = ""; } });
+    // Device profile editor: user values only enter textContent/value, never HTML.
+    function renderAgentProfileEditor(container, appId, bindingId) {
+      const receiptPolicy = createProfileReceiptPolicy();
+      const panel = document.createElement("div");
+      panel.className = "tile";
+      panel.innerHTML = '<h3>眼镜 Agent 设置</h3><p>配置仅属于此眼镜。Skill 是指引；MCP 是引用，不代表已连接或已获工具权限。</p><label>ID<input class="profile-id" maxlength="128"></label><label>名称<input class="profile-name" maxlength="128"></label><label>系统提示<textarea class="profile-prompt" rows="5" maxlength="8000"></textarea></label><div class="profile-skills"></div><div class="profile-mcp"></div><p class="profile-state" role="status"></p><div class="actions"><button class="profile-save" type="button">保存配置</button><button class="profile-read" type="button">回读 / 刷新</button><button class="profile-close" type="button">关闭</button></div>';
+      panel.querySelectorAll("input,textarea").forEach(input => { input.style.width = "100%"; input.style.boxSizing = "border-box"; });
+      const field = name => panel.querySelector(".profile-" + name);
+      const skillsEditor = createProfileSkillsEditor({document,container:field("skills"),validate:skills=>receiptPolicy.profile({revision:1,id:'draft',name:'draft',systemPrompt:'',skills,mcp:[]}).skills});
+      const mcpEditor = createProfileMcpEditor({document,container:field("mcp"),validate:mcp=>receiptPolicy.profile({revision:1,id:'draft',name:'draft',systemPrompt:'',skills:[],mcp}).mcp});
+      const endpoint = apiBase + "/apps/" + encodeURIComponent(appId) + "/devices/" + encodeURIComponent(bindingId) + "/agent-profile";
+      const ownerId = state.account?.id;
+      if (!ownerId) { panel.textContent = "请先登录管理账号。"; container.appendChild(panel); return; }
+      panel.profileOwnerId = ownerId;
+      const storageKey = "rabilink-profile-pending:" + JSON.stringify([ownerId, appId, bindingId]);
+      let revision = null, busy = false, pending = null, storageBlocked = false;
+      function clearPending() {
+        sessionStorage.removeItem(storageKey);
+        pending = null;
+      }
+      function restorePending() {
+        const raw = sessionStorage.getItem(storageKey);
+        if (!raw) return;
+        const saved = JSON.parse(raw);
+        if (saved.ownerId !== ownerId || saved.appId !== appId || saved.bindingId !== bindingId || typeof saved.body !== "string") throw new Error("待确认请求归属不匹配");
+        const input = JSON.parse(saved.body);
+        if (!Number.isSafeInteger(input.expectedRevision) || typeof input.idempotencyKey !== "string" || !input.profile || input.profile.revision !== input.expectedRevision + 1) throw new Error("待确认请求无效");
+        pending = input;
+      }
+      const status = text => { field("state").textContent = text; };
+      function lock(value) { const ownerChanged=state.account?.id!==ownerId; if (pending && !ownerChanged) pendingProfileWrites.add(panel); else pendingProfileWrites.delete(panel); busy = value; const frozen=ownerChanged||value||storageBlocked||revision===null||pending!==null; for(const name of ['id','name','prompt'])field(name).disabled=frozen;skillsEditor.lock(frozen);mcpEditor.lock(frozen);field("save").disabled=frozen;field("read").disabled=value||ownerChanged;field("close").disabled=value||pending!==null; }
+      async function readback() {
+        if (busy) return;
+        lock(true);
+        try {
+          const response = await fetch(endpoint, { headers: headers(false), credentials: "same-origin" });
+          const body = await response.json();
+          if (!response.ok || body.code !== 0 || !Number.isSafeInteger(body.data?.savedRevision)) throw new Error("读取失败");
+          if (state.account?.id !== ownerId) throw new Error("账号已变化");
+          // Only restore sensitive drafts after the authenticated endpoint confirms ownership.
+          if (!pending) { try { restorePending(); } catch (error) { storageBlocked = true; throw error; } }
+          const data = body.data;
+          if (data.savedRevision < 0 || (data.savedRevision === 0 ? data.profile !== null : receiptPolicy.profile(data.profile).revision !== data.savedRevision)) throw new Error("配置回读无效");
+          receiptPolicy.applied(data.applied, data.savedRevision);
+          if (pending) {
+            const confirmed = await receiptPolicy.resolveHistorical(pending, async key => {
+              const history = await fetch(endpoint + "/operations/" + encodeURIComponent(key), { headers: headers(false), credentials: "same-origin" });
+              return { status: history.status, body: await history.json() };
+            });
+            if (state.account?.id !== ownerId) throw new Error("账号已变化");
+            if (!confirmed) { status("历史回执尚未确认原写入，已保留原请求和幂等键；请稍后回读，不自动重发。"); return; }
+          }
+          clearPending();
+          revision = data.savedRevision;
+          const p = data.profile || { id: "assistant", name: "眼镜助手", systemPrompt: "", skills: [], mcp: [] };
+          field("id").value = p.id; field("name").value = p.name; field("prompt").value = p.systemPrompt;
+          skillsEditor.set(p.skills); mcpEditor.set(p.mcp);
+          status("已保存版本：" + revision + "；模型应用：" + (data.applied ? data.applied.appliedRevision + " / " + data.applied.status : "未确认") + "；MCP：未验证。刷新会覆盖未保存编辑。");
+        } catch (_) { status("读取失败，保留当前编辑与待确认请求。请检查登录和网络后回读。"); }
+        finally { lock(false); }
+      }
+      async function save() {
+        if (busy || pending || storageBlocked || revision === null || state.account?.id !== ownerId) return;
+        let profile;
+        try {
+          profile = receiptPolicy.profile({ revision: revision + 1, id: field("id").value, name: field("name").value, systemPrompt: field("prompt").value, skills: skillsEditor.get(), mcp: mcpEditor.get() });
+        } catch (_) { status("配置字段或 Skill 内容无效；请检查字段提示与 MCP 引用 JSON，未发送请求。"); return; }
+        const input = { expectedRevision: revision, idempotencyKey: "profile-" + crypto.randomUUID(), profile };
+        pending = JSON.parse(JSON.stringify(input));
+        const frozenBody = JSON.stringify(pending);
+        try {
+          sessionStorage.setItem(storageKey, JSON.stringify({ ownerId, appId, bindingId, body: frozenBody }));
+          if (JSON.parse(sessionStorage.getItem(storageKey)).body !== frozenBody) throw new Error();
+        } catch (_) { pending = null; storageBlocked = true; status("无法安全保存待确认请求，未发送。请检查浏览器会话存储后重新打开设置。"); lock(false); return; }
+        lock(true);
+        try {
+          const response = await fetch(endpoint, { method: "PUT", credentials: "same-origin", headers: { ...headers(true), "X-RabiLink-Profile-Write": "1" }, body: frozenBody });
+          const body = await response.json();
+          if (state.account?.id !== ownerId) { status("账号已变化，保留原请求等待同账号回读。"); return; }
+          if (response.status === 412) { clearPending(); revision = null; status("版本冲突：请回读最新配置，重新确认修改后再保存。"); return; }
+          if (!response.ok || body.code !== 0 || !receiptPolicy.matches(body.data, input)) {
+            if (response.status >= 400 && response.status < 500) { clearPending(); status(body.code === "PROFILE_RECEIPT_CAPACITY" || body.error === "PROFILE_RECEIPT_CAPACITY" || body.message === "PROFILE_RECEIPT_CAPACITY" ? "设备操作回执已达 128 条容量上限，保存被拒绝。请联系维护者处理；不能换键重试。" : "配置被拒绝，请检查字段或登录状态；未自动重试。"); }
+            else status("保存结果不确定，原请求与幂等键已保留。只回读，不自动重发或换键。");
+            return;
+          }
+          clearPending(); revision = profile.revision;
+          status("已保存版本：" + revision + "；等待眼镜应用；MCP：未验证。可回读查看模型应用状态。");
+        } catch (_) { status("网络或回执异常，保存结果不确定。原请求与幂等键已保存在当前标签页会话，请回读；刷新后登录同一账号可恢复，关闭标签页可能丢失。"); }
+        finally { lock(false); }
+      }
+      field("save").addEventListener("click", save);
+      field("read").addEventListener("click", readback);
+      field("close").addEventListener("click", () => { if (!busy && !pending) panel.remove(); });
+      container.appendChild(panel); lock(false); void readback();
+    }
+
     function render() {
+      if (!state.account || [...pendingProfileWrites].some(panel => panel.profileOwnerId !== state.account.id)) { pendingProfileWrites.clear(); el("apps").innerHTML = ""; }
+      if (pendingProfileWrites.size) return; // Preserve frozen uncertain writes during unrelated UI refreshes.
       const loggedIn = Boolean(state.account);
       el("loginCard").classList.toggle("hidden", loggedIn && !state.setupRequired);
       el("appCard").classList.toggle("hidden", !loggedIn);
@@ -4646,9 +4791,22 @@ function adminPageHtml() {
         node.querySelector(".notes").textContent = app.notes || "-";
         node.querySelector(".updated").textContent = app.updatedAt || "-";
         const bindings = Array.isArray(app.deviceBindings) ? app.deviceBindings : [];
-        node.querySelector(".device-binding-list").textContent = bindings.length
-          ? bindings.map((item) => item.serialPreview + " · " + (item.claimed ? "已领取" : "等待眼镜领取")).join("；")
-          : "尚未绑定眼镜 SN。";
+        const bindingList = node.querySelector(".device-binding-list");
+        if (!bindings.length) bindingList.textContent = "尚未绑定眼镜 SN。";
+        for (const binding of bindings) {
+          const row = document.createElement("div"); row.className = "actions";
+          const label = document.createElement("span"); label.textContent = binding.serialPreview + " · " + (binding.claimed ? "已领取" : "等待眼镜领取");
+          const button = document.createElement("button"); button.type = "button"; button.textContent = "Agent 设置";
+          button.addEventListener("click", () => { if (!row.querySelector(".profile-state")) renderAgentProfileEditor(row, app.id, binding.id); });
+          const grantButton = document.createElement("button"); grantButton.type = "button"; grantButton.textContent = "知识授权";
+          grantButton.addEventListener("click", () => {
+            if (row.querySelector(".knowledge-grant-editor")) return;
+            const editor = createKnowledgeGrantEditor({ state, document, apiBase, headers, fetch: (...args) => fetch(...args), storage: sessionStorage, pending: pendingProfileWrites, uuid: () => crypto.randomUUID() });
+            const result = editor.render(row, app, binding.id);
+            if (result) result.panel.className = "tile knowledge-grant-editor";
+          });
+          row.appendChild(label); row.appendChild(button); row.appendChild(grantButton); bindingList.appendChild(row);
+        }
         renderTargetCombo(node.querySelector(".target-worker"), app);
         node.querySelector(".enabled").addEventListener("change", (event) => patchApp(app.id, { enabled: event.target.checked }).catch((error) => flash("alert", error.message)));
         node.querySelector(".copy").addEventListener("click", () => copyToken(app.id));
@@ -5588,6 +5746,33 @@ async function handleAdminApi(req, url, res) {
     const app = createAppForAccount(auth.account, body);
     return sendJson(res, 200, { code: 0, ok: true, app: publicApp(app, { revealToken: true }) });
   }
+  const profileOperationMatch = apiPath.match(/^\/apps\/([^/]+)\/devices\/([^/]+)\/agent-profile\/operations\/([^/]+)$/);
+  if (req.method === 'GET' && profileOperationMatch) {
+    const data = agentProfileService.readOperation({ kind: 'account', accountId: auth.account.id }, decodeURIComponent(profileOperationMatch[1]), decodeURIComponent(profileOperationMatch[2]), decodeURIComponent(profileOperationMatch[3]));
+    return sendJson(res, 200, { code: 0, data });
+  }
+  const grantOperationMatch = apiPath.match(/^\/apps\/([^/]+)\/devices\/([^/]+)\/knowledge-grant\/operations\/([^/]+)$/);
+  if (req.method === 'GET' && grantOperationMatch) {
+    const data = knowledgeGrantService.readOperation(auth.account.id, decodeURIComponent(grantOperationMatch[1]), decodeURIComponent(grantOperationMatch[2]), decodeURIComponent(grantOperationMatch[3]));
+    return sendJson(res, 200, { code: 0, data });
+  }
+  const grantMatch = apiPath.match(/^\/apps\/([^/]+)\/devices\/([^/]+)\/knowledge-grant$/);
+  if (grantMatch && ['GET', 'PUT'].includes(req.method)) {
+    if (req.method === 'PUT') assertProfileManagementCsrf(req);
+    const appId = decodeURIComponent(grantMatch[1]), bindingId = decodeURIComponent(grantMatch[2]);
+    const data = req.method === 'GET' ? knowledgeGrantService.read(auth.account.id, appId, bindingId) : knowledgeGrantService.save(auth.account.id, appId, bindingId, body);
+    return sendJson(res, 200, { code: 0, data });
+  }
+  const profileMatch = apiPath.match(/^\/apps\/([^/]+)\/devices\/([^/]+)\/agent-profile$/);
+  if (profileMatch && ['GET', 'PUT'].includes(req.method)) {
+    const principal = { kind: 'account', accountId: auth.account.id };
+    const appId = decodeURIComponent(profileMatch[1]), bindingId = decodeURIComponent(profileMatch[2]);
+    if (req.method === 'PUT') assertProfileManagementCsrf(req);
+    const data = req.method === 'GET'
+      ? agentProfileService.readForAccount(principal, appId, bindingId)
+      : agentProfileService.save(principal, appId, bindingId, body);
+    return sendJson(res, 200, { code: 0, data });
+  }
   const deviceBindingMatch = apiPath.match(/^\/apps\/([^/]+)\/devices$/);
   if (deviceBindingMatch && req.method === "POST") {
     const { app, binding } = bindDeviceSerialToApp(auth.account, decodeURIComponent(deviceBindingMatch[1]), body);
@@ -5736,6 +5921,79 @@ const server = http.createServer(async (req, res) => {
             : peerRpcProxy
               ? { maxBytes: 1_500_000, label: "Peer RPC proxy" }
               : {});
+    const knowledgeOperationMatch = /^\/api\/rabilink\/device\/knowledge\/operations\/([^/]+)$/.exec(url.pathname);
+    if (knowledgeOperationMatch) {
+      if (req.method !== 'GET') return sendJson(res,405,{code:'METHOD_NOT_ALLOWED'});
+      const match = findEnabledAppByToken(requestToken(req,url,body));
+      if (!match?.deviceBinding) return sendJson(res,403,{code:'DEVICE_CREDENTIAL_REQUIRED'});
+      let key; try { key=decodeURIComponent(knowledgeOperationMatch[1]); } catch { return sendJson(res,400,{code:'INVALID_OPERATION_KEY'}); }
+      return sendJson(res,200,{code:0,data:readKnowledgeOperation(match.app,match.deviceBinding,key)},{'cache-control':'private, no-store'});
+    }
+    if (url.pathname === '/api/rabilink/device/knowledge') {
+      if (req.method !== 'POST') return sendJson(res, 405, { code: 'METHOD_NOT_ALLOWED' });
+      const match = findEnabledAppByToken(requestToken(req, url, body));
+      if (!match?.deviceBinding) return sendJson(res, 403, { code: 'DEVICE_CREDENTIAL_REQUIRED' });
+      const worker = mobileWorkersForApp(match.app).find(item => item.id === match.app.targetDeviceId);
+      const authorized = authorizeKnowledgeRequest(match.app, match.deviceBinding, worker, body);
+      if (!normalizeWorkerCapabilities(worker.capabilities).includes('knowledgebridge')) return sendJson(res, 503, { code: 'KNOWLEDGE_BRIDGE_NOT_READY', ok: false, uncertain: false });
+      if (authorized.nonReplayable) {
+        const store = readAppStore();
+        const storedBinding = store.apps.find(a => a.id === match.app.id)?.deviceBindings.find(b => b.id === match.deviceBinding.id);
+        const intents = normalizeKnowledgeIntents(storedBinding?.knowledgeIntents || []);
+        const key = body.args.idempotencyKey;
+        const hash = createHash('sha256').update(JSON.stringify({ target: worker.id, request: body })).digest('hex');
+        const previous = intents.find(x => x.key === key);
+        if (previous) return sendJson(res, 409, { code: previous.hash === hash ? 'KNOWLEDGE_OUTCOME_UNCERTAIN' : 'IDEMPOTENCY_CONFLICT', ok: false, uncertain: previous.hash === hash });
+        if (intents.length >= 128) return sendJson(res, 409, { code: 'KNOWLEDGE_INTENT_CAPACITY', ok: false, uncertain: false });
+        storedBinding.knowledgeIntents = [...intents, { key, hash, scope: {ownerAccountId:match.app.ownerAccountId,targetDeviceId:worker.id,roleId:body.args.roleId,tool:body.name,credentialHash:match.deviceBinding.credentialHash} }];
+        writeAppStore(store); // Durable intent before dispatch; restart never blindly re-executes a write.
+      }
+      const now = Date.now();
+      const request = { id: `knowledge-${randomUUID()}`, status: 'queued', createdAt: now, updatedAt: now, expiresAt: now + webguiRequestWaitMs, leaseUntil: 0, attempts: 0, appId: match.app.id, targetDeviceId: worker.id, method: 'POST', path: '/__rabilink/knowledge', headers: { 'content-type': 'application/json' }, bodyBase64: Buffer.from(JSON.stringify(authorized.request)).toString('base64'), knowledge: { ...authorized.metadata, grant: authorized.grant }, knowledgeCredentialHash: match.deviceBinding.credentialHash, nonReplayable: authorized.nonReplayable, response: null };
+      webguiRequests.set(request.id, request);
+      relayEventHub.publish('webgui_available', { appId: request.appId, targetDeviceId: worker.id, data: { requestId: request.id } });
+      const finished = await waitForWebguiRequest(request, webguiRequestWaitMs);
+      let result;
+      try { result = JSON.parse(Buffer.from(finished.response?.bodyBase64 || '', 'base64').toString('utf8')); } catch { result = null; }
+      if (authorized.nonReplayable) {
+        let outcome;
+        let stage = 'validate';
+        try {
+          outcome = knowledgeOutcome(result,finished.response?.statusCode,body.args.idempotencyKey);
+          stage = 'read';
+          const store=readAppStore();
+          const binding=store.apps.find(a=>a.id===match.app.id)?.deviceBindings.find(b=>b.id===match.deviceBinding.id);
+          stage = 'normalize';
+          const intents=normalizeKnowledgeIntents(binding?.knowledgeIntents||[]);
+          stage = 'lookup';
+          const intent=intents.find(x=>x.key===body.args.idempotencyKey);
+          if (!intent || intent.scope?.credentialHash!==match.deviceBinding.credentialHash) throw new Error('KNOWLEDGE_INTENT_CHANGED');
+          intent.outcome=outcome; binding.knowledgeIntents=intents;
+          stage = 'write';
+          writeAppStore(store); // Persist before any device response, including disconnected sockets.
+        } catch (error) {
+          try {
+            const code = ['EACCES','EPERM','ENOENT','EIO','ENOSPC'].includes(error?.code) ? error.code : 'UNKNOWN';
+            writeEvent('knowledge_receipt_persistence_failed', { requestId: request.id, stage, code });
+          } catch { /* Diagnostic failure must not replace the uncertain response. */ }
+          return sendJson(res,503,{code:'KNOWLEDGE_RECEIPT_NOT_PERSISTED',ok:false,uncertain:true});
+        }
+        if(outcome.state==='unknown') return sendJson(res,502,{code:'KNOWLEDGE_OUTCOME_UNCERTAIN',ok:false,uncertain:true});
+      }
+      if (!finished.response) return sendJson(res,504,{code:'KNOWLEDGE_TIMEOUT',ok:false,uncertain:false});
+      if (!result) return sendJson(res,502,{code:'INVALID_KNOWLEDGE_RESPONSE',ok:false,uncertain:false});
+      return sendJson(res, finished.response.statusCode || 502, result);
+    }
+    if (url.pathname === '/api/rabilink/device/agent-profile' || url.pathname === '/api/rabilink/device/agent-profile/applied') {
+      const match = findEnabledAppByToken(requestToken(req, url, body));
+      if (!match?.deviceBinding) return sendJson(res, 403, { code: -1, message: 'Device credential required.' });
+      const principal = { kind: 'device', appId: match.app.id, bindingId: match.deviceBinding.id, credentialHash: match.deviceBinding.credentialHash };
+      let data;
+      if (req.method === 'GET' && url.pathname === '/api/rabilink/device/agent-profile') data = agentProfileService.readOwn(principal);
+      else if (req.method === 'POST' && url.pathname.endsWith('/applied')) data = agentProfileService.acknowledge(principal, body);
+      else return sendJson(res, 405, { code: -1, message: 'Method not allowed.' });
+      return sendJson(res, 200, { code: 0, data });
+    }
     if (req.method === "POST" && url.pathname === "/api/rabilink/devices/token") {
       const claimed = claimDeviceToken(body);
       return sendJson(res, 200, {

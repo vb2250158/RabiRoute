@@ -15,6 +15,7 @@ import {
   planAttachmentMentionCandidates,
   referencedPlanAttachmentIds
 } from "@shared/planAttachmentMentions";
+import RoleSkillBrowser from "../components/RoleSkillBrowser.vue";
 import PlanAttachmentGallery from "../components/PlanAttachmentGallery.vue";
 import PlanFeedbackComposer from "../components/PlanFeedbackComposer.vue";
 import PlanQuestionFields from "../components/PlanQuestionFields.vue";
@@ -80,6 +81,7 @@ import type { RoleMemory, RolePlan, RolePlanApprovalContract, RolePlanFeedback, 
 const store = useGatewayStore();
 const route = useRoute();
 const { isEnglish, t } = useI18n();
+const skillsOpen = ref(false);
 const plans = ref<RolePlan[]>([]);
 const recentMemory = ref<RoleMemory[]>([]);
 const consolidatedMemory = ref<RoleMemory[]>([]);
@@ -3083,6 +3085,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
           <v-btn value="archived" prepend-icon="mdi-archive-outline"><span>{{ isEnglish ? "Archived" : "已归档" }}</span><b>{{ knowledgeCountsReady ? planPageCounts.archived + memoryPageCounts.archived : '—' }}</b></v-btn>
         </v-btn-toggle>
         <div class="knowledge-tools">
+          <v-btn variant="text" prepend-icon="mdi-book-open-page-variant-outline" :disabled="!roleId" @click="skillsOpen = true">{{ isEnglish ? 'Persona Skills' : '角色技能' }}</v-btn>
           <v-switch class="feedback-focus-switch" :disabled="!roleId" :model-value="feedbackFocusOpen" :label="t('专注')" color="primary" density="compact" hide-details inset @update:model-value="$event ? openFeedbackFocus() : feedbackFocusOpen = false" />
           <v-text-field
             v-if="!focusedPlanId"
@@ -3101,6 +3104,12 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
         </div>
       </div>
 
+      <v-dialog v-model="skillsOpen" max-width="900" scrollable>
+        <v-card>
+          <v-card-actions><v-spacer /><v-btn @click="skillsOpen = false">{{ isEnglish ? 'Close' : '关闭' }}</v-btn></v-card-actions>
+          <v-card-text><RoleSkillBrowser v-if="skillsOpen" :role-id="roleId" /></v-card-text>
+        </v-card>
+      </v-dialog>
       <v-progress-linear v-if="knowledgeListLoading" indeterminate color="secondary" />
       <div v-if="roleId && (showsPlanList || showsMemoryList)" class="knowledge-progressive-status" aria-live="polite">
         <v-progress-circular v-if="knowledgeListLoading" indeterminate size="16" width="2" color="primary" />

@@ -1,0 +1,53 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { createHash } from "node:crypto";
+import { RecordingArchiveCatalog } from "./recordingArchiveCatalog.js";
+import { recordingManifestHash, type RecordingManifest } from "./recordingArchiveContract.js";
+const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+const ns = "11111111-1111-4111-8111-111111111111";
+const manifest = (id: string, owner = "phone"): RecordingManifest => ({ schemaVersion: 1, recordId: id, captureId: "capture", eventId: id, deviceId: owner, source: "phone", startedAt: 1000, endedAt: 1100, timeBasis: "received", format: { codec: "pcm_s16le", sampleRate: 16000, channels: 1 }, segments: [{ sequence: 1, bytes: 3200, sha256: sha("audio"), startedAt: 1000 }], objects: [{ sha256: sha("audio"), bytes: 3200, offset: 0 }], gaps: [], processingPolicy: "transcribe", totalBytes: 3200, sealed: true });
+const receipt = (m: RecordingManifest) => ({ schemaVersion: 1 as const, workerId: "pc", storageNamespaceId: ns, recordId: m.recordId, manifestHash: recordingManifestHash(m), totalBytes: m.totalBytes, segmentCount: m.segments.length, committedAt: 2000, durability: "archived" as const, retention: "indefinite" as const });
+test("explicit recovery, immutable envelope validation, scoped and stale cursors; offline cached history", async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "archive-catalog-")); t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const root = path.join(dir, "nas"); await fs.mkdir(root); await fs.writeFile(path.join(root, "namespace.json"), JSON.stringify({ schemaVersion: 1, storageNamespaceId: ns }));
+  const target = path.join(root, "manifests", sha("phone")); await fs.mkdir(target, { recursive: true });
+  for (const id of ["b", "a", "c"]) { const m = manifest(id); await fs.writeFile(path.join(target, sha(id) + ".json"), JSON.stringify({ schemaVersion: 1, ownerHash: sha("phone"), manifest: m, receipt: receipt(m) })); }
+  let getManifestCalls = 0;
+  let boundNamespace = ns;
+  const options = { stateDir: path.join(dir, "state"), resolveOwner: async (_: string) => ({ root, storageNamespaceId: boundNamespace }), workerId: () => "pc", store: { getManifest: async () => { getManifestCalls++; return manifest("a"); } } };
+  const catalog = new RecordingArchiveCatalog(options);
+  await assert.rejects(catalog.list("phone"), { code: "catalog_not_ready" });
+  await catalog.restore("phone");
+  const first = await catalog.list("phone", { limit: 1 }); assert.equal(first.items[0].recordId, "a");
+  const second = await catalog.list("phone", { limit: 1, cursor: first.nextCursor! }); assert.equal(second.items[0].recordId, "b");
+  await assert.rejects(catalog.list("phone", { cursor: first.nextCursor!, source: "glasses" }), { code: "cursor_scope_mismatch" });
+  await catalog.restore("other");
+  await assert.rejects(catalog.list("other", { cursor: first.nextCursor! }), { code: "cursor_scope_mismatch" });
+  const d = manifest("d"); await catalog.onCommitted("phone", d, receipt(d));
+  await assert.rejects(catalog.list("phone", { cursor: first.nextCursor! }), { code: "cursor_stale" });
+  assert.equal(getManifestCalls, 0);
+  await fs.rename(root, root + "-offline");
+  assert.equal((await catalog.list("phone")).offline, true);
+  const restarted = new RecordingArchiveCatalog(options); await restarted.restoreCache("phone", ns);
+  assert.equal((await restarted.list("phone")).items.length, 4);
+  boundNamespace = "22222222-2222-4222-8222-222222222222";
+  await assert.rejects(restarted.list("phone"), { code: "namespace_changed" });
+});
+test("100k cached rows paginate without NAS enumeration or manifest reads", async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "archive-catalog-large-")); t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const root = path.join(dir, "nas"); await fs.mkdir(root); await fs.writeFile(path.join(root, "namespace.json"), JSON.stringify({ schemaVersion: 1, storageNamespaceId: ns }));
+  const cacheDir = path.join(dir, "recording-archive-catalog"); await fs.mkdir(cacheDir);
+  const rows = Array.from({ length: 100000 }, (_, i) => ({ recordId: `r${i.toString().padStart(6,"0")}`, deviceId: "phone", startedAt: i, endedAt: i+1, manifestHash: sha("m"), source: "phone", totalBytes: 2, manifestReference: "unused", captureId: "capture", eventId: "event", processingPolicy: "local_only", asrState: "not_requested" }));
+  await fs.writeFile(path.join(cacheDir, sha("phone") + ".json"), JSON.stringify({ schemaVersion: 1, ownerHash: sha("phone"), namespace: ns, revision: "snapshot", lastSyncedAt: 10, rows }));
+  const catalog = new RecordingArchiveCatalog({ stateDir: dir, resolveOwner: async () => ({root, storageNamespaceId: ns}), workerId: () => "pc", store: { getManifest: async () => { throw new Error("page read manifest"); } } });
+  await catalog.restoreCache("phone", ns);
+  const original = fs.opendir; let scans = 0;
+  fs.opendir = ((...args: Parameters<typeof fs.opendir>) => { scans++; return original(...args); }) as typeof fs.opendir;
+  t.after(() => { fs.opendir = original; });
+  let cursor: string | undefined;
+  for (let i=0;i<20;i++) { const page = await catalog.list("phone", { from: 90000, limit: 100, cursor }); assert.equal(page.items.length,100); cursor=page.nextCursor!; }
+  assert.equal(scans,0);
+});

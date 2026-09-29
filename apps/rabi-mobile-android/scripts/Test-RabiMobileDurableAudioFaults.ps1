@@ -1,3 +1,4 @@
+# Evidence contract: ../../../docs/mobile-audio-health-evidence.md
 param(
     [Parameter(Mandatory = $true)][string]$Serial,
     [int]$OfflineSeconds = 20,
@@ -8,6 +9,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'MobileCaptureEvidence.ps1')
 $packageName = "com.rabi.link"
 $adb = Join-Path $env:LOCALAPPDATA "RabiRoute\android-sdk\platform-tools\adb.exe"
 if (-not (Test-Path -LiteralPath $adb)) { $adb = (Get-Command adb -ErrorAction Stop).Source }
@@ -90,6 +92,10 @@ function Set-Network([bool]$Enabled) {
 $wifi = (& $adb -s $Serial shell settings get global wifi_on 2>$null).Trim()
 $data = (& $adb -s $Serial shell settings get global mobile_data 2>$null).Trim()
 $before = Read-State
+$beforeCapture = Read-MobileCaptureEvidence
+if (-not (Test-MobileCaptureFresh $beforeCapture ([DateTimeOffset]::Now.ToUnixTimeMilliseconds()))) {
+    throw 'Insufficient fresh phone-read evidence; no fault injection was performed. Glasses capture is not covered by these phone metrics.'
+}
 if ($null -eq $before) { throw "Durable audio state is unavailable; start voice capture first." }
 $beforeRecovered = Read-PartialRecoveryCount
 $beforeManifest = Read-Manifest
@@ -100,6 +106,8 @@ try {
     Set-Network $false
     Start-Sleep -Seconds $OfflineSeconds
     $offline = Read-State
+    $offlineCapture = Read-MobileCaptureEvidence
+    $restartStartedAt = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
     $offlineManifest = Read-Manifest
     & $adb -s $Serial shell am force-stop $packageName | Out-Null
     Start-Sleep -Seconds 2
@@ -110,7 +118,9 @@ try {
     do {
         Start-Sleep -Seconds 2
         $afterRestart = Read-State
-        if ($null -ne $afterRestart -and [long]$afterRestart.lastWrittenAt -gt [long]$offline.lastWrittenAt) { break }
+        $afterRestartCapture = Read-MobileCaptureEvidence
+        if ((Test-MobileCaptureFresh $afterRestartCapture ([DateTimeOffset]::Now.ToUnixTimeMilliseconds())) -and
+            $afterRestartCapture.lastSampleAt -gt $restartStartedAt) { break }
     } while ((Get-Date) -lt $restartDeadline)
     $afterRestartManifest = Read-Manifest
     & $adb -s $Serial shell svc wifi $(if ($wifi -eq "1") { "enable" } else { "disable" }) | Out-Null
@@ -119,7 +129,8 @@ try {
     do {
         Start-Sleep -Seconds 5
         $recovered = Read-State
-        if ($null -ne $recovered -and [long]$recovered.lastUploadedAt -gt [long]$before.lastUploadedAt -and
+        $uploadRequired = [long]$offline.pendingSegments -gt 0 -or [long]$recovered.totalCapturedBytes -gt [long]$before.totalCapturedBytes
+        if ($null -ne $recovered -and (-not $uploadRequired -or [long]$recovered.lastUploadedAt -gt [long]$before.lastUploadedAt) -and
             [long]$recovered.pendingSegments -eq 0L) { break }
     } while ((Get-Date) -lt $deadline)
 } finally {
@@ -130,12 +141,15 @@ try {
 $afterRecovered = Read-PartialRecoveryCount
 $recoveredManifest = Read-Manifest
 $serverLedger = Read-ServerLedger
-$offlineCaptureAdvanced = $null -ne $offline -and [long]$offline.nextSequence -gt [long]$before.nextSequence
+$offlineCaptureAdvanced = Test-MobileCaptureAdvanced $beforeCapture $offlineCapture
+$validEventsObserved = [long]$recovered.totalCapturedBytes -gt [long]$before.totalCapturedBytes
+$partialRecoveryRequired = [long]$offline.activePartialBytes -gt 0
 $restartSequenceMonotonic = $null -ne $afterRestart -and [long]$afterRestart.nextSequence -ge [long]$offline.nextSequence
 $partialRecovered = $afterRecovered -gt $beforeRecovered
-$uploadRecovered = $null -ne $recovered -and [long]$recovered.lastUploadedAt -gt [long]$before.lastUploadedAt -and
+$uploadRecovered = $null -ne $recovered -and (-not $uploadRequired -or [long]$recovered.lastUploadedAt -gt [long]$before.lastUploadedAt) -and
     [long]$recovered.pendingSegments -eq 0L
-$restartCaptureActive = $null -ne $afterRestart -and [long]$afterRestart.lastWrittenAt -gt [long]$offline.lastWrittenAt
+$restartCaptureActive = $null -ne $afterRestartCapture -and $afterRestartCapture.active -and
+    $afterRestartCapture.lastSampleAt -gt $restartStartedAt -and $afterRestartCapture.totalBytes -gt 0
 $manifestValid = $beforeManifest.hashesValid -and $offlineManifest.hashesValid -and
     $afterRestartManifest.hashesValid -and $recoveredManifest.hashesValid -and
     $beforeManifest.orderValid -and $offlineManifest.orderValid -and
@@ -145,15 +159,20 @@ $manifestValid = $beforeManifest.hashesValid -and $offlineManifest.hashesValid -
 $byteConservation = (Test-Accounting $offline $offlineManifest) -and
     (Test-Accounting $afterRestart $afterRestartManifest) -and
     (Test-Accounting $recovered $recoveredManifest)
-$serverExactlyOnce = $null -ne $serverLedger -and [long]$serverLedger.ambiguous -eq 0L -and
+$serverExactlyOnce = -not $uploadRequired -or ($null -ne $serverLedger -and [long]$serverLedger.ambiguous -eq 0L -and
     [long]$serverLedger.processed -eq [long]$recovered.totalAcknowledgedSegments -and
-    [long]$serverLedger.processedBytes -eq [long]$recovered.totalAcknowledgedBytes
+    [long]$serverLedger.processedBytes -eq [long]$recovered.totalAcknowledgedBytes)
 $passed = $offlineCaptureAdvanced -and $restartSequenceMonotonic -and $restartCaptureActive -and
-    $partialRecovered -and $uploadRecovered -and $manifestValid -and $byteConservation -and $serverExactlyOnce
+    (-not $partialRecoveryRequired -or $partialRecovered) -and $uploadRecovered -and $manifestValid -and $byteConservation -and $serverExactlyOnce
 [ordered]@{
     passed = $passed; serial = $Serial; capturedAt = (Get-Date).ToString("o")
     offlineSeconds = $OfflineSeconds; recoveryTimeoutSeconds = $RecoveryTimeoutSeconds
     offlineCaptureAdvanced = $offlineCaptureAdvanced
+    beforeCapture = $beforeCapture; offlineCapture = $offlineCapture; afterRestartCapture = $afterRestartCapture
+    validEventsObserved = $validEventsObserved; uploadRequired = $uploadRequired
+    partialRecoveryRequired = $partialRecoveryRequired; audioQualityVerified = $false
+    eventPipelineStatus = if ($validEventsObserved) { 'observed' } else { 'not_exercised_no_new_valid_events' }
+    partialRecoveryStatus = if ($partialRecoveryRequired) { 'exercised' } else { 'not_exercised_no_partial_at_snapshot' }
     restartSequenceMonotonic = $restartSequenceMonotonic
     restartCaptureActive = $restartCaptureActive
     partialRecovered = $partialRecovered; uploadRecovered = $uploadRecovered

@@ -67,9 +67,11 @@ type RabiInstance = {
 };
 
 export function publicRabiLinkRelayConfig(config: RabiLinkRelayGlobalConfig): Record<string, unknown> {
-  const { token: _token, ...safe } = config;
+  const { token: _token, knowledgeBridge, ...safe } = config;
+  const { token: _knowledgeToken, ...safeKnowledge } = knowledgeBridge || {};
   return {
     ...safe,
+    ...(knowledgeBridge ? { knowledgeBridge: { ...safeKnowledge, tokenConfigured: Boolean(knowledgeBridge.token) } } : {}),
     tokenConfigured: Boolean(config.token)
   };
 }

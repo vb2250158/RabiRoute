@@ -33,6 +33,9 @@ public final class RabiRecordingEventSync {
 
     static void enqueue(Context context, JSONObject receipt, List<RabiDurableAudioSpool.Segment> parts) throws Exception {
         if (parts.isEmpty() || receipt.optJSONObject("timelineWorker") == null || receipt.optString("timelineScope").isEmpty()) return;
+        String captureId = parts.get(0).captureId;
+        if (captureId == null || captureId.isEmpty()) throw new IllegalArgumentException("Missing recording capture identity");
+        for (RabiDurableAudioSpool.Segment part : parts) if (!captureId.equals(part.captureId)) throw new IllegalArgumentException("Mixed recording captures");
         String id = receipt.getString("eventId");
         if (!id.matches("[A-Za-z0-9_-]{1,120}")) throw new IllegalArgumentException("Invalid recording event");
         File target = new File(root(context), id + ".json");
@@ -45,11 +48,13 @@ public final class RabiRecordingEventSync {
                     if (!file.startsWith(context.getFilesDir().getCanonicalPath() + File.separator)) throw new IllegalArgumentException("Invalid recording file");
                     files.put(file); started = Math.min(started, part.startedAt); ended = Math.max(ended, part.endedAt);
                 }
-                write(target, new JSONObject().put("id", id).put("startedAt", started).put("endedAt", ended)
+                write(target, new JSONObject().put("id", id).put("captureId", captureId).put("startedAt", started).put("endedAt", ended)
                     .put("text", receipt.optString("text")).put("files", files)
                     .put("worker", receipt.getJSONObject("timelineWorker")).put("scope", receipt.getString("timelineScope")));
             }
             JSONObject item = new JSONObject(new String(Files.readAllBytes(target.toPath()), StandardCharsets.UTF_8));
+            if (!item.optString("captureId").isEmpty() && !captureId.equals(item.optString("captureId"))) throw new IllegalArgumentException("Recording capture changed");
+            if (item.optString("captureId").isEmpty()) { item.put("captureId", captureId); write(target, item); }
             String state = receipt.optString("transcriptionState", receipt.optString("text").isEmpty() ? "empty" : "ready");
             if (!(("processing".equals(state) || "pending".equals(state)) && ("ready".equals(item.optString("transcriptionState")) || "empty".equals(item.optString("transcriptionState"))))) {
                 if (!state.equals(item.optString("transcriptionState")) || !receipt.optString("text").equals(item.optString("text"))) {
@@ -78,6 +83,10 @@ public final class RabiRecordingEventSync {
                 for (File file : files) {
                     JSONObject item = new JSONObject(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
                     if (item.optBoolean("synced")) continue;
+                    if (!legacyAllowed(item)) {
+                        context.getSharedPreferences("recording_event_sync", Context.MODE_PRIVATE).edit().putString("status", "录音已交归档处理或归属待确认，旧事件同步保留").apply();
+                        continue;
+                    }
                     try { send(context, file, item); }
                     catch (Exception error) { retry = true; context.getSharedPreferences("recording_event_sync", Context.MODE_PRIVATE).edit().putString("status", "事件同步待重试：" + error.getMessage()).apply(); break; }
                 }
@@ -89,7 +98,18 @@ public final class RabiRecordingEventSync {
             }
         });
     }
+    static boolean legacyOwnershipAllows(String captureId, Boolean owned) {
+        return captureId != null && !captureId.trim().isEmpty() && Boolean.FALSE.equals(owned);
+    }
+    private static boolean legacyAllowed(JSONObject item) {
+        String captureId = item.optString("captureId");
+        return !captureId.isEmpty() && legacyOwnershipAllows(captureId, com.rabi.link.RabiConversationService.archiveOwnership(captureId));
+    }
+    private static void requireLegacy(JSONObject item) {
+        if (!legacyAllowed(item)) throw new IllegalStateException("Recording archive ownership changed or unavailable; legacy deferred");
+    }
     private static void send(Context context, File file, JSONObject item) throws Exception {
+        requireLegacy(item);
         RabiLinkRelayConfig relay = RabiLinkRelaySettings.INSTANCE.load(context);
         if (!relay.getConfigured() || !item.getString("scope").equals(AsrDirectory.accountIdentity(relay.getBaseUrl(), relay.getToken()))) return;
         JSONObject worker = item.getJSONObject("worker");
@@ -99,11 +119,13 @@ public final class RabiRecordingEventSync {
         for (int index = 0; index < files.length(); index++) {
             File original = new File(files.getString(index)).getCanonicalFile();
             if (!original.getPath().startsWith(context.getFilesDir().getCanonicalPath() + File.separator)) throw new IllegalStateException("Invalid recording path");
+            requireLegacy(item);
             File resolved = RecordingResourceCache.resolve(original);
             if (pcm.size() + resolved.length() > 4 * 1024 * 1024) throw new IllegalStateException("Recording event too large");
             pcm.write(Files.readAllBytes(resolved.toPath()));
         }
         byte[] audio = RabiEventAsrUploader.wav(pcm.toByteArray());
+        requireLegacy(item);
         try (RabiSpeechTunnel tunnel = new RabiSpeechTunnel(context, relay, target, "resources")) {
             JSONArray chunks = new JSONArray();
             for (int offset = 0; offset < audio.length; offset += 1024 * 1024) {
@@ -111,7 +133,9 @@ public final class RabiRecordingEventSync {
                 StringBuilder digest = new StringBuilder();
                 for (byte part : MessageDigest.getInstance("SHA-256").digest(bytes)) digest.append(String.format(java.util.Locale.ROOT, "%02x", part & 255));
                 String id = digest.toString();
+                requireLegacy(item);
                 RabiSpeechTunnel.Response reply = tunnel.request("PUT", "/objects/" + id, "application/octet-stream", bytes, 30000L);
+                requireLegacy(item);
                 if (reply.getStatus() != 200) throw new IllegalStateException("电脑保存录音失败 " + reply.getStatus());
                 JSONObject ack = new JSONObject(new String(reply.getBody(), StandardCharsets.UTF_8));
                 if (!ack.optBoolean("durable") || !id.equals(ack.optString("sha256")) || ack.optLong("bytes") != bytes.length) throw new IllegalStateException("Invalid recording receipt");
@@ -120,9 +144,12 @@ public final class RabiRecordingEventSync {
             JSONObject event = new JSONObject().put("id", item.getString("id")).put("startedAt", item.getLong("startedAt"))
                 .put("endedAt", item.getLong("endedAt")).put("text", item.getString("text")).put("chunks", chunks)
                 .put("transcriptionState", item.optString("transcriptionState", "ready"));
+            requireLegacy(item);
             RabiSpeechTunnel.Response reply = tunnel.request("PUT", "/recording-events", "application/json", event.toString().getBytes(StandardCharsets.UTF_8), 30000L);
             if (reply.getStatus() != 200 || !new JSONObject(new String(reply.getBody(), StandardCharsets.UTF_8)).optBoolean("durable")) throw new IllegalStateException("电脑尚未接收时间轴事件 " + reply.getStatus());
+            requireLegacy(item);
             synchronized (diskLock) {
+                requireLegacy(item);
                 JSONObject latest = new JSONObject(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
                 if (latest.optLong("revision") == item.optLong("revision")) { latest.put("synced", true); write(file, latest); }
                 else executor.schedule(() -> wake(context), 1, TimeUnit.SECONDS);

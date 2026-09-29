@@ -38,6 +38,15 @@ test("Windows release explicitly includes required discovery and Agent transport
       "scripts/lib/discover-manager-url.mjs",
       "apps/rabi-agent/lib/manager-client.mjs",
       "apps/rabi-agent/lib/manager-cli.mjs",
+      "packages/rabi-knowledge-contract/schema.mjs",
+      "scripts/lib/release-tracked-manifest.ps1",
+      "scripts/rabilink-relay-runtime-files.json",
+      "docs/aiui-agent-profile-http.md",
+      "docs/aiui-agent-profile-http_en.md",
+      "docs/rabilink-knowledge-operation-receipts.md",
+      "docs/rabilink-knowledge-operation-receipts_en.md",
+      "docs/knowledge-grant-phone-ui.md",
+      "docs/knowledge-grant-phone-ui_en.md",
     ]
   );
   assert.match(

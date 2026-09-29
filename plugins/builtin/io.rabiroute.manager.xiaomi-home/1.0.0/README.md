@@ -43,7 +43,9 @@ WebGUI 使用相对 Manager API，并在每次保存前重新读取 `/meta`，�
 
 ## 事件与摄像头录像
 
-`eventDeliveryMode=significant` 只投递离线、事件和移动告警。摄像头移动实体必须在真实 Home Assistant 资源枚举后加入 `cameraMotionEntityIds`；不要仅凭名称猜测摄像头归属。
+`eventDeliveryMode=significant` 默认只投递离线、事件和移动告警；显式加入 `monitoredEntityIds` 的设备也会投递实际状态变化。`all` 模式投递其它设备的实际状态变化，普通属性刷新不触发状态变化事件。摄像头移动实体必须在真实 Home Assistant 资源枚举后加入 `cameraMotionEntityIds`；不要仅凭名称猜测摄像头归属。
+
+事件历史保留在所属人格的 `xiaomi-home-events.jsonl`，以事件 `occurredAt` 写入 `time`/`isoTime`。Manager 通过单写入队列异步追加（最多 64 个待处理事件、每条不超过 256 KiB），角色目录缺失时不重建。写入失败记录脱敏审计，事件路由仍继续。该历史保持追加语义，不承诺跨重启去重；本次不增加自动轮转、归档或删除，也不迁移旧记录。
 
 小米官方 Home Assistant 集成不提供摄像头图片或视频流。社区链路可使用 Xiaomi Miot Auto 暴露的 `motion_video_*` 属性：抓取 Worker 按 `cameraClipAllowedHosts` 白名单读取 HTTPS HLS，处理 AES-128 分片并合并 MP4，再登记为本机 artifact。`cameraClipCaptureEnabled` 默认关闭；只有从真实事件 URL 确认媒体主机后才能登记白名单。
 

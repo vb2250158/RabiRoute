@@ -12,7 +12,9 @@ All-day recording is a continuous information-capture feature explicitly enabled
 
 “All-day” describes a goal of persistent operation, recovery and verifiable coverage. It does not mean an always-on camera by default, guaranteed uninterrupted hardware operation, exemption from background restrictions, or control over every vendor's capture behavior. RabiRoute remains a message gateway and policy router; the target Agent/program performs understanding, answers and actions.
 
-Baseline when this document was written:
+Current audio-persistence correction (implementation in progress, without completed tests or deployment acceptance): continuous listening and saving valid segments are separate. Mobile uses PC `MicrophoneConfig` acoustic segmentation rules; in-memory pre-roll is not continuous persistence, and invalid segments do not enter the spool. The PC provides transcription only; empty ASR text is not evidence of acoustic invalidity. All saved valid recordings remain visible and playable in local-only, pending, processing, failed and empty-transcript states. Existing recordings are not bulk-deleted. See [audio event splitting](rabilink-mobile-recording-ui_en.md#audio-event-splitting).
+
+Historical baseline when this document was written (not acceptance of the current correction):
 
 - Four-page navigation, local WAV recordings, video sessions and replay have entry points. New local recordings/videos do not yet automatically enter transcription.
 - Continuous-conversation audio has a separate durable PCM queue and PC RabiSpeech processing path.

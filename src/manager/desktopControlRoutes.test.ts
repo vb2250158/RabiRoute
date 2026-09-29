@@ -44,6 +44,36 @@ test("desktop open waits for the child-backed role transaction before exposing t
   assert.deepEqual(payload, { code: 0, data: { path: "C:\\roles\\YeYu\\persona.md" } });
 });
 
+test("recording folder aliases wait for the owner and preserve failures", async () => {
+  for (const alias of ["xiaomi-recordings", "xiaomi-media", "camera-clips"]) {
+    const ensured = deferred<string>();
+    const opened: string[] = [];
+    const operation = desktopConfigFilePayload(alias, null, "example", context({
+      ensureRoleFolder(roleId, subfolder) {
+        assert.equal(roleId, "example");
+        assert.equal(subfolder, "xiaomi-media");
+        return ensured.promise;
+      },
+      openPath: target => { opened.push(target); }
+    }));
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.deepEqual(opened, []);
+    ensured.resolve("recordings-path");
+    assert.deepEqual(await operation, { code: 0, data: { path: "recordings-path" } });
+    assert.deepEqual(opened, ["recordings-path"]);
+
+    const failure = new Error("transaction unavailable");
+    await assert.rejects(desktopConfigFilePayload(alias, null, "example", context({
+      ensureRoleFolder: async () => { throw failure; },
+      openPath: () => assert.fail("must not open a failed transaction")
+    })), error => error === failure);
+    await assert.rejects(desktopConfigFilePayload(alias, null, null, context({
+      ensureRoleFolder: async () => { assert.fail("missing role must not create a directory"); },
+      openPath: () => assert.fail("missing role must not open a directory")
+    })), /请先选择/);
+  }
+});
+
 test("desktop route open always awaits the serialized route upsert", async () => {
   const committed = deferred<void>();
   const opened: string[] = [];

@@ -79,6 +79,7 @@ test("Xiaomi Home runtime hot-loads saved settings without requiring credentials
       connectionState: "disabled",
       deliveryMode: "significant",
       cameraMotionEntityCount: 0,
+      monitoredEntityCount: 0,
       agentRoleConfigured: true
     });
     controller.stop();

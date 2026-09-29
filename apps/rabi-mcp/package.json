@@ -1,0 +1,10 @@
+{
+  "name": "rabi-knowledge-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.13.0" },
+  "scripts": { "start": "node knowledge-mcp.mjs", "test": "node --test test/*.test.mjs", "build": "node scripts/build.mjs" },
+  "dependencies": { "@modelcontextprotocol/sdk": "1.30.1" },
+  "devDependencies": { "esbuild": "0.28.2" }
+}

@@ -51,23 +51,50 @@ class RecordingPaginationInstrumentation : Instrumentation() {
             for(i in 0 until 205) {
                 val id = "audio-%03d".format(i)
                 File(segments,"$id.json").writeText(JSONObject().put("eventId",id).put("captureId",id).put("sha256","a".repeat(64))
-                    .put("sequence",i).put("bytes",32000).put("startedAt",1000L+i).put("endedAt",2000L+i).put("source","mobile").toString())
+                    .put("sequence",i).put("bytes",32000).put("startedAt",1000L+i).put("endedAt",2000L+i).put("source","mobile")
+                    .put("processingPolicy",if(i == 1) "local_only" else "transcribe").toString())
                 if(i == 0 || i == 204) File(spool,"asr-$id.json").writeText(JSONObject().put("eventId",id).put("captureId",id).put("text","recognized").put("completedAt",99999999).toString())
             }
-            val asr = com.rabi.link.recording.RabiAudioRecordRepository.page(isolated,Long.MAX_VALUE,"\uffff",true,0,true)
-            check(asr.length() == 2) { "Hidden audio must not consume a page" }
-            check(asr.getJSONObject(0).getLong("startedAt") == 1204L)
-            val previous = com.rabi.link.recording.RabiAudioRecordRepository.page(isolated,1204,"audio-204",true,0,true)
-            check(previous.length() == 1 && previous.getJSONObject(0).getString("id") == "audio-000")
-            val next = com.rabi.link.recording.RabiAudioRecordRepository.page(isolated,1000,"audio-000",false,0,true)
-            check(next.length() == 1 && next.getJSONObject(0).getString("id") == "audio-204")
+            com.rabi.link.transport.AsrEventProgress.processing("audio-002")
+            com.rabi.link.transport.AsrEventProgress.retry("audio-003")
             File(spool,"asr-audio-100.json").writeText(JSONObject().put("eventId","audio-100").put("captureId","audio-100").put("text","  ").toString())
-            check(com.rabi.link.recording.RabiAudioRecordRepository.listAsrRecords(isolated,0,10000).length() == 2)
+            val allAudio = com.rabi.link.recording.RabiAudioRecordRepository.listCaptureRecords(isolated,0L,10000L)
+            check(allAudio.length() == 205) { "Saved audio must not depend on ASR receipts" }
+            val byId = (0 until allAudio.length()).map { allAudio.getJSONObject(it) }.associateBy { it.getString("id") }
+            check(byId.getValue("audio-001").getString("processingPolicy") == "local_only")
+            check(byId.getValue("audio-002").getString("asrState") == "processing")
+            check(byId.getValue("audio-003").getString("asrState") == "retry")
+            check(byId.getValue("audio-004").getString("asrState") == "pending")
+            check(byId.getValue("audio-100").getJSONObject("transcript").getString("text").isBlank())
+            check(byId.values.sumOf { it.getLong("durationMs") } == 205000L)
+            check(byId.values.all { it.getJSONArray("playbackSpans").length() == 1 })
+            for (older in listOf(true,false)) {
+                val seen = mutableListOf<String>()
+                var time = if(older) Long.MAX_VALUE else 0L
+                var cursor = if(older) "\uffff" else ""
+                do {
+                    val page = com.rabi.link.recording.RabiAudioRecordRepository.page(isolated,time,cursor,older,0)
+                    val rows = (0 until page.length()).map { page.getJSONObject(it) }
+                        .sortedBy { it.getLong("startedAt") }.let { if(older) it.reversed() else it }.take(100)
+                    seen.addAll(rows.map { it.getString("id") })
+                    rows.lastOrNull()?.let { time = it.getLong("startedAt"); cursor = it.getString("id") }
+                } while(page.length() > 100)
+                val expectedAudio = (0 until 205).map { "audio-%03d".format(it) }
+                check(seen == if(older) expectedAudio.reversed() else expectedAudio) { "ASR state changed audio pagination: ${seen.size}" }
+            }
+            check(com.rabi.link.recording.RabiAudioRecordRepository.page(isolated,Long.MAX_VALUE,"\uffff",true,2).length() == 0)
             File(spool,"asr-audio-100.json").writeText(JSONObject().put("eventId","audio-100").put("captureId","audio-100").put("text","late recognized words").toString())
-            check(com.rabi.link.recording.RabiAudioRecordRepository.listAsrRecords(isolated,0,10000).length() == 3)
-            output.putString("result","PASS: ASR visibility, original time, adjacent navigation across 203 hidden recordings, late transcript refresh; 3-second/24-hour zoom bounds; 205 events, both directions, same-time IDs, 90-day gap, source filter, real EOF")
+            val refreshed = com.rabi.link.recording.RabiAudioRecordRepository.listCaptureRecords(isolated,0L,10000L)
+            check(refreshed.length() == 205)
+            check((0 until refreshed.length()).map { refreshed.getJSONObject(it) }.single { it.getString("id") == "audio-100" }
+                .getJSONObject("transcript").getString("text") == "late recognized words")
+            output.putString("result","PASS: all 205 saved audio events visible across local-only/pending/processing/retry/empty/nonempty ASR; both pagination directions, source filter, playback coverage, late transcript refresh; 3-second/24-hour zoom bounds; same-time IDs, 90-day gap, real EOF")
         } catch(error: Throwable) { code = Activity.RESULT_CANCELED; output.putString("error",error.stackTraceToString()) }
-        finally { root.deleteRecursively() }
+        finally {
+            com.rabi.link.transport.AsrEventProgress.complete("audio-002")
+            com.rabi.link.transport.AsrEventProgress.complete("audio-003")
+            root.deleteRecursively()
+        }
         finish(code,output)
     }
 }
