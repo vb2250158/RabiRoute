@@ -6,6 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.18 - 2026-10-01
+
+### Fix dependency security vulnerabilities
+
+- Update transitive `axios` from `1.18.1` to `1.20.0` and development dependency `brace-expansion` from `2.1.4` to `2.1.7` within the existing dependency ranges, addressing the high-severity findings in the current dependency audit.
+- Preserve direct dependency declarations and feature contracts; synchronize the repository version, lockfile and bilingual README. This source commit does not update installed applications or claim physical-device acceptance.
+
 ## 0.3.17 - 2026-09-29
 
 ### Integrate plan advancement and repair the Windows release pipeline
