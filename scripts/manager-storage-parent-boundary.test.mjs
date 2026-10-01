@@ -182,6 +182,7 @@ const FORBIDDEN_FS_METHODS = new Set([
 ]);
 
 const STORAGE_PATH_CARRYING_READERS = new Set([
+  "localPersonaMessageDirectories",
   "readPersonaAvatar"
 ]);
 
@@ -646,6 +647,28 @@ test("storage parent-boundary analyzer is symbol-aware and leaves local runtime 
       { code: "role-storage-fs-access", line: 7 },
       { code: "domain-storage-owner-call", line: 9 }
     ]
+  );
+});
+
+test("storage parent-boundary analyzer follows imported persona message directories", () => {
+  const fixture = [
+    'import fs from "node:fs";',
+    'import path from "node:path";',
+    'import { localPersonaMessageDirectories } from "./localPersonaOwner.js";',
+    'function read(roleDir, definition, runtimeLogPath) {',
+    '  const dirs = localPersonaMessageDirectories("root", definition, roleDir);',
+    '  return dirs.flatMap((dir) => {',
+    '    const eventsDir = path.join(dir, "wearable-health", "events");',
+    '    fs.appendFileSync(runtimeLogPath, "local runtime log");',
+    '    return fs.readdirSync(eventsDir);',
+    '  });',
+    '}',
+    ''
+  ].join("\n");
+  const violations = analyzeSource("src/manager/__boundary-fixture.ts", fixture);
+  assert.deepEqual(
+    violations.map(({ code, line }) => ({ code, line })),
+    [{ code: "role-storage-fs-access", line: 9 }]
   );
 });
 

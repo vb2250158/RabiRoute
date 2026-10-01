@@ -1,6 +1,7 @@
 import path from "node:path";
 import { sanitizeRoleId } from "../shared/routeIdentity.js";
 import { normalizePersonaFile, roleFilePath, roleFolderPath } from "../shared/routePaths.js";
+import { normalizeRemotePersonaReference } from "../shared/remotePersonaReference.js";
 import type {
   RouteCatalogPersonaFilePresentation,
   RouteCatalogPersonaPresentation
@@ -10,6 +11,7 @@ export type RoleInfoGatewayDefinition = {
   rolesDir?: string;
   agentRoleFile?: string;
   agentRoleId?: string;
+  agentRoleDeviceId?: string;
 };
 
 export type RoleInfoPayloadOptions = {
@@ -62,6 +64,7 @@ export function roleInfoPayload(
   const rolesDir = path.resolve(rootDir, definition.rolesDir ?? path.join("data", "roles"));
   const roleFileName = normalizePersonaFile(definition.agentRoleFile ?? "persona.md");
   const selectedRoleId = sanitizeRoleId(definition.agentRoleId);
+  const { agentRoleDeviceId } = normalizeRemotePersonaReference(definition);
   const activeRoot = rootKey(rolesDir);
   const roleOptions = (options.personaPresentations ?? [])
     .filter(item => item.isPersona && rootKey(item.rolesRoot) === activeRoot)
@@ -88,11 +91,13 @@ export function roleInfoPayload(
       "zh-CN"
     ));
 
-  const selectedDir = selectedRoleId ? roleFolderPath(rolesDir, selectedRoleId) : "";
-  const selectedRolePath = selectedRoleId ? roleFilePath(rolesDir, selectedRoleId, roleFileName) : "";
-  const selectedOption = roleOptions.find(item => item.value === selectedRoleId);
+  const selectedDir = selectedRoleId && !agentRoleDeviceId ? roleFolderPath(rolesDir, selectedRoleId) : "";
+  const selectedRolePath = selectedRoleId && !agentRoleDeviceId ? roleFilePath(rolesDir, selectedRoleId, roleFileName) : "";
+  const selectedOption = agentRoleDeviceId ? undefined : roleOptions.find(item => item.value === selectedRoleId);
   const payload: Record<string, unknown> = {
-    rolesDir,
+    rolesDir: agentRoleDeviceId ? "" : rolesDir,
+    selectedRoleSource: agentRoleDeviceId ? "remote" : "local",
+    selectedRoleDeviceId: agentRoleDeviceId || "",
     selectedRoleId,
     selectedRolePath,
     selectedRoleDataDir: selectedDir,

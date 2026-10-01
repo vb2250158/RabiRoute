@@ -34,6 +34,7 @@ import {
 } from "./automation/personaAutomationRuntime.js";
 import { buildAgentPacket } from "./routing/agentPacket.js";
 import { fetchRoleContextProjection } from "./manager/roleContextProjection.js";
+import { fetchRemotePersonaSnapshot, routeWithRemotePersonaConfig, type RemotePersonaSnapshot } from "./routing/remotePersonaClient.js";
 import { renderRabiDelivery, type RabiDeliveryEnvelope, type RabiMessageSource } from "./shared/rabiMessage.js";
 import { observeIdentityEndpoint } from "./identityRelations.js";
 import { identityEndpointsForForward } from "./routing/identityContext.js";
@@ -97,7 +98,7 @@ export type {
 } from "./routing/types.js";
 
 export type ForwardDeliveryStatus = "delivered" | "routed" | "missed" | "failed" | "skipped";
-export type ForwardDeliveryReason = "no_active_route_profile" | "no_matching_rule" | "low_signal_voice_transcript" | "no_agent_adapter" | "agent_busy";
+export type ForwardDeliveryReason = "no_active_route_profile" | "no_matching_rule" | "low_signal_voice_transcript" | "no_agent_adapter" | "agent_busy" | "remote_persona_unavailable" | "remote_persona_automation_remote_only";
 
 export type ForwardAdapterOutcome = {
   routeId: string;
@@ -235,6 +236,7 @@ async function activeMessageAgentPool(): Promise<MessageAgentPool> {
     agentAdapter: binding.agentAdapter,
     workspace: binding.workspace,
     roleId: config.agentRoleId,
+    roleDeviceId: config.agentRoleDeviceId,
     rolePath: config.agentRolePath,
     model: policy.model || DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL,
     reasoningEffort: policy.reasoningEffort || DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT,
@@ -833,7 +835,7 @@ function summarizeDeliveryResult(routeKind: ForwardRouteKind, record: ForwardRec
   const matchedRuleIds = routes.flatMap((route) => route.matchedRuleIds);
   const sentPacketCount = routes.reduce((sum, route) => sum + route.sentPacketCount, 0);
   const matchedRuleCount = routes.reduce((sum, route) => sum + route.matchedRuleCount, 0);
-  const failed = adapterOutcomes.some((outcome) => outcome.status === "failed");
+  const failed = routes.some((route) => route.status === "failed") || adapterOutcomes.some((outcome) => outcome.status === "failed");
   const delivered = adapterOutcomes.some((outcome) => outcome.status === "delivered");
   const routed = routes.some((route) => route.status === "routed" || route.status === "delivered" || route.status === "failed");
   const skipped = routes.length > 0 && routes.every((route) => route.status === "skipped");
@@ -988,6 +990,49 @@ async function forwardMessageToRoute(
     return routeResult(route, "skipped", { reason: "low_signal_voice_transcript" });
   }
 
+  const projectionIdentity = {
+    managerBaseUrl: String(process.env.GATEWAY_MANAGER_URL || "").trim(),
+    routeId: String(process.env.GATEWAY_ID || "").trim(),
+    capability: String(process.env.PERSONA_MESSAGING_CAPABILITY || "").trim(),
+    applicationGenerationId: String(process.env.RABIROUTE_APPLICATION_GENERATION_ID || "").trim(),
+    managerInstanceId: String(process.env.RABIROUTE_MANAGER_INSTANCE_ID || "").trim()
+  };
+  let remotePersona: RemotePersonaSnapshot | undefined;
+  if (route.agentRoleDeviceId) {
+    try {
+      remotePersona = await fetchRemotePersonaSnapshot({
+        ...projectionIdentity,
+        deviceId: route.agentRoleDeviceId,
+        roleId: String(route.agentRoleId || ""),
+        file: route.agentRoleFile,
+        signal: options.signal
+      });
+      // Resolve the authoritative remote rules before matching. Never mutate the Gateway's stored profile.
+      route = routeWithRemotePersonaConfig(route, remotePersona);
+      if (routeKind === "manual_trigger" && isManualTriggerRecord(record)
+        && (record.triggerSource === "auto" || record.triggerId === "memory-consolidation")) {
+        appendAdapterLogToDir("router", {
+          event: "remote_persona_automation_remote_only", level: "warning",
+          message: `Remote persona automation belongs to the target PC route=${route.id}`,
+          data: { routeId: route.id, deviceId: remotePersona.deviceId, roleId: remotePersona.roleId, routeKind, messageId: recordId(record) }
+        }, route.dataDir || config.dataDir);
+        return routeResult(route, "skipped", { reason: "remote_persona_automation_remote_only" });
+      }
+    } catch (error) {
+      appendAdapterLogToDir("router", {
+        event: "remote_persona_resolve_failed", level: "error",
+        message: `Remote persona is unavailable; Agent delivery stopped route=${route.id}`,
+        data: {
+          routeId: route.id, deviceId: route.agentRoleDeviceId, roleId: route.agentRoleId,
+          routeKind, messageId: recordId(record),
+          errorCode: (error as { code?: string }).code || "REMOTE_PERSONA_UNAVAILABLE",
+          error: error instanceof Error ? error.message : String(error)
+        }
+      }, route.dataDir || config.dataDir);
+      return routeResult(route, "failed", { reason: "remote_persona_unavailable" });
+    }
+  }
+
   const processingRequirementId = options.messageGroup && options.messageGroup.endpoint !== "heartbeat"
     ? messageProcessingRequirementId(options.messageGroup, route.id)
     : undefined;
@@ -1019,19 +1064,12 @@ async function forwardMessageToRoute(
   }
 
   const roleContext = rolePathsForRoute(route);
-  const projectionIdentity = {
-    managerBaseUrl: String(process.env.GATEWAY_MANAGER_URL || "").trim(),
-    routeId: String(process.env.GATEWAY_ID || "").trim(),
-    capability: String(process.env.PERSONA_MESSAGING_CAPABILITY || "").trim(),
-    applicationGenerationId: String(process.env.RABIROUTE_APPLICATION_GENERATION_ID || "").trim(),
-    managerInstanceId: String(process.env.RABIROUTE_MANAGER_INSTANCE_ID || "").trim()
-  };
   const projectionRequired = Boolean(
     projectionIdentity.capability
     || projectionIdentity.applicationGenerationId
     || projectionIdentity.managerInstanceId
   );
-  const roleKnowledge = roleContext.roleDir && projectionRequired
+  const roleKnowledge = !remotePersona && roleContext.roleDir && projectionRequired
     ? await fetchRoleContextProjection({
         ...projectionIdentity,
         roleId: roleContext.roleId,
@@ -1042,7 +1080,7 @@ async function forwardMessageToRoute(
         signal: options.signal
       })
     : undefined;
-  if (roleContext.roleDir) {
+  if (!remotePersona && roleContext.roleDir) {
     const identityEndpoints = identityEndpointsForForward(routeKind, record, {
       gatewayId: process.env.GATEWAY_ID,
       routeProfileId: route.id
@@ -1070,7 +1108,7 @@ async function forwardMessageToRoute(
     ?? (routeKind === "heartbeat" && messageAgentModeEnabled()
       ? immediateMessageAgentGroup(routeKind, record, extraValues)
       : undefined);
-  const useMemoryConsolidationAgent = memoryConsolidationAgentHandles(
+  const useMemoryConsolidationAgent = !remotePersona && memoryConsolidationAgentHandles(
     routeKind,
     isManualTriggerRecord(record) ? record.triggerId : undefined,
     config.codexMemoryConsolidationAgentEnabled,
@@ -1084,7 +1122,7 @@ async function forwardMessageToRoute(
   for (const rule of decision.matchedRules) {
     const packet = measureSyncPerformanceOperation(
       PERFORMANCE_OPERATIONS.gatewayPacketBuild,
-      () => buildAgentPacket(decision, rule, roleContext, { roleKnowledge })
+      () => buildAgentPacket(decision, rule, roleContext, { roleKnowledge, remotePersona })
     );
     if (packet.conversationSituation && !situationRecorded) {
       try {
@@ -1159,6 +1197,8 @@ async function forwardMessageAndWaitInternal(
   }
   if (!options.replayOfAttemptId) {
     for (const route of routes) {
+      // Remote persona scripts are never executable on this PC, including stale local projections.
+      if (route.agentRoleDeviceId) continue;
       for (const task of matchingMessageScriptAutomations(route, routeKind, record, extraValues)) {
         const runId = automationRunId(route.id, task.rule.id, { record });
         if (!claimAutomationRun(runId, {

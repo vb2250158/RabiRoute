@@ -27,6 +27,7 @@ import {
   routesConfigPath
 } from "../shared/routePaths.js";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
+import { normalizeAgentRoleDeviceId } from "../shared/remotePersonaReference.js";
 
 export type ConfigMigrationOptions = {
   routeRoot: string;
@@ -271,6 +272,7 @@ function routeProfileFragmentsByRole(raw: JsonObject): Array<{ roleId: string; f
   const result: Array<{ roleId: string; fragment: PersonaConfigFragment }> = [];
   for (const profile of raw.routeProfiles) {
     if (!isJsonObject(profile)) continue;
+    if (normalizeAgentRoleDeviceId(profile.agentRoleDeviceId)) continue;
     const roleId = sanitizeRoleId(typeof profile.agentRoleId === "string" ? profile.agentRoleId : undefined) || fallbackRoleId;
     if (!roleId) continue;
     result.push({
@@ -376,6 +378,8 @@ function migrateAdapterConfig(options: ConfigMigrationOptions, configName: strin
   const configPath = adapterConfigPath(options.routeRoot, configName);
   const parsed = readJsonFile(configPath);
   if (!isJsonObject(parsed)) return;
+  // Remote persona references own no local persona configuration to migrate.
+  if (normalizeAgentRoleDeviceId(parsed.agentRoleDeviceId)) return;
 
   const fallbackRoleId = sanitizeRoleId(typeof parsed.agentRoleId === "string" ? parsed.agentRoleId : undefined);
   if (fallbackRoleId) {

@@ -127,11 +127,13 @@ test('CAS rejects pointer/journal changes across lock and durable-archive bounda
   const f=fixture();try {
    // Instrument only a temporary copy; production exposes no fault-injection bypass.
    const copy=path.join(f.root,'instrumented.ps1');
-   let source=fs.readFileSync(script,'utf8');
+   const originalSource=fs.readFileSync(script,'utf8').replace(/\r\n/g,'\n');
+   let source=originalSource;
    const variable=target==='pointer'?'$pointerPath':'$journalPath';
    const mutate=`[IO.File]::AppendAllText(${variable},' ')`;
    if(boundary==='lock') source=source.replace('    Assert-Cas\n    $owner =',`    ${mutate}\n    Assert-Cas\n    $owner =`);
    else source=source.replace('        Assert-Cas\n        # Same-volume',`        ${mutate}\n        Assert-Cas\n        # Same-volume`);
+   assert.notEqual(source,originalSource,`missing CAS injection boundary: ${boundary}`);
    fs.writeFileSync(copy,source);f.args[f.args.indexOf('-File')+1]=copy;
    const r=run(f);assert.notEqual(r.status,0,`${boundary}/${target}`);assert.match(r.stderr,/CAS mismatch/);assert.ok(fs.existsSync(f.journalPath));assert.ok(!fs.existsSync(f.removed));
    if(boundary==='commit') assert.deepEqual(fs.readFileSync(f.archive),f.original);

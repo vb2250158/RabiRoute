@@ -13,6 +13,7 @@ import {
   RouteCatalogIdempotencyConflictError
 } from "./routeCatalogDurableTransaction.js";
 import { routeCatalogSnapshotIdentities } from "./routeCatalogIdentity.js";
+import { normalizeRemotePersonaReference } from "../shared/remotePersonaReference.js";
 
 export type RouteCatalogTransactionOperation =
   | Readonly<{ kind: "capture"; resolveOperationId?: string }>
@@ -109,13 +110,15 @@ function readOnlyConfig(repository: ManagerConfigRepository): GatewayConfigFile 
     const raw = migrateLegacyCopilotThreadName(
       JSON.parse(fs.readFileSync(configPath, "utf8")) as Partial<GatewayDefinition>
     );
-    const personaConfig = repository.readRoleMessageConfig(raw.agentRoleId);
+    const { agentRoleDeviceId } = normalizeRemotePersonaReference(raw);
+    const personaConfig = agentRoleDeviceId ? {} : repository.readRoleMessageConfig(raw.agentRoleId);
     gateways.push(repository.normalize({
       ...raw,
       ...personaConfig,
       id: configName,
       configName,
       agentRoleId: raw.agentRoleId,
+      agentRoleDeviceId,
       rolesDir: raw.rolesDir,
       agentRoleFile: raw.agentRoleFile
     } as GatewayDefinition));
@@ -249,6 +252,7 @@ function capturePersonaPresentations(
 ): readonly RouteCatalogPersonaPresentation[] {
   const roots = new Set<string>([path.resolve(repository.rolesRoot)]);
   for (const definition of gateways) {
+    if (definition.agentRoleDeviceId) continue;
     roots.add(resolveRolesRoot(rootDir, definition.rolesDir, repository.rolesRoot));
   }
   const personas = new Map<string, {
@@ -293,6 +297,7 @@ function capturePersonaPresentations(
     }
   }
   for (const definition of gateways) {
+    if (definition.agentRoleDeviceId) continue;
     const roleId = sanitizeRoleId(definition.agentRoleId);
     if (!roleId) continue;
     const rolesRoot = resolveRolesRoot(rootDir, definition.rolesDir, repository.rolesRoot);

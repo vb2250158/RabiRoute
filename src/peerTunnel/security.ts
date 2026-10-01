@@ -6,6 +6,10 @@ export type TunnelIdentity = { deviceId: string; generation: string; publicKey: 
 export type TunnelGrant = { deviceId: string; publicKey: string; services: string[]; bootstrapScope?: string };
 export type TunnelHello = { deviceId: string; generation: string; publicKey: string; ephemeral: string; nonce: string; target: string; signature: string };
 export class TunnelDenied extends Error {}
+export function isTunnelPublicKey(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > 2048) return false;
+  try { return createPublicKey(value).asymmetricKeyType === "ed25519"; } catch { return false; }
+}
 const protocol = "rabi-tunnel-v1";
 export function loadTunnelIdentity(file: string, deviceId: string, generation: string): TunnelIdentity {
   let keys: { publicKey: string; privateKey: string };

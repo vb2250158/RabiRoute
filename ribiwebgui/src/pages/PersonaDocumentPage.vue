@@ -21,19 +21,23 @@ const gateway = computed(() => store.gateways.find(item => (
   configNameFor(item) === routeKey.value || item.id === routeKey.value
 )) || null);
 const runtime = computed(() => gateway.value ? store.runtimeFor(gateway.value.id) : null);
+const isRemotePersona = computed(() => Boolean(gateway.value?.agentRoleDeviceId));
 const selectedRole = computed(() => {
+  if (isRemotePersona.value) return undefined;
   const roleId = gateway.value?.agentRoleId || "";
   return (runtime.value?.roleInfo?.options || []).find(role => role.value === roleId);
 });
-const personaSource = computed(() => loadedPersonaSource.value
+const personaSource = computed(() => isRemotePersona.value ? loadedPersonaSource.value : loadedPersonaSource.value
   || selectedRole.value?.roleContent
   || runtime.value?.roleInfo?.selectedRoleContent
   || "");
-const personaError = computed(() => loadedPersonaError.value
+const personaError = computed(() => isRemotePersona.value ? loadedPersonaError.value : loadedPersonaError.value
   || selectedRole.value?.roleError
   || runtime.value?.roleInfo?.selectedRoleError
   || "");
-const personaPath = computed(() => selectedRole.value?.rolePath
+const personaPath = computed(() => isRemotePersona.value
+  ? `远端 PC ${gateway.value?.agentRoleDeviceId} · ${gateway.value?.agentRoleId}/${gateway.value?.agentRoleFile || "persona.md"}`
+  : selectedRole.value?.rolePath
   || runtime.value?.roleInfo?.selectedRolePath
   || "persona.md");
 const personaName = computed(() => selectedRole.value
@@ -50,15 +54,16 @@ async function loadPersonaDocument(): Promise<void> {
   const requestVersion = ++personaRequestVersion;
   loadedPersonaSource.value = "";
   loadedPersonaError.value = "";
+  personaLoading.value = false;
   if (!roleId) return;
-  const embedded = selectedRole.value?.roleContent || runtime.value?.roleInfo?.selectedRoleContent || "";
+  const embedded = isRemotePersona.value ? "" : selectedRole.value?.roleContent || runtime.value?.roleInfo?.selectedRoleContent || "";
   if (embedded) {
     loadedPersonaSource.value = embedded;
     return;
   }
   personaLoading.value = true;
   try {
-    const result = await readPersonaDocument(roleId, fileName);
+    const result = await readPersonaDocument(roleId, fileName, gateway.value?.agentRoleDeviceId || "");
     if (requestVersion === personaRequestVersion) {
       loadedPersonaSource.value = result;
     }
@@ -72,7 +77,7 @@ async function loadPersonaDocument(): Promise<void> {
 }
 
 watch(
-  [() => gateway.value?.agentRoleId, () => gateway.value?.agentRoleFile, () => selectedRole.value?.roleContent],
+  [() => gateway.value?.agentRoleDeviceId, () => gateway.value?.agentRoleId, () => gateway.value?.agentRoleFile, () => selectedRole.value?.roleContent],
   () => { void loadPersonaDocument(); },
   { immediate: true }
 );

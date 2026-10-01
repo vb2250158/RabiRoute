@@ -179,7 +179,8 @@ test("knowledge page requests bounded plan pages and progressively renders plans
   assert.match(client, /detail: "summary"/);
   assert.match(client, /\/plans\?\$\{params\.toString\(\)\}/);
   assert.match(page, /const planRequestView = computed/);
-  assert.match(page, /const result = await loadRolePlanPage\(selectedRoleId, "", 8, currentPlanPageFilter\(\), controller.signal\)/);
+  assert.match(page, /const result = await loadRolePlanPage\(selectedRoleId, "", 8, currentPlanPageFilter\(\), controller.signal, \(\) => \{/);
+  assert.match(page, /planListAbort === controller && !controller.signal.aborted[\s\S]{0,160}currentRequest === requestVersion && selectedRoleId === roleId.value\) planCatalogInitializing.value = true/);
   assert.doesNotMatch(page, /loadRolePlanPageWithPriorityDetails/);
   assert.match(page, /loadRolePlanPage\(selectedRoleId, cursor, limit, \{[\s\S]{0,180}includeFacets: false/);
   assert.doesNotMatch(controlPlaneRoutes, /response\.end\(JSON\.stringify\(body, null, 2\)\)/);

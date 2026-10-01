@@ -287,7 +287,7 @@ test("global Relay runtime registers the PC and proxies remote WebGUI requests",
     deviceKind: "pc",
     deviceName: "Test PC",
     waitMs: "0",
-    capabilities: "wearable-observation-policy-v1,webgui,video-direct,peer-rpc-v1,peer-tunnel-v1",
+    capabilities: "wearable-observation-policy-v1,webgui,video-direct,peer-rpc-v1,peer-tunnel-v1,persona-reference-v1",
     peerUrls: JSON.stringify(["http://192.168.1.10:24001"])
   });
   assert.equal(finishedBody?.deviceId, "pc-a");
@@ -726,7 +726,7 @@ test("global Relay runtime proxies the independent speech plugin without exposin
     () => relayState.finishedBody !== undefined,
     () => ({ declaredCapabilities, localMethod: localState.method, relayReceiptReceived: relayState.finishedBody !== undefined })
   );
-  assert.equal(declaredCapabilities, "wearable-observation-policy-v1,webgui,video-direct,peer-rpc-v1,peer-tunnel-v1,speech,asr");
+  assert.equal(declaredCapabilities, "wearable-observation-policy-v1,webgui,video-direct,peer-rpc-v1,peer-tunnel-v1,persona-reference-v1,speech,asr");
   assert.equal(localState.method, "POST");
   assert.equal(localState.url, "/v1/audio/transcriptions?language=zh");
   assert.equal(localState.authorization, undefined);

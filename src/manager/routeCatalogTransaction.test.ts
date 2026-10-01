@@ -36,6 +36,25 @@ function transaction(
   };
 }
 
+test("remote references survive committed catalog reload without materializing local personas", () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-remote-reference-"));
+  try {
+    const saved = executeRouteCatalogTransaction(transaction(rootDir, "remote-seed", "seed", {
+      kind: "replace", config: { gateways: [{
+        id: "remote-route", configName: "remote-route", agentRoleId: "RemoteOnly", agentRoleDeviceId: "pc-target", gatewayPort: 23_001
+      }] }
+    }));
+    assert.equal(saved.gateways[0].agentRoleDeviceId, "pc-target");
+    assert.equal(saved.personas.some(persona => persona.roleId === "RemoteOnly"), false);
+    assert.equal(fs.existsSync(path.join(rootDir, "data", "roles", "RemoteOnly")), false);
+    const reload = executeRouteCatalogTransaction({ ...transaction(rootDir, "remote-reload", "reload", { kind: "capture" }), readOnly: true });
+    assert.equal(reload.gateways[0].agentRoleId, "RemoteOnly");
+    assert.equal(reload.gateways[0].agentRoleDeviceId, "pc-target");
+    assert.equal(reload.routeConfigHash, saved.routeConfigHash);
+    assert.equal(reload.personas.some(persona => persona.roleId === "RemoteOnly"), false);
+  } finally { fs.rmSync(rootDir, { recursive: true, force: true }); }
+});
+
 test("scoped upsert changes only one route file, supports rename, and exposes durable recovery", () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-scoped-save-"));
   try {

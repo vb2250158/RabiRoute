@@ -66,3 +66,20 @@ test("styleValidation 0 bypasses one send and keeps the persona binding", async 
   });
   assert.ok(options.runtimes[0].languageStyle);
 });
+
+test("remote style is evaluated by its owner and cannot use a same-named local binding", async t => {
+  const { request, options } = fixture(t);
+  options.runtimes[0]!.agentRoleDeviceId = "peer-owner";
+  options.runtimes[0]!.agentRoleId = "Example";
+  await assert.rejects(evaluateAgentSendLanguageStyle(request, options, new LanguageStyleValidator()), /owning Manager/);
+  const decision = await evaluateAgentSendLanguageStyle(request, {
+    ...options,
+    remoteLanguageStyle: async (route, text, mode) => {
+      assert.equal(route.runtime.agentRoleDeviceId, "peer-owner");
+      assert.equal(text, "我会处理。");
+      assert.equal(mode, 1);
+      return { blocked: false };
+    }
+  }, new LanguageStyleValidator());
+  assert.equal(decision.blocked, false);
+});

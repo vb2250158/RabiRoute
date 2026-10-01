@@ -10,6 +10,8 @@
 
 路由入口参数见 [路由配置](routing-configuration.md)。这里专门讲人格包，以及跟随人格的自动化规则。
 
+本机 Route 也可[引用远端 PC 人格](remote-persona-reference.md)（实验实现）：选择同一 RabiLink 应用中的来源 PC 和人格，自动公钥握手后只读远端正文与消息配置，保留本机消息端和处理 Agent；不复制人格目录，不回退到本机同名人格，也不新增完整管理权限。
+
 ## 路由人格
 
 RabiRoute 现在把路由配置和路由人格分开：

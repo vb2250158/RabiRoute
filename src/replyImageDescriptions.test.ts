@@ -230,3 +230,39 @@ test("tracked reviewed evidence is authoritative over an unrelated same-id Route
   assert.equal(plan?.items.length, 1);
   assert.equal(plan?.items[0]?.attachmentId, "source-1:image:reviewed");
 });
+
+test("remote persona image review reads only local Route audit and never the same-name local persona", (t) => {
+  const { rootDir, routeDataDir, mediaDir, replyOptions } = fixture(t, { imageCount: 1 });
+  replyOptions.runtimes[0]!.agentRoleId = "shared-persona";
+  replyOptions.runtimes[0]!.agentRoleDeviceId = "remote-pc";
+  const localRoleDir = path.join(rootDir, "data", "roles", "shared-persona");
+  fs.mkdirSync(localRoleDir, { recursive: true });
+  const roleHistory = path.join(localRoleDir, "group-messages.jsonl");
+  fs.writeFileSync(roleHistory, `${JSON.stringify({ time: 99, messageId: "source-1", groupId: 456, instanceId: "qq-main", rawMessage: "local same-name source with no image" })}\n`, "utf8");
+  const localBefore = fs.readFileSync(roleHistory, "utf8");
+  const plan = prepareReplyImageDescriptions(send(["截图展示实际 Route 收到的配置表。"]), replyOptions);
+  assert.equal(plan?.items.length, 1);
+  assert.equal(plan?.items[0]?.imagePath, path.join(mediaDir, "01-image-1.png"));
+  fs.rmSync(path.join(routeDataDir, "group-messages.jsonl"));
+  assert.throws(() => prepareReplyImageDescriptions(send([]), replyOptions), /was not found in the selected Route history/);
+  assert.equal(fs.readFileSync(roleHistory, "utf8"), localBefore);
+});
+
+test("remote persona reviewed fallback accepts current Route audit and rejects local persona evidence", (t) => {
+  const { rootDir, routeDataDir, replyOptions } = fixture(t, { imageCount: 1 });
+  replyOptions.runtimes[0]!.agentRoleId = "shared-persona";
+  replyOptions.runtimes[0]!.routeProfiles = [{ id: "route-main", agentRoleId: "shared-persona", agentRoleDeviceId: "remote-pc" }];
+  const historyPath = path.join(routeDataDir, "group-messages.jsonl");
+  const record = JSON.parse(fs.readFileSync(historyPath, "utf8").trim()) as Record<string, unknown>;
+  fs.rmSync(historyPath);
+  const reviewed: ReviewedReplySourceEvidence = {
+    routeId: "route-main", sourceMessageId: "source-1", groupId: "456", instanceId: "qq-main",
+    record, dataDirs: [routeDataDir], reviewedAttachmentIds: ["source-1:image:1"]
+  };
+  assert.equal(prepareReplyImageDescriptions(send(["截图展示已审核的 Route 配置表。"]), replyOptions, reviewed)?.items.length, 1);
+  reviewed.dataDirs = [path.join(rootDir, "data", "roles", "shared-persona")];
+  assert.throws(
+    () => prepareReplyImageDescriptions(send(["截图展示本地同名角色的配置表。"]), replyOptions, reviewed),
+    /remote persona must use the current local Route audit directories/
+  );
+});

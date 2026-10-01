@@ -1,4 +1,5 @@
 import { type AgentInstanceBinding } from "./agentInstance.js";
+import { normalizeRemotePersonaReference } from "./remotePersonaReference.js";
 import { normalizeRouteAgentTargets, resolvePrimaryAgentTarget, type RemoteAgentTarget } from "./routeAgentTargets.js";
 import { normalizeAgentCompletionDeliveries, type AgentCompletionDeliveryRule } from "./agentHookAutomation.js";
 export { normalizeAgentCompletionDeliveries, type AgentCompletionDeliveryRule } from "./agentHookAutomation.js";
@@ -262,6 +263,7 @@ export type RouteProfileDefinition = {
   pipelinePreset?: string;
   pipeline?: PipelineDefinition;
   agentRoleId?: string;
+  agentRoleDeviceId?: string;
   agentRoleFile?: string;
   rolesDir?: string;
   dataDir?: string;
@@ -404,6 +406,7 @@ export type GatewayDefinition = {
   routesDir?: string;
   configName?: string;
   agentRoleId?: string;
+  agentRoleDeviceId?: string;
   agentRoleFile?: string;
   agentAdapters?: AgentAdapterType[];
   primaryAgentAdapter?: AgentAdapterType;
@@ -1281,7 +1284,7 @@ function normalizeRouteProfile(
   rolesDir: string,
   options: GatewayConfigModelOptions
 ): RouteProfileDefinition | null {
-  const roleId = sanitizeRoleId(profile.agentRoleId);
+  const { agentRoleId: roleId, agentRoleDeviceId } = normalizeRemotePersonaReference(profile);
   const id = sanitizeRoleId(profile.id) || roleId || `route-${index + 1}`;
   const profileAutomations = normalizePersonaAutomationRules(profile.automationRules ?? definition.automationRules);
   const baseRules = profileAutomations.length > 0
@@ -1308,6 +1311,7 @@ function normalizeRouteProfile(
       : definition.pipelinePreset,
     pipeline: normalizePipeline(profile.pipeline) ?? normalizePipeline(definition.pipeline),
     agentRoleId: roleId,
+    agentRoleDeviceId,
     agentRoleFile: profile.agentRoleFile?.trim() || definition.agentRoleFile || "persona.md",
     rolesDir: profile.rolesDir?.trim() || rolesDir,
     dataDir: profile.dataDir?.trim() || dataDir,
@@ -1330,6 +1334,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
   if (definition.feishuWebhookPort != null) assertValidPort(definition.feishuWebhookPort, `Feishu webhook port for ${definition.id}`);
 
   const identity = resolveRouteIdentity(definition);
+  const { agentRoleDeviceId } = normalizeRemotePersonaReference(definition);
   const agentRoleId = identity.roleId;
   const configName = identity.configName;
   const runtimeId = identity.runtimeId;
@@ -1536,6 +1541,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     dataDir,
     rolesDir,
     agentRoleId,
+    agentRoleDeviceId,
     agentRoleFile: definition.agentRoleFile ?? "persona.md",
     roleNotificationRules: agentRoleId ? { [runtimeId]: notificationRules } : {},
     roleRouteNames: { [runtimeId]: routeName },
@@ -1544,6 +1550,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
       name: routeName,
       enabled: definition.enabled !== false,
       agentRoleId,
+      agentRoleDeviceId,
       agentRoleFile: definition.agentRoleFile ?? "persona.md",
       rolesDir,
       dataDir,

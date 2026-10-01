@@ -33,6 +33,7 @@ import {
   writePersonaRules
 } from "./configMigration.js";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
+import { normalizeRemotePersonaReference, removePersonaOwnedGatewayConfig } from "../shared/remotePersonaReference.js";
 
 export type ManagerConfig = {
   routeDir?: string;
@@ -269,13 +270,15 @@ export class ManagerConfigRepository {
     return resolveAdapterConfigPath(this.routeRoot, configName);
   }
 
-  readRoleMessageConfig(roleId: string | undefined): Partial<GatewayDefinition> {
+  readRoleMessageConfig(roleId: string | undefined, agentRoleDeviceId?: string): Partial<GatewayDefinition> {
+    if (normalizeRemotePersonaReference({ agentRoleId: roleId, agentRoleDeviceId }).agentRoleDeviceId) return {};
     const safeRoleId = sanitizeRoleId(roleId);
     if (!safeRoleId) return {};
     return readPersonaConfigFragment(this.personaConfigPath(safeRoleId));
   }
 
-  async readRoleMessageConfigAsync(roleId: string | undefined): Promise<Partial<GatewayDefinition>> {
+  async readRoleMessageConfigAsync(roleId: string | undefined, agentRoleDeviceId?: string): Promise<Partial<GatewayDefinition>> {
+    if (normalizeRemotePersonaReference({ agentRoleId: roleId, agentRoleDeviceId }).agentRoleDeviceId) return {};
     const safeRoleId = sanitizeRoleId(roleId);
     if (!safeRoleId) return {};
     return readPersonaConfigFragmentAsync(this.personaConfigPath(safeRoleId));
@@ -316,7 +319,11 @@ export class ManagerConfigRepository {
   }
 
   normalize(definition: GatewayDefinition): GatewayDefinition {
-    return normalizeGatewayDefinition(definition, {
+    const { agentRoleDeviceId } = normalizeRemotePersonaReference(definition);
+    const localDefinition = agentRoleDeviceId
+      ? this.adapterConfigItem(definition) as GatewayDefinition
+      : definition;
+    return normalizeGatewayDefinition(localDefinition, {
       managerPort: this.managerPort,
       routeDataDir: (configName) => path.relative(this.rootDir, routeFolderPath(this.routeRoot, configName)).replace(/\\/g, "/"),
       rolesDir: path.relative(this.rootDir, this.rolesRoot).replace(/\\/g, "/"),
@@ -336,13 +343,15 @@ export class ManagerConfigRepository {
       const raw = migrateLegacyCopilotThreadName(
         JSON.parse(fs.readFileSync(configPath, "utf8")) as Partial<GatewayDefinition>
       );
-      const personaConfig = this.readRoleMessageConfig(raw.agentRoleId);
+      const { agentRoleDeviceId } = normalizeRemotePersonaReference(raw);
+      const personaConfig = agentRoleDeviceId ? {} : this.readRoleMessageConfig(raw.agentRoleId);
       gateways.push(this.normalize({
         ...raw,
         ...personaConfig,
         id: configName,
         configName,
         agentRoleId: raw.agentRoleId,
+        agentRoleDeviceId,
         rolesDir: raw.rolesDir,
         agentRoleFile: raw.agentRoleFile
       } as GatewayDefinition));
@@ -390,7 +399,7 @@ export class ManagerConfigRepository {
       fs.mkdirSync(path.dirname(configPath), { recursive: true });
       fs.writeFileSync(configPath, JSON.stringify(this.adapterConfigItem(definition), null, 2), "utf8");
       const roleId = sanitizeRoleId(definition.agentRoleId) || routeRuntimeParts(definition.id).roleId;
-      if (roleId) {
+      if (roleId && !definition.agentRoleDeviceId) {
         const previous = groupedByRole.get(roleId);
         groupedByRole.set(roleId, {
           recentMessageLimit: previous?.recentMessageLimit ?? definition.recentMessageLimit,
@@ -418,16 +427,8 @@ export class ManagerConfigRepository {
 
   private adapterConfigItem(definition: GatewayDefinition): Partial<GatewayDefinition> {
     const {
-      notificationRules: _notificationRules,
-      automationRules: _automationRules,
-      roleNotificationRules: _roleNotificationRules,
-      roleRouteNames: _roleRouteNames,
       routeProfiles: _routeProfiles,
       dataDir: _dataDir,
-      recentMessageLimit: _recentMessageLimit,
-      recentMessageLimits: _recentMessageLimits,
-      speechTriggerKeywords: _speechTriggerKeywords,
-      languageStyle: _languageStyle,
       rabiLinkRelayEnabled: _rabiLinkRelayEnabled,
       rabiLinkRelayUrl: _rabiLinkRelayUrl,
       rabiLinkRelayToken: _rabiLinkRelayToken,
@@ -435,10 +436,10 @@ export class ManagerConfigRepository {
       rabiLinkRelayClaimWaitMs: _rabiLinkRelayClaimWaitMs,
       rabiLinkRelayReplyIdleTimeoutMs: _rabiLinkRelayReplyIdleTimeoutMs,
       ...adapterOnly
-    } = definition;
+    } = removePersonaOwnedGatewayConfig(definition);
     return {
       ...adapterOnly,
-      ...(definition.agentRoleId ? { codexHooks: undefined } : {}),
+      ...(!definition.agentRoleId ? { codexHooks: definition.codexHooks } : {}),
       remoteAgentDefaultCwd: this.configPathValue(adapterOnly.remoteAgentDefaultCwd),
       codexCwd: this.configPathValue(adapterOnly.codexCwd),
       copilotCwd: this.configPathValue(adapterOnly.copilotCwd),

@@ -30,7 +30,7 @@ export const activate = definePlugin({
                 "value": {
                     "surface": "web.commands",
                     "label": {
-                        "fallback": "新增航线"
+                        "fallback": "新增路由"
                     },
                     "handlerId": "web.add-route",
                     "requiredCapabilities": [

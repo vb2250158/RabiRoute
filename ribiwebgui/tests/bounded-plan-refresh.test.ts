@@ -49,9 +49,11 @@ test("caller abort reaches fetch and does not cancel another page request", asyn
   const first = new AbortController(); const second = new AbortController();
   const a = loadRolePlanPage("sample", "", 8, {}, first.signal);
   const b = loadRolePlanPage("sample", "next", 50, {}, second.signal);
-  first.abort(); await assert.rejects(a, /cancelled/);
+  first.abort(new Error("first caller cancelled"));
+  await assert.rejects(a, error => error === first.signal.reason);
   assert.equal(signals[0].aborted, true); assert.equal(signals[1].aborted, false);
-  second.abort(); await assert.rejects(b, /cancelled/);
+  second.abort(new Error("second caller cancelled"));
+  await assert.rejects(b, error => error === second.signal.reason);
 });
 
 test("actual visibility callback closes SSE and aborts before returning; visible callback only resumes bounded pending work", () => {
@@ -83,5 +85,7 @@ test("component uses one bounded event page and fences role/filter/abort; client
   assert.match(event, /!signal.aborted && request === requestVersion/);
   assert.match(event, /planNextCursor.value = result.nextCursor/);
   assert.match(client, /filter: RolePlanPageFilter = \{\},\s*signal\?: AbortSignal/);
-  assert.match(client, /plans\?\$\{params.toString\(\)\}`\s*, \{ signal \}/);
+  assert.match(client, /const path = `\/api\/roles\/\$\{encodeURIComponent\(roleId\)\}\/plans\?\$\{params.toString\(\)\}`/);
+  assert.match(client, /retryPlanCatalogInitialization\([\s\S]*requestSignal => managerData[^\n]*\(path, \{ signal: requestSignal \}\)/);
+  assert.match(client, /\{ signal, onInitializing, retryDelay:[\s\S]*PLAN_CATALOG_INITIALIZING/);
 });

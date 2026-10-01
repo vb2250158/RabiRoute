@@ -252,6 +252,22 @@ POST  /api/roles/:roleId/health/observations
 
 `state` 和 `summary` 都包含时效信息；`unknown` 或 `stale` 不得解释成确定的睡着、醒来或健康状态。经 RabiLink Relay 输入并命中心率/睡眠规则的观测会形成 `wearable_health_alert` Agent 事件。认证秘钥、Relay token 和原始敏感元数据不得作为观测字段传入。完整字段、配置和验收边界见 [`rabilink-wearable-health.md`](./rabilink-wearable-health.md)。
 
+### 读取远端人格配置（0.3.19 实验实现）
+
+本机 Route 的 `agentRoleDeviceId` 非空时，`agentRoleId` 属于该远端 PC。0.3.19 新增下列实验来源接口；来源 PC 缺少接口时需要升级，不能改读本机同名人格：
+
+```http
+GET /api/roles/:roleId/persona-reference?file=persona.md
+```
+
+`file` 只接受人格目录内的单个 `.md` / `.markdown` 文件名。成功返回 `{code:0,data}`，其中 `data` 包含 `schemaVersion:1`、真实 `roleId`、`file`、`document`、规范化 `personaConfig`、SHA-256 `revision`、`applicationGenerationId` 和 `managerInstanceId`。正文上限 2 MiB，配置上限 256 KiB；路径越界、损坏 JSON 或超限均拒绝，不返回冒充完整结果的截断内容。
+
+通过当前本机 Manager 的 `/api/rabilink/peer/http/<设备>/persona/...` 访问来源 PC。首次使用通过 `POST /api/rabilink/peer/persona/bootstrap` 提交 `{deviceId}`，复用 RabiLink 已鉴权的应用连接、签名握手和 P2P / Relay 传输，自动固定双方公钥并建立限定的人格服务权限；无需另授完整 `manager` 权限。来源必须声明 `persona-reference-v1` 能力。已有手工条目的明确限权不会被自动扩大，应用停用、凭据变化或撤销权限后拒绝访问。实际 Gateway 解析还核对当前 Route capability、已保存引用和两端 Manager 身份；切代、离线、鉴权失败或绑定变化时停止投递，无同名本机回退。
+
+本机实际处理 Agent 与消息端保留原 Route 配置，使用远端人格正文、消息规则和最近消息额度。计划、记忆与技能通过来源入口按需查询；本机 `roleDir`、`rolePath` 为空，投递审计留在本机 Route 目录。远端定时/脚本、计划秘书、记忆整理和 Hook 权限不会因此在本机启用。本机人格目录不把该 Route 挂到同名本机人格下，本机跨人格消息接口也拒绝冒充远端发件人格。
+
+对外回复需要语言风格检查时，读取远端人格当前配置，向来源 PC 的 `POST /api/roles/:roleId/persona-reference/language-style` 仅提交 `{text,file,revision}`。来源从该人格已保存配置读取风格资料，拒绝调用方提供风格地址；不能把来源路径用于本机读文件。前后核对两端身份和来源快照 revision。显式单次 `styleValidation=0` 按既有合同处理，但不能绕过远端配置读取、离线或鉴权失败。人格通道只允许限定读取及此项检查，不提供远端知识写入或完整管理操作。页面与完整边界见[远端人格引用](remote-persona-reference.md)；真实双 PC 投递仍需单独验收。
+
 ### 查询其它人格并投递消息
 
 “人格”是面向用户和 Agent 的正式名称；现有 `roleId`、`/api/roles/*` 和 `data/roles/` 是兼容保留的内部名称。人格列表提供专用接口，不需要从 Route 管理结果中拆解：

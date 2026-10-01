@@ -10,11 +10,13 @@ import {
 } from "../rolePanelTimeline.js";
 import type { PlanTaskCompletionDelivery } from "./codexHookContext.js";
 import { resolvePlanSecretaryAssignment, type PlanSecretaryTarget } from "./planSecretaryAssignment.js";
+import { localPersonaRuntimeForDelivery } from "./localPersonaOwner.js";
 
 export type PlanTaskCompletionRuntime = {
   definition: RouteAgentTargetsDefinition & {
     id: string;
     agentRoleId?: string;
+    agentRoleDeviceId?: string;
     agentAdapters?: AgentAdapterType[];
     primaryAgentAdapter?: AgentAdapterType;
     codexThreadId?: string;
@@ -113,19 +115,10 @@ export function createPlanTaskCompletionDelivery<TRuntime extends PlanTaskComple
   }
 
   function runtimeForRoleDelivery(roleId: string, gatewayId: string): TRuntime {
-    if (gatewayId) {
-      const runtime = options.getRuntime(gatewayId);
-      if (!runtime) throw new Error(`Gateway not found: ${gatewayId}`);
-      if (options.roleIdForDefinition(runtime.definition) !== roleId) {
-        throw new Error(`Gateway ${gatewayId} is not bound to role ${roleId}.`);
-      }
-      return runtime;
-    }
-    const matches = options.listRuntimes()
-      .filter((runtime) => options.roleIdForDefinition(runtime.definition) === roleId);
-    if (matches.length === 0) throw new Error(`No gateway is bound to role ${roleId}.`);
-    if (matches.length > 1) throw new Error(`Multiple gateways are bound to role ${roleId}; gatewayId is required.`);
-    return matches[0];
+    const candidates = gatewayId
+      ? [options.getRuntime(gatewayId)].filter((runtime): runtime is TRuntime => Boolean(runtime))
+      : options.listRuntimes();
+    return localPersonaRuntimeForDelivery(candidates, roleId, gatewayId, options.roleIdForDefinition);
   }
 
   return async (delivery: PlanTaskCompletionDelivery): Promise<void> => {

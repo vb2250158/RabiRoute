@@ -8,6 +8,7 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 import {
   MessageAgentPool,
+  messageAgentInitializationPrompt,
   rankMessageAgentWorkers,
   replacePersistedMessageAgentWorker,
   requestMessageAgentManager,
@@ -83,6 +84,68 @@ function options(statePath: string) {
     reasoningEffort: "medium" as const
   };
 }
+
+test("Message Agent initialization references the remote persona owner without a local persona binding", () => {
+  const configuration = options("fixture-state.json");
+  assert.match(messageAgentInitializationPrompt(configuration), /\[rabi:bind XinghaiBuilder\]/);
+  const remotePrompt = messageAgentInitializationPrompt({ ...configuration, roleDeviceId: "remote-pc" });
+  assert.match(remotePrompt, /人格所属电脑：remote-pc/);
+  assert.match(remotePrompt, /人格 ID：XinghaiBuilder/);
+  assert.match(remotePrompt, /每次消息 AgentPacket 的人格正文和远端知识入口/);
+  assert.doesNotMatch(remotePrompt, /\[rabi:bind/);
+});
+
+test("remote Message Agent worker naming ignores a same-name local persona document", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-remote-message-agent-title-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const rolePath = path.join(root, "persona.md");
+  fs.writeFileSync(rolePath, "# Wrong local same-name persona\n", "utf8");
+  const calls: Array<Record<string, any>> = [];
+  const pool = new MessageAgentPool({ ...options(path.join(root, "agents.json")), roleDeviceId: "remote-pc", roleDisplayName: undefined, rolePath }, {
+    request: async payload => {
+      calls.push(payload);
+      if (payload.action === "read") return { thread: { active: false } };
+      if (payload.action === "resolve") return { thread: { id: "019f0000-0000-7000-8000-000000000091", title: payload.title, cwd: process.cwd() } };
+      return { status: "delivered", delivery: { status: "delivered" } };
+    }
+  });
+  await deliver(pool, group("remote-group"), "Authoritative remote persona packet");
+  assert.match(String(calls.find(call => call.action === "resolve")?.title), /星海主任务/);
+  assert.doesNotMatch(JSON.stringify(calls), /Wrong local same-name persona|\[rabi:bind/);
+  assert.match(deliveryPayloadText(calls.find(call => call.action === "send")), /人格所属电脑：remote-pc/);
+  calls.length = 0;
+  await deliver(pool, group("remote-next"), "Next remote persona packet");
+  const reusedPrompt = deliveryPayloadText(calls.find(call => call.action === "send"));
+  assert.doesNotMatch(reusedPrompt, /\[消息处理 Agent 初始化\]|\[rabi:bind/);
+  assert.match(reusedPrompt, /人格所属电脑：remote-pc/);
+});
+
+test("a local-to-remote persona change reuses the same Message Agent task with a per-turn remote owner hint", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-agent-remote-owner-change-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const statePath = path.join(root, "agents.json");
+  const calls: Array<Record<string, any>> = [];
+  const request = async (payload: Record<string, any>) => {
+    calls.push(payload);
+    if (payload.action === "read") return { thread: { active: false } };
+    if (payload.action === "resolve") return { thread: { id: "019f0000-0000-7000-8000-000000000092", title: payload.title, cwd: process.cwd() } };
+    return { status: "delivered", delivery: { status: "delivered" } };
+  };
+  const localPool = new MessageAgentPool(options(statePath), { request });
+  const localWorker = await deliver(localPool, group("local-group"), "Local persona message");
+  assert.match(deliveryPayloadText(calls.find(call => call.action === "send")), /\[rabi:bind XinghaiBuilder\]/);
+  const initializedAt = localWorker.initializedAt;
+  calls.length = 0;
+  const remotePool = new MessageAgentPool({ ...options(statePath), roleDeviceId: "remote-pc" }, { request });
+  const remoteWorker = await deliver(remotePool, group("remote-group"), "Current AgentPacket remote persona document");
+  assert.equal(remoteWorker.threadId, localWorker.threadId);
+  assert.equal(remoteWorker.initializedAt, initializedAt);
+  assert.equal(calls.some(call => call.action === "resolve"), false);
+  const remotePrompt = deliveryPayloadText(calls.find(call => call.action === "send"));
+  assert.match(remotePrompt, /人格所属电脑：remote-pc/);
+  assert.match(remotePrompt, /按每次消息 AgentPacket 的人格正文和远端知识入口/);
+  assert.doesNotMatch(remotePrompt, /\[消息处理 Agent 初始化\]|\[rabi:bind/);
+});
 
 test("Message Agent delivery rejects an omitted messageSource before allocation", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-agent-source-"));

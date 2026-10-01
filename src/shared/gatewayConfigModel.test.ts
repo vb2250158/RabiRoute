@@ -61,6 +61,16 @@ test("route id and config names are normalized", () => {
   assert.equal(normalized.configName, "main-route");
 });
 
+test("remote persona identity is retained in Gateway and derived Route profiles", () => {
+  const normalized = normalizeGatewayDefinition(gateway({ agentRoleId: "Shared", agentRoleDeviceId: "pc-target" }));
+  assert.equal(normalized.agentRoleId, "Shared");
+  assert.equal(normalized.agentRoleDeviceId, "pc-target");
+  assert.equal(normalized.routeProfiles?.[0]?.agentRoleId, "Shared");
+  assert.equal(normalized.routeProfiles?.[0]?.agentRoleDeviceId, "pc-target");
+  assert.throws(() => normalizeGatewayDefinition(gateway({ agentRoleId: "", agentRoleDeviceId: "pc-target" })), /valid role ID/);
+  assert.throws(() => normalizeGatewayDefinition(gateway({ agentRoleDeviceId: "https://target" })), /device ID/);
+});
+
 test("message endpoint and Gateway adapter contracts have exact host-owned members", () => {
   assert.deepEqual([...MESSAGE_ENDPOINT_TYPES], [
     "napcat", "remoteAgent", "heartbeat", "rolePanel", "speech", "fennenote", "xiaoai",

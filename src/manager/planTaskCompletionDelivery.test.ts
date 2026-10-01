@@ -213,6 +213,46 @@ test("plan task completion fails closed for missing or conflicting route binding
   assert.equal(readRolePanelTimeline(roleDir).length, 0);
 });
 
+test("an old local plan cannot deliver through a Route now owned by a remote namesake persona", async (t) => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-plan-remote-owner-"));
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const remote = runtime("remote-route", "YeYu");
+  remote.definition.agentRoleDeviceId = "source-pc";
+  remote.definition.codexPlanAssistantEnabled = true;
+  let downstreamOperations = 0;
+  const deliver = createPlanTaskCompletionDelivery({
+    getRuntime: () => remote, listRuntimes: () => [remote],
+    roleIdForDefinition: definition => definition.agentRoleId || "",
+    assignSecretary: async () => { downstreamOperations++; return undefined; },
+    sendToSecretary: async () => { downstreamOperations++; },
+    triggerRolePanelMessage: async () => { downstreamOperations++; },
+    appendTimeline: async (_roleId, message) => { downstreamOperations++; return appendRolePanelTimelineMessageIfAbsent(roleDir, message); }
+  });
+  await assert.rejects(deliver(delivery(roleDir, remote.definition.id)), /REMOTE_PERSONA_OWNER_REQUIRED/);
+  await assert.rejects(deliver(delivery(roleDir)), /No local gateway/);
+  assert.equal(downstreamOperations, 0, "Ownership must be checked before secretary assignment, delivery or timeline writes");
+  assert.equal(readRolePanelTimeline(roleDir).length, 0);
+});
+
+test("local plan completion chooses the local Route when a remote persona shares its role ID", async (t) => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-plan-local-owner-"));
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const local = runtime("local-route", "YeYu");
+  const remote = runtime("remote-route", "YeYu");
+  remote.definition.agentRoleDeviceId = "source-pc";
+  const selected: string[] = [];
+  const deliver = createPlanTaskCompletionDelivery({
+    getRuntime: id => [local, remote].find(item => item.definition.id === id),
+    listRuntimes: () => [remote, local],
+    roleIdForDefinition: definition => definition.agentRoleId || "",
+    triggerRolePanelMessage: async target => { selected.push(target.definition.id); },
+    appendTimeline: appendTimelineTo(roleDir)
+  });
+  await deliver(delivery(roleDir));
+  assert.deepEqual(selected, [local.definition.id]);
+  assert.equal(readRolePanelTimeline(roleDir).length, 1);
+});
+
 test("plan task completion rejects a Codex target bound to the source session", async (t) => {
   const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-plan-delivery-loop-"));
   t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));

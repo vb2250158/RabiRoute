@@ -10,6 +10,7 @@ import {
   registerTrustedWebThemeResource,
   type TrustedWebThemeResourceRegistration
 } from "../src/pluginThemes";
+import { registerTrustedWebCommand, type TrustedWebCommandRegistration } from "../src/pluginCommands";
 
 type TestWebPluginApi = Readonly<{
   instanceId: string;
@@ -18,6 +19,7 @@ type TestWebPluginApi = Readonly<{
   registerSettingsRenderer(input: Omit<TrustedWebSettingsRendererRegistration, "instanceId" | "pluginId">): () => void;
   registerStatusRenderer(input: Omit<TrustedWebStatusRendererRegistration, "instanceId" | "pluginId">): () => void;
   registerTheme(input: Omit<TrustedWebThemeResourceRegistration, "instanceId" | "pluginId">): () => void;
+  registerCommand(input: Omit<TrustedWebCommandRegistration, "instanceId" | "pluginId">): () => void;
   asComponent(value: Component): Component;
 }>;
 
@@ -33,6 +35,7 @@ export function activateWebPluginForTest(
     registerSettingsRenderer: input => registerTrustedWebSettingsRenderer({ ...input, ...owner }),
     registerStatusRenderer: input => registerTrustedWebStatusRenderer({ ...input, ...owner }),
     registerTheme: input => registerTrustedWebThemeResource({ ...input, ...owner }),
+    registerCommand: input => registerTrustedWebCommand({ ...input, ...owner }),
     asComponent: value => value
   });
   const disposers = activate(api);

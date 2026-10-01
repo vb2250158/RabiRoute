@@ -1,0 +1,28 @@
+{
+  "id": "memory-rabiroute-remote-persona-reference",
+  "title": "本机 Route 引用远端人格时保持资料与执行归属",
+  "focus": "远端人格引用的只读权限与归属边界",
+  "content": "我在 0.3.19 中把远端人格作为引用使用：agentRoleDeviceId 指向稳定设备 ID，agentRoleId 保留来源 PC 的真实人格 ID；不复制人格目录，也不退回本机同名人格。本机 Route 继续拥有消息端、实际处理 Agent、工作目录和消息审计，正文、消息规则、上下文额度与知识仍由来源人格拥有。两端复用同一 RabiLink 应用认证，通过 bootstrap-persona 自动交换并固定公钥，再走既有 LAN/P2P/Relay 选路，只开放 persona 服务只读白名单；不新增手工完整 manager 授权，来源已有手工限权保留。每次消息读取来源 persona-reference 快照，核对两端 Manager 身份、Route capability、固定公钥和 revision；离线、鉴权失败、旧版或身份变化都停止投递。语言风格检查只提交正文、file、revision，由来源 PC 的已保存人格配置决定风格地址，拒绝调用方地址与检查期间变化；远端路径不在本机解释。人格及知识修改、定时任务、脚本、消息投递都不在 persona 服务权限内；本机不运行远端秘书、整理或人格 Hook。自动化测试与构建证据不能代替真实双 PC 投递、断线恢复和长期运行验收；当前实现仍为 experimental，操作合同见 docs/remote-persona-reference.md。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例近期记忆：0.3.19 远端人格引用的归属、授权与待验收边界"
+  },
+  "createdAt": "2026-10-01T00:00:00+08:00",
+  "updatedAt": "2026-10-01T00:00:00+08:00",
+  "keywords": [
+    "remote persona",
+    "远端人格",
+    "agentRoleDeviceId",
+    "AGENT_ROLE_DEVICE_ID",
+    "persona-reference",
+    "同名隔离",
+    "persona service",
+    "bootstrap-persona",
+    "RabiLink 应用鉴权",
+    "设备公钥",
+    "Manager 身份",
+    "失败关闭",
+    "Route audit",
+    "双 PC 验收"
+  ]
+}

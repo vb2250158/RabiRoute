@@ -69,6 +69,7 @@ export type MessageAgentPoolOptions = {
   agentAdapter?: AgentAdapterType;
   workspace: string;
   roleId: string;
+  roleDeviceId?: string;
   roleDisplayName?: string;
   rolePath?: string;
   model: string;
@@ -216,7 +217,8 @@ function workerAgentAdapter(worker: Pick<MessageAgentWorker, "agentAdapter" | "t
 }
 
 function workerBaseTitle(options: MessageAgentPoolOptions, sourceThreadDisplayName: string): string {
-  return String(sourceThreadDisplayName || options.roleDisplayName || roleDisplayNameFromFile(options.rolePath) || options.sourceThreadName).trim();
+  return String(sourceThreadDisplayName || options.roleDisplayName
+    || (!options.roleDeviceId ? roleDisplayNameFromFile(options.rolePath) : "") || options.sourceThreadName).trim();
 }
 
 function normalizeWorker(value: unknown): MessageAgentWorker | undefined {
@@ -572,6 +574,7 @@ function workerHandoffPrompt(
     `工作目录：${worker.workspace}`,
     `当前主人格任务：${options.sourceThreadName}`,
     `当前主人格任务 ID：${options.sourceThreadId}`,
+    ...remotePersonaReferenceLines(options),
     `向其它 Agent 投递时填写 messageSource={"type":"agent","agentAdapter":"${workerAgentAdapter(worker)}","sessionId":"${worker.threadId}","sessionName":"当前消息处理任务名称"}、sourceThreadId=${worker.threadId}、sourceAgentType=message_processing 和 responsePolicy；要求回复时填写 responseInstruction。`,
     `对方通过 POST ${threadsApi} 回复本任务，填写 inReplyToRequestId、result、nextAction 和 responsePolicy。`,
     "code=0、status=delivered、delivery.status=delivered 才表示任务已接收；delivered_tracking_failed 不得重投。",
@@ -587,9 +590,19 @@ function workerHandoffPrompt(
   ].join("\n");
 }
 
+function remotePersonaReferenceLines(options: MessageAgentPoolOptions): string[] {
+  return options.roleDeviceId ? [
+    "[远端人格引用]",
+    `人格所属电脑：${options.roleDeviceId}`,
+    `人格 ID：${options.roleId}`,
+    "按每次消息 AgentPacket 的人格正文和远端知识入口使用该人格。人格配置、计划、记忆与技能仍由远端 PC 保存；不要读取或绑定本机同名人格。"
+  ] : [];
+}
+
 export function messageAgentInitializationPrompt(options: MessageAgentPoolOptions): string {
+  const personaBinding = options.roleDeviceId ? remotePersonaReferenceLines(options) : [`[rabi:bind ${options.roleId}]`];
   return [
-    `[rabi:bind ${options.roleId}]`,
+    ...personaBinding,
     "[消息处理 Agent 初始化]",
     `主人格任务：${options.sourceThreadName}`,
     `主人格任务 ID：${options.sourceThreadId}`,

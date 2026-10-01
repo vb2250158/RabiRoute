@@ -75,6 +75,23 @@ test("full gateway role info returns bounded child content and stable unavailabl
   assert.equal(JSON.stringify(unavailable).includes("nas"), false);
 });
 
+test("remote role selection never displays a same-name local persona or local storage path", () => {
+  const rootDir = path.resolve("C:/app");
+  const rolesRoot = path.join(rootDir, "data", "roles");
+  const payload = roleInfoPayload(rootDir, { agentRoleId: "Rabi", agentRoleDeviceId: "pc-target" }, {
+    personaPresentations: [persona(rolesRoot, "# Local Rabi\n\nLocal-only content.")]
+  });
+  assert.equal(payload.selectedRoleId, "Rabi");
+  assert.equal(payload.selectedRoleDeviceId, "pc-target");
+  assert.equal(payload.selectedRoleSource, "remote");
+  assert.equal(payload.selectedRoleContent, "");
+  assert.equal(payload.selectedRoleTitle, "");
+  assert.equal(payload.selectedRolePath, "");
+  assert.equal(payload.selectedRoleDataDir, "");
+  assert.equal(payload.rolesDir, "");
+  assert.equal((payload.options as unknown[]).length, 1, "local catalog remains available for an explicit source change");
+});
+
 test("formal role info parent module contains no roles-root filesystem access", () => {
   const source = fs.readFileSync(new URL("./roleInfoPayload.ts", import.meta.url), "utf8");
   assert.doesNotMatch(source, /node:fs|PersonaCatalog|readFileSync|readdirSync|statSync|existsSync/);

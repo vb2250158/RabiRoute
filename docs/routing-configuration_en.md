@@ -8,6 +8,8 @@ English | <a href="./routing-configuration.md">简体中文</a>
 
 > Status: current guide. Checked against `personaConfig.json` loading, route kinds, pipelines, and current template values.
 
+When `agentRoleDeviceId` selects a remote PC, `agentRoleId` references that PC's persona. Empty or absent retains local selection. Both PCs reuse authentication for the same RabiLink application and an automatic public-key handshake for reads through the restricted `persona` service. Remote rules are read for delivery rather than persisted as local persona configuration. See [Use a remote persona from a local Route](remote-persona-reference_en.md) for selection, manual restrictions and failure boundaries (experimental).
+
 ## File locations
 
 Operational route configuration:

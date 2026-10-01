@@ -4,6 +4,11 @@ import test from "node:test";
 import type { WebPluginCatalog, WebPluginCatalogPlugin } from "../src/pluginCatalogClient";
 import { availableWebContributions } from "../src/pluginContributions";
 import { resolveWebCommandCatalog } from "../src/pluginCommands";
+import { activateRouteControl } from "../src/bundles/builtinWebContributions";
+import { activateWebPluginForTest } from "./web-plugin-test-host";
+
+const disposeRouteControl = activateWebPluginForTest({ instanceId: "manager:route-control", pluginId: "io.rabiroute.manager.route-control" }, activateRouteControl);
+test.after(() => disposeRouteControl());
 
 const pluginId = "io.rabiroute.manager.route-control";
 const activePlugin: WebPluginCatalogPlugin = {

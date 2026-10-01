@@ -1,4 +1,5 @@
 import { KNOWLEDGE_PATH, executeKnowledgeQueue, probeKnowledgeBridge, isCanonicalKnowledgeDeviceId, type KnowledgeRuntimeConfig, type KnowledgeQueueMetadata } from './rabiLinkKnowledgeRuntime.js';
+import { PERSONA_REFERENCE_CAPABILITY } from "../shared/personaPeerService.js";
 const knowledgeReady = new WeakMap<RabiLinkRelayRuntimeConfig, boolean>();
 type RelayProxyRequest = {
   knowledge?: KnowledgeQueueMetadata;
@@ -391,7 +392,7 @@ async function refreshAsrAdvertisement(config: RabiLinkRelayRuntimeConfig, signa
 }
 
 function workerCapabilities(config: RabiLinkRelayRuntimeConfig): string {
-  return ["wearable-observation-policy-v1", "webgui", "video-direct", "peer-rpc-v1", "peer-tunnel-v1", config.speechProxyEnabled ? "speech" : "", knowledgeReady.get(config) ? "knowledgebridge" : "", asrAdvertisements.get(config)?.available ? "asr" : ""]
+  return ["wearable-observation-policy-v1", "webgui", "video-direct", "peer-rpc-v1", "peer-tunnel-v1", PERSONA_REFERENCE_CAPABILITY, config.speechProxyEnabled ? "speech" : "", knowledgeReady.get(config) ? "knowledgebridge" : "", asrAdvertisements.get(config)?.available ? "asr" : ""]
     .filter(Boolean)
     .join(",");
 }

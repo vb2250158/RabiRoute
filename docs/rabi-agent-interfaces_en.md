@@ -149,6 +149,22 @@ POST  /api/roles/:roleId/health/observations
 
 `state` and `summary` include staleness. An Agent must not interpret `unknown` or stale data as a definite sleeping, awake, or medical state. Relay observations that match heart-rate or sleep rules become `wearable_health_alert` Agent events. Wearable authentication keys, Relay tokens, and raw sensitive metadata must never be submitted as observation fields. See [`rabilink-wearable-health_en.md`](./rabilink-wearable-health_en.md) for the full contract and acceptance boundary.
 
+### Reading remote persona configuration (experimental in 0.3.19)
+
+When a local Route's `agentRoleDeviceId` is nonempty, its `agentRoleId` belongs to that remote PC. Version 0.3.19 adds the following experimental source endpoint. Upgrade a source PC that lacks it rather than reading a same-name local persona:
+
+```http
+GET /api/roles/:roleId/persona-reference?file=persona.md
+```
+
+`file` accepts one `.md` or `.markdown` filename inside the persona directory. Success returns `{code:0,data}` with `schemaVersion:1`, the actual `roleId`, `file`, `document`, normalized `personaConfig`, SHA-256 `revision`, `applicationGenerationId` and `managerInstanceId`. Text is limited to 2 MiB and configuration to 256 KiB. Path escapes, malformed JSON and size limits fail the read; truncated content is never presented as a complete result.
+
+Use `/api/rabilink/peer/http/<device>/persona/...` on the current local Manager to access the source PC. On first use, submit `{deviceId}` to `POST /api/rabilink/peer/persona/bootstrap`. This reuses the authenticated RabiLink application connection, signed handshake and P2P / Relay transport to pin both public keys and establish limited persona-service permissions automatically, without a separate full `manager` grant. The source must advertise `persona-reference-v1`. Explicit restrictions in existing manual entries are not expanded automatically; disabling the application, changing credentials or revoking permissions denies access. Actual Gateway resolution additionally checks the current Route capability, persisted reference and both Manager identities. Generation changes, offline state, failed authentication or changed bindings stop delivery without a same-name local fallback.
+
+Local handling Agents and message inputs retain their Route configuration while using remote persona text, message rules and recent-message budgets. Query plans, memories and skills on demand through the source entry. Local `roleDir` and `rolePath` are empty, and delivery auditing stays in the local Route directory. Remote schedules, scripts, plan secretaries, memory consolidation and Hook permissions are not enabled locally by the reference. The local persona directory does not attach the Route to a same-name local persona, and the local cross-persona API refuses to impersonate a remote sender.
+
+When outbound replies require language-style validation, read the current remote persona configuration and submit only `{text,file,revision}` to the source PC's `POST /api/roles/:roleId/persona-reference/language-style`. The source reads style material from that persona's saved configuration and rejects caller-supplied style addresses. Never read source-owned paths locally. Both Manager identities and the source snapshot revision are checked before and after validation. An explicit one-send `styleValidation=0` follows the existing contract but cannot bypass remote configuration reads, offline state or failed authentication. The persona channel permits only limited reads and this validation, without remote knowledge writes or full management operations. See [remote persona references](remote-persona-reference_en.md) for the page and full boundaries. Delivery across two real PCs still requires separate acceptance.
+
 ### Discovering and messaging other personas
 
 “Persona” is the user-facing and Agent-facing term. Existing `roleId`, `/api/roles/*`, and `data/roles/` names remain as compatibility-oriented internal identifiers. Call the dedicated directory instead of decoding Route-management payloads:

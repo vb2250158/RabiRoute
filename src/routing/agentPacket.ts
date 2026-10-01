@@ -41,6 +41,7 @@ import {
 } from "./conversationSituation.js";
 import type { ForwardTemplateValues } from "./types.js";
 import type { RouteDecision } from "./routeDecision.js";
+import type { RemotePersonaSnapshot } from "./remotePersonaClient.js";
 import { messageContextScopeForForward } from "./messageContextScope.js";
 import {
   isGroupRecord,
@@ -83,6 +84,8 @@ export type AgentPacket = {
 export type BuildAgentPacketOptions = {
   /** Manager-fenced projection for an isolated Gateway/Speech child. */
   roleKnowledge?: RoleKnowledgeSnapshot;
+  /** Request-scoped remote owner snapshot; never interpreted as a local role directory. */
+  remotePersona?: RemotePersonaSnapshot;
 };
 
 type MessageCodeRecord = {
@@ -844,7 +847,7 @@ function planSourceIdentity(record: RouteDecision["record"], roleDir: string): {
     : {};
   const planId = canonicalLogicalPlanId(replyContext.planId);
   const planName = String(replyContext.planTitle || "").trim()
-    || (planId ? String(getPlan(roleDir, planId)?.title || "").trim() : "");
+    || (planId && roleDir ? String(getPlan(roleDir, planId)?.title || "").trim() : "");
   if (!planName) throw new Error("Plan message source requires the exact plan id and name.");
   return { planId, planName };
 }
@@ -996,6 +999,7 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     transport: recentContext.transport,
     conversationKey: recentContext.conversationKey,
     personaMessagingCapability: config.personaMessagingCapability || undefined,
+    agentRoleDeviceId: route.agentRoleDeviceId,
     adapterType: isPlanFeedback ? "planFeedback" : isRolePanel ? "rolePanel" : "adapterType" in record ? record.adapterType : undefined,
     voiceprintId: isVoiceTranscript ? record.voiceprintId : undefined,
     voiceprintIds: isVoiceTranscript ? voiceprintIds : undefined,
@@ -1141,11 +1145,16 @@ function buildAgentMessage(
   const record = decision.record;
   const routeKind = decision.routeKind;
   const shouldAttachMemoryConsolidation = routeKind === "manual_trigger" && String(values.triggerId || "") === "memory-consolidation";
-  const hasPersona = Boolean(String(values.agentRoleId || "").trim() && roleDir);
-  const referencedPlanSummaries = routeKind === "manual_trigger"
+  const remotePersona = options.remotePersona;
+  const hasLocalPersona = Boolean(String(values.agentRoleId || "").trim() && roleDir && !remotePersona);
+  const hasPersona = hasLocalPersona || Boolean(remotePersona);
+  const remoteRoleApiBase = remotePersona
+    ? `${remotePersona.knowledgeApiBaseUrl}/api/roles/${encodeURIComponent(remotePersona.roleId)}`
+    : "";
+  const referencedPlanSummaries = hasLocalPersona && routeKind === "manual_trigger"
     ? readReferencedPlanSummaries(roleDir, userTemplateText)
     : [];
-  const contextTrigger = hasPersona
+  const contextTrigger = hasLocalPersona
     ? {
         kind: "message_delivery",
         source: "rabi_delivery",
@@ -1190,10 +1199,10 @@ function buildAgentMessage(
   const identityObservationUrl = capabilityContext.roleId
     ? `http://127.0.0.1:${capabilityContext.managerPort}/api/roles/${encodeURIComponent(capabilityContext.roleId)}/identity-relations/observations`
     : "";
-  const voiceIdentityReviewHint = hasPersona
+  const voiceIdentityReviewHint = hasLocalPersona
     ? voiceIdentityReviewCapabilityHint(capabilityIntentText, capabilityContext)
     : null;
-  const identityContexts = hasPersona
+  const identityContexts = hasLocalPersona
     ? identityContextsForForward(roleDir, routeKind, record, {
         gatewayId: process.env.GATEWAY_ID,
         routeProfileId: decision.route.id
@@ -1212,7 +1221,7 @@ function buildAgentMessage(
       `如果本组消息为账号 ${context.endpoint.platform} / ${context.endpoint.endpointIdentityNamespace} / ${context.endpoint.senderStableId} 提供了新的、可核对的身份线索，主动 POST ${identityObservationUrl}。请求必须显式携带 platform、endpointIdentityNamespace、senderStableId，以及本组 messageId、conversationKey 和简短依据；只更新候选参与者或候选关系。没有新线索时不要重复写入。这个接口不能确认身份，也不能授予项目权限。`
     ];
   });
-  const situationScope = hasPersona
+  const situationScope = hasLocalPersona
     ? messageContextScopeForForward(routeKind, record, {
         gatewayId: process.env.GATEWAY_ID,
         routeProfileId: decision.route.id
@@ -1222,7 +1231,7 @@ function buildAgentMessage(
     ...(record.messageGroupMessageIds ?? []),
     "messageId" in record ? record.messageId : undefined
   ].map(value => String(value ?? "").trim()).filter(Boolean);
-  const conversationSituation = hasPersona
+  const conversationSituation = hasLocalPersona
     ? conversationSituationForDelivery(identityContext, routeKind, record, {
         conversationId: situationScope?.record.conversationKey,
         messageIds
@@ -1288,7 +1297,7 @@ function buildAgentMessage(
       String(values.personaVoiceIdentitySummary || "- 当前人格尚未记录这些声纹的身份说明。"),
       "PUT /api/roles/:roleId/voice-identities 只用于维护“这是我 / 其他人”等语音分类兼容信息；认识具体是谁、补充称呼和关系线索，统一使用下方通用身份观察接口。"
     ]) : "",
-    hasPersona ? section("身份定位", [
+    hasLocalPersona ? section("身份定位", [
       ...identityContextSummaryLines,
       identityContexts.some(context => context.candidateParticipants.length > 0)
         ? "候选身份尚未确认；显示名仅作别名线索，不授予权限。" : "",
@@ -1302,7 +1311,13 @@ function buildAgentMessage(
       "只允许调用 Rabi PC 已公开的远程 WebGUI/路由配置接口；不要索取、复述或猜测 token、密码等凭据。",
       "只有接口返回成功并复核读回结果后才能声称配置完成；不明确时先向用户追问。"
     ]) : "",
-    hasPersona ? section("角色和路径", [
+    remotePersona ? section("远端人格", [
+      `人格：${remotePersona.roleId}`,
+      `所属电脑：${remotePersona.deviceId}`,
+      `人格文档：${remotePersona.file}`,
+      "本次使用远端 PC 的人格正文和消息配置；人格、计划、记忆与技能仍由远端 PC 保存。",
+      "远端人格定时任务和脚本由远端 PC 运行，本机不执行其脚本或自动整理任务。"
+    ]) : hasPersona ? section("角色和路径", [
       optionalLine("角色", values.agentRoleId),
       optionalLine("角色文件", values.agentRolePath || rolePath),
       optionalLine("角色目录", values.agentRoleDir || roleDir),
@@ -1310,7 +1325,16 @@ function buildAgentMessage(
       optionalLine("计划目录", knowledgePlansDir ?? values.plansDir),
       optionalLine("记忆目录", knowledgeMemoryDir ?? values.memoryDir)
     ]) : section("无人格直通模式", directMessageModeLines(values)),
-    hasPersona ? section("记忆与计划", [
+    remotePersona ? section("远端人格正文", [remotePersona.document]) : "",
+    remotePersona ? section("远端记忆与计划", [
+      "不把本机同名人格当成该远端人格。需要既有事实、计划或历史时，通过以下远端入口按需读取：",
+      `知识搜索：GET ${remoteRoleApiBase}/knowledge/search?query=<关键词>&mode=keywords`,
+      `计划：GET ${remoteRoleApiBase}/plans；具体计划：GET ${remoteRoleApiBase}/plans/{planId}`,
+      `记忆：GET ${remoteRoleApiBase}/memory；具体记忆：GET ${remoteRoleApiBase}/memory/recent/{memoryId} 或 /memory/consolidated/{memoryId}`,
+      `技能：GET ${remoteRoleApiBase}/skills；具体技能：GET ${remoteRoleApiBase}/skills/{skillId}`,
+      `操作前读取当前接口合同：GET ${remotePersona.knowledgeApiBaseUrl}/api/agent/help。`,
+      "此远端人格入口只读，不提供远端数据修改、消息外发或跨任务投递；这些操作须在来源 PC 使用受管接口及其授权合同。离线、未授权或身份变化时停止，不改用本机数据。"
+    ]) : hasPersona ? section("记忆与计划", [
       optionalLine("更新记忆与计划的说明文档", knowledgeAgentInterfaceDocPath ?? values.agentInterfaceDocPath),
       ...(knowledgeView?.apiHintLines ?? []),
       "",
@@ -1331,11 +1355,11 @@ function buildAgentMessage(
         matchedIndex
       ])
     ]) : "",
-    hasPersona && planAssistantLines.length > 0 && needsPlanAssistantHint(capabilityIntentText, routeKind) ? section("计划协助会话", [
+    hasLocalPersona && planAssistantLines.length > 0 && needsPlanAssistantHint(capabilityIntentText, routeKind) ? section("计划协助会话", [
       "秘书负责计划控制面，业务执行交 taskBinding 指定任务；职责见 skills/plan-task-orchestration/SKILL.md。",
       ...planAssistantLines
     ]) : "",
-    hasPersona ? section("处理前上下文确认", requiredReadIndex) : "",
+    hasLocalPersona ? section("处理前上下文确认", requiredReadIndex) : "",
     voiceIdentityReviewHint ? section("全天语音与声纹归类", voiceIdentityReviewHint) : "",
     section("日志", [
       optionalLine("群聊日志", values.groupLogPath),
@@ -1370,7 +1394,7 @@ function buildAgentMessage(
       userTemplateText.trim() && userTemplateText.trim() !== String(values.message || record.rawMessage || "").trim()
         ? section("用户模板补充", [userTemplateText.trim()]) : ""
     ].filter(Boolean).join("\n\n"),
-    contextBlocks: [...contextBlocks.filter(Boolean), ...(hasPersona ? [appendAgentRoleReference("", rolePath)] : [])],
+    contextBlocks: [...contextBlocks.filter(Boolean), ...(hasLocalPersona ? [appendAgentRoleReference("", rolePath)] : [])],
     controlBlocks: [
       section("回传参数", [
         optionalLine("明确发送 API", values.sendApiUrl),
@@ -1397,6 +1421,16 @@ export function buildAgentPacket(
   roleContext: AgentRoleContext,
   options: BuildAgentPacketOptions = {}
 ): AgentPacket {
+  if (options.remotePersona) {
+    const remote = options.remotePersona;
+    if (remote.deviceId !== decision.route.agentRoleDeviceId || remote.roleId !== decision.route.agentRoleId) {
+      throw new Error("Remote persona packet identity does not match the selected Route.");
+    }
+    const routeDataDir = roleContext.routeDataDir || decision.route.dataDir;
+    if (!routeDataDir) throw new Error("Remote persona packets require a local Route audit directory.");
+    // A stale caller's local role path must never leak into remote persona packet building.
+    roleContext = { roleId: remote.roleId, roleDir: "", rolePath: "", routeDataDir, personaDataDir: routeDataDir };
+  }
   const templateValues = {
     ...templateValuesForDecision(decision, roleContext),
     ...decision.extraValues,

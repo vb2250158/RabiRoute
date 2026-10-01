@@ -6,6 +6,16 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.19 - 2026-10-02
+
+### Local Routes referencing remote personas (experimental)
+
+- Add `agentRoleDeviceId` / `AGENT_ROLE_DEVICE_ID` references and page selection of source PC and persona. Retain local message inputs, the actual handling Agent, workspace and Route auditing, without a local persona replica or same-name local fallback.
+- Add the source-PC `persona-reference-v1` capability and bounded `GET /api/roles/:roleId/persona-reference` reads with persona text, normalized message configuration, revision and Manager identity. Actual delivery reads remote message rules and context budgets while checking both identities, Route capability and pinned device public keys.
+- Reuse authentication for the same RabiLink application through local managed `POST /api/rabilink/peer/persona/bootstrap` to exchange keys automatically, then reuse LAN/P2P/Relay selection. Open only the fixed allowlist of the `persona` service, without requiring a new manual full `manager` grant, and preserve existing manual restrictions. Persona and knowledge writes, schedules, scripts and message delivery are outside this service's permissions.
+- Remote schedules, scripts, plan secretaries and memory consolidation do not run locally because of the reference. Persona Hooks reject same-name local material for ordinary remote bindings and older mixed bindings. Query knowledge through source-PC read-only persona interfaces. Add `POST /api/roles/:roleId/persona-reference/language-style`: the source checks text using stored configuration and rechecks revision, without accepting a caller-supplied style address. Preserve the explicit one-send `styleValidation=0` contract while still requiring remote configuration reads, identity checks and authentication.
+- Add save/reload, same-name isolation, failure-closure and page-state tests and bilingual operation/API documentation; update public Rabi example knowledge and the pending acceptance plan. Synchronize the version to 0.3.19; older source PCs need an upgrade. Source submission, installed-package updates and complete delivery, recovery and sustained operation across two real PCs require separate acceptance.
+
 ## 0.3.18 - 2026-10-01
 
 ### Fix dependency security vulnerabilities

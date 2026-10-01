@@ -21,6 +21,7 @@ onBeforeUnmount(registerPageSaveAction({
 }));
 
 function avatarUrlForGateway(gatewayId: string, roleId?: string): string {
+  if (store.gateways.find(item => item.id === gatewayId)?.agentRoleDeviceId) return "";
   const options = store.runtimeFor(gatewayId).roleInfo?.options || [];
   return options.find(option => option.value === roleId)?.avatarUrl || "";
 }
@@ -114,6 +115,7 @@ function gatewayRuntimeColor(gateway: any): string {
             <div class="min-w-0">
               <div class="route-card-title">{{ store.configNameFor(gw) }}</div>
               <div class="route-card-subtitle">人格 {{ gw.agentRoleId || "未选择" }}</div>
+              <div v-if="gw.agentRoleDeviceId" class="route-card-subtitle"><span>远端 PC</span> · <span data-no-i18n>{{ gw.agentRoleDeviceId }}</span></div>
             </div>
           </div>
           <v-chip size="small" :color="gatewayRuntimeColor(gw)" variant="tonal">

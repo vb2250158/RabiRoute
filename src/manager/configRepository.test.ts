@@ -6,6 +6,7 @@ import test from "node:test";
 import { ManagerConfigRepository } from "./configRepository.js";
 import {
   DEFAULT_RECENT_MESSAGE_LIMIT,
+  normalizeCodexHookSettings,
   type GatewayDefinition
 } from "../shared/gatewayConfigModel.js";
 
@@ -17,6 +18,47 @@ function writeJson(filePath: string, value: unknown): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf8");
 }
+
+test("remote persona references save and reload without reading or overwriting same-name local configuration", async () => {
+  const rootDir = makeTempRoot();
+  try {
+    const personaPath = path.join(rootDir, "data", "roles", "Shared", "personaConfig.json");
+    writeJson(personaPath, { notificationRules: [{ id: "local-only", routeKinds: ["private"], template: "local persona" }], unrelatedSetting: { keep: true } });
+    const localBefore = fs.readFileSync(personaPath, "utf8");
+    const repo = new ManagerConfigRepository({ rootDir, managerPort: 31_337 });
+    repo.writeConfig({ gateways: [{
+      id: "remote-route", gatewayPort: 23_001, agentRoleId: "Shared", agentRoleDeviceId: "pc-target",
+      messageAdapters: ["heartbeat"], remoteAgentDefaultCwd: "projects/example",
+      notificationRules: [{ id: "remote-copy", routeKinds: ["private"], template: "must not persist" }],
+      codexHooks: normalizeCodexHookSettings({ sessionContextEnabled: false }), languageStyle: { styleSkillUrl: "https://example.com/style/SKILL.md" }, recentMessageLimit: 41
+    }] });
+    const loaded = repo.readConfig().gateways[0];
+    assert.equal(loaded.agentRoleId, "Shared");
+    assert.equal(loaded.agentRoleDeviceId, "pc-target");
+    assert.equal(loaded.remoteAgentDefaultCwd, "projects/example");
+    assert.equal(loaded.notificationRules?.some(rule => rule.id === "local-only" || rule.id === "remote-copy"), false);
+    assert.deepEqual(repo.readRoleMessageConfig("Shared", "pc-target"), {});
+    assert.deepEqual(await repo.readRoleMessageConfigAsync("Shared", "pc-target"), {});
+    const adapter = JSON.parse(fs.readFileSync(repo.adapterConfigPath("remote-route"), "utf8"));
+    for (const field of ["notificationRules", "automationRules", "routeProfiles", "recentMessageLimit", "recentMessageLimits", "languageStyle", "codexHooks"]) {
+      assert.equal(adapter[field], undefined, `${field} is owned by the remote persona`);
+    }
+    assert.equal(fs.readFileSync(personaPath, "utf8"), localBefore);
+    repo.writeConfig({ gateways: [{ ...loaded, agentRoleId: "RemoteOnly" }] });
+    assert.equal(fs.existsSync(path.join(rootDir, "data", "roles", "RemoteOnly")), false);
+    assert.equal(fs.readFileSync(personaPath, "utf8"), localBefore);
+  } finally { fs.rmSync(rootDir, { recursive: true, force: true }); }
+});
+
+test("invalid remote persona references fail before repository writes any route", () => {
+  const rootDir = makeTempRoot();
+  try {
+    const repo = new ManagerConfigRepository({ rootDir, managerPort: 31_337 });
+    assert.throws(() => repo.writeConfig({ gateways: [{ id: "invalid", gatewayPort: 23_001, agentRoleDeviceId: "pc-target" }] }), /valid role ID/);
+    assert.throws(() => repo.writeConfig({ gateways: [{ id: "invalid", gatewayPort: 23_001, agentRoleId: "Shared", agentRoleDeviceId: "../target" }] }), /device ID/);
+    assert.equal(fs.existsSync(repo.adapterConfigPath("invalid")), false);
+  } finally { fs.rmSync(rootDir, { recursive: true, force: true }); }
+});
 
 test("persona Hook migration preserves settings across Agent changes and removes adapter copies", () => {
   const rootDir = makeTempRoot();

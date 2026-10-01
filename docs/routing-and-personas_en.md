@@ -10,6 +10,8 @@ English | <a href="./routing-and-personas.md">简体中文</a>
 
 RabiRoute is a dispatcher. A route represents one deployable message path; a role/persona represents the reusable identity and policy context carried to a handler. The handler performs the real work.
 
+A local Route can also [reference a remote PC's persona](remote-persona-reference_en.md) (experimental): select its source PC and persona in the same RabiLink application, read remote text and message policy after an automatic public-key handshake, and retain local message inputs and the handling Agent. Persona directories are not replicated, same-name local personas are never a fallback, and full-management access is not added.
+
 ## Route-owned data
 
 `data/route/<configName>/adapterConfig.json` owns operational concerns:

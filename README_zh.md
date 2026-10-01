@@ -17,7 +17,7 @@
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="许可证：MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 20 或更高版本" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="当前版本：0.3.18" src="https://img.shields.io/badge/version-0.3.18-3178c6">
+  <img alt="当前版本：0.3.19" src="https://img.shields.io/badge/version-0.3.19-3178c6">
   <img alt="状态：积极开发中" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
@@ -72,7 +72,7 @@ Manager 启动后会打印真实的回环地址，端口由操作系统分配。
 
 ## 当前能力
 
-仓库当前版本为 `0.3.18`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
+仓库当前版本为 `0.3.19`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
 
 | 范围 | 当前状态 | 用户可以完成什么 |
 | --- | --- | --- |
@@ -93,6 +93,10 @@ Manager 启动后会打印真实的回环地址，端口由操作系统分配。
 完整状态、限制和事实源见[当前能力与成熟度](docs/current-capabilities.md)。
 
 ## 近期变化
+
+### 0.3.19 实验实现：本机路由引用远端人格
+
+本机 Route 可以选择另一台 PC 的人格，读取正文、消息规则和上下文额度，同时沿用本机消息端和处理 Agent。0.3.19 新增这项实验实现：两端复用同一 RabiLink 应用认证，自动交换并固定设备公钥，再沿 LAN、P2P 或 Relay 读取受限人格服务，无需另行手工开放完整管理权限。来源 PC 需要新版能力，已有手工限权仍保留。操作、失败行为和待完成的真实双 PC 验收见[远端人格引用](docs/remote-persona-reference.md)。
 
 ### 0.3.5：远端 Agent 授权、审批专注视图与移动记录
 
@@ -165,6 +169,7 @@ data/roles/<RoleId>/personaConfig.json
 
 - [配置说明](docs/configuration.md)：查看本机配置、目录和主要参数。
 - [局域网 Rabi Agent](docs/lan-rabi-agent-bootstrap.md)：连接其他电脑上的 Codex/DSH 任务，并配置节点权限。
+- [远端人格引用](docs/remote-persona-reference.md)：0.3.19 实验实现，在本机 Route 使用另一台 PC 的人格。
 - [RabiSpeech](docs/rabispeech-plugin.md)：配置本机或远端 TTS / ASR。
 - [客户端应用](apps/README.md)：构建 Android、Rokid AIUI、浏览器桥和 Rabi Agent。
 

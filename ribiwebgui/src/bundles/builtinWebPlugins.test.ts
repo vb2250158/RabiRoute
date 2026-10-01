@@ -9,6 +9,8 @@ import { activate as activateCore } from "./builtin/core";
 import { activate as activatePersona } from "./builtin/persona";
 import { activate as activateDesktop } from "./builtin/desktop";
 import { activate as activateXiaomiHome } from "./builtin/xiaomi-home";
+import { activate as activateRouteControl } from "./builtin/route-control";
+import type { TrustedWebCommandRegistration } from "../pluginCommands";
 
 type Registration = {
   kind: string;
@@ -17,6 +19,7 @@ type Registration = {
   rendererId?: string;
   placementId?: string;
   themeId?: string;
+  handlerId?: string;
 };
 type InstanceApi = Readonly<{
   instanceId: string; pluginId: string; asComponent(value: Component): Component;
@@ -24,6 +27,7 @@ type InstanceApi = Readonly<{
   registerSettingsRenderer(input: Omit<TrustedWebSettingsRendererRegistration, "instanceId" | "pluginId">): () => void;
   registerStatusRenderer(input: Omit<TrustedWebStatusRendererRegistration, "instanceId" | "pluginId">): () => void;
   registerTheme(input: Omit<TrustedWebThemeResourceRegistration, "instanceId" | "pluginId">): () => void;
+  registerCommand(input: Omit<TrustedWebCommandRegistration, "instanceId" | "pluginId">): () => void;
 }>;
 function moduleApi(instanceId: string, registrations: Registration[]) {
   const register = (kind: string, input: object) => {
@@ -34,7 +38,8 @@ function moduleApi(instanceId: string, registrations: Registration[]) {
       routeId: value.routeId as string | undefined,
       rendererId: value.rendererId as string | undefined,
       placementId: value.placementId as string | undefined,
-      themeId: value.themeId as string | undefined
+      themeId: value.themeId as string | undefined,
+      handlerId: value.handlerId as string | undefined
     };
     registrations.push(item);
     return () => { const index = registrations.indexOf(item); if (index >= 0) registrations.splice(index, 1); };
@@ -42,7 +47,8 @@ function moduleApi(instanceId: string, registrations: Registration[]) {
   const api: InstanceApi = {
     instanceId, pluginId: `io.rabiroute.${instanceId}`, asComponent: value => value,
     registerPage: input => register("page", input), registerSettingsRenderer: input => register("settings", input),
-    registerStatusRenderer: input => register("status", input), registerTheme: input => register("theme", input)
+    registerStatusRenderer: input => register("status", input), registerTheme: input => register("theme", input),
+    registerCommand: input => register("command", input)
   };
   return { instanceIds: [instanceId], forInstance: () => api };
 }
@@ -58,4 +64,16 @@ test("independent Web plugin entries register only their own contributions", () 
   assert.deepEqual(registrations.filter(item => item.instanceId === "manager:desktop").map(item => item.placementId), ["global.settings.sections"]);
   assert.deepEqual(registrations.filter(item => item.instanceId === "manager:xiaomi-home").map(item => item.rendererId), ["builtin.xiaomi-home-message-endpoint.v1", "builtin.xiaomi-home-auth.v1"]);
   assert.deepEqual(registrations.filter(item => item.instanceId === "manager:xiaomi-home").map(item => item.placementId), ["route.adapters.message-endpoint-settings", "route.adapters.message-endpoint-settings"]);
+});
+
+test("route-control Web entry registers and releases its own route commands", () => {
+  const registrations: Registration[] = [];
+  const dispose = activateRouteControl(moduleApi("manager:route-control", registrations));
+  assert.deepEqual(registrations.map(item => [item.kind, item.instanceId, item.handlerId]), [
+    ["command", "manager:route-control", "web.quick-setup"],
+    ["command", "manager:route-control", "web.add-route"],
+    ["command", "manager:route-control", "web.open-manager-config"]
+  ]);
+  dispose();
+  assert.deepEqual(registrations, []);
 });

@@ -171,6 +171,8 @@ const catalog: readonly AgentApiOperation[] = Object.freeze([
     ["GET", "/message-endpoint-history", "检索消息端历史", "query match adapter channel kind sender target conversationKey from to includeArchives limit maxChars"],
     ["GET", "/role-panel/messages", "读取人格消息时间线", "limit"],
     ["GET", "/persona-document", "读取固定 persona.md；不开放 file 参数"],
+    ["GET", "/persona-reference", "只读获取人格正文与消息配置；数据仍归所属 PC", "file"],
+    ["POST", "/persona-reference/language-style", "由人格所属 PC 根据当前 revision 和自身风格配置检查正文；不接受调用者指定文件地址", ""],
     ["GET", "/plans/:planId/attachments/:attachmentId", "读取受管计划附件"],
     ["GET", "/plan-agents/status", "读取计划绑定 Agent 的状态", "planId", "planId"]
   ]),

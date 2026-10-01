@@ -37,6 +37,7 @@
 - [计划与记忆摘要搜索](knowledge-search.md)
 - [路由配置](routing-configuration.md) — **现行指南**。`personaConfig.json`、route kind、regex、schedule、pipeline 和模板变量。
 - [路由与人格](routing-and-personas.md) — **现行指南**。route 与 role 的边界、人格包和消息模板判断框架。
+- [本机路由使用远端人格](remote-persona-reference.md) — **0.3.19 实验实现**。选择同一 RabiLink 应用中的来源 PC 和人格，自动握手并只读资料，沿用本机消息端与处理 Agent；真实双 PC 投递仍待验收。
 - [Agent 上下文注入](agent-context-injection.md) — **现行指南**。人格级统一双向账本、分消息端/会话的最近消息额度、归档边界，以及 `AgentPacket` 中的人格目录、跨人格投递凭据、路径和回复上下文。
 - [Rabi Agent 接口](rabi-agent-interfaces.md) — **当前合同**。处理端如何回复、查询可联系人格、进行带幂等回执的单向跨人格投递，以及使用 thread bridge、计划、记忆、Remote Agent 和多实例 API。
 - [计划和记忆机制](plan-and-memory-model.md) — **现行指南**。Role Knowledge 的文件真源、召回和整理副作用。

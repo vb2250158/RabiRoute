@@ -193,31 +193,6 @@ export function webCommandForHandler(
 
 const builtinWebCommands: readonly TrustedWebCommandRegistration[] = [
   {
-    instanceId: "manager:route-control",
-    pluginId: "io.rabiroute.manager.route-control",
-    handlerId: "web.quick-setup",
-    allowedSlots: ["sidebar-footer-primary"],
-    allowedIcons: ["mdi-lightning-bolt-outline"],
-    appearance: "primary",
-    execute: context => context.openQuickSetup()
-  },
-  {
-    instanceId: "manager:route-control",
-    pluginId: "io.rabiroute.manager.route-control",
-    handlerId: "web.add-route",
-    allowedSlots: ["topbar-primary"],
-    allowedIcons: ["mdi-plus"],
-    execute: context => context.addRoute()
-  },
-  {
-    instanceId: "manager:route-control",
-    pluginId: "io.rabiroute.manager.route-control",
-    handlerId: "web.open-manager-config",
-    allowedSlots: ["sidebar-footer"],
-    allowedIcons: ["mdi-folder-cog-outline"],
-    execute: context => context.openManagerConfig()
-  },
-  {
     instanceId: "manager:core",
     pluginId: "io.rabiroute.manager.core",
     handlerId: "web.save-page",

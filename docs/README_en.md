@@ -37,6 +37,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Plan and memory summary search](knowledge-search_en.md)
 - [Routing configuration](routing-configuration_en.md) — **Current guide** for `personaConfig.json`, route kinds, regex, pipelines, and template variables.
 - [Routing and personas](routing-and-personas_en.md) — **Current guide** for route/role boundaries and persona decision templates.
+- [Use a remote persona from a local Route](remote-persona-reference_en.md) — **Experimental in 0.3.19**. Select a source PC and persona in the same RabiLink application, use an automatic handshake for read-only access, and retain local message inputs and the handling Agent. Real two-PC delivery remains pending acceptance.
 - [Agent context injection](agent-context-injection_en.md) — **Current guide** for the persona-scoped bidirectional ledger, per-endpoint/conversation recent-message budgets, archival boundaries, persona-directory and cross-persona credentials, paths, and reply context inside `AgentPacket`.
 - [Rabi Agent interfaces](rabi-agent-interfaces_en.md) — **Current contract** for handler replies, persona discovery, idempotent one-way cross-persona delivery, receipts, thread bridge, plans, memory, Remote Agent, and role skills.
 - [Plans and memory](plan-and-memory-model_en.md) — **Current guide** for Role Knowledge sources, recall, explicit consolidation, and side effects.

@@ -7,6 +7,7 @@ const webDist = path.join(root, "ribiwebgui", "dist");
 const manifest = JSON.parse(await readFile(path.join(webDist, ".vite", "manifest.json"), "utf8"));
 const entries = [
   ["src/bundles/builtin/core.ts", "io.rabiroute.manager.core"],
+  ["src/bundles/builtin/route-control.ts", "io.rabiroute.manager.route-control"],
   ["src/bundles/builtin/message-adapter-control.ts", "io.rabiroute.manager.message-adapter-control"],
   ["src/bundles/builtin/persona.ts", "io.rabiroute.manager.persona"],
   ["src/bundles/builtin/speech.ts", "io.rabiroute.manager.speech"],

@@ -7,6 +7,11 @@ import {
   resolveWebCommandCatalog,
   webCommandHandler
 } from "./pluginCommands";
+import { activateRouteControl } from "./bundles/builtinWebContributions";
+import { activateWebPluginForTest } from "../tests/web-plugin-test-host";
+
+const disposeRouteControl = activateWebPluginForTest({ instanceId: "manager:route-control", pluginId: "io.rabiroute.manager.route-control" }, activateRouteControl);
+test.after(() => disposeRouteControl());
 
 function contribution(handlerId: string, overrides: Record<string, unknown> = {}): unknown {
   return {
@@ -27,10 +32,10 @@ function contribution(handlerId: string, overrides: Record<string, unknown> = {}
 
 test("built-in Web commands use the trusted registration API", () => {
   assert.deepEqual(registeredWebCommands().map(command => [command.instanceId, command.pluginId, command.handlerId]), [
+    ["manager:core", "io.rabiroute.manager.core", "web.save-page"],
     ["manager:route-control", "io.rabiroute.manager.route-control", "web.quick-setup"],
     ["manager:route-control", "io.rabiroute.manager.route-control", "web.add-route"],
-    ["manager:route-control", "io.rabiroute.manager.route-control", "web.open-manager-config"],
-    ["manager:core", "io.rabiroute.manager.core", "web.save-page"]
+    ["manager:route-control", "io.rabiroute.manager.route-control", "web.open-manager-config"]
   ]);
 });
 

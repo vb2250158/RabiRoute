@@ -16,6 +16,7 @@ import {
   type TrustedWebSettingsRendererRegistration,
   type TrustedWebStatusRendererRegistration
 } from "./pluginRenderers";
+import { registerTrustedWebCommand, type TrustedWebCommandRegistration } from "./pluginCommands";
 
 type WebPluginModuleInstanceDescriptor = Readonly<{
   instanceId: string;
@@ -39,6 +40,7 @@ type WebPluginInstanceRegistrationApi = Readonly<{
   registerSettingsRenderer(input: Omit<TrustedWebSettingsRendererRegistration, "instanceId" | "pluginId">): () => void;
   registerStatusRenderer(input: Omit<TrustedWebStatusRendererRegistration, "instanceId" | "pluginId">): () => void;
   registerTheme(input: Omit<TrustedWebThemeResourceRegistration, "instanceId" | "pluginId">): () => void;
+  registerCommand(input: Omit<TrustedWebCommandRegistration, "instanceId" | "pluginId">): () => void;
   asComponent(value: Component): Component;
 }>;
 
@@ -114,6 +116,7 @@ function instanceRegistrationApi(
     registerSettingsRenderer: input => registerTrustedWebSettingsRenderer({ ...input, ...owner }),
     registerStatusRenderer: input => registerTrustedWebStatusRenderer({ ...input, ...owner }),
     registerTheme: input => registerTrustedWebThemeResource({ ...input, ...owner }),
+    registerCommand: input => registerTrustedWebCommand({ ...input, ...owner }),
     asComponent: value => value
   });
 }

@@ -6,6 +6,30 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { buildPluginPackages } from "./build-plugin-packages.mjs";
 
+test("route-control package includes the Manager and independently generated Web command entry", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabiroute-route-control-build-"));
+  try {
+    const pluginId = "io.rabiroute.manager.route-control";
+    const source = path.resolve(import.meta.dirname, "../plugins/builtin", pluginId, "1.0.0");
+    const packageRoot = path.join(root, "plugins", "builtin", pluginId, "1.0.0");
+    await fs.cp(source, packageRoot, { recursive: true });
+    await fs.mkdir(path.join(packageRoot, "web"), { recursive: true });
+    await fs.writeFile(path.join(packageRoot, "web", "client.mjs"), "export function activate(api) { return () => {}; }\n");
+    await fs.cp(path.resolve(import.meta.dirname, "../plugins/contracts/plugin-sdk"), path.join(root, "plugins", "contracts", "plugin-sdk"), { recursive: true });
+    await writeJson(path.join(root, "plugins", "profiles", "desktop.json"), {
+      schemaVersion: 2, readyRequires: [],
+      instances: [{ id: "manager:route-control", package: pluginId, version: "1.0.0", enabled: true, config: {}, grants: [] }]
+    });
+    const built = await buildPluginPackages(root);
+    const output = path.join(built.packagesRoot, pluginId, "1.0.0");
+    const manifest = JSON.parse(await fs.readFile(path.join(output, "rabi.plugin.json"), "utf8"));
+    assert.deepEqual(Object.keys(manifest.entries), ["manager", "web"]);
+    assert.deepEqual(manifest.entries.web, { execution: "in_process", module: "./web/client.mjs" });
+    assert.equal(typeof (await import(pathToFileURL(path.join(output, "web", "client.mjs")).href)).activate, "function");
+    assert.match(await fs.readFile(path.join(output, "manager.mjs"), "utf8"), /\.rabi-deps\/plugin-sdk\/index\.mjs/);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
 async function writeJson(target, value) {
   await fs.mkdir(path.dirname(target), { recursive: true });
   await fs.writeFile(target, JSON.stringify(value, null, 2) + "\n", "utf8");

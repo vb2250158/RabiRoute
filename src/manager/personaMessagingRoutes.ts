@@ -153,7 +153,8 @@ export function listPersonas(context: Pick<PersonaMessagingRouteContext, "rolesR
     .map((item) => {
       const personaId = item.roleId;
       const title = item.files.find(file => file.fileName.toLowerCase() === "persona.md")?.title ?? "";
-      const matchingRuntimes = runtimes.filter(runtime => personaIdForDefinition(runtime.definition) === personaId);
+      const matchingRuntimes = runtimes.filter(runtime => !runtime.definition.agentRoleDeviceId
+        && personaIdForDefinition(runtime.definition) === personaId);
       const routes = matchingRuntimes.map(routeSummary)
         .sort((left, right) => left.routeId.localeCompare(right.routeId));
       const enabledRoutes = routes.filter(route => route.enabled);
@@ -209,6 +210,9 @@ function preparePersonaMessage(
   const sourceRouteId = String(body.sourceRouteId || "").trim();
   if (!sourceRouteId) throw new PersonaMessagingError(400, "Missing sourceRouteId.");
   const sourceRuntime = enabledRuntime(sourceRouteId, context);
+  if (sourceRuntime.definition.agentRoleDeviceId) {
+    throw new PersonaMessagingError(409, "Remote persona messages must use the target PC's persona interface.");
+  }
   const sourcePersonaId = personaIdForDefinition(sourceRuntime.definition);
   const sourceCapability = String(body.sourceCapability || "").trim();
   if (!sourceCapability || !context.authorizeSource(sourceRouteId, sourcePersonaId, sourceCapability)) {

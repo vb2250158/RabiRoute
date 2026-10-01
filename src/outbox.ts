@@ -102,6 +102,7 @@ export type AgentReplyRouteProfile = {
   pipeline?: PipelineDefinition;
   dataDir?: string;
   agentRoleId?: string;
+  agentRoleDeviceId?: string;
   languageStyle?: LanguageStyleBinding;
   rolesDir?: string;
   routeVariables?: Record<string, string>;
@@ -117,6 +118,7 @@ export type AgentReplyRuntime = {
   pipeline?: PipelineDefinition;
   dataDir?: string;
   agentRoleId?: string;
+  agentRoleDeviceId?: string;
   languageStyle?: LanguageStyleBinding;
   rolesDir?: string;
   routeVariables?: Record<string, string>;
@@ -625,26 +627,41 @@ function mobileAttachmentContentType(kind: MessagePayloadKind, filePath: string)
   return "application/octet-stream";
 }
 
-function roleDirFor(rootDir: string, rolesRoot: string, item: { rolesDir?: string; agentRoleId?: string }): string | undefined {
+function roleDirFor(rootDir: string, rolesRoot: string, item: { rolesDir?: string; agentRoleId?: string; agentRoleDeviceId?: string }): string | undefined {
+  if (valueString(item.agentRoleDeviceId)) return undefined;
   const roleId = valueString(item.agentRoleId);
   if (!roleId) return undefined;
   const base = path.resolve(rootDir, item.rolesDir ?? rolesRoot);
   return path.join(base, roleId);
 }
 
-function dataDirsForRoute(options: AgentReplyOptions, route: ResolvedRoute): string[] {
+/** The selected Route decides persona ownership; request JSON cannot change it. */
+export function agentReplyPersonaDeviceId(route: ResolvedRoute): string | undefined {
+  return valueString(route.profile?.agentRoleDeviceId ?? route.runtime.agentRoleDeviceId);
+}
+
+/** Local Route audit sources remain readable when its persona is remote; local same-named roles do not. */
+export function agentReplyDataDirsForRoute(options: AgentReplyOptions, route: ResolvedRoute): string[] {
   const dirs = new Set<string>();
+  const isRemote = Boolean(agentReplyPersonaDeviceId(route));
+  // The configured audit directory is the forwarding owner for remote-persona Routes.
+  if (isRemote) {
+    const preferredDataDir = resolvePath(options.rootDir, route.profile?.dataDir)
+      || resolvePath(options.rootDir, route.runtime.dataDir);
+    if (preferredDataDir) dirs.add(preferredDataDir);
+  }
   dirs.add(path.resolve(options.routeRoot, routeConfigName(route.runtime.id)));
   const runtimeDataDir = resolvePath(options.rootDir, route.runtime.dataDir);
   if (runtimeDataDir) dirs.add(runtimeDataDir);
-  const runtimeRoleDir = roleDirFor(options.rootDir, options.rolesRoot, route.runtime);
+  const runtimeRoleDir = isRemote ? undefined : roleDirFor(options.rootDir, options.rolesRoot, route.runtime);
   if (runtimeRoleDir) dirs.add(runtimeRoleDir);
   if (route.profile) {
     const profileDataDir = resolvePath(options.rootDir, route.profile.dataDir);
     if (profileDataDir) dirs.add(profileDataDir);
-    const profileRoleDir = roleDirFor(options.rootDir, options.rolesRoot, {
+    const profileRoleDir = isRemote ? undefined : roleDirFor(options.rootDir, options.rolesRoot, {
       rolesDir: route.profile.rolesDir ?? route.runtime.rolesDir,
-      agentRoleId: route.profile.agentRoleId ?? route.runtime.agentRoleId
+      agentRoleId: route.profile.agentRoleId ?? route.runtime.agentRoleId,
+      agentRoleDeviceId: route.profile.agentRoleDeviceId ?? route.runtime.agentRoleDeviceId
     });
     if (profileRoleDir) dirs.add(profileRoleDir);
   }
@@ -652,10 +669,16 @@ function dataDirsForRoute(options: AgentReplyOptions, route: ResolvedRoute): str
 }
 
 function conversationDataDirForRoute(options: AgentReplyOptions, route: ResolvedRoute): string {
+  if (agentReplyPersonaDeviceId(route)) {
+    return resolvePath(options.rootDir, route.profile?.dataDir)
+      || resolvePath(options.rootDir, route.runtime.dataDir)
+      || path.resolve(options.routeRoot, routeConfigName(route.runtime.id));
+  }
   if (route.profile) {
     const profileRoleDir = roleDirFor(options.rootDir, options.rolesRoot, {
       rolesDir: route.profile.rolesDir ?? route.runtime.rolesDir,
-      agentRoleId: route.profile.agentRoleId ?? route.runtime.agentRoleId
+      agentRoleId: route.profile.agentRoleId ?? route.runtime.agentRoleId,
+      agentRoleDeviceId: route.profile.agentRoleDeviceId ?? route.runtime.agentRoleDeviceId
     });
     if (profileRoleDir) return profileRoleDir;
     const profileDataDir = resolvePath(options.rootDir, route.profile.dataDir);
@@ -733,7 +756,7 @@ function sourceRecordFromLog(record: Record<string, unknown>, targetType: "group
 
 function findSourceRecord(options: AgentReplyOptions, route: ResolvedRoute, messageId?: string): SourceRecord | undefined {
   if (!messageId) return undefined;
-  for (const dir of dataDirsForRoute(options, route)) {
+  for (const dir of agentReplyDataDirsForRoute(options, route)) {
     for (const [fileName, targetType] of [
       ["group-messages.jsonl", "group"],
       ["private-messages.jsonl", "private"],
@@ -837,11 +860,11 @@ function resolveRouteById(options: AgentReplyOptions, routeProfileId?: string, r
         || idMatches(runtime.id, routeProfileId)
         || idMatches(runtime.configName, routeProfileId)
         || idMatches(runtime.name, routeProfileId)
-        || idMatches(runtime.agentRoleId, routeProfileId);
+        || (!runtime.agentRoleDeviceId && idMatches(runtime.agentRoleId, routeProfileId));
       const profile = runtime.routeProfiles?.find((item) =>
         idMatches(item.id, routeProfileId)
         || idMatches(item.name, routeProfileId)
-        || idMatches(item.agentRoleId, routeProfileId)
+        || (!(item.agentRoleDeviceId ?? runtime.agentRoleDeviceId) && idMatches(item.agentRoleId, routeProfileId))
       );
       if (profile) return { runtime, profile };
       if (runtimeMatched) return { runtime, profile: runtime.routeProfiles?.[0] };
@@ -880,7 +903,7 @@ function resolveRoute(options: AgentReplyOptions, routeProfileId?: string, messa
 }
 
 function appendOutboxLog(options: AgentReplyOptions, route: ResolvedRoute | undefined, level: "info" | "warning" | "error", event: string, message: string, data: unknown): void {
-  const dir = route ? dataDirsForRoute(options, route)[0] : path.join(options.rootDir, "data", "route", "default");
+  const dir = route ? agentReplyDataDirsForRoute(options, route)[0] : path.join(options.rootDir, "data", "route", "default");
   fs.mkdirSync(dir, { recursive: true });
   fs.appendFileSync(path.join(dir, "outbox-adapter.log.jsonl"), `${JSON.stringify({
     time: Math.floor(Date.now() / 1000),
@@ -928,6 +951,7 @@ function outboundConversationData(
     conversationId: target.conversationId ?? data.conversationId,
     chatId: target.chatId ?? data.chatId,
     roleId: target.roleId ?? data.roleId,
+    agentRoleDeviceId: agentReplyPersonaDeviceId(route),
     sessionId: valueString(context.sessionId),
     speakerId: voiceReply ? personaId : undefined,
     speakerName: voiceReply ? personaId : undefined,
@@ -1056,7 +1080,7 @@ export async function inspectAgentReplyDelivery(
   if (!route) {
     return { state: "uncertain", reason: "The explicit route cannot be resolved for authoritative Outbox readback." };
   }
-  const logPath = path.join(dataDirsForRoute(options, route)[0], "outbox-adapter.log.jsonl");
+  const logPath = path.join(agentReplyDataDirsForRoute(options, route)[0], "outbox-adapter.log.jsonl");
   if (!fs.existsSync(logPath)) return { state: "missing" };
 
   let logText: string;
@@ -1237,7 +1261,7 @@ function appendAdapterReply(
   content: ReplyContent,
   request: AgentReplyRequest
 ): AgentReplyResult {
-  const dir = dataDirsForRoute(options, route)[0];
+  const dir = agentReplyDataDirsForRoute(options, route)[0];
   fs.mkdirSync(dir, { recursive: true });
   const id = `${adapterType}-reply-${Date.now()}`;
   const replyFileName = `${adapterType}-replies.jsonl`;
@@ -1329,6 +1353,9 @@ async function appendRolePanelReply(
   attachments: RolePanelAttachment[],
   request: AgentReplyRequest
 ): Promise<AgentReplyResult> {
+  if (agentReplyPersonaDeviceId(route)) {
+    return { ok: false, status: "blocked", reason: "REMOTE_PERSONA_OWNER_REQUIRED: role panel replies must use the explicit remote persona owner.", routeProfileId: route.profile?.id ?? route.runtime.id, messageId: target.messageId, targetType: "role_panel" };
+  }
   const roleId = valueString(target.roleId ?? route.profile?.agentRoleId ?? route.runtime.agentRoleId);
   if (!roleId) {
     return { ok: false, status: "blocked", reason: "Role panel reply requires a role id.", routeProfileId: route.profile?.id ?? route.runtime.id, messageId: target.messageId };
@@ -1383,6 +1410,9 @@ async function appendPlanFeedbackReply(
   text: string,
   request: AgentReplyRequest
 ): Promise<AgentReplyResult> {
+  if (agentReplyPersonaDeviceId(route)) {
+    return { ok: false, status: "blocked", reason: "REMOTE_PERSONA_OWNER_REQUIRED: plan feedback must use the explicit remote plan owner.", routeProfileId: route.profile?.id ?? route.runtime.id, messageId: target.messageId, targetType: "plan_feedback" };
+  }
   const context = contextObject(request);
   const routeRoleId = valueString(route.profile?.agentRoleId ?? route.runtime.agentRoleId);
   const roleId = valueString(context.roleId ?? target.roleId ?? routeRoleId);
@@ -1497,7 +1527,7 @@ function stripRouteSuffix(value: string | undefined): string | undefined {
 function personaNameForFenneNote(options: AgentReplyOptions, route: ResolvedRoute): string | undefined {
   const roleId = valueString(route.profile?.agentRoleId ?? route.runtime.agentRoleId);
   const rolesDir = valueString(route.profile?.rolesDir ?? route.runtime.rolesDir) ?? options.rolesRoot;
-  if (roleId && rolesDir) {
+  if (!agentReplyPersonaDeviceId(route) && roleId && rolesDir) {
     const rolePath = path.join(path.isAbsolute(rolesDir) ? rolesDir : path.resolve(options.rootDir, rolesDir), roleId, "persona.md");
     try {
       const firstHeading = fs.readFileSync(rolePath, "utf8").split(/\r?\n/).find((line) => line.trim().startsWith("# "));
@@ -1660,6 +1690,15 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
     return result;
   }
 
+  if (agentReplyPersonaDeviceId(route) && content.managedPlanAttachment) {
+    const result: AgentReplyResult = {
+      ok: false, status: "blocked", routeProfileId: route.profile?.id ?? route.runtime.id, messageId,
+      reason: "REMOTE_PERSONA_OWNER_REQUIRED: a remote persona plan attachment cannot be resolved through local plan storage."
+    };
+    appendOutboxLog(options, route, "warning", "reply_blocked", result.reason!, result);
+    return result;
+  }
+
   const routeSourceRecord = "sourceRecord" in route ? route.sourceRecord : undefined;
   const loggedTarget = routeSourceRecord ?? findSourceRecord(options, route, messageId);
   const definedContextTarget = Object.fromEntries(
@@ -1819,20 +1858,20 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
         : undefined;
       const sent = content.kind === "image" && filePath
         ? await sendWeixinImage(
-            dataDirsForRoute(options, route)[0],
+            agentReplyDataDirsForRoute(options, route)[0],
             sessionId,
             filePath,
             deliveryId
           )
         : content.kind === "file" && filePath
           ? await sendWeixinFile(
-            dataDirsForRoute(options, route)[0],
+            agentReplyDataDirsForRoute(options, route)[0],
             sessionId,
             filePath,
             content.fileName || path.basename(filePath),
             deliveryId
           )
-          : await sendWeixinText(dataDirsForRoute(options, route)[0], sessionId, text, deliveryId);
+          : await sendWeixinText(agentReplyDataDirsForRoute(options, route)[0], sessionId, text, deliveryId);
       const result: AgentReplyResult = {
         ok: true,
         status: "sent",

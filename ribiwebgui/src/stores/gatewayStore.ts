@@ -209,7 +209,7 @@ export const useGatewayStore = defineStore("gateway", () => {
       if (Array.isArray(gateway.notificationRules)) {
         gateway.notificationRules = gateway.notificationRules.map((rule, index) => normalizeRule(rule, index));
       }
-      automationRulesForGateway(gateway);
+      if (!gateway.agentRoleDeviceId) automationRulesForGateway(gateway);
       if (gateway.roleNotificationRules && typeof gateway.roleNotificationRules === "object" && !Array.isArray(gateway.roleNotificationRules)) {
         Object.keys(gateway.roleNotificationRules).forEach(roleId => {
           const rules = gateway.roleNotificationRules?.[roleId];
@@ -219,7 +219,7 @@ export const useGatewayStore = defineStore("gateway", () => {
         });
       }
       applyAdapterDefaults(gateway);
-      ensureActiveRoleRules(gateway);
+      if (!gateway.agentRoleDeviceId) ensureActiveRoleRules(gateway);
     });
   }
 
@@ -656,13 +656,50 @@ export const useGatewayStore = defineStore("gateway", () => {
 
   async function deleteGateway(id: string): Promise<void> {
     if (saving.value) throw new Error("另一项配置操作正在执行，请稍后重试。");
-    const nextSelectedGatewayId = selectedGatewayId.value === id
-      ? gateways.value.find(gateway => gateway.id !== id)?.id || ""
-      : selectedGatewayId.value;
+    const requestedGateway = gateways.value.find(gateway => gateway.id === id);
+    const configName = requestedGateway ? configNameFor(requestedGateway) : "";
     saving.value = true;
     error.value = "";
     try {
       for (const previous of routeCatalogMutationLedger.unresolved()) await recoverPendingMutation(previous);
+      // Receipt recovery can replace a provisional ID with the persisted one.
+      const target = gateways.value.find(gateway => gateway.id === id)
+        || gateways.value.find(gateway => configName && configNameFor(gateway) === configName);
+      if (!target) throw new Error("当前路由已变化，请重新选择后删除。");
+      const localId = target.id;
+      const targetConfigName = configNameFor(target);
+      id = localId;
+      if (!savedGateways.value.some(gateway => gateway.id === localId)) {
+        const draftLifecycleKey = await loadMeta(true);
+        const response = await boundedRouteCatalogMutationFetch(`${apiBase}/gateways?summary=1&includeConfig=1`, {});
+        const body = await response.json().catch(() => ({})) as GatewayPayload;
+        const current = body.data?.config?.gateways;
+        if (!response.ok || body.code !== 0 || !Array.isArray(current)
+          || current.some(gateway => !gateway || typeof gateway !== "object" || Array.isArray(gateway)
+            || typeof gateway.id !== "string" || !gateway.id.trim()
+            || (gateway.configName !== undefined && typeof gateway.configName !== "string"))) {
+          throw new Error("无法确认服务端是否已有该路由，当前草稿已保留。");
+        }
+        if (await loadMeta(true) !== draftLifecycleKey) {
+          throw new Error("Manager 已重启，无法确认草稿是否已保存；当前草稿已保留，请重试。");
+        }
+        const currentDraft = gateways.value.find(gateway => gateway.id === localId);
+        if (!currentDraft || configNameFor(currentDraft) !== targetConfigName) {
+          throw new Error("当前草稿的 ID 或配置名已变化，草稿已保留，请重新选择后删除。");
+        }
+        if (current.some(gateway => gateway.id === localId || configNameFor(gateway) === targetConfigName)) {
+          throw new Error("配置冲突：服务端已有相同 ID 或配置名的路由，当前草稿已保留；请先确认保存结果或更换配置名。");
+        }
+        applyRouteCatalogVersion(body.routeCatalog);
+        if (selectedGatewayId.value === localId) closeQuickSetup();
+        removeGateway(localId);
+        saveState.value = "idle";
+        saveMessage.value = "";
+        return;
+      }
+      const nextSelectedGatewayId = selectedGatewayId.value === localId
+        ? gateways.value.find(gateway => gateway.id !== localId)?.id || ""
+        : selectedGatewayId.value;
       const mutationLifecycleKey = await loadMeta(true);
       const pendingMutation = await routeCatalogMutationLedger.retain(
         "delete",
@@ -698,8 +735,8 @@ export const useGatewayStore = defineStore("gateway", () => {
       routeCatalogRevisionHash.value = committedRevision;
       routeCatalogMutationLedger.complete(pendingMutation);
       selectedGatewayId.value = nextSelectedGatewayId;
-      gateways.value = gateways.value.filter(item => item.id !== id);
-      savedGateways.value = savedGateways.value.filter(item => item.id !== id);
+      gateways.value = gateways.value.filter(item => item.id !== id && item.id !== localId);
+      savedGateways.value = savedGateways.value.filter(item => item.id !== id && item.id !== localId);
       await load();
       if (gateways.value.some(gateway => gateway.id === id)) {
         throw new Error("删除请求已返回成功，但 Manager 刷新后仍返回该路由；请重启 Manager 后再试。");

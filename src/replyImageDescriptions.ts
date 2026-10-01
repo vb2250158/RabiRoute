@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { MessageAttachmentRecord } from "./history.js";
-import type { AgentReplyOptions, AgentReplyRouteProfile, AgentReplyRuntime } from "./outbox.js";
+import { agentReplyDataDirsForRoute, agentReplyPersonaDeviceId, type AgentReplyOptions, type AgentReplyRouteProfile, type AgentReplyRuntime } from "./outbox.js";
 import { atomicWriteFileSync, withFileLockSync } from "./shared/filePersistence.js";
 
 export type ReplyImageDescriptionSend = {
@@ -70,17 +70,6 @@ function text(value: unknown): string {
   return String(value ?? "").trim();
 }
 
-function routeConfigName(runtimeId: string): string {
-  const parts = runtimeId.split("__");
-  return parts[1] || runtimeId;
-}
-
-function roleDir(rootDir: string, rolesRoot: string, item: { rolesDir?: string; agentRoleId?: string }): string | undefined {
-  const roleId = text(item.agentRoleId);
-  if (!roleId) return undefined;
-  return path.join(path.resolve(rootDir, item.rolesDir ?? rolesRoot), roleId);
-}
-
 function resolveRoute(options: AgentReplyOptions, routeId: string): ResolvedRoute | undefined {
   for (const runtime of options.runtimes) {
     if (runtime.enabled === false) continue;
@@ -94,23 +83,6 @@ function resolveRoute(options: AgentReplyOptions, routeId: string): ResolvedRout
     }
   }
   return undefined;
-}
-
-function dataDirsForRoute(options: AgentReplyOptions, route: ResolvedRoute): string[] {
-  const output = new Set<string>();
-  output.add(path.resolve(options.routeRoot, routeConfigName(route.runtime.id)));
-  if (route.runtime.dataDir) output.add(path.resolve(options.rootDir, route.runtime.dataDir));
-  const runtimeRoleDir = roleDir(options.rootDir, options.rolesRoot, route.runtime);
-  if (runtimeRoleDir) output.add(runtimeRoleDir);
-  if (route.profile?.dataDir) output.add(path.resolve(options.rootDir, route.profile.dataDir));
-  if (route.profile) {
-    const profileRoleDir = roleDir(options.rootDir, options.rolesRoot, {
-      rolesDir: route.profile.rolesDir ?? route.runtime.rolesDir,
-      agentRoleId: route.profile.agentRoleId ?? route.runtime.agentRoleId
-    });
-    if (profileRoleDir) output.add(profileRoleDir);
-  }
-  return [...output];
 }
 
 function readJsonl(filePath: string): Record<string, unknown>[] {
@@ -139,7 +111,7 @@ function locateMessage(
 ): LocatedMessage | undefined {
   const route = resolveRoute(options, routeId);
   if (!route) throw new Error(`Cannot resolve the exact enabled routeId ${routeId} while checking the referenced QQ message.`);
-  const dataDirs = dataDirsForRoute(options, route);
+  const dataDirs = agentReplyDataDirsForRoute(options, route);
   const allowLegacyMissingInstance = (route.runtime.napcatInstances ?? []).filter((item) => item.enabled !== false).length <= 1;
   const candidates = dataDirs.flatMap((dataDir) => readJsonl(path.join(dataDir, "group-messages.jsonl"))
     .filter((record) => text(record.messageId ?? record.message_id) === messageId)
@@ -261,6 +233,17 @@ export function prepareReplyImageDescriptions(
   }
   const groupId = text(input.target.groupId);
   const instanceId = text(input.target.instanceId);
+  if (reviewedSource) {
+    const route = resolveRoute(options, input.routeId);
+    if (!route) throw new Error(`Cannot resolve the exact enabled routeId ${input.routeId} while checking the reviewed QQ message.`);
+    if (agentReplyPersonaDeviceId(route)) {
+      const currentAuditDirectories = new Set(agentReplyDataDirsForRoute(options, route).map(directory => path.resolve(directory).toLowerCase()));
+      if (!Array.isArray(reviewedSource.dataDirs)
+        || reviewedSource.dataDirs.some(directory => !currentAuditDirectories.has(path.resolve(directory).toLowerCase()))) {
+        throw new Error("Reviewed source for a remote persona must use the current local Route audit directories.");
+      }
+    }
+  }
   const located = reviewedSource
     ? locateReviewedMessage(reviewedSource, input.routeId, replyToMessageId, groupId, instanceId)
     : locateMessage(options, input.routeId, replyToMessageId, groupId, instanceId);

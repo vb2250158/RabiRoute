@@ -108,6 +108,52 @@ test("persona directory exposes user-facing names and enabled Route reachability
   assert.equal(personas.find(item => item.personaId === "Builder")?.defaultRouteId, "builder-main");
 });
 
+test("remote persona references do not make same-name local personas addressable", (t) => {
+  const rolesRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-local-persona-owner-"));
+  t.after(() => fs.rmSync(rolesRoot, { recursive: true, force: true }));
+  persona(rolesRoot, "Shared", "Local persona");
+  const remote = runtime("remote-route", "Shared");
+  remote.definition.agentRoleDeviceId = "pc-target";
+  const result = listPersonas({ rolesRoot, personaPresentations: () => personaPresentations(rolesRoot), runtimes: () => [remote] });
+  assert.deepEqual(result[0].routes, []);
+  assert.equal(result[0].addressable, false);
+  assert.equal(result[0].defaultRouteId, undefined);
+  const local = runtime("local-route", "Shared");
+  const mixed = listPersonas({ rolesRoot, personaPresentations: () => personaPresentations(rolesRoot), runtimes: () => [local, remote] });
+  assert.deepEqual(mixed[0].routes.map(route => route.routeId), ["local-route"]);
+});
+
+test("remote persona senders cannot write a same-name local persona timeline", async (t) => {
+  const rolesRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-remote-persona-source-"));
+  t.after(() => fs.rmSync(rolesRoot, { recursive: true, force: true }));
+  persona(rolesRoot, "Shared", "Local source");
+  persona(rolesRoot, "Target", "Local target");
+  const remote = runtime("remote-route", "Shared");
+  remote.definition.agentRoleDeviceId = "pc-target";
+  let timelineWrites = 0;
+  let deliveries = 0;
+  const context: PersonaMessagingRouteContext = {
+    rootDir: rolesRoot, rolesRoot, personaPresentations: () => personaPresentations(rolesRoot),
+    runtimes: () => [remote, runtime("target-route", "Target")], authorizeSource: () => true,
+    deliver: async () => { deliveries += 1; },
+    appendTimeline: async () => { timelineWrites += 1; throw new Error("Timeline must not be reached."); }
+  };
+  const server = http.createServer((request, response) => {
+    const url = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
+    if (!handlePersonaMessagingApi(request, url, response, context)) response.writeHead(404).end();
+  });
+  const port = await listen(server);
+  t.after(() => close(server));
+  const response = await fetch(`http://127.0.0.1:${port}/api/personas/Target/messages`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ deliveryId: "remote-local-owner-test", sourceRouteId: "remote-route", sourceCapability: "test-capability", text: "hello" })
+  });
+  assert.equal(response.status, 409);
+  assert.match(await response.text(), /target PC/);
+  assert.equal(timelineWrites, 0);
+  assert.equal(deliveries, 0);
+});
+
 test("persona message API authenticates the Route-bound sender and delivers to the target persona", async (t) => {
   const rolesRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-persona-message-"));
   t.after(() => fs.rmSync(rolesRoot, { recursive: true, force: true }));

@@ -113,7 +113,7 @@ export function finishAutomationRun(runId: string, status: string, metadata: Rec
 export function collectScheduledAutomationTasks(routes: RouteProfile[]): ScheduledAutomationTask[] {
   const tasks: ScheduledAutomationTask[] = [];
   for (const route of routes) {
-    if (route.enabled === false) continue;
+    if (route.enabled === false || route.agentRoleDeviceId) continue;
     for (const rule of route.automationRules ?? []) {
       if (rule.enabled === false || rule.trigger.type !== "schedule" || rule.trigger.schedule.enabled === false) continue;
       tasks.push({ route, rule: rule as ScheduledAutomationTask["rule"] });
@@ -142,6 +142,7 @@ export function matchingMessageScriptAutomations(
   record: ForwardRecord,
   extraValues: ForwardTemplateValues
 ): ScriptAutomationTask[] {
+  if (route.agentRoleDeviceId) return [];
   return (route.automationRules ?? [])
     .filter((rule): rule is ScriptAutomationTask["rule"] => rule.enabled !== false
       && rule.trigger.type === "message"
@@ -162,6 +163,7 @@ export function resolvePersonaScript(
   route: RouteProfile,
   configuredPath: string
 ): { scriptPath: string; command: string; argsPrefix: string[]; cwd: string } {
+  if (route.agentRoleDeviceId) throw new Error("Remote persona scripts must execute on their owning PC.");
   if (!route.personaAutomationScriptsEnabled) {
     throw new Error("当前 Route 未允许人格自动化运行本机脚本。");
   }

@@ -44,6 +44,7 @@ export default defineConfig(({ command }) => {
         input: {
           app: fileURLToPath(new URL("./index.html", import.meta.url)),
           managerCorePlugin: fileURLToPath(new URL("./src/bundles/builtin/core.ts", import.meta.url)),
+          managerRouteControlPlugin: fileURLToPath(new URL("./src/bundles/builtin/route-control.ts", import.meta.url)),
           managerMessageAdapterControlPlugin: fileURLToPath(new URL("./src/bundles/builtin/message-adapter-control.ts", import.meta.url)),
           managerPersonaPlugin: fileURLToPath(new URL("./src/bundles/builtin/persona.ts", import.meta.url)),
           managerSpeechPlugin: fileURLToPath(new URL("./src/bundles/builtin/speech.ts", import.meta.url)),

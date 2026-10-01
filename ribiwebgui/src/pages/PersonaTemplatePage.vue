@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { userFacingError } from "../userFacingError";
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import SpeechParameterSlider from "../components/SpeechParameterSlider.vue";
 import PlanFollowupSettings from "../components/PlanFollowupSettings.vue";
 import type { PlanFollowupSettings as PlanFollowupConfig } from "@shared/planFollowup";
@@ -66,6 +66,8 @@ import {
   templateVars
 } from "../utils/gatewayHelpers";
 import { personaOptionDisplayName } from "../personaPresentation";
+import { RemotePersonaReferenceBrowser, personaReferenceIdentity } from "../persona/remotePersonaReference";
+import { removePersonaOwnedGatewayConfig } from "@shared/remotePersonaReference";
 
 const store = useGatewayStore();
 const speech = useSpeechStore();
@@ -117,6 +119,36 @@ const PERSONA_SUMMARY_MAX_CHARACTERS = 420;
 const recentMessageEndpoints: RecentMessageEndpoint[] = RECENT_MESSAGE_ENDPOINTS.filter(endpoint => endpoint !== "heartbeat");
 
 const gateway = computed(() => store.selectedGateway);
+const remotePersona = reactive(new RemotePersonaReferenceBrowser());
+const isRemotePersona = computed(() => Boolean(gateway.value?.agentRoleDeviceId));
+const personaSourceDevice = computed(() => remotePersona.devices.find(item => item.deviceId === gateway.value?.agentRoleDeviceId));
+const personaSourceName = computed(() => personaSourceDevice.value?.name || gateway.value?.agentRoleDeviceId || "本机");
+const personaSourceOptions = computed(() => {
+  const selected = gateway.value?.agentRoleDeviceId || "";
+  const options = remotePersona.devices.map(device => ({
+    title: device.name,
+    subtitle: !device.online ? "离线" : !device.supported ? "在线 · 需要更新" : !device.trusted ? "在线 · 将自动连接" : "在线",
+    value: device.deviceId,
+    props: { disabled: !device.online && device.deviceId !== selected }
+  }));
+  if (selected && !options.some(option => option.value === selected)) {
+    options.push({ title: selected, subtitle: "已保存的远端 PC · 状态待核对", value: selected, props: { disabled: false } });
+  }
+  return [{ title: "本机", subtitle: "使用本机人格", value: "", props: { disabled: false } }, ...options];
+});
+const remoteRoleOptions = computed(() => {
+  const options = remotePersona.personas.map(persona => ({ title: persona.title || persona.name || persona.personaId, value: persona.personaId }));
+  const selected = gateway.value?.agentRoleId || "";
+  if (selected && !options.some(option => option.value === selected)) options.push({ title: `${selected} · 已保存的引用`, value: selected });
+  return [{ title: "不注入人格", value: "" }, ...options];
+});
+const remoteReadState = computed(() => remotePersona.catalogState !== "ready" ? remotePersona.catalogState : remotePersona.referenceState);
+const remoteReadError = computed(() => remotePersona.catalogError || remotePersona.referenceError);
+const remoteConfigSummary = computed(() => JSON.stringify(remotePersona.reference?.personaConfig || {}, null, 2));
+const remoteRuleCount = computed(() => {
+  const rules = remotePersona.reference?.personaConfig.automationRules;
+  return Array.isArray(rules) ? rules.length : 0;
+});
 const personaSecondaryNavItems = computed(() => buildWebNavigation(
   pluginCatalogStore.contributions.value,
   gateway.value ? configNameFor(gateway.value) : ""
@@ -132,14 +164,15 @@ const roleOptions = computed(() => [
   })))
 ]);
 const selectedRole = computed(() => {
+  if (isRemotePersona.value) return undefined;
   const roleId = gateway.value?.agentRoleId || "";
   return (runtime.value.roleInfo?.options || []).find(role => role.value === roleId);
 });
-const personaMarkdownSource = computed(() => personaMarkdownContent.value
+const personaMarkdownSource = computed(() => isRemotePersona.value ? remotePersona.reference?.document || "" : personaMarkdownContent.value
   || selectedRole.value?.roleContent
   || runtime.value.roleInfo?.selectedRoleContent
   || "");
-const personaMarkdownError = computed(() => personaMarkdownLoadError.value
+const personaMarkdownError = computed(() => isRemotePersona.value ? remoteReadError.value : personaMarkdownLoadError.value
   || selectedRole.value?.roleError
   || runtime.value.roleInfo?.selectedRoleError
   || "");
@@ -151,6 +184,7 @@ const personaDocumentPath = computed(() => routeScopedPersonaDocumentPath(
   gateway.value ? configNameFor(gateway.value) : ""
 ));
 const voiceProfile = computed(() => {
+  if (isRemotePersona.value) return undefined;
   const roleId = gateway.value?.agentRoleId || "";
   return speech.personas.find(persona => persona.id === roleId);
 });
@@ -954,12 +988,38 @@ function setScriptArguments(value: unknown): void {
 
 function setRole(value: string): void {
   if (!gateway.value) return;
+  if (isRemotePersona.value) clearPersonaProjection();
   gateway.value.agentRoleId = value;
-  if (!value) {
+  if (!value && !isRemotePersona.value) {
     gateway.value.automationRules = [];
     gateway.value.notificationRules = [];
   }
   store.touch();
+}
+
+function clearPersonaProjection(): void {
+  if (!gateway.value) return;
+  const index = store.gateways.findIndex(item => item.id === gateway.value?.id);
+  if (index >= 0) store.gateways[index] = removePersonaOwnedGatewayConfig(gateway.value);
+}
+
+function setPersonaSource(value: string): void {
+  if (!gateway.value || value === (gateway.value.agentRoleDeviceId || "")) return;
+  clearPersonaProjection();
+  gateway.value.agentRoleDeviceId = value || undefined;
+  gateway.value.agentRoleId = "";
+  gateway.value.agentRoleFile = "persona.md";
+  activePersonaPageTab.value = "profile";
+  store.touch();
+}
+
+async function refreshRemotePersona(): Promise<void> {
+  await remotePersona.refreshDevices();
+  const deviceId = gateway.value?.agentRoleDeviceId || "";
+  await remotePersona.selectSource(deviceId);
+  if (deviceId && deviceId === gateway.value?.agentRoleDeviceId && remotePersona.catalogState === "ready") {
+    await remotePersona.loadReference(deviceId, gateway.value?.agentRoleId || "", gateway.value?.agentRoleFile || "persona.md");
+  }
 }
 
 function chooseAvatar(): void {
@@ -1090,6 +1150,8 @@ async function loadPersonaMarkdown(): Promise<void> {
   const requestVersion = ++personaMarkdownRequestVersion;
   personaMarkdownContent.value = "";
   personaMarkdownLoadError.value = "";
+  personaMarkdownLoading.value = false;
+  if (isRemotePersona.value) return;
   if (!roleId) return;
   const embedded = selectedRole.value?.roleContent || runtime.value.roleInfo?.selectedRoleContent || "";
   if (embedded) {
@@ -1314,6 +1376,7 @@ function personaEventData(raw: Event): { roleId?: string; path?: string } | null
 }
 
 function relevantPersonaEvent(raw: Event): boolean {
+  if (isRemotePersona.value) return false;
   const data = personaEventData(raw);
   if (!data) return false;
   try {
@@ -1343,11 +1406,13 @@ function startPersonaEvents(): void {
     if (voiceIdentityLoaded.value && relevantPersonaEvent(raw)) void refreshVoiceIdentityReview();
   });
   managerEvents.addEventListener("persona_chat_history_changed", (raw) => {
+    if (isRemotePersona.value) return;
     if (personaEventData(raw)?.roleId === gateway.value?.agentRoleId) chatHistoryVersion.value += 1;
   });
   managerEvents.addEventListener("identity_relation_changed", (raw) => {
     if (relevantPersonaEvent(raw)) identityRelationsVersion.value += 1;
   });
+  managerEvents.addEventListener("peer_changed", () => { void refreshRemotePersona(); });
 }
 
 function updateVariableKey(oldKey: string, value: string, event: Event): void {
@@ -1355,7 +1420,8 @@ function updateVariableKey(oldKey: string, value: string, event: Event): void {
   store.updateRouteVariable(oldKey, target?.value || oldKey, value);
 }
 
-watch(() => gateway.value?.agentRoleId, (roleId) => {
+watch(() => gateway.value ? personaReferenceIdentity(gateway.value) : "", () => {
+  const roleId = gateway.value?.agentRoleId || "";
   voiceProfileCopyResult.value = "";
   voiceIdentityNotice.value = "";
   voiceConfirmation.value = idlePersonaVoiceConfirmation();
@@ -1363,7 +1429,7 @@ watch(() => gateway.value?.agentRoleId, (roleId) => {
   identityParticipants.value = [];
   identityEndpointAccounts.value = [];
   voiceToolsDialog.value = false;
-  if (roleId) {
+  if (roleId && !isRemotePersona.value) {
     void refreshVoiceProfile();
     clearVoiceIdentityReview();
   } else {
@@ -1379,21 +1445,38 @@ watch(hasPersona, (enabled) => {
 });
 
 watch(() => speech.recordsVersion, () => {
-  if (hasPersona.value && voiceIdentityLoaded.value) void refreshVoiceIdentityReview(true);
+  if (hasPersona.value && !isRemotePersona.value && voiceIdentityLoaded.value) void refreshVoiceIdentityReview(true);
+});
+
+watch(() => gateway.value?.agentRoleDeviceId || "", async deviceId => {
+  activePersonaPageTab.value = "profile";
+  await remotePersona.selectSource(deviceId);
+  if (deviceId && deviceId === gateway.value?.agentRoleDeviceId && remotePersona.catalogState === "ready") {
+    await remotePersona.loadReference(deviceId, gateway.value?.agentRoleId || "", gateway.value?.agentRoleFile || "persona.md");
+  }
+}, { immediate: true });
+
+watch([() => gateway.value?.agentRoleId, () => gateway.value?.agentRoleFile], () => {
+  const deviceId = gateway.value?.agentRoleDeviceId || "";
+  if (deviceId && remotePersona.catalogState === "ready") {
+    void remotePersona.loadReference(deviceId, gateway.value?.agentRoleId || "", gateway.value?.agentRoleFile || "persona.md");
+  }
 });
 
 watch(
-  [() => gateway.value?.agentRoleId, () => gateway.value?.agentRoleFile, () => selectedRole.value?.roleContent],
+  [() => gateway.value?.agentRoleDeviceId, () => gateway.value?.agentRoleId, () => gateway.value?.agentRoleFile, () => selectedRole.value?.roleContent],
   () => { void loadPersonaMarkdown(); },
   { immediate: true }
 );
 
 onMounted(async () => {
+  void refreshRemotePersona();
   releaseSpeech = await speech.acquire();
   startPersonaEvents();
 });
 
 onBeforeUnmount(() => {
+  remotePersona.invalidate();
   releaseSpeech?.();
   releaseSpeech = null;
   managerEvents?.close();
@@ -1411,17 +1494,34 @@ onBeforeUnmount(() => {
         <div class="page-subtitle">人格可以留空；留空时只使用消息入口默认包装和回传 API。</div>
       </div>
       <div class="page-actions" v-if="gateway">
-        <template v-if="hasPersona">
+        <template v-if="hasPersona && !isRemotePersona">
           <v-btn v-for="item in personaSecondaryNavItems" :key="item.key" :to="item.to" :prepend-icon="item.icon" color="secondary" variant="tonal">{{ item.title }}</v-btn>
         </template>
-        <v-btn v-if="hasPersona" prepend-icon="mdi-account-edit-outline" variant="tonal" @click="store.openConfigFile('role', gateway.id, gateway.agentRoleId || '')">打开人格配置</v-btn>
-        <v-btn v-if="hasPersona" prepend-icon="mdi-file-code-outline" variant="tonal" @click="store.openConfigFile('role-message-config', gateway.id, gateway.agentRoleId || '')">打开人格自动化配置</v-btn>
+        <v-btn v-if="hasPersona && !isRemotePersona" prepend-icon="mdi-account-edit-outline" variant="tonal" @click="store.openConfigFile('role', gateway.id, gateway.agentRoleId || '')">打开人格配置</v-btn>
+        <v-btn v-if="hasPersona && !isRemotePersona" prepend-icon="mdi-file-code-outline" variant="tonal" @click="store.openConfigFile('role-message-config', gateway.id, gateway.agentRoleId || '')">打开人格自动化配置</v-btn>
       </div>
     </div>
 
     <v-alert v-if="!gateway" type="info" variant="tonal">暂无路由配置，请先新增或完成快速配置。</v-alert>
 
     <template v-if="gateway">
+      <v-card class="app-card glass-card section-card persona-source-card">
+        <div class="d-flex align-center ga-3 flex-wrap">
+          <v-select
+            :model-value="gateway.agentRoleDeviceId || ''"
+            :items="personaSourceOptions"
+            label="人格来源 PC"
+            :loading="remotePersona.devicesLoading"
+            hide-details
+            @update:model-value="value => setPersonaSource(String(value || ''))"
+          >
+            <template #item="{ props: itemProps, item }"><v-list-item v-bind="itemProps" :subtitle="item.raw.subtitle" /></template>
+          </v-select>
+          <v-btn variant="tonal" prepend-icon="mdi-refresh" :loading="remotePersona.devicesLoading" @click="refreshRemotePersona">刷新远端 PC</v-btn>
+        </div>
+        <v-alert v-if="remotePersona.devicesError" class="mt-3" type="error" variant="tonal">远端 PC 发现失败：{{ remotePersona.devicesError }}</v-alert>
+        <div class="section-note mt-3">本机路由可以使用远端人格配置；人格和记录保存在来源 PC，消息端和处理 Agent 保持这条路由的配置。</div>
+      </v-card>
       <div class="summary-grid">
         <div class="summary-tile persona-summary-tile">
           <PersonaAvatar :role-id="gateway.agentRoleId || ''" :avatar-url="selectedRole?.avatarUrl" :size="42" />
@@ -1432,19 +1532,19 @@ onBeforeUnmount(() => {
         </div>
         <div class="summary-tile">
           <span>消息规则</span>
-          <b>{{ hasPersona ? `${messageAutomations.length} 条规则` : "入口默认" }}</b>
+          <b>{{ isRemotePersona ? remotePersona.reference ? `${remoteRuleCount} 条远端规则` : "远端待读取" : hasPersona ? `${messageAutomations.length} 条规则` : "入口默认" }}</b>
         </div>
         <div class="summary-tile">
           <span>定时任务</span>
-          <b>{{ hasPersona ? `${scheduledAutomations.length} 条任务` : "未启用" }}</b>
+          <b>{{ isRemotePersona ? "由远端人格配置决定" : hasPersona ? `${scheduledAutomations.length} 条任务` : "未启用" }}</b>
         </div>
         <div class="summary-tile">
-          <span>{{ hasPersona ? "角色目录" : "运行模式" }}</span>
-          <b :data-no-i18n="hasPersona ? '' : undefined">{{ hasPersona ? roleDirLabel : "无人格直通" }}</b>
+          <span>{{ isRemotePersona ? "人格来源" : hasPersona ? "角色目录" : "运行模式" }}</span>
+          <b :data-no-i18n="hasPersona ? '' : undefined">{{ isRemotePersona ? personaSourceName : hasPersona ? roleDirLabel : "无人格直通" }}</b>
         </div>
       </div>
 
-      <v-card class="app-card glass-card overflow-hidden">
+      <v-card v-if="!isRemotePersona" class="app-card glass-card overflow-hidden">
         <v-tabs
           v-model="activePersonaPageTab"
           class="persona-page-tabs"
@@ -1463,7 +1563,40 @@ onBeforeUnmount(() => {
         </v-tabs>
       </v-card>
 
-      <v-window v-model="activePersonaPageTab" class="persona-page-window" :touch="false">
+      <div v-if="isRemotePersona" class="persona-tab-panel">
+        <v-alert v-if="remoteReadState === 'offline'" type="warning" variant="tonal">来源 PC 暂时无法连接。已保存的远端人格引用会保留，消息不会改用本机同名人格。</v-alert>
+        <v-alert v-else-if="remoteReadState === 'unsupported'" type="warning" variant="tonal">远端 PC 需要更新，当前版本无法读取人格配置。</v-alert>
+        <v-alert v-else-if="remoteReadState === 'unauthorized'" type="warning" variant="tonal">RabiLink 鉴权失败，无法读取远端人格。请检查 RabiLink 的连接和登录状态。</v-alert>
+        <v-alert v-else-if="remoteReadError" type="error" variant="tonal">远端人格读取失败：{{ remoteReadError }}</v-alert>
+        <div class="two-column">
+          <v-card class="app-card glass-card section-card">
+            <div class="section-title">远端人格引用</div>
+            <div class="section-note">只保存来源 PC、人格 ID 和文件名；远端配置在读取时使用。</div>
+            <div class="form-grid mt-3">
+              <v-select :model-value="gateway.agentRoleId || ''" :items="remoteRoleOptions" label="指向远端人格"
+                :loading="remotePersona.catalogState === 'loading'" :disabled="remotePersona.catalogState !== 'ready'"
+                @update:model-value="value => setRole(String(value || ''))" />
+              <v-text-field v-if="hasPersona" v-model="gateway.agentRoleFile" label="人格文件名" placeholder="persona.md" @update:model-value="store.touch" />
+            </div>
+            <v-alert v-if="remotePersona.catalogState === 'ready' && !remotePersona.personas.length" type="info" variant="tonal">来源 PC 没有可选人格。</v-alert>
+            <div class="status-row"><span>来源 PC</span><b data-no-i18n>{{ personaSourceName }}</b></div>
+            <div class="status-row"><span>人格 ID</span><b data-no-i18n>{{ gateway.agentRoleId || "未选择" }}</b></div>
+            <div class="section-note mt-3">远端人格配置为只读。头像、语言风格、身份、自动化和知识的修改应在来源 PC 完成。</div>
+          </v-card>
+          <v-card v-if="hasPersona" class="app-card glass-card section-card persona-summary-card">
+            <div class="section-title-row">
+              <div><div class="section-title">persona.md 摘要</div><div class="section-note" data-no-i18n>{{ personaSourceName }} · {{ gateway.agentRoleId }}</div></div>
+              <v-btn :to="personaDocumentPath" color="secondary" variant="tonal" prepend-icon="mdi-file-document-outline">查看完整正文</v-btn>
+            </div>
+            <div v-if="remotePersona.referenceState === 'loading'" class="persona-summary-loading" aria-live="polite"><v-progress-circular indeterminate color="secondary" size="24" /><span>正在读取远端人格…</span></div>
+            <div v-else-if="remotePersona.reference" class="persona-summary-preview" data-no-i18n>{{ personaMarkdownSummary || "人格正文为空。" }}</div>
+            <div v-else class="section-note">远端配置尚未读取成功。</div>
+            <details v-if="remotePersona.reference" class="mt-4"><summary>查看远端人格配置（只读）</summary><pre class="mono-box" data-no-i18n>{{ remoteConfigSummary }}</pre></details>
+          </v-card>
+        </div>
+      </div>
+
+      <v-window v-if="!isRemotePersona" v-model="activePersonaPageTab" class="persona-page-window" :touch="false">
         <v-window-item value="all-day-recording">
           <div class="persona-tab-panel">
             <PersonaAllDayRecording v-if="hasPersona && activePersonaPageTab === 'all-day-recording'" :role-id="gateway.agentRoleId || ''" />

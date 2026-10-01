@@ -68,6 +68,18 @@ test("message script automation reuses Route matching rules", () => {
   }, {}).length, 0);
 });
 
+test("remote persona automation cannot schedule or execute scripts on the local PC", () => {
+  const profile = route("C:\\roles", {
+    agentRoleDeviceId: "peer-b",
+    personaAutomationScriptsEnabled: true,
+    automationRules: [{ id: "remote-schedule", trigger: { type: "schedule", schedule: { id: "daily", type: "daily_time", timeOfDay: "09:00" } }, action: { type: "deliver_agent", message: "review" } },
+      { id: "remote-script", trigger: { type: "message", routeKinds: ["private"] }, action: { type: "run_script", scriptPath: "check.py" } }]
+  });
+  assert.deepEqual(collectScheduledAutomationTasks([profile]), []);
+  assert.deepEqual(matchingMessageScriptAutomations(profile, "private", { time: 1, userId: 2, rawMessage: "hello" }, {}), []);
+  assert.throws(() => resolvePersonaScript(profile, "check.py"), /owning PC/);
+});
+
 test("persona script resolution requires local opt-in and blocks path escape", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-automation-"));
   const rolesDir = path.join(root, "roles");

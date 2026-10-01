@@ -16,6 +16,8 @@ import {
   type CodexHookContextRequest,
   type PlanTaskCompletionDelivery
 } from "./codexHookContext.js";
+import { assertLocalPersonaOwner } from "./localPersonaOwner.js";
+import { readPersonaChatHistory } from "../personaChatHistory.js";
 
 function publishFixtureRoleKnowledge(roleDir: string): void {
   publishRoleKnowledgeCatalogSnapshot(roleDir, readRoleKnowledgeCatalogSnapshot(roleDir));
@@ -106,6 +108,39 @@ test("Stop completion is rejected before internal plan reads or mutations while 
   );
   assert.equal(deliveries, 0);
   assert.equal(fs.existsSync(storePath), false);
+});
+
+test("remote and mixed-owner Hooks reject an existing local namesake binding before context or Stop writes", async (t) => {
+  const { root, roleDir, rolesRoot, storePath, service: oldService } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  oldService.bindSession("reused-session", "YeYu");
+  const originalStore = fs.readFileSync(storePath, "utf8");
+  const originalPlan = fs.readFileSync(planJsonFile(roleDir, "plan-hook", "active"), "utf8");
+  const local = { agentRoleId: "YeYu" };
+  const remote = { ...local, agentRoleDeviceId: "source-pc" };
+  let definitions: Array<{ agentRoleId: string; agentRoleDeviceId?: string }> = [remote];
+  let readyChecks = 0;
+  const service = new CodexHookContextService({
+    rolesRoot: () => rolesRoot, storePath,
+    assertSessionPersonaOwner: () => definitions.forEach(definition => assertLocalPersonaOwner(definition, "Persona Hooks")),
+    hookEnabled: () => false,
+    chatHistoryRoleIds: () => ["YeYu"],
+    planStorageReady: () => { readyChecks++; return true; }
+  });
+  for (const owners of [[remote], [local, remote]]) {
+    definitions = owners;
+    assert.throws(() => service.bindSession("reused-session", "YeYu"), /REMOTE_PERSONA_OWNER_REQUIRED/);
+    assert.throws(() => service.handleContext({ sessionId: "reused-session", eventName: "UserPromptSubmit", prompt: "[rabi:refresh]" }), /REMOTE_PERSONA_OWNER_REQUIRED/);
+    await assert.rejects(service.handleHook({ sessionId: "reused-session", eventName: "SessionStart" }), /REMOTE_PERSONA_OWNER_REQUIRED/);
+    await assert.rejects(service.handleHook({ sessionId: "reused-session", eventName: "Stop", turnId: "remote-turn", lastAssistantMessage: "Remote reply" }), /REMOTE_PERSONA_OWNER_REQUIRED/);
+  }
+  assert.equal(readyChecks, 0, "Remote ownership must be rejected before plan recovery or Stop processing");
+  assert.equal(fs.readFileSync(storePath, "utf8"), originalStore);
+  assert.equal(fs.readFileSync(planJsonFile(roleDir, "plan-hook", "active"), "utf8"), originalPlan);
+  assert.deepEqual((await readPersonaChatHistory(roleDir)).entries, []);
+  definitions = [local];
+  await service.handleHook({ sessionId: "reused-session", eventName: "Stop", turnId: "local-turn", lastAssistantMessage: "Local reply" });
+  assert.equal((await readPersonaChatHistory(roleDir)).entries[0].text, "Local reply");
 });
 
 test("persona followup reads saved config, deduplicates and delays completion delivery", async (t) => {

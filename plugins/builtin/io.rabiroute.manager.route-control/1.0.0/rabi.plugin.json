@@ -6,6 +6,10 @@
     "manager": {
       "execution": "in_process",
       "module": "./manager.mjs"
+    },
+    "web": {
+      "execution": "in_process",
+      "module": "./web/client.mjs"
     }
   },
   "provides": [

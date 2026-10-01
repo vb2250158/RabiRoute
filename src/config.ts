@@ -41,6 +41,7 @@ import { resolvePersistedProjectPath } from "./shared/projectPaths.js";
 import { resolveRouteIdentity, sanitizeRoleId } from "./shared/routeIdentity.js";
 import { resolveRolePaths, roleFilePath, roleFolderPath } from "./shared/routePaths.js";
 import { resolveRuntimeLayout } from "./shared/runtimeLayout.js";
+import { normalizeRemotePersonaReference } from "./shared/remotePersonaReference.js";
 
 const defaultPackageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const runtimeLayout = resolveRuntimeLayout(defaultPackageRoot);
@@ -82,6 +83,7 @@ export type RouteProfile = {
   pipeline?: PipelineDefinition;
   resolvedPipeline: ResolvedPipeline;
   agentRoleId?: string;
+  agentRoleDeviceId?: string;
   agentRoleFile: string;
   rolesDir: string;
   dataDir?: string;
@@ -281,18 +283,17 @@ function parseRouteProfiles(raw: string | undefined, defaults: RouteProfileDefau
     return [];
   }
 
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    return parsed
-      .map((item, index) => normalizeRouteProfile(item, index, defaults))
-      .filter((item): item is RouteProfile => Boolean(item));
+    parsed = JSON.parse(raw) as unknown;
   } catch (error) {
     console.error("Failed to parse ROUTE_PROFILES", error);
     return [];
   }
+  if (!Array.isArray(parsed)) return [];
+  return parsed
+    .map((item, index) => normalizeRouteProfile(item, index, defaults))
+    .filter((item): item is RouteProfile => Boolean(item));
 }
 
 function parsePipelineDefinition(raw: string | undefined): PipelineDefinition | undefined {
@@ -365,6 +366,7 @@ function normalizeRouteProfile(item: unknown, index: number, defaults: RouteProf
   }
 
   const raw = item as Partial<RouteProfile>;
+  const { agentRoleDeviceId } = normalizeRemotePersonaReference(raw);
   const identity = resolveRouteIdentity({
     id: raw.id,
     agentRoleId: raw.agentRoleId,
@@ -397,6 +399,7 @@ function normalizeRouteProfile(item: unknown, index: number, defaults: RouteProf
     pipeline,
     resolvedPipeline: resolvePipeline(pipelinePreset, pipeline),
     agentRoleId: roleId,
+    agentRoleDeviceId,
     agentRoleFile: typeof raw.agentRoleFile === "string" && raw.agentRoleFile.trim() ? raw.agentRoleFile.trim() : "persona.md",
     rolesDir: typeof raw.rolesDir === "string" && raw.rolesDir.trim() ? path.resolve(rootDir, raw.rolesDir) : rolesDir,
     dataDir: typeof raw.dataDir === "string" && raw.dataDir.trim() ? path.resolve(rootDir, raw.dataDir) : undefined,
@@ -423,9 +426,13 @@ const botNickname = process.env.BOT_NICKNAME ?? "QQ小助手";
 const baseDataDir = path.resolve(rootDir, process.env.DATA_DIR ?? path.join("data", "route", "default"));
 const rolesDir = path.resolve(rootDir, process.env.ROLES_DIR ?? path.join("data", "roles"));
 const agentRoleId = sanitizeRoleId(process.env.AGENT_ROLE_ID);
+const { agentRoleDeviceId } = normalizeRemotePersonaReference({
+  agentRoleDeviceId: process.env.AGENT_ROLE_DEVICE_ID,
+  agentRoleId: process.env.AGENT_ROLE_ID
+});
 const agentRoleFile = process.env.AGENT_ROLE_FILE?.trim() || "persona.md";
-const agentRoleDir = agentRoleId ? roleFolderPath(rolesDir, agentRoleId) : "";
-const agentRolePath = agentRoleId ? roleFilePath(rolesDir, agentRoleId, agentRoleFile) : "";
+const agentRoleDir = agentRoleId && !agentRoleDeviceId ? roleFolderPath(rolesDir, agentRoleId) : "";
+const agentRolePath = agentRoleId && !agentRoleDeviceId ? roleFilePath(rolesDir, agentRoleId, agentRoleFile) : "";
 const notificationRules = parseNotificationRules(process.env.NOTIFICATION_RULES) ?? [];
 const automationRules = normalizePersonaAutomationRules(
   parseJsonEnvironmentValue(process.env.AUTOMATION_RULES, "AUTOMATION_RULES")
@@ -601,6 +608,7 @@ export const config = {
   baseDataDir,
   rolesDir,
   agentRoleId,
+  agentRoleDeviceId,
   agentRoleFile,
   agentRoleDir,
   agentRolePath,
@@ -634,13 +642,19 @@ export function setBotProfile(profile: { nickname?: string; userId?: string | nu
 export function rolePathsFor(agentRoleId: string | undefined): { roleId: string; roleDir: string; rolePath: string; routeDataDir: string; personaDataDir: string } {
   return rolePathsForRoute({
     agentRoleId,
+    agentRoleDeviceId: config.agentRoleDeviceId,
     agentRoleFile: config.agentRoleFile,
     rolesDir: config.rolesDir,
     dataDir: undefined
   });
 }
 
-export function rolePathsForRoute(route: Pick<RouteProfile, "agentRoleId" | "agentRoleFile" | "rolesDir" | "dataDir">): { roleId: string; roleDir: string; rolePath: string; routeDataDir: string; personaDataDir: string } {
+export function rolePathsForRoute(route: Pick<RouteProfile, "agentRoleId" | "agentRoleDeviceId" | "agentRoleFile" | "rolesDir" | "dataDir">): { roleId: string; roleDir: string; rolePath: string; routeDataDir: string; personaDataDir: string } {
+  const { agentRoleId, agentRoleDeviceId } = normalizeRemotePersonaReference(route);
+  if (agentRoleDeviceId) {
+    const routeDataDir = route.dataDir || config.baseDataDir;
+    return { roleId: agentRoleId, roleDir: "", rolePath: "", routeDataDir, personaDataDir: routeDataDir };
+  }
   return resolveRolePaths({
     agentRoleId: route.agentRoleId,
     agentRoleFile: route.agentRoleFile,

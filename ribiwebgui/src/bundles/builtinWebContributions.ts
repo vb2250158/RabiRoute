@@ -5,6 +5,7 @@ import type {
   TrustedWebStatusRendererRegistration
 } from "../pluginRenderers";
 import type { TrustedWebThemeResourceRegistration } from "../pluginThemes";
+import type { TrustedWebCommandRegistration } from "../pluginCommands";
 import {
   routeScopedAdaptersPath,
   routeScopedKnowledgePath,
@@ -30,6 +31,20 @@ type BaseWebBundleModuleApi = Readonly<{
 }>;
 type Dispose = () => void;
 type PageInput = Omit<TrustedWebPageRegistration, "instanceId" | "pluginId">;
+type WebCommandBundleApi = Readonly<{
+  registerCommand(input: Omit<TrustedWebCommandRegistration, "instanceId" | "pluginId">): () => void;
+}>;
+
+export function activateRouteControl(api: WebCommandBundleApi): readonly Dispose[] {
+  return [
+    api.registerCommand({ handlerId: "web.quick-setup", allowedSlots: ["sidebar-footer-primary"],
+      allowedIcons: ["mdi-lightning-bolt-outline"], appearance: "primary", execute: context => context.openQuickSetup() }),
+    api.registerCommand({ handlerId: "web.add-route", allowedSlots: ["topbar-primary"],
+      allowedIcons: ["mdi-plus"], execute: context => context.addRoute() }),
+    api.registerCommand({ handlerId: "web.open-manager-config", allowedSlots: ["sidebar-footer"],
+      allowedIcons: ["mdi-folder-cog-outline"], execute: context => context.openManagerConfig() })
+  ];
+}
 
 function registerPage(api: BaseWebBundleApi, input: PageInput): Dispose {
   return api.registerPage(input);

@@ -11,12 +11,12 @@ export type AgentSendLanguageStyleDecision = {
   metadata?: NonNullable<AgentSendResult["languageStyleValidation"]>;
 };
 
-type ResolvedRoute = {
+export type AgentSendLanguageStyleRoute = {
   runtime: AgentReplyRuntime;
   profile?: AgentReplyRouteProfile;
 };
 
-function resolveRoute(runtimes: AgentReplyRuntime[], routeId: string): ResolvedRoute | undefined {
+function resolveRoute(runtimes: AgentReplyRuntime[], routeId: string): AgentSendLanguageStyleRoute | undefined {
   for (const runtime of runtimes) {
     if (runtime.enabled === false) continue;
     const profile = runtime.routeProfiles?.find(item => item.id === routeId && item.enabled !== false);
@@ -33,11 +33,18 @@ function resolveRoute(runtimes: AgentReplyRuntime[], routeId: string): ResolvedR
 
 export async function evaluateAgentSendLanguageStyle(
   request: AgentSendRequest,
-  options: Pick<AgentReplyOptions, "runtimes">,
+  options: Pick<AgentReplyOptions, "runtimes"> & {
+    remoteLanguageStyle?(route: AgentSendLanguageStyleRoute, text: string, mode: 0 | 1): Promise<AgentSendLanguageStyleDecision>;
+  },
   validator: LanguageStyleValidator
 ): Promise<AgentSendLanguageStyleDecision> {
   const prepared = prepareAgentSendRequest(request);
   const route = resolveRoute(options.runtimes, prepared.routeId);
+  const text = typeof prepared.internal.text === "string" ? prepared.internal.text.trim() : "";
+  if (route && (route.profile?.agentRoleDeviceId ?? route.runtime.agentRoleDeviceId)) {
+    if (!options.remoteLanguageStyle) throw new Error("Remote persona language style requires its owning Manager.");
+    return options.remoteLanguageStyle(route, text, prepared.styleValidation);
+  }
   const binding = route?.profile?.languageStyle ?? route?.runtime.languageStyle;
   if (!binding) return { blocked: false };
   if (prepared.styleValidation === 0) {
@@ -50,7 +57,6 @@ export async function evaluateAgentSendLanguageStyle(
       }
     };
   }
-  const text = typeof prepared.internal.text === "string" ? prepared.internal.text.trim() : "";
   if (!text) return { blocked: false };
   const result = await validator.validate({
     text,

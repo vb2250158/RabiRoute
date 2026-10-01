@@ -17,7 +17,7 @@ English | <a href="./README_zh.md">简体中文</a>
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 20 or newer" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="Current version: 0.3.18" src="https://img.shields.io/badge/version-0.3.18-3178c6">
+  <img alt="Current version: 0.3.19" src="https://img.shields.io/badge/version-0.3.19-3178c6">
   <img alt="Status: active development" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
@@ -72,7 +72,7 @@ The manual trigger performs a real delivery. See [Complete the first Route](docs
 
 ## Current capabilities
 
-The repository version is `0.3.18`. The table lists behavior backed by current code, configuration surfaces, and tests. Features that require accounts, external services, or physical devices still need acceptance in their target environment.
+The repository version is `0.3.19`. The table lists behavior backed by current code, configuration surfaces, and tests. Features that require accounts, external services, or physical devices still need acceptance in their target environment.
 
 | Area | Status | What it provides |
 | --- | --- | --- |
@@ -93,6 +93,10 @@ The repository version is `0.3.18`. The table lists behavior backed by current c
 See [Current capabilities and maturity](docs/current-capabilities_en.md) for complete status, limits, and sources of truth.
 
 ## Recent changes
+
+### 0.3.19 experimental implementation: remote persona references
+
+Local Routes can select a persona owned by another PC and read its text, message rules and context budgets while keeping their existing message inputs and handling Agent. Version 0.3.19 adds this experimental implementation: both PCs reuse authentication for the same RabiLink application, automatically exchange and pin device public keys, then use LAN, P2P or Relay to access a restricted persona service without an additional manual full-management grant. Source PCs need the new capability, and existing manual restrictions remain enforced. See [remote persona references](docs/remote-persona-reference_en.md) for operation, failure behavior and the pending two-PC acceptance.
 
 ### 0.3.5: Remote Agent authorization, focused approvals and mobile recording
 
@@ -165,6 +169,7 @@ Buildable clients live under [`apps/`](apps/), shared SDKs under [`packages/`](p
 
 - [Configuration](docs/configuration_en.md): review local files, directories, and main settings.
 - [LAN Rabi Agent](docs/lan-rabi-agent-bootstrap_en.md): connect Codex/DSH tasks on another computer and configure node permissions.
+- [Remote persona references](docs/remote-persona-reference_en.md): 0.3.19 experimental implementation for using another PC's persona in a local Route.
 - [RabiSpeech](docs/rabispeech-plugin_en.md): configure local or remote TTS and ASR.
 - [Client applications](apps/README_en.md): build Android, Rokid AIUI, browser bridge, and Rabi Agent clients.
 

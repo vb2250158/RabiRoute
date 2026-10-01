@@ -156,6 +156,7 @@ export type CodexHookContextServiceOptions = {
   isManagedAgentSession?: (request: CodexHookContextRequest) => boolean;
   recordAgentRequestStop?: (request: CodexHookContextRequest) => Promise<AgentRequestStopResult> | AgentRequestStopResult;
   planStorageReady?: () => boolean;
+  assertSessionPersonaOwner?: (sessionId: string, cwd?: string) => void;
   chatHistoryRoleIds?: (request: CodexHookContextRequest) => readonly string[];
   onChatHistoryChanged?: (roleId: string) => void;
 };
@@ -374,6 +375,7 @@ export class CodexHookContextService {
   private readonly isManagedAgentSession?: (request: CodexHookContextRequest) => boolean;
   private readonly recordAgentRequestStop?: (request: CodexHookContextRequest) => Promise<AgentRequestStopResult> | AgentRequestStopResult;
   private readonly planStorageReady?: () => boolean;
+  private readonly assertSessionPersonaOwner?: CodexHookContextServiceOptions["assertSessionPersonaOwner"];
   private readonly chatHistoryRoleIds?: CodexHookContextServiceOptions["chatHistoryRoleIds"];
   private readonly onChatHistoryChanged?: CodexHookContextServiceOptions["onChatHistoryChanged"];
 
@@ -388,6 +390,7 @@ export class CodexHookContextService {
     this.isManagedAgentSession = options.isManagedAgentSession;
     this.recordAgentRequestStop = options.recordAgentRequestStop;
     this.planStorageReady = options.planStorageReady;
+    this.assertSessionPersonaOwner = options.assertSessionPersonaOwner;
     this.chatHistoryRoleIds = options.chatHistoryRoleIds;
     this.onChatHistoryChanged = options.onChatHistoryChanged;
   }
@@ -439,6 +442,7 @@ export class CodexHookContextService {
   }
 
   bindSession(sessionId: string, roleId: string): CodexHookSessionBinding {
+    this.assertSessionPersonaOwner?.(sessionId);
     const id = this.requireSessionId(sessionId);
     const role = this.requireRole(roleId);
     const store = this.readStore();
@@ -467,6 +471,7 @@ export class CodexHookContextService {
   }
 
   async handleHook(request: CodexHookContextRequest): Promise<CodexHookContextResult> {
+    this.assertSessionPersonaOwner?.(request.sessionId, request.cwd);
     // Stop may read plans and persists completion/progress state. Fence it
     // before any observer, role lookup or internal mutation while recovery is
     // incomplete; non-mutating context hooks remain available.
@@ -509,6 +514,7 @@ export class CodexHookContextService {
   }
 
   handleContext(request: CodexHookContextRequest): CodexHookContextResult {
+    this.assertSessionPersonaOwner?.(request.sessionId, request.cwd);
     const sessionId = this.requireSessionId(request.sessionId);
     if (!["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse"].includes(request.eventName)) {
       throw new Error(`Unsupported Codex hook event: ${request.eventName}`);

@@ -24,6 +24,8 @@ Version 0.3.5 adds individual remote Agent credentials, per-Agent authorization 
 
 Version 0.3.6 adds Antigravity as a fifth deliverable Agent target, delivering through the host's own `agy agentapi` subcommands rather than driving the desktop renderer, and declaring the same unified capability list as Codex, DSH and WorkBuddy. It also replaces the "Codex or DSH" binary for the primary Agent with an explicit target (local/remote + provider + instance), so send permission, plan-assistant session filtering and instance thread routing all resolve from one target and a new adapter becomes eligible just by declaring its capability. DSH connections now require explicit local-user authorization and never persist the login link. Device settings move to the mobile recording system, dropping the standalone glasses/watch/band entries from the PC side while existing client transport stays compatible; unified recording-event delivery is not implemented yet.
 
+Version 0.3.19 adds the experimental [remote persona reference](../../../../docs/remote-persona-reference_en.md): the source PC owns persona text, message rules and context budgets, while the local Route retains its handling Agent and message audit. Both PCs reuse authentication for the same RabiLink application to exchange and pin keys automatically for restricted persona reads, without adding full-management access. Example memory records identity checks, manual restrictions and same-name isolation, and the existing context plan keeps a pending real two-PC delivery step. Copying this example does not configure application credentials or create a remote persona replica.
+
 ## Directory contents
 
 - `persona.md` defines identity, voice, boundaries, and routing behavior.

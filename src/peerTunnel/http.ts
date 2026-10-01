@@ -3,7 +3,10 @@ import https from "node:https";
 import { Duplex, pipeline } from "node:stream";
 import type { TunnelSession, TunnelStream, TunnelRequest } from "./session.js";
 
-export type TunnelService = { baseUrl: string; pathPrefix?: string; headers?: Record<string, string> };
+export type TunnelService = {
+  baseUrl: string; pathPrefix?: string; headers?: Record<string, string>;
+  requestAllowed?(request: Pick<TunnelRequest, "method" | "path" | "upgrade"> & { redirect?: boolean }): boolean;
+};
 export function tunnelHeaders(headers: Record<string, unknown>, response = false): Record<string, string | string[]> {
   const connection = String(headers.connection || "").toLowerCase().split(",").map(value => value.trim());
   const excluded = new Set(["host", "connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade", "proxy-authorization", "proxy-authenticate", "cookie", "set-cookie", "origin", "referer", "authorization", "content-length", ...connection]);
@@ -32,19 +35,27 @@ export function serveTunnel(session: TunnelSession, services: () => Record<strin
       if (!request || typeof request.service !== "string" || !authorize(request.service) || !/^[A-Z]{1,20}$/.test(request.method) || ["CONNECT", "TRACE"].includes(request.method)) throw new Error("Service denied.");
       const service = services()[request.service];
       if (!service) throw new Error("Service unavailable.");
+      if (service.requestAllowed && !service.requestAllowed(request)) throw new Error("Service request denied.");
       const endpoint = serviceEndpoint(service, request.path);
+      if (service.requestAllowed && !service.requestAllowed({ ...request, path: endpoint.pathname + endpoint.search })) throw new Error("Service endpoint denied.");
       const headers = { ...tunnelHeaders(request.headers || {}), ...service.headers };
       if (request.upgrade) { headers.connection = "Upgrade"; headers.upgrade = "websocket"; }
       upstream = (endpoint.protocol === "https:" ? https : http).request(endpoint, { method: request.method, headers }, response => {
         const responseHeaders = tunnelHeaders(response.headers, true);
         if (responseHeaders.location) {
-          const location = new URL(String(responseHeaders.location), endpoint);
-          if (location.origin !== endpoint.origin) { response.destroy(); stream.destroy(new Error("External redirect denied.")); return; }
+          let location: URL | undefined;
+          try { location = new URL(String(responseHeaders.location), endpoint); } catch { /* Invalid redirects are denied. */ }
+          if (!location || location.origin !== endpoint.origin || service.requestAllowed && !service.requestAllowed({ ...request, path: location.pathname + location.search, redirect: true })) {
+            response.destroy(); void stream.reply({ status: 403, headers: { "content-type": "text/plain" } }).then(() => stream.end("Service redirect denied.")); return;
+          }
           responseHeaders.location = location.pathname + location.search;
         }
         void stream.reply({ status: response.statusCode || 502, headers: responseHeaders }).then(() => pipeline(response, stream, () => {}));
       });
       upstream.once("upgrade", (response, socket, head) => {
+        if (service.requestAllowed && !service.requestAllowed({ ...request, upgrade: true })) {
+          socket.destroy(); void stream.reply({ status: 403, headers: { "content-type": "text/plain" } }).then(() => stream.end("Service upgrade denied.")); return;
+        }
         void stream.reply({ status: 101, headers: tunnelHeaders(response.headers, true) }).then(() => {
           if (head.length) stream.write(head);
           stream.pipe(socket); socket.pipe(stream);

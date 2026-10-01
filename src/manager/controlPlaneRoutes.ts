@@ -537,6 +537,8 @@ import type {
 import type { LocalSpeechResponse } from "../speech/localSpeechClient.js";
 import { standaloneGatewayPayload as buildStandaloneGatewayPayload } from "./statusPayload.js";
 import { handlePersonaDocumentApi } from "./personaDocumentRoutes.js";
+import { handlePersonaBootstrapApi, handlePersonaReferenceApi, handlePersonaReferenceLanguageStyleApi, handleRemotePersonaResolutionApi, resolveRemotePersonaSnapshot, validateRemotePersonaLanguageStyle, type RemotePersonaReadContext } from "./remotePersonaRoutes.js";
+import { assertLocalPersonaOwner, localPersonaMessageDirectories, localPersonaRoleForAgentTask, localPersonaRoleForHooks, localPersonaRuntimeForDelivery, routeOwnsLocalPersona } from "./localPersonaOwner.js";
 import {
   getPlan,
   getPublishedPlan,
@@ -727,6 +729,7 @@ type GatewayDefinition = {
   routesDir?: string;
   configName?: string;
   agentRoleId?: string;
+  agentRoleDeviceId?: string;
   agentRoleFile?: string;
   agentAdapters?: AgentAdapterType[];
   primaryAgentAdapter?: AgentAdapterType;
@@ -765,6 +768,7 @@ type RouteProfileDefinition = {
   pipelinePreset?: string;
   pipeline?: PipelineDefinition;
   agentRoleId?: string;
+  agentRoleDeviceId?: string;
   agentRoleFile?: string;
   rolesDir?: string;
   dataDir?: string;
@@ -908,6 +912,7 @@ function runtimeOwnsAgentSession(runtime: GatewayRuntime, sessionId: string): bo
   if ((runtime.definition.codexPlanAssistantSessions ?? []).some((session) => session.threadId === id)) return true;
   const target = currentMessageProcessingTargetByThreadId(id);
   if (target && runtimeForMessageProcessingTarget(target)?.definition.id === runtime.definition.id) return true;
+  if (!routeOwnsLocalPersona(runtime.definition)) return false;
   const roleId = roleIdForDefinition(runtime.definition);
   if (!roleId) return false;
   const roleDir = roleDirForApi(roleId);
@@ -1000,13 +1005,14 @@ function agentThreadRequestOptions(
     } : {}),
     onChatHistoryDelivery: (body, result) => recordPersonaAgentDelivery(body, result, {
       roleForTask: (sessionId, workspace) => {
+        const configuredDefinitions = configuredPersonaDefinitionsForSession(sessionId);
+        if (configuredDefinitions.some(definition => !routeOwnsLocalPersona(definition))) return undefined;
         const binding = codexHookContextService.getBinding(sessionId);
         if (binding?.cwd && workspace && !hookWorkspaceMatches(binding.cwd, workspace)) return undefined;
-        const roleIds = new Set([...gatewayIdsForManagedSession(sessionId, workspace)]
-          .map(id => sanitizeRoleId(runtimes.get(id)?.definition.agentRoleId))
-          .filter((id): id is string => Boolean(id)));
-        if (binding) roleIds.add(binding.roleId);
-        return roleIds.size === 1 ? [...roleIds][0] : undefined;
+        const definitions = [...gatewayIdsForManagedSession(sessionId, workspace)]
+          .map(id => runtimes.get(id)?.definition)
+          .filter((definition): definition is GatewayDefinition => Boolean(definition));
+        return localPersonaRoleForAgentTask(definitions, roleIdForDefinition, binding?.roleId);
       },
       roleDir: roleDirForApi,
       changed: roleId => publishManagerEvent("persona_chat_history_changed", { roleId })
@@ -1452,10 +1458,19 @@ const messageProcessingSendContextReview = new MessageProcessingSendContextRevie
   loadContext: async (requirement, sourceMessageId, reviewedSource) => {
     const roleId = String(requirement.source.roleId || "").trim();
     if (!roleId) return [];
+    const routeId = String(requirement.source.routeProfileId || requirement.source.routeId || "").trim();
+    const runtime = runtimeForAgentSendRoute(routeId);
+    if (!runtime) throw new Error("Message source Route is no longer available.");
+    const profile = runtime.definition.routeProfiles?.find(item => item.id === routeId);
+    const remoteDeviceId = profile?.agentRoleDeviceId ?? runtime.definition.agentRoleDeviceId;
+    const auditDir = profile?.dataDir ?? runtime.definition.dataDir;
+    const sourceDir = remoteDeviceId
+      ? (auditDir ? path.resolve(rootDir, auditDir) : dataDirFor(runtime.definition))
+      : roleDirForApi(roleId);
     return managerKnowledgePageWorkerPool.run({
       type: "message_processing_send_context",
       input: {
-        roleDir: roleDirForApi(roleId),
+        roleDir: sourceDir,
         requirement: { id: requirement.id, source: requirement.source, ...(reviewedSource ? { sourceEvidenceReview: requirement.sourceEvidenceReview } : {}) },
         sourceMessageId,
         reviewedSource
@@ -1468,12 +1483,28 @@ function currentPersonaMessageAuthority(): PersonaMessageAuthority {
   personaMessageAuthority ??= loadPersonaMessageAuthority(rootDir);
   return personaMessageAuthority;
 }
+
+function remotePersonaReadContext(): RemotePersonaReadContext {
+  return {
+    identity: () => ({ applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, managerInstanceId }),
+    managerBaseUrl,
+    remoteGeneration: async deviceId => {
+      if (!activePeerTunnel) throw new Error("Peer tunnel is not ready.");
+      await activePeerTunnel.ensurePersonaService(deviceId);
+      return (await activePeerTunnel.session(deviceId)).remote.generation;
+    },
+    fetchRemote: async (deviceId, pathname, init) => {
+      if (!activePeerTunnel) throw new Error("Peer tunnel is not ready.");
+      return activePeerTunnel.fetch(deviceId, "persona", pathname, init);
+    }
+  };
+}
 const agentCompletionDelivery = new AgentCompletionDeliveryService({
   rules: request => {
     const roles = new Set<string>();
     return [...runtimes.values()].flatMap(runtime => {
       const roleId = sanitizeRoleId(runtime.definition.agentRoleId);
-      if (!roleId || roles.has(roleId) || runtime.definition.enabled === false) return [];
+      if (!roleId || roles.has(roleId) || runtime.definition.enabled === false || runtime.definition.agentRoleDeviceId) return [];
       roles.add(roleId);
       return [
         ...(runtime.definition.codexHooks?.completionDeliveries ?? []).map(rule => ({ roleId, rule })),
@@ -1522,8 +1553,14 @@ const codexHookContextService = new CodexHookContextService({
   hookEnabled: codexHookEnabled,
   isManagedAgentSession,
   recordAgentRequestStop,
+  assertSessionPersonaOwner: sessionId => {
+    configuredPersonaDefinitionsForSession(sessionId)
+      .forEach(definition => assertLocalPersonaOwner(definition, "Persona Hooks"));
+  },
   chatHistoryRoleIds: request => [...gatewayIdsForManagedSession(request.sessionId, request.cwd)]
-    .map(id => sanitizeRoleId(runtimes.get(id)?.definition.agentRoleId))
+    .map(id => runtimes.get(id)?.definition)
+    .filter((definition): definition is GatewayDefinition => Boolean(definition && routeOwnsLocalPersona(definition)))
+    .map(definition => sanitizeRoleId(definition.agentRoleId))
     .filter((roleId): roleId is string => Boolean(roleId)),
   onChatHistoryChanged: roleId => publishManagerEvent("persona_chat_history_changed", { roleId }),
   planStorageReady: () => planStorageStartupStatus().state === "ready"
@@ -1601,6 +1638,7 @@ function createManagerPeerRuntime() {
   tunnel = new PeerTunnelRuntime({
     readOnly: managerReadOnly,
     allowResourceBootstrap: () => rabiLinkRelayConfigForMeta().enabled,
+    allowPersonaBootstrap: () => rabiLinkRelayConfigForMeta().enabled,
     allowSpeechBootstrap: () => rabiLinkRelayConfigForMeta().enabled && rabiGlobalConfig.read().rabiLinkRelay.speechProxyEnabled,
     allowControl: (request, url) => request.socket.localPort === managerPort && webguiLanRequestAllowed(request, url),
     dataDir: path.join(rootDir, "data", "rabilink"),
@@ -1615,7 +1653,16 @@ function createManagerPeerRuntime() {
   activePeerTunnel = tunnel;
   const currentLan = peerLanServer.status();
   if (currentLan.state === "listening") tunnel.startLanDiscovery(currentLan.port || 0);
-  const handler: typeof runtime.handler = (request, url, response) => tunnel.handler(request, url, response, readJsonBody) || runtime.handler(request, url, response);
+  const handler: typeof runtime.handler = (request, url, response) => {
+    if (handlePersonaBootstrapApi(request, url, response, {
+      allowed: (req, target) => !managerReadOnly && req.socket.localPort === managerPort && webguiLanRequestAllowed(req, target),
+      identity: () => ({ applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, managerInstanceId }),
+      readJson: readJsonBody,
+      ensure: async deviceId => { if (activePeerTunnel !== tunnel) throw new Error("Peer tunnel is stopping."); await tunnel.ensurePersonaService(deviceId); },
+      json: jsonResponse
+    })) return true;
+    return tunnel.handler(request, url, response, readJsonBody) || runtime.handler(request, url, response);
+  };
   const combined = { ...runtime, handler };
   activePeerRuntime = combined;
   return { handler, async stop() {
@@ -1974,6 +2021,7 @@ export function adapterConfigItem(definition: GatewayDefinition): Record<string,
     astrbotSessionId: definition.astrbotSessionId,
     rolesDir: configPathValue(definition.rolesDir),
     agentRoleId: definition.agentRoleId,
+    agentRoleDeviceId: definition.agentRoleDeviceId,
     agentRoleFile: definition.agentRoleFile,
     agentAdapters: definition.agentAdapters,
     primaryAgentAdapter: definition.primaryAgentAdapter,
@@ -2305,6 +2353,7 @@ async function ensureRoleFolder(roleId: string, subfolder?: string): Promise<str
 async function reconcilePersistedPlanSecretaryWorkspaces(): Promise<void> {
   const ownerByRoleDir = new Map<string, { roleDir: string; roleId: string; workspace: string; agentTargetId: string; conflicting: boolean }>();
   for (const runtime of runtimes.values()) {
+    if (runtime.definition.agentRoleDeviceId) continue;
     const target = resolvePrimaryAgentTarget(runtime.definition);
     const workspace = primaryAgentWorkspace(runtime.definition)?.trim();
     if (!target || !workspace) continue;
@@ -2710,6 +2759,7 @@ function envFor(
     ASTRBOT_SESSION_ID: definition.astrbotSessionId?.trim() || process.env.ASTRBOT_SESSION_ID || "",
     ROLES_DIR: routeRolesDir,
     AGENT_ROLE_ID: sanitizeRoleId(definition.agentRoleId),
+    AGENT_ROLE_DEVICE_ID: definition.agentRoleDeviceId || "",
     AGENT_ROLE_FILE: definition.agentRoleFile ?? "persona.md",
     AGENT_ADAPTERS: Array.isArray(definition.agentAdapters) ? definition.agentAdapters.join(",") : process.env.AGENT_ADAPTERS ?? "",
     PRIMARY_AGENT_ADAPTER: definition.primaryAgentAdapter ?? "",
@@ -3512,23 +3562,7 @@ function gatewayStatusForRuntime(runtime: GatewayRuntime, startedNapcatInstances
 }
 
 function messageFileCandidateDirs(definition: GatewayDefinition): string[] {
-  const dirs = new Set<string>();
-  dirs.add(dataDirFor(definition));
-  const roleId = sanitizeRoleId(definition.agentRoleId);
-  const rolesDir = path.resolve(rootDir, definition.rolesDir ?? path.join("data", "roles"));
-  if (roleId) {
-    dirs.add(roleFolderPath(rolesDir, roleId));
-  }
-  for (const profile of definition.routeProfiles ?? []) {
-    if (profile.dataDir) {
-      dirs.add(path.resolve(rootDir, profile.dataDir));
-    }
-    const profileRole = sanitizeRoleId(profile.agentRoleId);
-    if (profileRole) {
-      dirs.add(roleFolderPath(rolesDir, profileRole));
-    }
-  }
-  return [...dirs];
+  return localPersonaMessageDirectories(rootDir, definition, dataDirFor(definition));
 }
 
 function recordTimeMs(record: Record<string, unknown>): number {
@@ -4704,6 +4738,7 @@ function parseReplayRouteKind(value: unknown): ForwardRouteKind | undefined {
 }
 
 function roleDirForDefinition(definition: GatewayDefinition): string {
+  if (definition.agentRoleDeviceId) throw new Error("Remote persona storage belongs to the target PC.");
   const rolesDir = path.resolve(rootDir, definition.rolesDir ?? path.join("data", "roles"));
   const roleId = sanitizeRoleId(definition.agentRoleId) || routeRuntimeParts(definition.id).roleId || "Rabi";
   return roleFolderPath(rolesDir, roleId);
@@ -4711,7 +4746,7 @@ function roleDirForDefinition(definition: GatewayDefinition): string {
 
 function memoryConsolidationScheduleTargets(): MemoryConsolidationScheduleTarget[] {
   return runtimes.values()
-    .filter((runtime) => runtime.definition.enabled !== false)
+    .filter((runtime) => runtime.definition.enabled !== false && !runtime.definition.agentRoleDeviceId)
     .map((runtime) => {
       const roleDir = roleDirForDefinition(runtime.definition);
       const roleId = roleIdForDefinition(runtime.definition);
@@ -4829,7 +4864,7 @@ function roleIdForDefinition(definition: GatewayDefinition): string {
 function roleIdsForPlanBoundSession(sessionId: string, cwd?: string): Set<string> {
   const roleIds = new Set<string>();
   const candidateRoleIds = new Set(
-    [...runtimes.values()].map(runtime => roleIdForDefinition(runtime.definition))
+    [...runtimes.values()].filter(runtime => !runtime.definition.agentRoleDeviceId).map(runtime => roleIdForDefinition(runtime.definition))
   );
   for (const roleId of candidateRoleIds) {
     const roleDir = roleDirForApi(roleId);
@@ -4849,7 +4884,8 @@ function roleIdsForPlanBoundSession(sessionId: string, cwd?: string): Set<string
   return roleIds;
 }
 
-function gatewayIdsForManagedSession(sessionId: string, cwd?: string): Set<string> {
+/** Ownership checks must not consult local persona plans before rejecting a remote Route. */
+function gatewayIdsForConfiguredSession(sessionId: string, cwd?: string): Set<string> {
   const exactSessionId = String(sessionId || "").trim();
   const gatewayIds = new Set<string>();
   for (const runtime of runtimes.values()) {
@@ -4876,10 +4912,22 @@ function gatewayIdsForManagedSession(sessionId: string, cwd?: string): Set<strin
       gatewayIds.add(requirement.source.routeId);
     }
   }
+  return gatewayIds;
+}
+
+function configuredPersonaDefinitionsForSession(sessionId: string, cwd?: string): GatewayDefinition[] {
+  return [...gatewayIdsForConfiguredSession(sessionId, cwd)]
+    .map(id => runtimes.get(id)?.definition)
+    .filter((definition): definition is GatewayDefinition => Boolean(definition));
+}
+
+function gatewayIdsForManagedSession(sessionId: string, cwd?: string): Set<string> {
+  const exactSessionId = String(sessionId || "").trim();
+  const gatewayIds = gatewayIdsForConfiguredSession(exactSessionId, cwd);
   const roleIds = roleIdsForPlanBoundSession(exactSessionId, cwd);
   if (roleIds.size > 0) {
     for (const runtime of runtimes.values()) {
-      if (roleIds.has(roleIdForDefinition(runtime.definition))) gatewayIds.add(runtime.definition.id);
+      if (routeOwnsLocalPersona(runtime.definition) && roleIds.has(roleIdForDefinition(runtime.definition))) gatewayIds.add(runtime.definition.id);
     }
   }
   return gatewayIds;
@@ -5080,12 +5128,12 @@ function applyManagedAgentThreadDefaults(request: AgentThreadRequest): AgentThre
   if (request.action !== "send") return request;
   if (request.model?.trim()) return request;
   const targetRuntime = request.threadId ? runtimeForAgentThreadRequest({ threadId: request.threadId, agentAdapter: "codex" }) : undefined;
-  const roleId = targetRuntime ? roleIdForDefinition(targetRuntime.definition) : "";
+  const roleId = targetRuntime && !targetRuntime.definition.agentRoleDeviceId ? roleIdForDefinition(targetRuntime.definition) : "";
   const plans = roleId ? publishedRolePlans(roleDirForApi(roleId)) : undefined;
   const bindingModel = plans?.find(plan => plan.taskBinding?.sessionId === request.threadId)?.taskBinding?.modelSnapshot?.trim();
   if (bindingModel) return { ...request, model: bindingModel };
   const model = resolveCodexPlanAssistantTurnModel(
-    [...runtimes.values()].flatMap((runtime) => runtime.definition.codexPlanAssistantEnabled === true
+    [...runtimes.values()].flatMap((runtime) => !runtime.definition.agentRoleDeviceId && runtime.definition.codexPlanAssistantEnabled === true
       ? (runtime.definition.codexPlanAssistantSessions ?? []).map((session) => ({ ...session, model: normalizeCodexPlanAssistantModel(runtime.definition.codexPlanAssistantModel) }))
       : []), request.threadId, request.model, request.instanceBinding ? `remote:${encodeURIComponent(request.instanceBinding.instanceId)}:${encodeURIComponent(request.instanceBinding.agentId)}` : `local:${request.agentAdapter || "codex"}`
   );
@@ -5172,6 +5220,21 @@ async function performAgentSend(
     planStorageReady: () => planStorageStartupStatus().state === "ready",
     appendRolePanelTimeline,
     submitPlanFeedback: submitAgentPlanFeedback,
+    remoteLanguageStyle: async () => {
+      const runtime = runtimeForAgentSendRoute(prepared.routeId);
+      if (!runtime) throw new Error("Remote persona Route is no longer available.");
+      const profile = runtime.definition.routeProfiles?.find(item => item.id === prepared.routeId);
+      const selection = profile ? { ...runtime.definition, ...profile } : runtime.definition;
+      const context = remotePersonaReadContext();
+      const snapshot = await resolveRemotePersonaSnapshot(selection, context);
+      const binding = snapshot.personaConfig.languageStyle;
+      if (!binding) return { blocked: false };
+      if (prepared.styleValidation === 0) return { blocked: false, metadata: { mode: 0 as const, bypassed: true, styleSkillUrl: binding.styleSkillUrl } };
+      const text = typeof prepared.internal.text === "string" ? prepared.internal.text.trim() : "";
+      if (!text) return { blocked: false };
+      const result = await validateRemotePersonaLanguageStyle(snapshot, text, context);
+      return { blocked: !result.passed, metadata: { mode: 1 as const, bypassed: false, styleSkillUrl: binding.styleSkillUrl, result } };
+    },
     runtimes: [...runtimes.values()].map(runtime => {
       const relay = rabiLinkRelayConfigFor(runtime.definition);
       return {
@@ -5725,6 +5788,10 @@ async function messageProcessingBoardPayload(routeId?: string, limit?: number): 
 }
 
 function setMessageProcessingPlanBaseline(item: MessageProcessingRequirement, roleIdInput?: string, planIdInput?: string): void {
+  const routeId = String(item.source.routeProfileId || item.source.routeId || "").trim();
+  const runtime = runtimeForAgentSendRoute(routeId);
+  const profile = runtime?.definition.routeProfiles?.find(candidate => candidate.id === routeId);
+  if (!runtime || (profile?.agentRoleDeviceId ?? runtime.definition.agentRoleDeviceId)) return;
   const roleId = String(roleIdInput || item.source.roleId || "").trim();
   const planId = String(planIdInput || item.plan?.planId || "").trim();
   if (!roleId || !planId) return;
@@ -6051,18 +6118,7 @@ async function resolvePlanSecretaryDeliveryTarget(
 }
 
 function runtimeForRoleDelivery(roleId: string, gatewayId: string): GatewayRuntime {
-  if (gatewayId) {
-    const runtime = runtimes.get(gatewayId);
-    if (!runtime) throw new Error(`Gateway not found: ${gatewayId}`);
-    if (roleIdForDefinition(runtime.definition) !== roleId) {
-      throw new Error(`Gateway ${gatewayId} is not bound to role ${roleId}.`);
-    }
-    return runtime;
-  }
-  const matches = [...runtimes.values()].filter((runtime) => roleIdForDefinition(runtime.definition) === roleId);
-  if (matches.length === 0) throw new Error(`No gateway is bound to role ${roleId}.`);
-  if (matches.length > 1) throw new Error(`Multiple gateways are bound to role ${roleId}; gatewayId is required.`);
-  return matches[0];
+  return localPersonaRuntimeForDelivery(runtimes.values(), roleId, gatewayId, roleIdForDefinition);
 }
 
 function deliverPlanTaskCompletion(delivery: PlanTaskCompletionDelivery): Promise<void> {
@@ -6976,6 +7032,7 @@ function handleRolePanelApi(
         const gatewayId = sanitizeRoleId(body.gatewayId);
         const runtime = gatewayId ? runtimes.get(gatewayId) : [...runtimes.values()][0];
         if (!runtime) throw new Error(gatewayId ? `Gateway not found: ${gatewayId}` : "No gateway is configured.");
+        assertLocalPersonaOwner(runtime.definition, "Role panel messages");
         const text = String(body.text || "").trim();
         const attachments = normalizeRolePanelAttachments(body.attachments);
         if (!text && attachments.length === 0) throw new Error("Missing role panel message text or attachment.");
@@ -9035,6 +9092,18 @@ export function handlePersonaPluginApi(
     publishManagerEvent("persona_avatar_changed", change);
   })) return true;
   if (handlePersonaDocumentApi(request, requestUrl, response, resolveRoleDir)) return true;
+  if (handlePersonaReferenceLanguageStyleApi(request, requestUrl, response, {
+    roleDirectory: resolveRoleDir,
+    identity: () => ({ applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, managerInstanceId }),
+    readJson: readJsonBody,
+    validate: input => languageStyleValidator.validate(input),
+    json: jsonResponse
+  })) return true;
+  if (handlePersonaReferenceApi(request, requestUrl, response, {
+    roleDirectory: resolveRoleDir,
+    identity: () => ({ applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, managerInstanceId }),
+    json: jsonResponse
+  })) return true;
   if (handlePlanAgentStatusApi(request, requestUrl, response, { roleDir: resolveRoleDir })) return true;
   if (handlePlanAdvanceApi(request, requestUrl, response, { roleDir: resolveRoleDir, send: body => handleAgentThreadRequest(body, agentThreadRequestOptions(body)) })) return true;
   if (handlePlanAttachmentApi(request, requestUrl.pathname, response, resolveRoleDir)) return true;
@@ -9423,9 +9492,8 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         if (!agent?.enabled || (hook.sessionId !== agent.sessionId && !agent.managedSessionIds?.includes(hook.sessionId))) throw new Error("Hook does not belong to the bound instance Agent.");
         const sessionId = instanceHookSessionId(instanceId, agentId, hook.sessionId);
         const routes = routeCatalogConfig.gateways.filter(definition => normalizeRouteAgentTargets(definition).remoteAgentTargets.some(binding => binding.instanceId === instanceId && binding.agentId === agentId));
-        const roles = [...new Set(routes.map(definition => roleIdForDefinition(definition)))];
-        if (roles.length !== 1) throw new Error("Bind this instance Agent to one persona before using its Hooks.");
-        if (codexHookContextService.getBinding(sessionId)?.roleId !== roles[0]) codexHookContextService.bindSession(sessionId, roles[0]!);
+        const roleId = localPersonaRoleForHooks(routes, roleIdForDefinition);
+        if (codexHookContextService.getBinding(sessionId)?.roleId !== roleId) codexHookContextService.bindSession(sessionId, roleId);
         return codexHookContextService.handleHook({ ...hook, sessionId });
       },
       localInstanceAgents: () => routeCatalogConfig.gateways.flatMap(definition => [...new Set<AgentAdapterType>([
@@ -10262,14 +10330,28 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       })) {
         return;
       }
+      if (handleRemotePersonaResolutionApi(request, requestUrl, response, {
+        identity: () => ({ applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, managerInstanceId }),
+        isLoopback: isLoopbackRemoteAddress,
+        definition: routeId => runtimes.get(routeId)?.definition,
+        verifyCapability: (routeId, roleId, capability) => currentPersonaMessageAuthority().verify(routeId, roleId, capability),
+        resolve: definition => resolveRemotePersonaSnapshot(definition, remotePersonaReadContext()),
+        reportFailure: (routeId, error) => managerOperationalLog.record("warn", "remote_persona_read_failed", {
+          action: routeId, error: managerOperationalError(error, rootDir)
+        }),
+        json: jsonResponse
+      })) return;
       if (handleRoleContextProjectionRequest(request, requestUrl, response, {
         identity: {
           applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
           managerInstanceId
         },
         isLoopback: isLoopbackRemoteAddress,
-        verifyCapability: (routeId, roleId, capability) =>
-          currentPersonaMessageAuthority().verify(routeId, roleId, capability),
+        verifyCapability: (routeId, roleId, capability) => {
+          const definition = runtimes.get(routeId)?.definition;
+          return Boolean(definition && !definition.agentRoleDeviceId && definition.agentRoleId === roleId
+            && currentPersonaMessageAuthority().verify(routeId, roleId, capability));
+        },
         readJsonBody,
         resolve: body => {
           const roleDir = roleDirForApi(body.roleId);
