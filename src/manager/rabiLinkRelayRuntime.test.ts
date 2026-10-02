@@ -197,10 +197,12 @@ test("global Relay runtime registers the PC and proxies remote WebGUI requests",
   let claimCount = 0;
   let speechClaimCount = 0;
   let claimedIdentity: Record<string, string> = {};
+  let eventCapabilities = "";
   const relayState: { finishedBody?: Record<string, unknown> } = {};
   const relay = http.createServer((request, response) => {
     const url = new URL(request.url || "/", "http://127.0.0.1");
     if (request.method === "GET" && url.pathname === "/api/rabilink/events") {
+      eventCapabilities = url.searchParams.get("capabilities") || "";
       openRelayEvents(
         response,
         "event: outbox_receipt\ndata: {\"deliveryId\":\"delivery-a\",\"deviceId\":\"phone-a\",\"state\":\"played\",\"routeProfileId\":\"route-a\"}\n\n"
@@ -262,6 +264,7 @@ test("global Relay runtime registers the PC and proxies remote WebGUI requests",
     claimWaitMs: 60000,
     localWebguiUrl: `http://127.0.0.1:${localPort}`,
     peerUrls: ["http://192.168.1.10:24001"],
+    rabiPcVersion: "0.3.19",
     speechProxyEnabled: false,
     localSpeechUrl: "http://127.0.0.1:8781"
   });
@@ -287,9 +290,11 @@ test("global Relay runtime registers the PC and proxies remote WebGUI requests",
     deviceKind: "pc",
     deviceName: "Test PC",
     waitMs: "0",
-    capabilities: "wearable-observation-policy-v1,webgui,video-direct,peer-rpc-v1,peer-tunnel-v1,persona-reference-v1",
+    capabilities: "wearable-observation-policy-v1,webgui,video-direct,peer-rpc-v1,peer-tunnel-v1,persona-reference-v1,rabi-pc-version-0.3.19",
     peerUrls: JSON.stringify(["http://192.168.1.10:24001"])
   });
+  assert.equal(eventCapabilities, claimedIdentity.capabilities);
+  assert.ok(runtime.status().capabilities?.includes("rabi-pc-version-0.3.19"));
   assert.equal(finishedBody?.deviceId, "pc-a");
   assert.equal(finishedBody?.deviceGuid, "guid-a");
   assert.equal(finishedBody?.statusCode, 200);

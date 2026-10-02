@@ -31,8 +31,8 @@ function send(response: http.ServerResponse, body: unknown): void {
   response.setHeader("content-type", "application/json");
   response.end(JSON.stringify(body));
 }
-async function manager(t: TestContext, read: () => RabiLinkRelayGlobalConfig): Promise<string> {
-  const context = { applicationGenerationId: "test-generation", managerInstanceId: "test-manager", globalConfig: { read: () => ({ rabiLinkRelay: read() }) } } as unknown as RabiApiContext;
+async function manager(t: TestContext, read: () => RabiLinkRelayGlobalConfig, readGuid = () => "local-guid"): Promise<string> {
+  const context = { applicationGenerationId: "test-generation", managerInstanceId: "test-manager", version: () => "0.3.19", globalConfig: { read: () => ({ rabiLinkRelay: read(), rabiGuid: readGuid() }) } } as unknown as RabiApiContext;
   return server(t, (request, response) => {
     if (!handleRabiApi(request, new URL(request.url || "/", "http://localhost"), response, context)) { response.statusCode = 404; response.end(); }
   });
@@ -53,13 +53,45 @@ test("link home uses only saved app header and returns a positive allowlist", as
   assert.equal(response.status, 200);
   const body = await response.json();
   assert.equal(body.code, 0);
-  assert.deepEqual(body.data.devices, [peer]);
+  assert.deepEqual(body.data.devices, [{ ...peer, deviceKind: "unknown", rabiPcVersion: null, isLocal: false }]);
   assert.ok(Number.isFinite(Date.parse(body.data.checkedAt)));
   assert.doesNotMatch(JSON.stringify(body), /private|token|cookie|peerUrls|appId/);
   assert.equal(calls, 1);
   const invalid = await fetch(`${base}/api/rabi/link-home?url=http://example.invalid&token=caller`);
   assert.equal(invalid.status, 400);
   assert.equal(calls, 1);
+});
+
+test("home versions come from each PC advertisement and local identity requires both saved identifiers", async t => {
+  const peers = [
+    { ...peer, id: "test-device", guid: "local-guid", name: "Renamed local PC", deviceKind: "pc", capabilities: ["webgui", "rabi-pc-version-0.3.18"] },
+    { ...peer, id: "remote", guid: "remote-guid", deviceKind: "pc", capabilities: ["webgui", "rabi-pc-version-0.3.17"] },
+    { ...peer, id: "legacy", deviceKind: "pc", rabiPcVersion: "99.9.9" },
+    { ...peer, id: "test-device", guid: "other-guid", deviceKind: "pc" },
+    { ...peer, id: "other-device", guid: "local-guid", deviceKind: "pc" },
+    { ...peer, id: "phone", deviceKind: "phone", capabilities: ["rabi-pc-version-0.3.17"] }
+  ];
+  const upstream = await server(t, (_request, response) => send(response, { code: 0, ok: true, peers }));
+  const base = await manager(t, () => config(upstream));
+  const response = await fetch(`${base}/api/rabi/link-home`);
+  assert.equal(response.status, 200);
+  const { data } = await response.json();
+  assert.deepEqual(data.devices.map((item: { isLocal: boolean; rabiPcVersion: string | null }) => [item.isLocal, item.rabiPcVersion]), [
+    [true, "0.3.19"], [false, "0.3.17"], [false, null], [false, null], [false, null], [false, null]
+  ]);
+  assert.deepEqual(data.devices[1].capabilities, ["webgui"]);
+  assert.equal(data.devices[5].deviceKind, "phone");
+});
+
+test("unsafe and conflicting version metadata does not fail the device directory", async t => {
+  const upstream = await server(t, (_request, response) => send(response, { code: 0, ok: true, peers: [
+    { ...peer, deviceKind: "pc", capabilities: ["webgui", "rabi-pc-version-0.3.19", "rabi-pc-version-0.3.18"] },
+    { ...peer, id: "unsafe", deviceKind: "pc", capabilities: ["rabi-pc-version-" + "<script>".repeat(100)] }
+  ] }));
+  const result = await readRabiLinkHome(config(upstream));
+  assert.equal(result.devices.length, 2);
+  assert.deepEqual(result.devices.map(item => item.rabiPcVersion), [null, null]);
+  assert.deepEqual(result.devices.map(item => item.capabilities), [["webgui"], []]);
 });
 
 test("disabled and missing configuration fail explicitly without an empty success", async t => {
@@ -118,4 +150,16 @@ test("configuration changes during discovery reject the old authorization result
   const body = await response.json();
   assert.equal(body.errorCode, "RABILINK_HOME_CONFIG_CHANGED");
   assert.equal(body.data, undefined);
+});
+
+test("a local GUID change during discovery cannot label the old registration as this PC", async t => {
+  let guid = "local-guid";
+  const upstream = await server(t, (_request, response) => {
+    guid = "new-guid";
+    send(response, { code: 0, ok: true, peers: [{ ...peer, id: "test-device", guid: "local-guid", deviceKind: "pc" }] });
+  });
+  const base = await manager(t, () => config(upstream), () => guid);
+  const response = await fetch(`${base}/api/rabi/link-home`);
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).errorCode, "RABILINK_HOME_CONFIG_CHANGED");
 });

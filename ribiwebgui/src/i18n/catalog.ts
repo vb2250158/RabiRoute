@@ -1,5 +1,7 @@
 export const englishCatalog: Record<string, string> = {
   "人格来源 PC": "Persona source PC",
+  "版本未知": "Version unknown",
+  "本机人格在本机项中选择；远端列表仅列出其他 PC。": "Choose local personas under the local PC entry. The remote list contains other PCs only.",
   "远端 PC": "Remote PC",
   "刷新远端 PC": "Refresh remote PCs",
   "使用本机人格": "Use a local persona",

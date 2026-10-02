@@ -6,6 +6,8 @@ Status: experimental implementation. Automated coverage includes local dual endp
 
 ## User interface
 
+RabiLink Home and persona source selection show the RabiPC version advertised by each device, or an unknown version when it was not advertised. Home checks the device ID and GUID for its Local label. The local source option shows the actual name and current running version; this PC is not listed as another remote PC. Versions help identify running installations but do not participate in authentication, service permissions or capability checks.
+
 The Speech service page provides a Speech server selector. Rows show the device name, online status, actual transport and measured round-trip latency. Local calls are labelled as local, never as a fabricated zero-millisecond measurement.
 
 Opening the menu checks up to ten eligible peers with at most two concurrent connection attempts. The selected target has priority. Older devices require an upgrade; untrusted devices require explicit trust. Offline peers cannot be newly selected. A selected peer going offline remains selected, without silent fallback to this PC.

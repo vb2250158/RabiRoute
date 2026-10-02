@@ -36,14 +36,14 @@ test("remote persona discovery combines PC identities with tunnel trust without 
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
     const path = String(input); paths.push(path);
     return new Response(JSON.stringify(path.includes("peer/list")
-      ? { peers: [{ id: "peer-a", name: "PC A", online: true }, { id: "peer-b", name: "PC B", online: false }, { id: "peer-old", name: "Old PC", online: true }] }
+      ? { peers: [{ id: "peer-a", name: "PC A", online: true, rabiPcVersion: "0.3.19" }, { id: "peer-b", name: "PC B", online: false }, { id: "peer-old", name: "Old PC", online: true }] }
       : { selectedDeviceId: "speech-pc", peers: [{ deviceId: "peer-a", trusted: false, supported: true, personaSupported: true, online: true }, { deviceId: "peer-old", trusted: true, supported: true, personaSupported: false, online: true }] }));
   });
   const devices = await remotePersonaClient.devices();
   assert.deepEqual(devices, [
-    { deviceId: "peer-a", name: "PC A", online: true, supported: true, trusted: false },
-    { deviceId: "peer-b", name: "PC B", online: false, supported: false, trusted: false },
-    { deviceId: "peer-old", name: "Old PC", online: true, supported: false, trusted: true }
+    { deviceId: "peer-a", name: "PC A", online: true, supported: true, trusted: false, rabiPcVersion: "0.3.19" },
+    { deviceId: "peer-b", name: "PC B", online: false, supported: false, trusted: false, rabiPcVersion: null },
+    { deviceId: "peer-old", name: "Old PC", online: true, supported: false, trusted: true, rabiPcVersion: null }
   ]);
   assert.deepEqual(paths, ["/api/rabilink/peer/list?deviceKind=pc", "/api/rabilink/peer/servers"]);
 });
@@ -266,7 +266,7 @@ test("remote persona views gate all local persona editors and preserve route-onl
   assert.match(page, /<v-window v-if="!isRemotePersona"/);
   assert.match(page, /v-if="hasPersona && !isRemotePersona"[^\n]+openConfigFile/);
   assert.match(page, /removePersonaOwnedGatewayConfig/);
-  assert.match(page, /在线 · 将自动连接/);
+  assert.match(page, /buildPersonaSourceOptions\(store\.meta, remotePersona\.devices/);
   assert.doesNotMatch(page, /核对双端设备公钥|允许本机使用 manager 服务/);
   assert.match(page, /remoteConfigSummary[\s\S]*personaConfig/);
   assert.doesNotMatch(page, /Object\.assign\(gateway\.value,\s*remotePersona/);

@@ -6,6 +6,15 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.20 - 2026-10-02
+
+### Show PC versions and distinguish the local persona source
+
+- Show each PC's advertised RabiPC version in the RabiLink device list and label the local device. Older devices without a version advertisement show an unknown version; the local version is never used to infer a remote version.
+- Show the local device name and version, plus remote versions, in the persona source selector. The current device remains the local option rather than another remote PC, avoiding a remote persona reference to the same device.
+- Pass PC versions through existing RabiLink capability advertisements while preserving application authentication, device ID and GUID checks, and capability-based upgrade checks. Versions are display metadata and do not grant permissions or replace feature capabilities.
+- Synchronize bilingual operation notes, version logs and version surfaces, and add regressions for advertisements, unknown versions, local labels and persona source presentation. Actual two-PC persona delivery still needs acceptance after updating both running installations.
+
 ## 0.3.19 - 2026-10-02
 
 ### Local Routes referencing remote personas (experimental)

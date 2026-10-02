@@ -9,6 +9,8 @@ export interface RabiLinkHomeDevice {
   deviceModel?: string;
   clientKind?: string;
   platform?: string;
+  rabiPcVersion?: string | null;
+  isLocal?: boolean;
 }
 export interface RabiLinkHomeData {
   devices: RabiLinkHomeDevice[];
@@ -29,6 +31,10 @@ export async function readRabiLinkHome(signal: AbortSignal, request: typeof fetc
     if (!record(device) || typeof device.id !== "string" || typeof device.guid !== "string" || typeof device.name !== "string" || typeof device.online !== "boolean" || !Array.isArray(device.capabilities) || !device.capabilities.every(value => typeof value === "string")) {
       throw new Error("服务器返回的数据不完整，请刷新重试。");
     }
+    if ((device.rabiPcVersion !== undefined && device.rabiPcVersion !== null && (typeof device.rabiPcVersion !== "string" || !device.rabiPcVersion.trim()))
+      || (device.isLocal !== undefined && typeof device.isLocal !== "boolean")) {
+      throw new Error("服务器返回的数据不完整，请刷新重试。");
+    }
     const kind = typeof device.kind === "string" ? device.kind : (typeof device.deviceKind === "string" ? device.deviceKind : undefined);
     const deviceModel = typeof device.deviceModel === "string" ? device.deviceModel : (typeof device.model === "string" ? device.model : undefined);
     const clientKind = typeof device.clientKind === "string" ? device.clientKind : undefined;
@@ -40,19 +46,31 @@ export async function readRabiLinkHome(signal: AbortSignal, request: typeof fetc
       online: device.online,
       capabilities: [...device.capabilities],
       ...(kind ? { kind } : {}),
+      ...(typeof device.deviceKind === "string" ? { deviceKind: device.deviceKind } : {}),
       ...(deviceModel ? { deviceModel } : {}),
       ...(clientKind ? { clientKind } : {}),
-      ...(platform ? { platform } : {})
+      ...(platform ? { platform } : {}),
+      ...(device.rabiPcVersion !== undefined ? { rabiPcVersion: device.rabiPcVersion as string | null } : {}),
+      ...(device.isLocal !== undefined ? { isLocal: device.isLocal as boolean } : {})
     };
   });
   return { devices: result, checkedAt };
 }
 
 export function rabiLinkDeviceKind(device: RabiLinkHomeDevice): "phone" | "glasses" | "desktop" {
+  if ((device.deviceKind || device.kind) === "pc") return "desktop";
   const text = `${device.kind || ""} ${device.deviceKind || ""} ${device.clientKind || ""} ${device.platform || ""} ${device.deviceModel || ""} ${device.name || ""} ${device.id || ""}`.toLowerCase();
   if (text.includes("glass") || text.includes("rokid") || text.includes("ar")) return "glasses";
   if (text.includes("phone") || text.includes("mobile") || text.includes("android") || text.includes("ios") || text.includes("iphone") || text.includes("xiaomi") || text.includes("huawei") || text.includes("23116pn5bc")) return "phone";
   return "desktop";
+}
+
+export function rabiPcVersionLabel(version: string | null | undefined, translate: (text: string) => string = text => text): string {
+  return version ? `RabiPC v${version}` : `RabiPC ${translate("版本未知")}`;
+}
+
+export function rabiLinkDeviceVersionLabel(device: RabiLinkHomeDevice, translate?: (text: string) => string): string {
+  return (device.deviceKind || device.kind) === "pc" ? rabiPcVersionLabel(device.rabiPcVersion, translate) : "";
 }
 
 export function rabiLinkDeviceIcon(device: RabiLinkHomeDevice): string {

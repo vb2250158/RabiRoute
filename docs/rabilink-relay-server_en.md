@@ -6,6 +6,8 @@ English | <a href="./rabilink-relay-server.md">简体中文</a>
 
 # RabiLink Public Relay
 
+Starting with 0.3.20, PCs include a bounded self-reported `rabi-pc-version-<version>` tag in existing capability advertisements. Existing registration and discovery carry it without a new public Relay endpoint. Manager parses it into the display field `rabiPcVersion`; older devices and invalid or conflicting advertisements show an unknown version. The local version comes only from the running Manager, while a remote version comes only from that device's advertisement. This metadata does not attest software integrity, grant permissions or replace capability checks such as `peer-tunnel-v1` and `persona-reference-v1`. Each PC starts advertising after its actual running installation is updated.
+
 Device ownership has changed: configure watches, bands, and glasses in mobile recording, which submits recording events. Separate PC device entries are removed; legacy device protocols below are retained for compatibility maintenance. See [implementation and retirement criteria](mobile-recording-event-boundary_en.md).
 
 > Maturity: experimental. Relay, PC worker, remote WebGUI, input/downlink mailboxes, device logs, and the unified ledger have implementations. Real public-network, account-isolation, device, and recovery acceptance is still required.

@@ -67,6 +67,7 @@ import {
 } from "../utils/gatewayHelpers";
 import { personaOptionDisplayName } from "../personaPresentation";
 import { RemotePersonaReferenceBrowser, personaReferenceIdentity } from "../persona/remotePersonaReference";
+import { personaSourceOptions as buildPersonaSourceOptions } from "../persona/personaSourcePresentation";
 import { removePersonaOwnedGatewayConfig } from "@shared/remotePersonaReference";
 
 const store = useGatewayStore();
@@ -123,19 +124,7 @@ const remotePersona = reactive(new RemotePersonaReferenceBrowser());
 const isRemotePersona = computed(() => Boolean(gateway.value?.agentRoleDeviceId));
 const personaSourceDevice = computed(() => remotePersona.devices.find(item => item.deviceId === gateway.value?.agentRoleDeviceId));
 const personaSourceName = computed(() => personaSourceDevice.value?.name || gateway.value?.agentRoleDeviceId || "本机");
-const personaSourceOptions = computed(() => {
-  const selected = gateway.value?.agentRoleDeviceId || "";
-  const options = remotePersona.devices.map(device => ({
-    title: device.name,
-    subtitle: !device.online ? "离线" : !device.supported ? "在线 · 需要更新" : !device.trusted ? "在线 · 将自动连接" : "在线",
-    value: device.deviceId,
-    props: { disabled: !device.online && device.deviceId !== selected }
-  }));
-  if (selected && !options.some(option => option.value === selected)) {
-    options.push({ title: selected, subtitle: "已保存的远端 PC · 状态待核对", value: selected, props: { disabled: false } });
-  }
-  return [{ title: "本机", subtitle: "使用本机人格", value: "", props: { disabled: false } }, ...options];
-});
+const personaSourceOptions = computed(() => buildPersonaSourceOptions(store.meta, remotePersona.devices, gateway.value?.agentRoleDeviceId || "", t));
 const remoteRoleOptions = computed(() => {
   const options = remotePersona.personas.map(persona => ({ title: persona.title || persona.name || persona.personaId, value: persona.personaId }));
   const selected = gateway.value?.agentRoleId || "";
@@ -1511,11 +1500,13 @@ onBeforeUnmount(() => {
             :model-value="gateway.agentRoleDeviceId || ''"
             :items="personaSourceOptions"
             label="人格来源 PC"
+            :hint="t('本机人格在本机项中选择；远端列表仅列出其他 PC。')"
+            persistent-hint
             :loading="remotePersona.devicesLoading"
-            hide-details
             @update:model-value="value => setPersonaSource(String(value || ''))"
           >
             <template #item="{ props: itemProps, item }"><v-list-item v-bind="itemProps" :subtitle="item.raw.subtitle" /></template>
+            <template #selection="{ item }"><div class="d-flex flex-column" data-no-i18n><span>{{ item.raw.title }}</span><span class="text-caption">{{ item.raw.subtitle }}</span></div></template>
           </v-select>
           <v-btn variant="tonal" prepend-icon="mdi-refresh" :loading="remotePersona.devicesLoading" @click="refreshRemotePersona">刷新远端 PC</v-btn>
         </div>

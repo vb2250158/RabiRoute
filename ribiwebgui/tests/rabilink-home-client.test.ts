@@ -22,7 +22,7 @@ test("home uses one fixed Manager GET without browser application credentials", 
   assert.deepEqual(await readRabiLinkHome(controller.signal, request), data);
 });
 test("strict DTO parser rejects malformed success and upstream errors instead of zero devices", async () => {
-  for (const body of [null, { code: -1 }, { code: 0, data: {} }, { code: 0, data: { ...data, checkedAt: "bad" } }, { code: 0, data: { ...data, devices: [{ ...device, online: "true" }] } }, { code: 0, data: { ...data, devices: [{ ...device, capabilities: [1] }] } }]) {
+  for (const body of [null, { code: -1 }, { code: 0, data: {} }, { code: 0, data: { ...data, checkedAt: "bad" } }, { code: 0, data: { ...data, devices: [{ ...device, online: "true" }] } }, { code: 0, data: { ...data, devices: [{ ...device, capabilities: [1] }] } }, { code: 0, data: { ...data, devices: [{ ...device, rabiPcVersion: 19 }] } }, { code: 0, data: { ...data, devices: [{ ...device, isLocal: "true" }] } }]) {
     await assert.rejects(readRabiLinkHome(new AbortController().signal, response(body)));
   }
   for (const status of [502, 503, 504]) {

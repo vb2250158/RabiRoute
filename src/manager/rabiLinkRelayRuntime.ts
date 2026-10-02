@@ -1,5 +1,6 @@
 import { KNOWLEDGE_PATH, executeKnowledgeQueue, probeKnowledgeBridge, isCanonicalKnowledgeDeviceId, type KnowledgeRuntimeConfig, type KnowledgeQueueMetadata } from './rabiLinkKnowledgeRuntime.js';
 import { PERSONA_REFERENCE_CAPABILITY } from "../shared/personaPeerService.js";
+import { normalizeRabiPcVersion, rabiPcVersionAdvertisement } from "../shared/rabiPcVersionContract.js";
 const knowledgeReady = new WeakMap<RabiLinkRelayRuntimeConfig, boolean>();
 type RelayProxyRequest = {
   knowledge?: KnowledgeQueueMetadata;
@@ -18,6 +19,8 @@ export type RabiLinkRelayRuntimeConfig = {
   deviceId: string;
   deviceGuid: string;
   deviceName: string;
+  /** The package version of the running Manager, never a configured peer version. */
+  rabiPcVersion?: string;
   claimWaitMs: number;
   localWebguiUrl: string;
   /** Direct Manager endpoints advertised only to PCs using the same application token. */
@@ -392,7 +395,7 @@ async function refreshAsrAdvertisement(config: RabiLinkRelayRuntimeConfig, signa
 }
 
 function workerCapabilities(config: RabiLinkRelayRuntimeConfig): string {
-  return ["wearable-observation-policy-v1", "webgui", "video-direct", "peer-rpc-v1", "peer-tunnel-v1", PERSONA_REFERENCE_CAPABILITY, config.speechProxyEnabled ? "speech" : "", knowledgeReady.get(config) ? "knowledgebridge" : "", asrAdvertisements.get(config)?.available ? "asr" : ""]
+  return ["wearable-observation-policy-v1", "webgui", "video-direct", "peer-rpc-v1", "peer-tunnel-v1", PERSONA_REFERENCE_CAPABILITY, rabiPcVersionAdvertisement(config.rabiPcVersion), config.speechProxyEnabled ? "speech" : "", knowledgeReady.get(config) ? "knowledgebridge" : "", asrAdvertisements.get(config)?.available ? "asr" : ""]
     .filter(Boolean)
     .join(",");
 }
@@ -692,6 +695,7 @@ function normalizeConfig(config: RabiLinkRelayRuntimeConfig): RabiLinkRelayRunti
     deviceId: config.deviceId.trim(),
     deviceGuid: config.deviceGuid.trim(),
     deviceName: config.deviceName.trim(),
+    rabiPcVersion: normalizeRabiPcVersion(config.rabiPcVersion) ?? undefined,
     claimWaitMs: Math.max(0, Math.min(60000, Number(config.claimWaitMs) || 0)),
     localWebguiUrl: normalizeBaseUrl(config.localWebguiUrl),
     peerUrls: [...new Set((config.peerUrls || []).map(normalizeBaseUrl).filter(Boolean))].slice(0, 8),

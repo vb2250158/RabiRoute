@@ -56,6 +56,8 @@ Configuration shows the instance GUID and saves the instance name, Relay URL and
 
 Home is a compact native view, with Chinese labels in the Chinese UI, showing computer names, identifiers, online state, and services within the current application instead of embedding management pages. After valid connection settings are saved, reading this information does not require another Relay management-account login. Manager stores and uses the application token for the read; Home never receives that token and page URLs never contain it. Only HTTP(S) root Relay addresses are supported, without userinfo, query, hash, or path prefixes.
 
+PC rows show their RabiPC version, and this computer has a Local label. Versions come from each computer's running installation. Older devices without an advertisement show an unknown version; this computer's version does not establish whether another computer was updated. The local persona-source option also shows the actual device name, and this computer is not repeated as a remote source. If another computer shares the same device identity, verify the identity configuration on both computers first.
+
 If unconfigured, open Configuration. For connection, authentication, or read failures, follow the displayed error and retry after checking the connection. A failed read does not mean zero devices or first-time initialization; only a successful empty response means no devices.
 
 **No repeated Home login does not grant administrator privileges.** To manage accounts or applications, use **Open in new window** for the separate `/manage` page, which still requires management-account login. Home does not depend on that page's login cookie. Deployment and real-page interaction for this design still require separate acceptance.

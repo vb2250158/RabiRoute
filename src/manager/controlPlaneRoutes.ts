@@ -2099,6 +2099,7 @@ async function syncRabiLinkRelayRuntime(onLanReady?: () => void | Promise<void>)
     ...relay,
     deviceGuid: globalConfig.rabiGuid,
     deviceName: globalConfig.rabiName || os.hostname(),
+    rabiPcVersion: rabiRoutePackageVersion(),
     localWebguiUrl: `http://127.0.0.1:${managerPort}`,
     peerUrls: lanEnabled ? peerLanServer.peerUrls() : [],
     speechProxyEnabled: relay.speechProxyEnabled,

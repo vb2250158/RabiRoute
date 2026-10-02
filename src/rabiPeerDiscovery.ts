@@ -1,5 +1,8 @@
+import { rabiPcVersionFromCapabilities } from "./shared/rabiPcVersionContract.js";
+
 export type DiscoveredRabiPeer = {
   id: string; guid?: string; name: string; deviceKind: string; online: boolean; capabilities: string[]; peerUrls: string[];
+  rabiPcVersion?: string | null;
 };
 export function peerDeviceKind(value: unknown): string {
   const kind = typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -27,5 +30,8 @@ export async function discoverRabiPeers(relay: { url: string; token: string; dev
   });
   const body = await response.json() as { peers?: DiscoveredRabiPeer[] };
   if (!response.ok || !Array.isArray(body.peers)) throw new Error("RabiLink device discovery failed.");
-  return body.peers.map(peer => ({ ...peer, deviceKind: peerDeviceKind(peer.deviceKind) }));
+  return body.peers.map(peer => {
+    const deviceKind = peerDeviceKind(peer.deviceKind);
+    return { ...peer, deviceKind, rabiPcVersion: deviceKind === "pc" ? rabiPcVersionFromCapabilities(peer.capabilities) : null };
+  });
 }

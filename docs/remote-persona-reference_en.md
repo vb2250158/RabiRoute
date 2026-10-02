@@ -18,6 +18,8 @@ A local message Route can use persona text, message rules and recent-message bud
 4. Confirm that the text preview and read-only configuration have loaded, then save the Route. Edit persona text, avatars, identities, automation or knowledge on the source PC.
 5. Perform one delivery through the Route's existing workflow and check local diagnostics and actual receipt by the target Agent. Reading the preview, saving configuration and completing a real delivery are separate results.
 
+The local source option shows this device's name and RabiPC version. Other PCs show their advertised version; older devices without an advertisement show an unknown version. RabiLink Home also labels this device and displays each PC's version. A device name is not its identity: a row matching this device's ID and GUID belongs to the local option and is not another remote source. If two PCs copied the same identity configuration, verify and separate their identities before selecting a remote persona; changing a display name or disabling self-filtering does not resolve the shared identity. Version text does not replace the `persona-reference-v1` capability or authentication checks.
+
 Offline, authentication-failure, upgrade-required and read-failure states are distinct. A saved remote reference remains selected; a failed read stops Agent delivery through that Route and never substitutes a same-name local persona. The application-authenticated persona handshake does not add full-management access or change an administrator's existing manual restrictions.
 
 ## Data and execution ownership

@@ -94,13 +94,13 @@ test("peer discovery and RPC stay isolated while retired synchronization is unav
     });
     assert.equal(appResponseB.status, 200);
     const tokenB = (await appResponseB.json()).app.token;
-    const register = async (token, deviceId, deviceGuid, peerUrls, deviceKind) => {
+    const register = async (token, deviceId, deviceGuid, peerUrls, deviceKind, capabilities = "webgui,persona-sync,persona-sync-plan-package-v1") => {
       const params = new URLSearchParams({
         deviceId,
         deviceGuid,
         deviceName: deviceId,
         waitMs: "0",
-        capabilities: "webgui,persona-sync,persona-sync-plan-package-v1",
+        capabilities,
         peerUrls: JSON.stringify(peerUrls)
       });
       if (deviceKind !== undefined) params.set("deviceKind", deviceKind);
@@ -119,7 +119,7 @@ test("peer discovery and RPC stay isolated while retired synchronization is unav
       headers: { "x-rabilink-token": tokenA, accept: "text/event-stream" }
     });
     assert.equal(peerObserver.status, 200);
-    await register(tokenA, "pc-b", "guid-b", ["http://192.168.1.11:8790", "not a URL"]);
+    await register(tokenA, "pc-b", "guid-b", ["http://192.168.1.11:8790", "not a URL"], undefined, "webgui,persona-sync,persona-sync-plan-package-v1,rabi-pc-version-0.3.19");
     const peerChangedReader = await waitForSseEvent(peerObserver, "peer_changed");
     await peerChangedReader.cancel();
     await register(tokenB, "pc-c", "guid-c", ["http://192.168.1.12:8790"]);
@@ -153,7 +153,7 @@ test("peer discovery and RPC stay isolated while retired synchronization is unav
     const peerB = peersA.find(peer => peer.id === "pc-b");
     assert.ok(peerB);
     assert.deepEqual(peerB.peerUrls, ["http://192.168.1.11:8790"]);
-    assert.deepEqual(peerB.capabilities, ["webgui"]);
+    assert.deepEqual(peerB.capabilities, ["rabi-pc-version-0.3.19", "webgui"]);
 
     await liveEvents.body.cancel();
     const stillConnectedResponse = await fetch(`${baseUrl}/api/rabilink/peers?deviceId=pc-a&deviceGuid=guid-a`, {

@@ -892,11 +892,15 @@ export function handleRabiApi(request: http.IncomingMessage, requestUrl: URL, re
       jsonResponse(response, 400, { code: -1, errorCode: "RABILINK_HOME_INVALID_REQUEST", message: "此接口不接受查询参数或请求正文。" });
       return true;
     }
-    const saved = { ...ctx.globalConfig.read().rabiLinkRelay };
-    void readRabiLinkHome(saved)
+    const savedConfig = ctx.globalConfig.read();
+    const saved = { ...savedConfig.rabiLinkRelay };
+    const local = { deviceGuid: savedConfig.rabiGuid, rabiPcVersion: ctx.version() };
+    void readRabiLinkHome(saved, local)
       .then((data) => {
-        const current = ctx.globalConfig.read().rabiLinkRelay;
-        if (current.enabled !== saved.enabled || current.url !== saved.url || current.token !== saved.token || current.deviceId !== saved.deviceId) {
+        const currentConfig = ctx.globalConfig.read();
+        const current = currentConfig.rabiLinkRelay;
+        if (current.enabled !== saved.enabled || current.url !== saved.url || current.token !== saved.token || current.deviceId !== saved.deviceId
+          || currentConfig.rabiGuid !== local.deviceGuid) {
           throw new RabiLinkHomeError(409, "RABILINK_HOME_CONFIG_CHANGED", "RabiLink 配置已变更，请重新刷新。");
         }
         jsonResponse(response, 200, { code: 0, data });

@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { managerEventSource } from "../managerApi";
 import { useGatewayStore } from "../stores/gatewayStore";
+import { useI18n } from "../i18n";
 import { rabiLinkManagementUrl, rabiLinkTab } from "../rabiLinkPresentation";
 import { createRabiLinkRefreshFence } from "../rabiLinkRefreshFence";
 import {
@@ -11,6 +12,7 @@ import {
   rabiLinkDeviceDisplayName,
   rabiLinkDeviceIcon,
   rabiLinkDeviceKind,
+  rabiLinkDeviceVersionLabel,
   type RabiLinkHomeData
 } from "../rabiLinkHomeClient";
 import { createRabiLinkHomeLoader, type RabiLinkHomeState } from "../rabiLinkHomeState";
@@ -20,6 +22,7 @@ import RabiLinkSettings from "../components/RabiLinkSettings.vue";
 const route = useRoute();
 const router = useRouter();
 const store = useGatewayStore();
+const { t } = useI18n();
 const tab = computed(() => rabiLinkTab(route.query.tab));
 const ready = ref(false);
 const saving = ref(false);
@@ -39,6 +42,7 @@ const devices = computed(() => home.value.phase === "ready" ? home.value.data.de
     kind,
     icon: rabiLinkDeviceIcon(device),
     displayName: rabiLinkDeviceDisplayName(device),
+    versionLabel: rabiLinkDeviceVersionLabel(device, t),
     services: rabiLinkCapabilities(device.capabilities, kind)
   };
 }) : []);
@@ -166,6 +170,8 @@ onBeforeUnmount(() => { disposed = true; metaRequest?.abort(); managerEvents?.cl
             <div class="rabilink-device-content">
               <div class="d-flex flex-wrap align-center ga-2">
                 <strong>{{ device.displayName }}</strong>
+                <v-chip v-if="device.isLocal" size="x-small" variant="outlined">{{ t('本机') }}</v-chip>
+                <span v-if="device.versionLabel" class="section-note" data-no-i18n>{{ device.versionLabel }}</span>
                 <v-chip size="x-small" :color="device.online ? 'success' : 'default'" variant="tonal">{{ device.online ? '在线' : '离线' }}</v-chip>
               </div>
               <div class="d-flex flex-wrap ga-2 mt-2">

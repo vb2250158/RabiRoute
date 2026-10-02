@@ -8,6 +8,7 @@ export type PersonaSourceDevice = {
   online: boolean;
   supported: boolean;
   trusted: boolean;
+  rabiPcVersion?: string | null;
 };
 export type RemotePersonaOption = { personaId: string; name: string; title?: string };
 export type RemotePersonaReference = {
@@ -99,7 +100,7 @@ export const remotePersonaClient = {
       readJson("/api/rabilink/peer/list?deviceKind=pc", signal),
       readJson("/api/rabilink/peer/servers", signal)
     ]);
-    const peers = discovery.peers as Array<{ id: string; name: string; online: boolean }>;
+    const peers = discovery.peers as Array<{ id: string; name: string; online: boolean; rabiPcVersion?: string | null }>;
     const connections = ((servers.data as { peers?: PeerConnectionStatus[] } | undefined)?.peers || servers.peers) as Array<PeerConnectionStatus & { personaSupported?: boolean }>;
     if (!Array.isArray(peers) || !Array.isArray(connections)) throw new Error("远端 PC 目录格式无效。");
     return peers.map(peer => {
@@ -108,7 +109,8 @@ export const remotePersonaClient = {
         deviceId: peer.id, name: peer.name || peer.id,
         online: peer.online === true || connection?.online === true,
         supported: connection?.personaSupported === true,
-        trusted: connection?.trusted === true
+        trusted: connection?.trusted === true,
+        rabiPcVersion: typeof peer.rabiPcVersion === "string" ? peer.rabiPcVersion : null
       };
     });
   },

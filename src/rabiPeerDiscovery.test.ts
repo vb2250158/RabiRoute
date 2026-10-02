@@ -43,3 +43,21 @@ test("discovery normalizes missing types from an older Relay without guessing fr
     assert.equal(peers[1].deviceKind, "pc");
   } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
 });
+
+test("peer discovery derives each remote PC version from its own advertisement", async t => {
+  const server = http.createServer((_req, res) => {
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ peers: [
+      { id: "remote", name: "Remote", deviceKind: "pc", online: true, capabilities: ["rabi-pc-version-0.3.17"], peerUrls: [] },
+      { id: "old", name: "Old", deviceKind: "pc", online: true, capabilities: [], peerUrls: [], rabiPcVersion: "99.9.9" },
+      { id: "conflict", name: "Conflict", deviceKind: "pc", online: true, capabilities: ["rabi-pc-version-0.3.18", "rabi-pc-version-0.3.19"], peerUrls: [] },
+      { id: "phone", name: "Phone", deviceKind: "phone", online: true, capabilities: ["rabi-pc-version-0.3.19"], peerUrls: [] }
+    ] }));
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const { port } = server.address() as { port: number };
+  const peers = await discoverRabiPeers({ url: `http://127.0.0.1:${port}`, token: "fixture", deviceId: "self", deviceGuid: "self-guid" });
+  assert.deepEqual(peers.map(peer => peer.rabiPcVersion), ["0.3.17", null, null, null]);
+  assert.deepEqual(peerDiscoveryPage(peers, new URLSearchParams("deviceKind=pc")).peers.map(peer => peer.rabiPcVersion), ["0.3.17", null, null]);
+});

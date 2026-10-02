@@ -1,4 +1,6 @@
 import type { RabiLinkRelayGlobalConfig } from "./globalConfig.js";
+import { peerDeviceKind } from "../rabiPeerDiscovery.js";
+import { isRabiPcVersionAdvertisement, normalizeRabiPcVersion, rabiPcVersionFromCapabilities } from "../shared/rabiPcVersionContract.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
 const DEADLINE_MS = 3_000;
@@ -7,9 +9,14 @@ export type RabiLinkHomeDevice = {
   id: string;
   guid: string;
   name: string;
+  deviceKind: string;
   online: boolean;
   capabilities: string[];
+  rabiPcVersion: string | null;
+  isLocal: boolean;
 };
+
+type LocalRabiPcIdentity = Readonly<{ deviceGuid: string; rabiPcVersion: string }>;
 
 export class RabiLinkHomeError extends Error {
   constructor(readonly statusCode: number, readonly errorCode: string, message: string) {
@@ -32,15 +39,24 @@ function text(value: unknown, maxLength: number, optional = false): string {
   return value;
 }
 
-function device(value: unknown): RabiLinkHomeDevice {
+function device(value: unknown, localDeviceId: string, local?: LocalRabiPcIdentity): RabiLinkHomeDevice {
   const peer = record(value);
   if (typeof peer.online !== "boolean" || !Array.isArray(peer.capabilities) || peer.capabilities.length > 64) throw invalidResponse();
+  const id = text(peer.id, 256);
+  const guid = text(peer.guid, 256, true);
+  const deviceKind = peerDeviceKind(peer.deviceKind);
+  const isLocal = Boolean(localDeviceId && local?.deviceGuid && id === localDeviceId && guid === local.deviceGuid);
+  const rabiPcVersion = deviceKind !== "pc" ? null : isLocal
+    ? normalizeRabiPcVersion(local?.rabiPcVersion) : rabiPcVersionFromCapabilities(peer.capabilities);
   return {
-    id: text(peer.id, 256),
-    guid: text(peer.guid, 256, true),
+    id,
+    guid,
     name: text(peer.name, 256, true),
+    deviceKind,
     online: peer.online,
-    capabilities: peer.capabilities.map(value => {
+    rabiPcVersion,
+    isLocal,
+    capabilities: peer.capabilities.filter(value => !isRabiPcVersionAdvertisement(value)).map(value => {
       const capability = text(value, 64);
       if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(capability)) throw invalidResponse();
       return capability;
@@ -49,7 +65,7 @@ function device(value: unknown): RabiLinkHomeDevice {
 }
 
 /** Only the saved Manager configuration is accepted; never pass caller headers or URLs. */
-export async function readRabiLinkHome(config: Readonly<RabiLinkRelayGlobalConfig>): Promise<{ devices: RabiLinkHomeDevice[]; checkedAt: string }> {
+export async function readRabiLinkHome(config: Readonly<RabiLinkRelayGlobalConfig>, local?: LocalRabiPcIdentity): Promise<{ devices: RabiLinkHomeDevice[]; checkedAt: string }> {
   if (!config.enabled) throw new RabiLinkHomeError(503, "RABILINK_HOME_DISABLED", "RabiLink 尚未启用。");
   if (!config.url.trim() || !config.token.trim()) throw new RabiLinkHomeError(503, "RABILINK_HOME_NOT_CONFIGURED", "请先保存 RabiLink 服务器地址和应用令牌。");
   let endpoint: URL;
@@ -90,7 +106,7 @@ export async function readRabiLinkHome(config: Readonly<RabiLinkRelayGlobalConfi
     }
     const body = record(JSON.parse(Buffer.concat(chunks).toString("utf8")));
     if (body.code !== 0 || body.ok !== true || !Array.isArray(body.peers) || body.peers.length > 1000) throw invalidResponse();
-    return { devices: body.peers.map(device), checkedAt: new Date().toISOString() };
+    return { devices: body.peers.map(value => device(value, config.deviceId, local)), checkedAt: new Date().toISOString() };
   } catch (error) {
     if (signal.aborted) throw new RabiLinkHomeError(504, "RABILINK_HOME_TIMEOUT", "读取 RabiLink 设备超时，请稍后重试。");
     if (error instanceof RabiLinkHomeError) throw error;
