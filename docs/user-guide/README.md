@@ -45,6 +45,7 @@ RabiRoute 是消息分诊和调度层。它接收消息、记录事件、判断�
 | --- | --- |
 | 第一次配置并验证投递 | [跑通第一条 Route](first-route.md) |
 | 看懂导航、状态和保存提示 | [界面与状态](interface-and-status.md) |
+| 区分两台电脑、修复复制过来的实例身份 | [重置实例 ID](instance-identity.md) |
 | 接 QQ、定时器、Webhook 或 RabiLink | [Route 与消息端](routes-and-adapters.md) |
 | 从其他设备调用目标 PC 的 TTS / ASR | [从远端调用 TTS 与 ASR](speech-api.md) |
 | 绑定 Codex 或其他处理端 | [Agent、项目与任务](agents-and-sessions.md) |

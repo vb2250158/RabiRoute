@@ -273,6 +273,7 @@ import { WebPatchWatcher } from "./webPatchWatcher.js";
 import { handleSourcePatchApi } from "./sourcePatchRoutes.js";
 import { WebPatchService } from "./webPatchService.js";
 import { handleWebPatchApi } from "./webPatchRoutes.js";
+import { HostInstanceIdentityReset, handleInstanceIdentityReset } from "./identityResetRoutes.js";
 import {
   GenerationRuntime,
   loadPluginProfile,
@@ -407,6 +408,7 @@ import { handlePlanAdvanceApi } from "./planAdvanceRoutes.js";
 import { parseRoleKnowledgeResourceRoute } from "./roleKnowledgeRoute.js";
 import { parseWearableHealthResourceRoute } from "./wearableHealthRoute.js";
 import { RabiGlobalConfigStore, type RabiLinkRelayGlobalConfig } from "./globalConfig.js";
+import { DeviceIdentityOwner } from "./deviceIdentity.js";
 import { LanAgentRegistry } from "./lanAgentRegistry.js";
 import { LanAgentReleaseStore } from "./lanAgentReleaseStore.js";
 import { handleLanAgentApi } from "./lanAgentRoutes.js";
@@ -1152,6 +1154,8 @@ const handleResourceCacheApi = (request: http.IncomingMessage, url: URL, respons
   return true;
 };
 const managerHostIdentity = managerHostIdentityFromEnvironment();
+const instanceIdentityReset = new HostInstanceIdentityReset({ stateRoot: rootDir,
+  applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? "" });
 const managerPortPolicy = parseManagerPortPolicy(process.env.GATEWAY_MANAGER_PORT);
 let managerPort = managerPortPolicy.mode === "fixed" ? managerPortPolicy.port : 0;
 let managerBaseUrl = managerPort > 0 ? `http://127.0.0.1:${managerPort}` : "";
@@ -1245,8 +1249,12 @@ const managerRequestContexts = new WeakMap<http.ServerResponse, {
   startedAt: number;
   responseBytes?: number;
 }>();
-const rabiGlobalConfig = new RabiGlobalConfigStore(rootDir);
 const managerReadOnly = managerReadOnlyEnabled();
+const deviceIdentityOwner = new DeviceIdentityOwner(rootDir);
+deviceIdentityOwner.assertStartup();
+const rabiGlobalConfig = new RabiGlobalConfigStore(rootDir);
+deviceIdentityOwner.ensureBound(managerReadOnly);
+rabiGlobalConfig.reload();
 const managerHostOverride = process.env.GATEWAY_MANAGER_HOST?.trim() || "";
 const managerHost = managerHostOverride || (!managerReadOnly && rabiGlobalConfig.read().webguiLan.enabled ? "0.0.0.0" : "127.0.0.1");
 const managerShouldAutostart = !managerReadOnly && managerAutostartEnabled();
@@ -10408,6 +10416,13 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       })) {
         return;
       }
+      if (handleInstanceIdentityReset(request, requestUrl, response, {
+        service: instanceIdentityReset,
+        currentGuid: () => rabiGlobalConfig.read().rabiGuid,
+        trustedRemote: request => Boolean(getTrustedLanAgentSource(request)),
+        readJson: readJsonBody,
+        json: jsonResponse
+      })) return;
       if (request.method === "GET" && requestUrl.pathname === "/health") {
         jsonResponse(response, 200, managerHealthPayload());
         return;

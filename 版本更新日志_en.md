@@ -6,6 +6,15 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.21 - 2026-10-03
+
+### Reset instance IDs and prevent copied PC identities
+
+- Add **Reset instance ID** beside the RabiLink configuration identity. After confirmation, Host stops the current generation, backs up and generates a new GUID and Ed25519 connection key, then starts a new generation. Preserve the name, server connection, application token, Routes, personas, history and independent Agent node identity.
+- Fence reset with the current GUID, generation and stable operation ID. Acceptance is not completion; the page waits only for this operation and reads the new identity after completion. Reject remote Agent, Relay, P2P and cross-site reset requests. Never expand device grants or automatically replace another device's pinned old public key.
+- Bind identity to operating-system machine identity in configuration and local runtime data. Check GUID, key and ownership before startup. Reject newer configuration copied to another PC; preserve and bind unmarked legacy identities on first upgrade, requiring an explicit reset for existing duplicates. Complete OS clones retaining the same machine identity still require manual handling.
+- Persist multi-file transaction records, private backups and sanitized receipts. Host recovers interrupted resets before startup; independent file changes or unconfirmed recovery fail closed. Update bilingual operation, architecture and recovery guides and add copy/reset/rollback, Host-contract and page-state regressions. Source and local acceptance do not replace real two-PC persona delivery acceptance.
+
 ## 0.3.20 - 2026-10-02
 
 ### Show PC versions and distinguish the local persona source

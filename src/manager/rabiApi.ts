@@ -3,6 +3,7 @@ import { errorResponsePresentation } from "../shared/errorPresentation.js";
 import { normalizeAgentInstanceBindings, type AgentInstanceBinding } from "../shared/agentInstance.js";
 import http from "node:http";
 import { readRabiLinkHome, RabiLinkHomeError } from "./rabiLinkHome.js";
+import { instanceIdentityResetAvailable } from "./identityResetRoutes.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -165,6 +166,7 @@ function identityPayload(ctx: RabiApiContext, request: http.IncomingMessage): { 
       rabiLinkRelay: publicRabiLinkRelayConfig(config.rabiLinkRelay),
       agentUploads: config.agentUploads,
       configPath: ctx.globalConfig.configPath,
+      canResetInstanceId: instanceIdentityResetAvailable(),
       self: true
     }
   };

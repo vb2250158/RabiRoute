@@ -8,14 +8,17 @@ using System.Text.Json;
 using System.Threading.Channels;
 
 var failures = new List<string>();
+var assertionCount = 0;
 
 void Check(bool condition, string message)
 {
+    assertionCount++;
     if (!condition) failures.Add(message);
 }
 
 await SourcePatchTests.RunAsync(Check);
 await ShortcutRecoveryTests.RunAsync(Check);
+await IdentityResetTests.RunAsync(Check);
 EnvironmentBlockTests.Run(Check);
 
 Check(NativeChildProcess.QuoteWindowsArgument("plain") == "plain", "plain argument quoting");
@@ -704,7 +707,7 @@ if (failures.Count > 0)
     return 1;
 }
 
-Console.WriteLine("RabiRouteHost tests passed.");
+Console.WriteLine($"RabiRouteHost tests passed. Assertions: {assertionCount}.");
 return 0;
 
 internal sealed class SequenceLifecycleAudit(params bool[] results) : IHostLifecycleAudit

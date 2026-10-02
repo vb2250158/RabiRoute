@@ -6,6 +6,8 @@ English | <a href="./remote-persona-reference.md">简体中文</a>
 
 # Use a remote persona from a local Route
 
+Both PCs need distinct instance IDs, connection keys and local connection IDs. If copied configuration causes a remote source to be treated as local, [reset instance identity](user-guide/instance-identity_en.md) on one PC. Changing a display name cannot separate copied identities.
+
 > Status: experimental implementation in 0.3.19. Automated tests cover configuration, bounded reads, identity checks, message delivery packaging and page selection. Complete delivery, recovery and sustained operation across two physical PCs still require acceptance. Both PCs reuse authentication for the same RabiLink application and automatically exchange and pin device public keys for persona reads; no additional manual full-management grant is required. The source PC must provide the new `persona-reference-v1` capability and endpoints; older versions need an upgrade.
 
 A local message Route can use persona text, message rules and recent-message budgets owned by another PC. Message inputs, the Agent that actually handles the work, its workspace and message auditing remain those configured for the local Route. Selecting a remote persona does not automatically select a remote Agent or import or synchronize a persona directory.

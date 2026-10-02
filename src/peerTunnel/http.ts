@@ -38,7 +38,9 @@ export function serveTunnel(session: TunnelSession, services: () => Record<strin
       if (service.requestAllowed && !service.requestAllowed(request)) throw new Error("Service request denied.");
       const endpoint = serviceEndpoint(service, request.path);
       if (service.requestAllowed && !service.requestAllowed({ ...request, path: endpoint.pathname + endpoint.search })) throw new Error("Service endpoint denied.");
-      const headers = { ...tunnelHeaders(request.headers || {}), ...service.headers };
+      // Every service is remote, including user-configured aliases to Manager.
+      // Apply this after configured headers so no alias can impersonate a local UI.
+      const headers: Record<string, string | string[]> = { ...tunnelHeaders(request.headers || {}), ...service.headers, "x-rabiroute-peer-proxy": "1" };
       if (request.upgrade) { headers.connection = "Upgrade"; headers.upgrade = "websocket"; }
       upstream = (endpoint.protocol === "https:" ? https : http).request(endpoint, { method: request.method, headers }, response => {
         const responseHeaders = tunnelHeaders(response.headers, true);

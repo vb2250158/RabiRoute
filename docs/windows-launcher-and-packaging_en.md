@@ -101,6 +101,20 @@ Each release still stores its manifest-validated Node.js copy at `versions/<rele
 
 Host also provides Manager and Desktop with a read-only package root (`RABIROUTE_PACKAGE_ROOT`) and a stable writable state root (`RABIROUTE_STATE_ROOT`). Desktop loads code and icons from the package root, while screenshot images, region history, pin state, selected-text settings, and generated COM caches are written only under the installation root. Runtime data no longer enters `versions/<releaseId>`, so later Host status, restart, and upgrade operations can continue validating the active release against its manifest.
 
+## Instance identity reset
+
+Use the [reset button in RabiLink configuration](user-guide/instance-identity_en.md) for normal operation. Manager sends the confirmed request to the official installed Host. Host checks the actor, current generation and operation ID, persists `queued`, then stops the generation and executes the offline identity transaction. Backups are private. Host supplies `RABIROUTE_HOST_EXECUTABLE`; the page cannot select an executable. Remote management proxies cannot call the reset API.
+
+If copied identity checks prevent Manager startup, use the formal Host recovery command. Run `RabiRouteHost.exe --command status --json` and take `controlFenceGenerationId` from current status (a healthy runtime may also use `applicationGenerationId`). Read current `rabiGuid` from runtime `data/Config.json`. Write only this GUID and a fresh UUID to a private UTF-8 request file: `{ "operationId": "<new UUID>", "expectedGuid": "<current GUID>" }`. Then run:
+
+```text
+RabiRouteHost.exe --command reset-instance-id --application-generation-id <current fence> --identity-reset-request <absolute private request-file path> --json
+```
+
+An absent Host, missing or stale fence, or mismatched GUID never permits an unconditional reset. `queued` means acceptance only. Result state is in `data/rabilink/identity-resets/<operation ID>/host-status.json`; backups and the identity transaction receipt are in the same directory. If a request or acknowledgment is lost, query the original operation instead of generating another operation and replaying. After restart, rediscover `managerBaseUrl` through Host, check `/meta` generation and instance, then read the new identity.
+
+On cold start with `identity-reset-pending.json`, Host recovers that operation before launching Manager. Recovery verifies all files against backups and before/after hashes. Unconfirmed recovery retains the transaction and faults; do not delete markers, quit without a fence or start Manager separately. Machine ownership is not network authorization and grants no additional services to other PCs.
+
 ## Traceable design basis
 
 This design borrows lifecycle invariants, not another project's process layout or ports:

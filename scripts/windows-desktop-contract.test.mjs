@@ -35,6 +35,14 @@ const speechServiceInstaller = read("../plugin-adapters/rabi-speech/scripts/inst
 const speechPluginDocs = read("../docs/rabispeech-plugin.md");
 const speechPluginDocsEn = read("../docs/rabispeech-plugin_en.md");
 
+function hostRuntimeMethod(name) {
+  const signature = new RegExp(`^    (?:private|internal|public) [^\\r\\n]*\\b${name}\\(`, "m").exec(hostRuntime);
+  assert.ok(signature, `Host runtime method ${name} must exist`);
+  const bodyStart = signature.index + signature[0].length;
+  const nextMethod = /^    (?:private|internal|public) [^\r\n]*\(/m.exec(hostRuntime.slice(bodyStart));
+  return hostRuntime.slice(signature.index, nextMethod ? bodyStart + nextMethod.index : hostRuntime.length);
+}
+
 test("Windows production package exposes only the lifecycle-owning Host entry", () => {
   assert.equal("start:windows" in packageJson.scripts, false);
   assert.equal(fs.existsSync(retiredLauncherPath), false, "the retired BAT launcher must not remain a source entry");
@@ -224,7 +232,26 @@ test("Host control and diagnostics cannot wedge the lifecycle owner", () => {
   assert.match(hostRuntime, /marker\.Event \?\?= new HostAuditEvent/);
   assert.match(hostRuntime, /var persisted = _audit\.Append\(marker\.Event\)/);
   assert.match(hostRuntime, /if \(completedPersisted\) markTerminalAuditAppended\(\)/);
-  assert.doesNotMatch(hostRuntime, /AppendAudit\(command\.Operation,\s*"generation_stopped"/);
+  for (const method of [
+    "RunAsync",
+    "StartGenerationOrCommandAsync",
+    "WaitForCommandOrFailureAsync",
+    "WaitBackoffOrCommandAsync",
+    "WaitInFaultedStateAsync",
+    "StopAndDisposeGenerationAsync",
+    "BeginClientRecovery",
+    "BeginInternalRecovery",
+    "FailPendingTransition",
+    "CancelPendingTransitionAsync",
+    "CompletePendingForHostShutdownAsync",
+    "CompleteAcceptedMutationsForHostShutdownAsync",
+  ]) {
+    assert.doesNotMatch(
+      hostRuntimeMethod(method),
+      /AppendAudit\(command\.Operation,\s*"generation_stopped"/,
+      `ordinary ${method} must not duplicate the command's terminal lifecycle audit`,
+    );
+  }
   assert.match(hostRuntime, /if \(!CanAdoptGeneration\(generation\.Failure\)\) return false/);
   assert.match(hostRuntime, /TrySelectPublishedManagerUrl\(_publication, generationId, out managerUrl\)/);
   assert.doesNotMatch(hostRuntime, /case "activate":[\s\S]{0,120}generation\.Ready\.BaseUrl/);
@@ -243,6 +270,45 @@ test("Host control and diagnostics cannot wedge the lifecycle owner", () => {
   assert.match(hostControlAudit, /ContainsExactRecord\(filePath, payload\)/);
   assert.match(hostControlAudit, /InvalidateTerminalIndex\(entry\)/);
   assert.doesNotMatch(hostControlAudit, /entry\.Phase == "completed" && ContainsTerminalRecord/);
+});
+
+test("identity reset audits a verified offline generation before invoking its owner", () => {
+  const reset = hostRuntimeMethod("ExecuteIdentityResetAsync");
+  let previous = -1;
+  for (const step of [
+    'command.Completion.TrySetResult(Response(true, "queued"',
+    "await command.ResponseSent.Task.WaitAsync(cancellationToken)",
+    "_identityOfflineVerified = false;",
+    'await generation.StopAndVerifyEmptyAsync("explicit-instance-identity-reset", cancellationToken);',
+    "_identityOfflineVerified = true;",
+    "await generation.DisposeAsync();",
+    "if (ReferenceEquals(_generation, generation)) _generation = null;",
+    "RefreshPublicationLocked();",
+    "if (!_identityOfflineVerified) throw",
+    'var stoppedPersisted = AppendAudit(command.Operation, "generation_stopped"',
+    'if (!stoppedPersisted) throw new InvalidOperationException("Identity reset offline audit was not persisted.");',
+    "receipt = await _identityReset.RunOfflineAsync(request, recover: false, cancellationToken)",
+  ]) {
+    const index = reset.indexOf(step);
+    assert.ok(index > previous, `identity reset must execute ${step} after the preceding offline boundary step`);
+    previous = index;
+  }
+  const stopFailure = reset.slice(
+    reset.indexOf('if (!stoppedPersisted) throw'),
+    reset.indexOf("IdentityResetReceipt receipt;"),
+  );
+  assert.match(stopFailure, /catch[\s\S]*PublishState\("faulted"\)/);
+  assert.match(stopFailure, /WriteStatus\(request, "failed", message: "generation_stop_unconfirmed"\)/);
+  assert.match(stopFailure, /AppendTerminalAudit\(command\.Operation,[\s\S]*"failed", "faulted"\)/);
+  assert.match(stopFailure, /return "identity-reset-failed"/);
+  assert.doesNotMatch(stopFailure, /RunOfflineAsync/);
+
+  const recovery = hostRuntimeMethod("RecoverIdentityResetBeforeStartupAsync");
+  assert.match(recovery, /StopAndVerifyEmptyAsync[\s\S]*_identityOfflineVerified = true;[\s\S]*DisposeAsync\(\)[\s\S]*_generation = null;[\s\S]*RefreshPublication\(\)/);
+  assert.match(recovery, /if \(!_identityOfflineVerified\) return false;[\s\S]*if \(!AppendAudit\([\s\S]*"recovery_requested"[\s\S]*\)\) return false;[\s\S]*RunOfflineAsync\(request, recover: true/);
+
+  const ready = hostRuntimeMethod("CompleteIdentityResetAtReady");
+  assert.match(ready, /AppendTerminalAudit[\s\S]*if \(!auditPersisted\) throw[\s\S]*_identityReset\.Complete\(pending\.Request, pending\.Receipt\)/);
 });
 
 test("startup cancellation remains distinct from a readiness timeout", () => {

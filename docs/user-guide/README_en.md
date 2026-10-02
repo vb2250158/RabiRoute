@@ -45,6 +45,7 @@ In normal use, confirm **Manager connected**, then save and start your own Route
 | --- | --- |
 | Configure and verify the first delivery | [Run your first Route](first-route_en.md) |
 | Understand navigation, states, and save notices | [Interface and status](interface-and-status_en.md) |
+| Distinguish PCs and repair a copied instance identity | [Reset instance ID](instance-identity_en.md) |
 | Connect QQ, schedules, webhooks, or RabiLink | [Routes and message adapters](routes-and-adapters_en.md) |
 | Call TTS / ASR on the target PC from another device | [Call TTS and ASR remotely](speech-api_en.md) |
 | Bind Codex or another handler | [Agents, projects, and tasks](agents-and-sessions_en.md) |

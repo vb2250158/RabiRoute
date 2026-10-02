@@ -17,7 +17,7 @@
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="许可证：MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 20 或更高版本" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="当前版本：0.3.20" src="https://img.shields.io/badge/version-0.3.20-3178c6">
+  <img alt="当前版本：0.3.21" src="https://img.shields.io/badge/version-0.3.21-3178c6">
   <img alt="状态：积极开发中" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
@@ -72,7 +72,7 @@ Manager 启动后会打印真实的回环地址，端口由操作系统分配。
 
 ## 当前能力
 
-仓库当前版本为 `0.3.20`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
+仓库当前版本为 `0.3.21`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
 
 | 范围 | 当前状态 | 用户可以完成什么 |
 | --- | --- | --- |
@@ -93,6 +93,10 @@ Manager 启动后会打印真实的回环地址，端口由操作系统分配。
 完整状态、限制和事实源见[当前能力与成熟度](docs/current-capabilities.md)。
 
 ## 近期变化
+
+### 0.3.21：区分电脑实例身份
+
+RabiLink 配置新增 **重置实例 ID**，用于修复两台电脑复制配置后共用身份。Host 备份并重置实例 ID 和连接密钥，保留已保存数据，再重启应用；本机归属标记阻止后续外机复制身份继续运行。旧配置、恢复方法及连接边界见[实例身份说明](docs/user-guide/instance-identity.md)。
 
 ### 0.3.19 实验实现：本机路由引用远端人格
 

@@ -29,6 +29,7 @@
 - [常驻性能记录与查看](performance-monitoring.md) — **现行指南**。按开关持续记录 Manager、Gateway 和 WebGUI 的近期性能，查看趋势、慢操作和独立 JSONL 文件。
 - [排障](troubleshooting.md) — NapCat、编码、Codex Desktop 任务归属、模型与审批边界。
 - [Windows 启动与打包](windows-launcher-and-packaging.md) — Windows 安装、启动和打包方式。
+- [区分电脑与重置实例 ID](user-guide/instance-identity.md) — 修复复制配置后两台电脑共用身份，让远端电脑能独立出现在人格来源中。
 - [NapCat 无值守](napcat-unattended.md) — QQ 登录状态、快速登录、Manager 恢复和守护边界。
 
 ## 接入开发：路由、人格与 Agent 接口

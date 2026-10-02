@@ -11,11 +11,11 @@ export function isTunnelPublicKey(value: unknown): value is string {
   try { return createPublicKey(value).asymmetricKeyType === "ed25519"; } catch { return false; }
 }
 const protocol = "rabi-tunnel-v1";
-export function loadTunnelIdentity(file: string, deviceId: string, generation: string): TunnelIdentity {
+export function loadTunnelIdentity(file: string, deviceId: string, generation: string, options: { create?: boolean } = {}): TunnelIdentity {
   let keys: { publicKey: string; privateKey: string };
   try { keys = JSON.parse(readFileSync(file, "utf8")); }
   catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT" || options.create === false) throw error;
     const pair = generateKeyPairSync("ed25519");
     keys = { publicKey: pair.publicKey.export({ type: "spki", format: "pem" }).toString(), privateKey: pair.privateKey.export({ type: "pkcs8", format: "pem" }).toString() };
     mkdirSync(path.dirname(file), { recursive: true });

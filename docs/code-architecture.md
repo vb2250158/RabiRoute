@@ -28,6 +28,8 @@ Android 全天记录整合正在实施：`RabiConversationService` 是手机/眼
 
 ## 总览
 
+实例身份由 `manager/deviceIdentity.ts` 统一拥有：`Config.json` 的私有归属字段与 `data/rabilink/device-identity.json` 绑定 GUID、操作系统机器身份哈希和 tunnel 公钥哈希；公开 DTO 不返回归属信息。Manager 在配置归一化及任何身份联网前检查并绑定旧版身份。跨机复制、GUID/密钥冲突或未完成重置拒绝启动。Windows Host 的 `reset-instance-id` 在 fenced 停代后调用离线 CLI，持有用户 Mutex，独立 Job 管理隐藏子进程，备份、事务与 CAS 恢复由身份 owner 实现；其他数据及外部公钥固定信任不变。页面只等待显式操作，状态读取用单操作目录文件事件长等待与有界期限，不增加后台业务扫描。恢复和旧版边界见[实例身份](user-guide/instance-identity.md)。
+
 RabiRoute 的代码可以按运行角色分成以下主要区域：
 
 ```text

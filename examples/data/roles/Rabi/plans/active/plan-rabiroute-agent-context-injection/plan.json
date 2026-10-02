@@ -7,8 +7,8 @@
   "priority": "high",
   "kind": "architecture",
   "currentStepId": "validate-codex-plugin",
-  "currentStep": "AgentPacket、Codex Hook 与 Manager 现在共用聚焦知识生命周期；普通消息先展示最近消息再展示本轮消息，消息处理需求必须核对当前来源、递归引用链和附件。发送前的 send-context 审核绑定上下文版本、发送会话、目标和正文，引用图片还需逐张提交内容与含义说明。Codex Desktop 仍是唯一真实消息 owner，线程创建 reservation 防止并发或索引延迟造成重复任务。正式项目 workspace 的 Stop Hook 只对有效进展发起工作群通知，并要求 Outbox 发送标识与平台引用回读；缺少任一证据时完成通知失败关闭。 0.2.4 源码增加人格最终回复聊天记录、人格级 Hook 与完成回传规则，以及 Codex/DSH Hook 安装入口。Codex 回执不确定时停止自动重发；RabiLink 视频直连仍是实验接入。0.3.19 增加远端人格引用：正文与消息配置每次从来源 PC 读取，本机 Agent 与 Route 审计保留；复用 RabiLink 应用认证和自动公钥握手，经 persona 只读白名单访问，不新增完整 manager 授权，已有手工限权保留。同名本机人格和普通或混合旧绑定的本机人格 Hook 不作替代，真实双 PC 联调仍待验收。",
-  "nextAction": "在真实 Codex Desktop 中验证本机图片随消息进入正确任务、同一完整 ID 连续续投、并发创建只产生一个任务、上下文变化后旧发送审核被拒绝、完成或暂停后的消息处理槽位释放，以及正式项目进展通知的真实平台回读；再补无副作用 packet preview。 补充新 Hook 安装、最终回复历史与完成回传的实际使用验收。按 docs/remote-persona-reference.md 验证同一 RabiLink 应用内双 PC 的自动握手、正文/规则读取、本机 Agent 收件与 Route 审计、手工限权拒绝、断线和身份切换失败关闭；确认 persona 服务不开放知识或配置修改，语言风格只按来源配置和当前 revision 检查。不以源码提交关闭进行中的计划。",
+  "currentStep": "AgentPacket、Codex Hook 与 Manager 现在共用聚焦知识生命周期；普通消息先展示最近消息再展示本轮消息，消息处理需求必须核对当前来源、递归引用链和附件。发送前的 send-context 审核绑定上下文版本、发送会话、目标和正文，引用图片还需逐张提交内容与含义说明。Codex Desktop 仍是唯一真实消息 owner，线程创建 reservation 防止并发或索引延迟造成重复任务。正式项目 workspace 的 Stop Hook 只对有效进展发起工作群通知，并要求 Outbox 发送标识与平台引用回读；缺少任一证据时完成通知失败关闭。 0.2.4 源码增加人格最终回复聊天记录、人格级 Hook 与完成回传规则，以及 Codex/DSH Hook 安装入口。Codex 回执不确定时停止自动重发；RabiLink 视频直连仍是实验接入。0.3.19 增加远端人格引用：正文与消息配置每次从来源 PC 读取，本机 Agent 与 Route 审计保留；复用 RabiLink 应用认证和自动公钥握手，经 persona 只读白名单访问，不新增完整 manager 授权，已有手工限权保留。同名本机人格和普通或混合旧绑定的本机人格 Hook 不作替代，真实双 PC 联调仍待验收。 0.3.21 增加由 Host 拥有的实例 ID 与连接密钥重置、私有备份和事务恢复，并在身份联网前拒绝已绑定配置的外机复制。旧版无标记身份保留，已复制身份需要显式重置；双 PC 联调仍未因这一切片完成而结束。",
+  "nextAction": "在真实 Codex Desktop 中验证本机图片随消息进入正确任务、同一完整 ID 连续续投、并发创建只产生一个任务、上下文变化后旧发送审核被拒绝、完成或暂停后的消息处理槽位释放，以及正式项目进展通知的真实平台回读；再补无副作用 packet preview。 补充新 Hook 安装、最终回复历史与完成回传的实际使用验收。按 docs/remote-persona-reference.md 验证同一 RabiLink 应用内双 PC 的自动握手、正文/规则读取、本机 Agent 收件与 Route 审计、手工限权拒绝、断线和身份切换失败关闭；确认 persona 服务不开放知识或配置修改，语言风格只按来源配置和当前 revision 检查。不以源码提交关闭进行中的计划。 真实双机验收前先核对实例 GUID、连接密钥和本机连接标识独立；重复身份按实例重置流程修复，不以改显示名称替代，不删除归属标记绕过检查。",
   "steps": [
     {
       "id": "inject-agent-packet",
@@ -78,7 +78,7 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-10-01T00:00:00+08:00",
+  "updatedAt": "2026-10-03T00:00:00+08:00",
   "keywords": [
     "AgentPacket",
     "上下文注入",

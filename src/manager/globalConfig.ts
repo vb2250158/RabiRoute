@@ -14,6 +14,8 @@ import {
   type PerformanceMonitoringConfig
 } from "../shared/performanceContract.js";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
+import { deviceIdentityConfigField } from "./deviceIdentity.js";
+import { atomicWriteFileSync } from "../shared/filePersistence.js";
 
 export type RabiGlobalConfig = {
   rabiGuid: string;
@@ -42,6 +44,7 @@ export class RabiGlobalConfigStore {
   readonly rootDir: string;
   readonly configPath: string;
   private current: RabiGlobalConfig;
+  private deviceIdentityBinding: unknown;
 
   constructor(rootDir: string) {
     this.rootDir = rootDir;
@@ -123,7 +126,9 @@ export class RabiGlobalConfigStore {
   private readExisting(): RabiGlobalConfig | null {
     if (!fs.existsSync(this.configPath)) return null;
     try {
-      const parsed = JSON.parse(fs.readFileSync(this.configPath, "utf8")) as Partial<RabiGlobalConfig>;
+      const parsed = JSON.parse(fs.readFileSync(this.configPath, "utf8")) as Partial<RabiGlobalConfig> & Record<string, unknown>;
+      // The local owner is intentionally absent from read/patch/public DTO types.
+      this.deviceIdentityBinding = parsed[deviceIdentityConfigField];
       const now = new Date().toISOString();
       const normalized: RabiGlobalConfig = {
         rabiGuid: typeof parsed.rabiGuid === "string" && parsed.rabiGuid.trim() ? parsed.rabiGuid.trim() : randomUUID(),
@@ -163,7 +168,8 @@ export class RabiGlobalConfigStore {
   ): void {
     try {
       fs.mkdirSync(path.dirname(this.configPath), { recursive: true });
-      fs.writeFileSync(this.configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+      const persisted = { ...config, ...(this.deviceIdentityBinding === undefined ? {} : { [deviceIdentityConfigField]: this.deviceIdentityBinding }) };
+      atomicWriteFileSync(this.configPath, `${JSON.stringify(persisted, null, 2)}\n`);
       recordDataMutationAudit({
         group: "config.global",
         event: `global_config_${action}`,

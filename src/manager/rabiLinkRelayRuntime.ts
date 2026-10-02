@@ -504,6 +504,7 @@ async function proxyWebguiRequest(
         headers[lower] = String(value || "");
       }
     }
+    headers["x-rabiroute-relay-proxy"] = "1";
     if (isWebguiEventStreamProxy(localPath, headers)) {
       throw new Error("SSE event streams must use the Relay event channel instead of the finite WebGUI response proxy.");
     }

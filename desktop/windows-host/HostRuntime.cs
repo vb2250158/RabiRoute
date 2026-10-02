@@ -327,6 +327,7 @@ internal sealed class ApplicationGeneration : IAsyncDisposable
             ["RABIROUTE_HOSTED"] = "1",
             ["RABIROUTE_APPLICATION_GENERATION_ID"] = generationId,
             ["RABIROUTE_HOST_CONTROL_TOKEN"] = null,
+            ["RABIROUTE_HOST_EXECUTABLE"] = null,
             ["RABIROUTE_PACKAGE_ROOT"] = packageRoot,
             ["RABIROUTE_STATE_ROOT"] = stateRoot
         };
@@ -368,7 +369,8 @@ internal sealed class ApplicationGeneration : IAsyncDisposable
                      ["RABIROUTE_MANAGER_TEST_OWNERSHIP_NAMESPACE"] = null,
                      ["RABIROUTE_MANAGER_ACCEPTANCE_MODE"] = null,
                      ["RABIROUTE_PACKAGE_ROOT"] = packageRoot,
-                     ["RABIROUTE_STATE_ROOT"] = stateRoot
+                     ["RABIROUTE_STATE_ROOT"] = stateRoot,
+                     ["RABIROUTE_HOST_EXECUTABLE"] = Environment.ProcessPath ?? Path.Combine(stateRoot, "RabiRouteHost.exe")
                  });
             log.Write($"generation={generationId} manager pid={manager.ProcessId} started suspended, assigned to Job, then resumed");
 
@@ -557,6 +559,18 @@ internal sealed class ApplicationGeneration : IAsyncDisposable
         catch (Exception exception) { _log.Write($"generation={Id} job termination failed: {exception.Message}"); }
     }
 
+    internal async Task StopAndVerifyEmptyAsync(string reason, CancellationToken cancellationToken)
+    {
+        await StopAsync(reason);
+        if (_job.MemberProcessIds().Count != 0) _job.Terminate(1);
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
+        while (_job.MemberProcessIds().Count != 0 || !_manager.HasExited || !_tray.HasExited)
+        {
+            if (DateTimeOffset.UtcNow >= deadline) throw new InvalidOperationException("The identity reset generation did not become empty.");
+            await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
+        }
+    }
+
     private async Task<string> ObserveFailureAsync()
     {
         var unhealthy = ObserveManagerHealthAsync(_monitorCancellation.Token);
@@ -667,7 +681,14 @@ internal sealed record QueuedCommand(
     HostOperationContext Operation,
     TaskCompletionSource<HostResponse> Completion,
     TaskCompletionSource<bool> ResponseSent,
-    JsonElement? SourcePatch = null);
+    JsonElement? SourcePatch = null,
+    IdentityResetRequest? IdentityReset = null);
+
+internal sealed record PendingIdentityReset(
+    HostOperationContext Operation,
+    IdentityResetRequest Request,
+    IdentityResetReceipt Receipt,
+    string? RequestedGenerationId);
 
 internal sealed record PendingTransition(
     HostOperationContext Operation,
@@ -722,6 +743,10 @@ internal sealed class HostRuntime
     private volatile LifecyclePublication _publication = new("starting", null, null);
     private bool _acceptingMutations = true;
     private int _sourcePatchInFlight;
+    private readonly IdentityResetLifecycle _identityReset;
+    private PendingIdentityReset? _pendingIdentityReset;
+    private bool _identityRecoveryRequired = true;
+    private bool _identityOfflineVerified = true;
 
     internal HostRuntime(string packageRoot, string stateRoot, HostLog log, IHostLifecycleAudit? audit = null)
     {
@@ -729,6 +754,7 @@ internal sealed class HostRuntime
         _stateRoot = stateRoot;
         _log = log;
         _audit = audit ?? new HostLifecycleAudit();
+        _identityReset = new IdentityResetLifecycle(packageRoot, stateRoot, log);
     }
 
     internal async Task<int> RunAsync(CancellationToken cancellationToken)
@@ -742,6 +768,12 @@ internal sealed class HostRuntime
             {
                 try
                 {
+                    if (_identityRecoveryRequired && !await RecoverIdentityResetBeforeStartupAsync(cancellationToken))
+                    {
+                        PublishState("faulted");
+                        if (await WaitInFaultedStateAsync(cancellationToken) == "quit") return 0;
+                        continue;
+                    }
                     PublishState("starting");
                     var startup = await StartGenerationOrCommandAsync(cancellationToken);
                     if (startup.Command == "quit") return 0;
@@ -761,6 +793,7 @@ internal sealed class HostRuntime
                         await StopAndDisposeGenerationAsync(admittedGeneration, "generation-failed-after-ready-admission");
                         throw new InvalidOperationException($"Generation failed immediately after READY admission: {await admittedGeneration.Failure}");
                     }
+                    CompleteIdentityResetAtReady();
                     if (_pendingTransition is not null)
                     {
                         var transition = _pendingTransition;
@@ -804,6 +837,7 @@ internal sealed class HostRuntime
                     if (_failureWindow.IsOpen(DateTimeOffset.UtcNow))
                     {
                         PublishState("faulted");
+                        FailIdentityResetAtCircuitOpen();
                         FailPendingTransition("replacement_generation_circuit_open");
                         _log.Write($"restart circuit opened after {failures} failed generations");
                         var faultCommand = await WaitInFaultedStateAsync(cancellationToken);
@@ -829,6 +863,12 @@ internal sealed class HostRuntime
                 catch (Exception exception)
                 {
                     _log.Write($"generation start failed: {exception}");
+                    if (_pendingIdentityReset is { } failedIdentityReset)
+                    {
+                        _identityReset.WriteStatus(failedIdentityReset.Request, "failed", failedIdentityReset.Receipt, "replacement_generation_start_failed");
+                        AppendAudit(failedIdentityReset.Operation, "generation_start_failed", IdentityResetLifecycle.Command, "replacement_generation_start_failed",
+                            failedIdentityReset.RequestedGenerationId, "recovering", CurrentState(), ElapsedMilliseconds(failedIdentityReset.Operation));
+                    }
                     if (_generation is not null)
                     {
                         await StopAndDisposeGenerationAsync(_generation, "generation-admission-failed");
@@ -848,6 +888,7 @@ internal sealed class HostRuntime
                     if (_failureWindow.IsOpen(DateTimeOffset.UtcNow))
                     {
                         PublishState("faulted");
+                        FailIdentityResetAtCircuitOpen();
                         FailPendingTransition("replacement_generation_start_circuit_open");
                         _log.Write($"restart circuit opened after {failures} failed generation starts");
                         var faultCommand = await WaitInFaultedStateAsync(cancellationToken);
@@ -875,6 +916,12 @@ internal sealed class HostRuntime
         finally
         {
             controlAcceptCancellation.Cancel();
+            if (_pendingIdentityReset is { } stoppedIdentityReset)
+            {
+                _identityReset.WriteStatus(stoppedIdentityReset.Request, "failed", stoppedIdentityReset.Receipt, "host_stopped_before_replacement_ready");
+                AppendTerminalAudit(stoppedIdentityReset.Operation, IdentityResetLifecycle.Command, "host_stopped_before_replacement_ready",
+                    stoppedIdentityReset.RequestedGenerationId, "cancelled", "stopped");
+            }
             lock (_mutationAcceptanceGate) _acceptingMutations = false;
             await CompletePendingForHostShutdownAsync("host_shutdown");
             await CompleteAcceptedMutationsForHostShutdownAsync("host_shutdown");
@@ -1055,6 +1102,11 @@ internal sealed class HostRuntime
                     await StopAndDisposeGenerationAsync(generation, "explicit-restart");
                     _pendingTransition = new PendingTransition(command.Operation, command, command.ApplicationGenerationId, true);
                     return "restart";
+                case IdentityResetLifecycle.Command:
+                    var resetOutcome = await ExecuteIdentityResetAsync(command, generation, cancellationToken);
+                    if (resetOutcome == "identity-reset-failed") return await WaitInFaultedStateAsync(cancellationToken);
+                    if (resetOutcome is not null) return resetOutcome;
+                    break;
                 case "quit":
                     if (!CanQuit(command))
                     {
@@ -1186,6 +1238,12 @@ internal sealed class HostRuntime
                 }
                 BeginClientRecovery(command);
                 return "restart";
+            }
+            if (command.Command == IdentityResetLifecycle.Command)
+            {
+                var resetOutcome = await ExecuteIdentityResetAsync(command, _generation, cancellationToken);
+                if (resetOutcome == "restart") return "restart";
+                continue;
             }
             if (command.Command == "activate")
             {
@@ -1365,6 +1423,156 @@ internal sealed class HostRuntime
         catch (Exception exception) { _log.Write($"generation={generation.Id} dispose failed during teardown: {exception.Message}"); }
     }
 
+    private async Task<string?> ExecuteIdentityResetAsync(QueuedCommand command, ApplicationGeneration? generation, CancellationToken cancellationToken)
+    {
+        if (!CanQuit(command) || command.IdentityReset is not { } request)
+        {
+            command.Completion.TrySetResult(Response(false, "stale_generation", "Identity reset requires the exact current Host generation fence."));
+            return null;
+        }
+        try
+        {
+            _identityReset.Queue(request);
+            if (!AppendAudit(command.Operation, "queued", command.Command, "fenced_identity_reset_queued", command.ApplicationGenerationId, "queued", CurrentState(), ElapsedMilliseconds(command.Operation)))
+                throw new InvalidOperationException("Identity reset queue audit was not persisted.");
+        }
+        catch
+        {
+            try { _identityReset.RejectUnstartedQueue(request); }
+            catch { _log.Write($"identity operationId={request.OperationId} rejected queue recovery marker could not be finalized"); }
+            command.Completion.TrySetResult(Response(false, "identity_reset_rejected", "Identity reset could not be durably queued; the running identity was not changed."));
+            return null;
+        }
+        command.Completion.TrySetResult(Response(true, "queued", "Identity reset was queued; query this operation after the replacement Manager is ready."));
+        if (!await command.ResponseSent.Task.WaitAsync(cancellationToken))
+        {
+            _identityReset.WriteStatus(request, "failed", message: "queued_ack_not_confirmed");
+            _identityReset.RemoveActive(request);
+            AppendTerminalAudit(command.Operation, command.Command, "queued_ack_not_confirmed", command.ApplicationGenerationId, "rejected", "failed");
+            return null;
+        }
+        _identityRecoveryRequired = true;
+        PublishState("stopping");
+        try
+        {
+            if (generation is not null)
+            {
+                _identityOfflineVerified = false;
+                await generation.StopAndVerifyEmptyAsync("explicit-instance-identity-reset", cancellationToken);
+                _identityOfflineVerified = true;
+                await generation.DisposeAsync();
+                lock (_publicationGate)
+                {
+                    if (ReferenceEquals(_generation, generation)) _generation = null;
+                    RefreshPublicationLocked();
+                }
+            }
+            if (!_identityOfflineVerified) throw new InvalidOperationException("Identity reset offline boundary has not been verified.");
+            var stoppedPersisted = AppendAudit(command.Operation, "generation_stopped", command.Command, "identity_offline_boundary", command.ApplicationGenerationId, "stopped", "stopped", ElapsedMilliseconds(command.Operation));
+            if (!stoppedPersisted) throw new InvalidOperationException("Identity reset offline audit was not persisted.");
+        }
+        catch
+        {
+            PublishState("faulted");
+            _identityReset.WriteStatus(request, "failed", message: "generation_stop_unconfirmed");
+            AppendTerminalAudit(command.Operation, command.Command, "generation_stop_unconfirmed", command.ApplicationGenerationId, "failed", "faulted");
+            return "identity-reset-failed";
+        }
+        IdentityResetReceipt receipt;
+        try
+        {
+            try { receipt = await _identityReset.RunOfflineAsync(request, recover: false, cancellationToken); }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch
+            {
+                if (!AppendAudit(command.Operation, "recovery_requested", command.Command, "offline_identity_reset_unconfirmed", command.ApplicationGenerationId, "recovering", "stopped", ElapsedMilliseconds(command.Operation)))
+                    throw new InvalidOperationException("Identity reset recovery audit was not persisted.");
+                receipt = await _identityReset.RunOfflineAsync(request, recover: true, cancellationToken);
+            }
+            _identityRecoveryRequired = false;
+            _pendingIdentityReset = new(command.Operation, request, receipt, command.ApplicationGenerationId);
+            return "restart";
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _identityReset.WriteStatus(request, "failed", message: "host_cancelled_during_offline_identity_operation");
+            AppendTerminalAudit(command.Operation, command.Command, "host_cancelled_during_offline_identity_operation", command.ApplicationGenerationId, "cancelled", "stopped");
+            throw;
+        }
+        catch
+        {
+            PublishState("faulted");
+            _identityReset.WriteStatus(request, "failed", message: "offline_identity_recovery_unconfirmed");
+            AppendTerminalAudit(command.Operation, command.Command, "offline_identity_recovery_unconfirmed", command.ApplicationGenerationId, "failed", "faulted");
+            return "identity-reset-failed";
+        }
+    }
+
+    private async Task<bool> RecoverIdentityResetBeforeStartupAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var request = _identityReset.ReadPendingRequest();
+            if (request is null) { _identityRecoveryRequired = false; return true; }
+            _fenceGenerationId ??= Guid.NewGuid().ToString("N");
+            PublishState("stopping");
+            // A failed active stop must never be mistaken for an offline Host.
+            if (_generation is not null)
+            {
+                await _generation.StopAndVerifyEmptyAsync("identity-reset-recovery", cancellationToken);
+                _identityOfflineVerified = true;
+            }
+            if (_generation is not null)
+            {
+                await _generation.DisposeAsync();
+                _generation = null;
+                RefreshPublication();
+            }
+            if (!_identityOfflineVerified) return false;
+            var operation = InternalOperation() with { OperationId = request.OperationId };
+            if (!AppendAudit(operation, "recovery_requested", IdentityResetLifecycle.Command, "host_start_identity_recovery", _fenceGenerationId, "recovering", "stopped", 0)) return false;
+            _identityReset.WriteStatus(request, "queued", message: "host_start_identity_recovery");
+            var receipt = await _identityReset.RunOfflineAsync(request, recover: true, cancellationToken);
+            _pendingIdentityReset = new(operation, request, receipt, _fenceGenerationId);
+            _identityRecoveryRequired = false;
+            return true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch
+        {
+            _fenceGenerationId ??= Guid.NewGuid().ToString("N");
+            _log.Write("identity recovery did not confirm a safe offline state; Manager startup is blocked");
+            return false;
+        }
+    }
+
+    private void CompleteIdentityResetAtReady()
+    {
+        if (_pendingIdentityReset is not { } pending) return;
+        var auditPersisted = AppendTerminalAudit(pending.Operation, IdentityResetLifecycle.Command, "replacement_generation_ready", pending.RequestedGenerationId,
+            pending.Receipt.Outcome == "committed" ? "completed" : "rolled_back", pending.Receipt.Outcome);
+        if (!auditPersisted) throw new InvalidOperationException("Identity reset terminal audit was not persisted.");
+        _identityReset.Complete(pending.Request, pending.Receipt);
+        _pendingIdentityReset = null;
+    }
+
+    private void FailIdentityResetAtCircuitOpen()
+    {
+        if (_pendingIdentityReset is not { } pending) return;
+        _identityReset.WriteStatus(pending.Request, "failed", pending.Receipt, "replacement_generation_circuit_open");
+        var persisted = AppendTerminalAudit(pending.Operation, IdentityResetLifecycle.Command, "replacement_generation_circuit_open", pending.RequestedGenerationId, "failed", "faulted");
+        // The offline owner has already confirmed a committed or rolled-back
+        // identity. Preserve its evidence, but do not let a failed READY block
+        // a later explicit reset with a fresh operation (notably foreign rollback).
+        if (persisted && !File.Exists(Path.Combine(_stateRoot, "data", "rabilink", "identity-reset-pending.json")))
+        {
+            _identityReset.RemoveActive(pending.Request);
+            _identityRecoveryRequired = false;
+        }
+        else _identityRecoveryRequired = true;
+        _pendingIdentityReset = null;
+    }
+
     private async Task RunControlServerAsync(
         CancellationToken acceptCancellationToken,
         CancellationToken handlerCancellationToken)
@@ -1425,6 +1633,7 @@ internal sealed class HostRuntime
             bool requestedAuditPersisted = false;
             bool requestedAuditAppended = false;
             bool terminalAuditAppended = false;
+            bool queuedAckWritten = false;
             try
             {
                 var acceptedAt = DateTimeOffset.UtcNow;
@@ -1441,6 +1650,18 @@ internal sealed class HostRuntime
                 requestedCommand = string.IsNullOrWhiteSpace(request.Command)
                     ? "empty"
                     : request.Command.Trim().ToLowerInvariant();
+                IdentityResetRequest? identityReset = null;
+                if (requestedCommand == IdentityResetLifecycle.Command)
+                {
+                    if (request.IdentityReset is not { } resetPayload || request.SourcePatch is not null || request.WebPatch is not null)
+                        throw new InvalidDataException("Identity reset request envelope is invalid.");
+                    identityReset = IdentityResetLifecycle.ParseRequest(resetPayload);
+                    operation = operation with { OperationId = identityReset.OperationId };
+                }
+                else if (request.IdentityReset is not null)
+                {
+                    throw new InvalidDataException("Identity reset payload requires its own command.");
+                }
                 if (!RequiresDurableAudit(requestedCommand))
                 {
                     await HostProtocol.WriteAsync(server, CurrentResponse(true), cancellationToken);
@@ -1483,7 +1704,8 @@ internal sealed class HostRuntime
                         operation,
                         completion,
                         responseSent,
-                        SourcePatchTransport.IsWebCommand(normalizedCommand) ? request.WebPatch : request.SourcePatch);
+                        SourcePatchTransport.IsWebCommand(normalizedCommand) ? request.WebPatch : request.SourcePatch,
+                        identityReset);
                 var mutationAccepted = false;
                 lock (_mutationAcceptanceGate)
                 {
@@ -1509,6 +1731,15 @@ internal sealed class HostRuntime
                     throw;
                 }
                 var response = await completion.Task.WaitAsync(cancellationToken);
+                if (normalizedCommand == IdentityResetLifecycle.Command && response.Ok && response.State == "queued")
+                {
+                    // The lifecycle owner records the terminal result after offline
+                    // commit and replacement READY. This acknowledgement is not it.
+                    terminalAuditAppended = true;
+                    await HostProtocol.WriteAsync(server, response with { OperationId = operation.OperationId, AuditPersisted = requestedAuditPersisted }, cancellationToken);
+                    queuedAckWritten = true;
+                    return;
+                }
                 await WriteAuditedResponseAsync(
                     server,
                     operation,
@@ -1550,7 +1781,7 @@ internal sealed class HostRuntime
             }
             finally
             {
-                responseSent?.TrySetResult(true);
+                responseSent?.TrySetResult(requestedCommand != IdentityResetLifecycle.Command || queuedAckWritten);
                 if (queuedCommand is not null)
                 {
                     _acceptedMutations.TryRemove(queuedCommand.Operation.OperationId, out _);
@@ -1680,6 +1911,7 @@ internal sealed class HostRuntime
             "source-patch-reconcile" => "source_patch_reconcile",
             "web-patch" => "web_patch_request",
             "web-patch-reconcile" => "web_patch_reconcile",
+            IdentityResetLifecycle.Command => "fenced_identity_reset_request",
             "quit" when !string.IsNullOrWhiteSpace(requestedGenerationId) => "fenced_cli_exit",
             "quit" => "generation_mismatch",
             _ => "invalid_operation"

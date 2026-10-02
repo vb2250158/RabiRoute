@@ -17,7 +17,7 @@ English | <a href="./README_zh.md">简体中文</a>
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 20 or newer" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="Current version: 0.3.20" src="https://img.shields.io/badge/version-0.3.20-3178c6">
+  <img alt="Current version: 0.3.21" src="https://img.shields.io/badge/version-0.3.21-3178c6">
   <img alt="Status: active development" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
@@ -72,7 +72,7 @@ The manual trigger performs a real delivery. See [Complete the first Route](docs
 
 ## Current capabilities
 
-The repository version is `0.3.20`. The table lists behavior backed by current code, configuration surfaces, and tests. Features that require accounts, external services, or physical devices still need acceptance in their target environment.
+The repository version is `0.3.21`. The table lists behavior backed by current code, configuration surfaces, and tests. Features that require accounts, external services, or physical devices still need acceptance in their target environment.
 
 | Area | Status | What it provides |
 | --- | --- | --- |
@@ -93,6 +93,10 @@ The repository version is `0.3.20`. The table lists behavior backed by current c
 See [Current capabilities and maturity](docs/current-capabilities_en.md) for complete status, limits, and sources of truth.
 
 ## Recent changes
+
+### 0.3.21: separate PC identities
+
+RabiLink configuration adds **Reset instance ID** to repair identities copied between PCs. Host backs up and resets the instance ID and connection key while preserving saved data, then restarts the application. A local ownership marker rejects future copies to another PC. See [instance identity](docs/user-guide/instance-identity_en.md) for legacy configurations, recovery and connection limits.
 
 ### 0.3.19 experimental implementation: remote persona references
 

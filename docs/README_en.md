@@ -29,6 +29,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Resident performance recording and inspection](performance-monitoring_en.md) — **Current guide** for optional continuous Manager, Gateway, and WebGUI metrics, trends, slow operations, and independent JSONL files.
 - [Troubleshooting](troubleshooting_en.md) — NapCat, encoding, Codex Desktop task ownership, models, and approval boundaries.
 - [Windows launcher and packaging](windows-launcher-and-packaging_en.md) — Windows installation, startup, and packaging.
+- [PC identities and instance ID reset](user-guide/instance-identity_en.md) — Repair a copied identity so separate PCs appear independently as persona sources.
 - [Unattended NapCat](napcat-unattended_en.md) — QQ login state, quick login, Manager recovery, and supervision boundaries.
 
 ## Developer: routing, personas, and Agent interfaces

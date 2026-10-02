@@ -14,6 +14,7 @@ public static class HostEntry
         if (jsonOutput) ConsoleBridge.AttachToParent();
         if (command == "self-test") return RunSelfTest();
         JsonElement? sourcePatch = null;
+        JsonElement? identityReset = null;
         var isWebPatch = SourcePatchTransport.IsWebCommand(command);
         if (SourcePatchTransport.IsCommand(command) || isWebPatch)
         {
@@ -21,6 +22,15 @@ public static class HostEntry
             catch (Exception exception) when (exception is IOException or InvalidDataException or JsonException or ArgumentException or UnauthorizedAccessException)
             {
                 if (jsonOutput) WriteJson(new HostResponse(false, "invalid_request", "Source patch request file could not be validated."));
+                return 64;
+            }
+        }
+        if (command == IdentityResetLifecycle.Command)
+        {
+            try { identityReset = IdentityResetLifecycle.ReadRequest(ParseOption(args, "--identity-reset-request")); }
+            catch (Exception exception) when (exception is IOException or InvalidDataException or JsonException or ArgumentException or UnauthorizedAccessException)
+            {
+                if (jsonOutput) WriteJson(new HostResponse(false, "invalid_request", "Identity reset request file could not be validated."));
                 return 64;
             }
         }
@@ -33,7 +43,8 @@ public static class HostEntry
                 generationId,
                 CommandTimeout(command ?? "activate"),
                 sourcePatch: isWebPatch ? null : sourcePatch,
-                webPatch: isWebPatch ? sourcePatch : null);
+                webPatch: isWebPatch ? sourcePatch : null,
+                identityReset: identityReset);
             if (jsonOutput) WriteJson(response ?? new HostResponse(false, "unreachable", "The Host control pipe did not respond."));
             return response?.Ok == true ? 0 : 2;
         }
@@ -43,9 +54,9 @@ public static class HostEntry
             if (jsonOutput) WriteJson(new HostResponse(false, "stopped", "Unknown Host command."));
             return 64;
         }
-        if (command is "quit" or "restart" or "status" || SourcePatchTransport.IsCommand(command) || isWebPatch)
+        if (command is "quit" or "restart" or "status" or IdentityResetLifecycle.Command || SourcePatchTransport.IsCommand(command) || isWebPatch)
         {
-            var staleFencedQuit = command == "quit" || SourcePatchTransport.IsCommand(command) || isWebPatch;
+            var staleFencedQuit = command is "quit" or IdentityResetLifecycle.Command || SourcePatchTransport.IsCommand(command) || isWebPatch;
             var response = staleFencedQuit
                 ? new HostResponse(false, "stale_generation", "No matching Host generation is running.")
                 : new HostResponse(true, "stopped", "No Host instance is running.");
@@ -113,7 +124,7 @@ public static class HostEntry
             {
                 if (index + 1 >= args.Length) return "invalid";
                 var value = args[index + 1].Trim().ToLowerInvariant();
-                return value is "quit" or "restart" or "status" or "activate" || SourcePatchTransport.IsCommand(value) || SourcePatchTransport.IsWebCommand(value) ? value : "invalid";
+                return value is "quit" or "restart" or "status" or "activate" or IdentityResetLifecycle.Command || SourcePatchTransport.IsCommand(value) || SourcePatchTransport.IsWebCommand(value) ? value : "invalid";
             }
         }
         if (args.Contains("--self-test", StringComparer.OrdinalIgnoreCase)) return "self-test";

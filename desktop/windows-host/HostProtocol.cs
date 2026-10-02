@@ -13,7 +13,8 @@ internal sealed record HostRequest(
     string? Command,
     string? ApplicationGenerationId = null,
     JsonElement? SourcePatch = null,
-    JsonElement? WebPatch = null);
+    JsonElement? WebPatch = null,
+    JsonElement? IdentityReset = null);
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 internal sealed record HostResponse(
     bool Ok,
@@ -101,7 +102,8 @@ internal static class HostProtocol
         TimeSpan timeout,
         string? pipeName = null,
         JsonElement? sourcePatch = null,
-        JsonElement? webPatch = null)
+        JsonElement? webPatch = null,
+        JsonElement? identityReset = null)
     {
         using var timeoutSource = new CancellationTokenSource(timeout);
         await using var client = new NamedPipeClientStream(
@@ -113,7 +115,7 @@ internal static class HostProtocol
         try
         {
             await client.ConnectAsync(timeoutSource.Token);
-            await WriteAsync(client, new HostRequest(command, applicationGenerationId, sourcePatch, webPatch), timeoutSource.Token);
+            await WriteAsync(client, new HostRequest(command, applicationGenerationId, sourcePatch, webPatch, identityReset), timeoutSource.Token);
             return await ReadAsync<HostResponse>(client, timeoutSource.Token);
         }
         catch (OperationCanceledException)

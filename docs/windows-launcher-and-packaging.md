@@ -101,6 +101,20 @@ Manager 另持有按当前用户与产品安装身份派生的操作系统命名
 
 Host 同时向 Manager 与 Desktop 提供只读的发布目录（`RABIROUTE_PACKAGE_ROOT`）和稳定的运行数据目录（`RABIROUTE_STATE_ROOT`）。Desktop 从发布目录读取程序和图标，但截图图片、框选历史、贴图状态、滑词设置和 COM 生成缓存等可写内容只进入安装根目录。`versions/<releaseId>` 不再接收运行数据，因此 Host 后续执行 `status`、重启或升级时仍能按清单验证当前发布。
 
+## 实例身份重置
+
+正常操作使用 [RabiLink 配置中的重置按钮](user-guide/instance-identity.md)。Manager 将确认请求交给安装根的正式 Host，Host 校验调用者、当前运行代与操作 ID，先保存 `queued` 状态，再停止整代并执行离线身份事务；备份不是公开资料。Manager 的 `RABIROUTE_HOST_EXECUTABLE` 由 Host 提供，页面不能指定执行路径。远程管理代理不能调用重置接口。
+
+外机身份检查导致 Manager 启动失败时，可使用正式 Host 命令恢复。先执行 `RabiRouteHost.exe --command status --json`，从当前状态取得 `controlFenceGenerationId`（正常运行也可使用 `applicationGenerationId`）；从运行数据 `data/Config.json` 读取当前 `rabiGuid`。将这一个 GUID 和新生成的 UUID 写入私有 UTF-8 请求文件，内容为 `{ "operationId": "<新 UUID>", "expectedGuid": "<当前 GUID>" }`，再调用：
+
+```text
+RabiRouteHost.exe --command reset-instance-id --application-generation-id <当前 fence> --identity-reset-request <私有请求文件的绝对路径> --json
+```
+
+无 Host、缺少 fence、旧 fence 或 GUID 不符均不能无条件重置。`queued` 仅表示受理；结果记录在 `data/rabilink/identity-resets/<操作 ID>/host-status.json`，备份及身份事务回执在同目录。请求或回执丢失时只查原操作，不生成新操作重复执行。重启后通过 Host 重新发现 `managerBaseUrl`，核对 `/meta` 的 generation 与 instance，再读取新实例身份。
+
+Host 冷启动发现 `identity-reset-pending.json` 时，先在无 Manager 的状态下恢复原操作。恢复使用备份及写入前后哈希核对全部文件，无法确认时保留事务并进入故障状态；不删除标记、无 fence 退出或单独启动 Manager。机器归属标记不是网络授权，也不新增其他电脑的服务权限。
+
 ## 可追溯的设计依据
 
 这套边界参考的是生命周期不变量，不照搬参考项目的进程布局或端口：

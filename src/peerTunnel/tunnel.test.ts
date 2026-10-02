@@ -15,6 +15,7 @@ import { serveTunnel, serviceEndpoint, tunnelFetch } from "./http.js";
 import { PeerConnections, type TunnelCandidate } from "./connections.js";
 import { TunnelRtc } from "./rtc.js";
 import { PeerTunnelRuntime } from "./runtime.js";
+import { handleInstanceIdentityReset } from "../manager/identityResetRoutes.js";
 
 function channelPair(): [TunnelChannel, TunnelChannel] {
   const a = new EventEmitter() as TunnelChannel, b = new EventEmitter() as TunnelChannel;
@@ -109,6 +110,24 @@ test("service grants and paths fail closed", { timeout: 5_000 }, async t => {
   assert.throws(()=>serviceEndpoint({baseUrl:upstream.url},"//other-host/private"));
   assert.throws(()=>serviceEndpoint({baseUrl:upstream.url,pathPrefix:"/safe"},"/../private"));
   assert.throws(()=>serviceEndpoint({baseUrl:upstream.url},"/api/rabilink/peer/selection"));
+});
+test("an authorized service alias cannot impersonate a local identity reset request", async t => {
+  const [caller, receiver] = await sessions(t);
+  let resets = 0;
+  const upstream = await fixtureServer(t, (request, response) => {
+    handleInstanceIdentityReset(request, new URL(request.url!, "http://localhost"), response, {
+      service: { available: () => true, enqueue: async input => { ++resets; return { operationId: input.operationId, state: "queued" }; }, status: async () => undefined },
+      currentGuid: () => "647f6388-a4dc-4327-ab17-3ccbd43ef9e2", trustedRemote: () => false,
+      readJson: async () => ({}), json: (response, status, body) => { response.writeHead(status); response.end(JSON.stringify(body)); }
+    });
+  });
+  serveTunnel(receiver, () => ({ alias: { baseUrl: upstream.url, headers: { "x-rabiroute-peer-proxy": "" } } }), service => service === "alias");
+  const response = await tunnelFetch(caller, "alias", "/api/rabi/identity/reset-instance-id", {
+    method: "POST", headers: { "content-type": "application/json", "x-rabiroute-peer-proxy": "" }, body: "{}"
+  });
+  assert.equal(response.status, 403);
+  await response.text();
+  assert.equal(resets, 0);
 });
 test("automatic selection uses LAN then P2P then relay and clears RTT after disconnect", async t => {
   const [session] = await sessions(t);

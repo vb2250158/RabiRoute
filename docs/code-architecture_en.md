@@ -26,6 +26,8 @@ By default, the owner of a business-state change emits an event, and Routes, per
 
 ## High-level flow
 
+`manager/deviceIdentity.ts` owns instance identity. Private ownership metadata in `Config.json` and `data/rabilink/device-identity.json` bind the GUID, an OS-machine identity hash and the tunnel public-key hash; public DTOs omit ownership metadata. Manager checks and binds legacy identity before configuration normalization or identity networking. Foreign-machine copies, GUID/key conflicts and pending reset transactions reject startup. Windows Host runs the offline CLI after a fenced generation stop, holds the user Mutex and manages the hidden child in an independent Job. The identity owner implements backup, transactions and CAS recovery; other data and pinned peer trust remain unchanged. The page waits only for an explicit operation, using file-event long waits on its operation directory and a bounded deadline rather than background business scans. See [instance identity](user-guide/instance-identity_en.md) for recovery and legacy limits.
+
 ```text
 src/index.ts
   -> message adapters
