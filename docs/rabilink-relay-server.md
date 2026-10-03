@@ -143,7 +143,7 @@ POST /api/rabilink/speech/v1/audio-streams/rabilink/stop
 POST /api/rabilink/speech/messages  # 兼容/调试，不是 Android 主链
 ```
 
-完整公网 URL 是 `https://你的域名` 加上上面的路径。应用必须已选择一台在线 PC，且该 PC 已打开“允许语音中转”。可复制的 TTS/ASR 命令、验收和错误恢复见[从远端调用 TTS 与 ASR](user-guide/speech-api.md)；机器可读契约位于 `/api/rabilink/speech/openapi.json`。
+完整公网 URL 是 `https://你的域名` 加上上面的路径。应用必须已选择一台在线 PC，且该 PC 的 RabiSpeech 真实运行并上报 `speech` 能力。从 0.3.22 起，同一应用内已鉴权设备默认可使用实际提供的语音服务，无需额外授权开关；公共应用 token 的固定路径和模型范围仍适用。可复制的 TTS/ASR 命令、验收和错误恢复见[从远端调用 TTS 与 ASR](user-guide/speech-api.md)；机器可读契约位于 `/api/rabilink/speech/openapi.json`。
 
 ## 发布 Relay 并核对文档版本
 
@@ -1122,8 +1122,8 @@ Receive-Job $rokid -Wait
 
 ## 手机 ASR 优先级
 
-应用鉴权接口 `GET/PATCH /api/rabilink/mobile/asr-settings` 返回有 `asr` 能力的电脑及优先级。PATCH 接收 `{ "priority": ["computer-a", "computer-b"] }`，拒绝重复 ID 和非 ASR 电脑；在线状态只影响当前选择，不删除已保存的排序。电脑需开启语音共享，并由本地 `/v1/capabilities` 声明 ASR，不能把只有 TTS 的电脑列入。
+应用鉴权接口 `GET/PATCH /api/rabilink/mobile/asr-settings` 返回有 `asr` 能力的电脑及优先级。PATCH 接收 `{ "priority": ["computer-a", "computer-b"] }`，拒绝重复 ID 和非 ASR 电脑；在线状态只影响当前选择，不删除已保存的排序。电脑的 RabiSpeech 必须实际运行，并由本地 `/v1/capabilities.providers.asr` 声明已启用的 ASR Provider；同应用鉴权后默认可用，不需开启额外共享权限，不能把只有 TTS 的电脑列入。
 
 音频使用应用鉴权握手建立的端到端加密通道，先 LAN、再 P2P、最后 Relay。部署必须同时包含 `rabilink-event-hub.mjs`、`rabilink-proxy-request-queue.mjs`、`lib/rabilink-tunnel-broker.mjs`、`lib/rabilink-asr-priority.mjs` 及 `ws` 依赖；仅替换服务器主脚本不足以升级旧实例。
 
-电脑每 30 秒独立复查本地 ASR 能力；能力变化时重新上报，启动较慢或服务恢复后无需等待语音请求。停止共享时取消检查。
+电脑在连接时读取本地 `/v1/capabilities`，随后根据语音事件流的 `ready`、`capabilities_changed` 和 Manager 模型管理变更重新读取并上报能力，不做空闲定时轮询。语音事件流断开时撤回语音能力广告，重连后重新核验；关闭全局 RabiLink 连接会取消本代订阅与请求。启动较慢或服务恢复后无需等待语音请求。

@@ -194,6 +194,7 @@ def create_app(
     transcoder = AudioTranscoder(current.server.temp_dir, current.server.ffmpeg)
     logger = logging.getLogger("rabispeech")
     event_hub = SpeechEventHub()
+    providers.set_capabilities_event_sink(event_hub.publish)
     audio_stream_events = AudioStreamEventStore(current.remote_audio.settings_path.parent / "audio-stream-events")
     remote_audio = RemoteAudioHub(
         RemoteAudioServerConfig(
@@ -499,6 +500,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_api: FastAPI):
         nonlocal tts_cleanup_closed, tts_cleanup_task
+        providers.set_capabilities_event_sink(event_hub.publish)
         async def warmup_providers() -> None:
             try:
                 await provider_warmup_gate.wait()
@@ -537,6 +539,7 @@ def create_app(
             await microphone.stop(persist=False)
             await remote_audio.stop()
             mixer_keepalive.stop()
+            providers.set_capabilities_event_sink(None)
 
     api = FastAPI(
         title="RabiSpeech Local API",
@@ -1024,7 +1027,7 @@ def create_app(
                     "speed": persona_defaults.get("speed") or body.speed,
                 })
             provider, selection = providers.tts(body.provider, body.model)
-            artifact = await provider.synthesize(
+            artifact = await providers.run_with_capability_events(provider, lambda: provider.synthesize(
                 SpeechSynthesisRequest(
                     text=body.input,
                     model=selection.model,
@@ -1035,7 +1038,7 @@ def create_app(
                     instructions=body.instructions,
                     sample_rate=body.sample_rate,
                 )
-            )
+            ))
             prepared = await transcoder.prepare(artifact, body.response_format, body.sample_rate)
             cache_dir = persona_tts_cache_dir(persona_role_dir)
             selected_tts_audio = tts_audio_stores.get(cache_dir) if cache_dir is not None else fallback_tts_audio
@@ -1378,7 +1381,7 @@ async def _transcribe(
 ) -> TranscriptionResult:
     try:
         selected, selection = registry.asr(provider, model)
-        return await selected.transcribe(
+        return await registry.run_with_capability_events(selected, lambda: selected.transcribe(
             TranscriptionRequest(
                 audio_path=audio_path,
                 model=selection.model,
@@ -1387,7 +1390,7 @@ async def _transcribe(
                 word_timestamps=word_timestamps,
                 speaker_count=speaker_count,
             )
-        )
+        ))
     except KeyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ValueError as exc:

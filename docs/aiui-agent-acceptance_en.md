@@ -2,11 +2,13 @@
 
 English | [简体中文](aiui-agent-acceptance.md)
 
-Status: implementation-stage evidence, not completion of the entire objective. AIUI owns Agent execution, phone settings manage Skills/MCP, and PC provides plan/memory tools over HTTP. PC inference must not replace AIUI. This document changes no business state.
+Status: historical 0.3.15 implementation and candidate evidence, not current 0.3.22 acceptance or completion of the whole objective. The PC knowledge-permission forms, phone grant editor and external-MCP RabiLink path discussed below are retired. All counts, screenshots, package hashes and remaining-work tables refer to their original source checkpoints; historical “latest” labels are not current releases or instructions. AIUI still owns Agent execution rather than delegating inference to PC.
 
-## Verified work and limits
+Since 0.3.22, devices authenticated in the same RabiLink application use the PC’s built-in Manager knowledge tools, including mutations, without another role/tool/write grant or MCP secret. See the [current knowledge runtime](rabilink-knowledge-runtime_en.md), [connection contract](rabilink-peer-tunnel_en.md) and [retired-page migration](user-guide/knowledge-bridge-settings_en.md). New builds, installed Host/static assets and physical-device acceptance require separate evidence; none of the old passes establishes this new path.
 
-| Layer | Current evidence | Not established |
+## Historical evidence and limits
+
+| Layer | Evidence at the historical checkpoint | Not established |
 |---|---|---|
 | Root application | Latest full local root build exit 0. Earlier knowledge tests 4 plus original Relay runtime tests 17 total 21; Relay/UI/knowledge set 30/30; dynamic Manager contract 6/6 | Formal installation, refreshed Host and actual loaded browser assets |
 | Independent MCP | After shared-schema extraction, 51/51; official SDK HTTP/stdio initialization/catalog checks; 3643 artifact files verified by size and SHA-256 | Real Host only provided identity checks; no actual plan/memory CRUD acceptance |
@@ -50,7 +52,7 @@ The new package is not formally installed or production-ready; the historical pe
 
 Actual payload browser validation passed, exit 0: packaged Node 22.17.1 and Relay used temporary data with Chrome at width 320. Enabled Skills saved with PUT 200/revision 1 and full matching GET content; a `plan_list` grant with writes false also matched GET readback. No console errors or horizontal overflow; Node, manifest and 13 module hashes were unchanged before/after. The parent checked the report. This is not installation, a formal service, or physical-phone acceptance.
 
-### Latest complete candidate 0.3.15-397c589c9e64 (not installed or production-ready)
+### Historical complete candidate 0.3.15-397c589c9e64 (not installed or production-ready)
 
 Earlier d1ae validation remains valid historical evidence but excludes the later visual MCP UI. Latest payload SHA-256: `397c589c9e644fdde7d5c449f1e52ba9db942f4483204b77a0be4fd318ca4cbf`. Source hashes matched for 21 files: 14 modules, manifest and 6 documents. Build, selftest, ZIP roundtrip, ISCC and imports passed.
 
@@ -65,12 +67,12 @@ Stability evidence: the fixed 14-module source passed 10 sequential independent 
 
 Official-contract follow-up: six targeted public fetches reviewed the redirected official repository and model documentation on main/v0.18.x without establishing result submission by callId and continuation. No real host was run; main is not assumed to be a released runtime, and API absence is not asserted. See the [tool contract review](../apps/rabilink-aiui/docs/agent-tool-contract_en.md); single-step boundaries remain.
 
-## Required remaining work
+## Historical remaining work (not current instructions)
 
 | Category | Remaining gap | Acceptance exit | Safe next step / external information |
 |---|---|---|---|
 | Deployment | Latest complete `397c589c9e64` includes the later MCP UI and fixes and passed artifact checks, but is unsigned, uninstalled and not production-ready; old `e6e3709e82f8` has a known defect | Review candidate risks/target, then managed installation and actual resource/health checks; deploy MCP separately | Do not install old Setup or equate temporary payload browser tests with formal service acceptance; preserve private configuration |
-| Deployment | MCP not formally managed; PC bridge defaults off, but safe configuration UI now exists | Configuration persistence, MCP ready, PC capability, actual calls and reconnect behavior | Use existing safe UI; never put PC secrets in Relay profiles; verify real device ownership |
+| Retired deployment path | External MCP and the PC knowledge-permission UI were not formally deployed at that checkpoint; 0.3.22 replaces them with built-in Manager access | Old gaps do not establish new acceptance; actual calls and recovery need new verification | Do not configure the old knowledge URL, secret or permission forms |
 | Hardware evidence | Phone save → AIUI persistence → next model → one-time application receipt not device-tested | Matching revision/role/tool binding, offline/restart/ownership/save-failure handling and usable phone UI | Need connected phone/glasses, model, firmware/AIUI version, current app and connection method; no plaintext token request |
 | Hardware evidence | ASR/TTS, real tool events and result reading/paging lack real-host evidence | Voice, explicit role choice, read call, cancellation/timeout, no double responses/echo and actual readability | Same hardware information; a host model is not necessarily offline inference |
 | Unimplemented | Official tool-result submission and automatic model continuation remain unverified | Official contract or real-host proof, followed by multi-step tests | Continue public/version investigation; ordinary prompts cannot masquerade as tool responses |
@@ -80,7 +82,7 @@ Official-contract follow-up: six targeted public fetches reviewed the redirected
 | Configuration concurrency | PC UI uses the existing identity API without configuration revision CAS | Explicit multi-admin conflict protection; refresh must not falsely confirm an uncertain secret update | Add versioned settings contract; keep write-only secrets and current uncertainty guidance |
 | Scope | Configuration-command counts do not establish “all Agent capabilities” | Separate user-visible exits for multi-step work, cancellation, memory/context, permissions, recovery and third-party tools | Continue itemized acceptance rather than marking the entire objective complete |
 
-## Next steps
+## Historical next steps (superseded where paths were retired)
 
 1. Packaged Chrome saving is verified and the new complete candidate is built. Continue reviewing the historical receipt persist timeout and candidate risks before confirming installation targets, unsigned-package risks and recovery plans. The old package remains unsuitable for production.
 2. Validate the full first-success path through the existing safe settings UI; continue specific write confirmation and controlled long-term recovery rather than rebuilding an already implemented UI.
@@ -92,8 +94,8 @@ The parent ran `devices -l` using locally discovered ADB, exit 0 with an empty l
 ## Related contracts
 
 - [Single-step tools](../apps/rabilink-aiui/docs/knowledge-single-step_en.md), [page integration](../apps/rabilink-aiui/docs/knowledge-tool-page_en.md), [one-time application receipts](../apps/rabilink-aiui/docs/agent-profile-runtime_en.md)
-- [PC safe settings UI](user-guide/knowledge-bridge-settings_en.md), [PC runtime configuration](rabilink-knowledge-runtime_en.md)
-- [Phone knowledge grants](knowledge-grant-phone-ui_en.md), [profile HTTP](aiui-agent-profile-http_en.md)
+- [Retired PC settings migration](user-guide/knowledge-bridge-settings_en.md), [current PC runtime](rabilink-knowledge-runtime_en.md)
+- [Retired phone-grant page migration](knowledge-grant-phone-ui_en.md), [profile HTTP](aiui-agent-profile-http_en.md)
 - [Official tool contract](../apps/rabilink-aiui/docs/agent-tool-contract_en.md)
 
-Both the PC safe-settings UI and runtime topics describe the current entry. The API is the underlying contract, not the only user entry.
+The linked migration pages describe removal of the historical permission editors. The runtime page is the authority for current built-in Manager knowledge access.

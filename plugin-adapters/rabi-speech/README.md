@@ -77,6 +77,8 @@ RabiSpeech 本身目前没有声学回声参考或 AEC。桌面远程语音客�
 
 控制面状态通过回环 SSE `GET /v1/events` 推送。Manager 将它转发为 `GET /api/speech/events`；`microphone_event`、`playback_changed`、`audio_stream_changed` 分别刷新对应状态，`records_changed` 只在 ASR/TTS 记录成功落盘后刷新记录面板，麦克风电平使用限频的 `microphone_level` 直接更新。SSE 重连只做一次快照补漏，不运行固定间隔状态或记录轮询。
 
+Provider 注册、预热或 TTS/ASR 执行使公开能力发生变化时，Registry 发布 `capabilities_changed`。事件只携带刷新提示，不包含提供端配置、路径、错误或凭据；订阅方重新读取 `/v1/capabilities` 获取当前能力。RabiLink 使用该事件更新语音可用状态，服务断线时撤销能力，不做空闲定时探测。
+
 `PUT /v1/playback/settings` 同样只允许回环调用，接受 `{"volume": 0..100}`。它是主机级唯一播放音量，持久化在忽略 Git 的 `output/playback-settings.json`，不属于 Route 或人格；每条 FIFO 音频开始播放时冻结当时的数值。Windows 播放统一使用 SoundFile / PortAudio，能正确读取流式 WAV 的实际数据长度。Windows 11 音量合成器按进程映像显示应用，因此 `scripts/install.ps1` 会生成并由 `scripts/start.ps1` 优先启动带 RabiSpeech 产品资源的 `runtime/RabiSpeech.exe`。服务启动时建立一个持续无声的共享输出会话，把历史 `1%` 只归一一次到 `100%`，之后只保活、不回写，保证 Windows 合成器滑条一直可调。该无声会话不进入 FIFO，也不触发麦克风防回流。
 
 DashScope 风格兼容面：

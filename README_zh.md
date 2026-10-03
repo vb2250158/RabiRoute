@@ -17,7 +17,7 @@
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="许可证：MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 20 或更高版本" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="当前版本：0.3.21" src="https://img.shields.io/badge/version-0.3.21-3178c6">
+  <img alt="当前版本：0.3.22" src="https://img.shields.io/badge/version-0.3.22-3178c6">
   <img alt="状态：积极开发中" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
@@ -72,7 +72,7 @@ Manager 启动后会打印真实的回环地址，端口由操作系统分配。
 
 ## 当前能力
 
-仓库当前版本为 `0.3.21`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
+仓库当前版本为 `0.3.22`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
 
 | 范围 | 当前状态 | 用户可以完成什么 |
 | --- | --- | --- |
@@ -94,13 +94,17 @@ Manager 启动后会打印真实的回环地址，端口由操作系统分配。
 
 ## 近期变化
 
+### 0.3.22：一次连接，默认使用服务
+
+同一 RabiLink 应用已鉴权设备默认可以使用 PC 提供的服务，包括语音、人格、资源、管理和知识读写。配置页移除重复权限开关、MCP 密钥和白名单；设备身份、应用隔离和服务就绪仍分别核对。见[通用连接](docs/rabilink-peer-tunnel.md)及[知识服务](docs/rabilink-knowledge-runtime.md)。
+
 ### 0.3.21：区分电脑实例身份
 
 RabiLink 配置新增 **重置实例 ID**，用于修复两台电脑复制配置后共用身份。Host 备份并重置实例 ID 和连接密钥，保留已保存数据，再重启应用；本机归属标记阻止后续外机复制身份继续运行。旧配置、恢复方法及连接边界见[实例身份说明](docs/user-guide/instance-identity.md)。
 
 ### 0.3.19 实验实现：本机路由引用远端人格
 
-本机 Route 可以选择另一台 PC 的人格，读取正文、消息规则和上下文额度，同时沿用本机消息端和处理 Agent。0.3.19 新增这项实验实现：两端复用同一 RabiLink 应用认证，自动交换并固定设备公钥，再沿 LAN、P2P 或 Relay 读取受限人格服务，无需另行手工开放完整管理权限。来源 PC 需要新版能力，已有手工限权仍保留。操作、失败行为和待完成的真实双 PC 验收见[远端人格引用](docs/remote-persona-reference.md)。
+本机 Route 可以选择另一台 PC 的人格，读取正文、消息规则和上下文额度，同时沿用本机消息端和处理 Agent。0.3.19 新增这项实验实现：两端复用同一 RabiLink 应用认证，自动交换并固定设备公钥，再沿 LAN、P2P 或 Relay 读取受限人格服务，无需逐服务手工授权。0.3.22 起同一应用已鉴权连接默认允许实际提供的服务，固定公钥继续核对；来源 PC 需升级。操作、失败行为和待完成的真实双 PC 验收见[远端人格引用](docs/remote-persona-reference.md)。
 
 ### 0.3.5：远端 Agent 授权、审批专注视图与移动记录
 

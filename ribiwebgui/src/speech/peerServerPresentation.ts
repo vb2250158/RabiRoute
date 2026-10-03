@@ -1,8 +1,23 @@
 import type { PeerConnectionStatus } from "../../../src/shared/peerTunnelContract";
+
+/** Availability comes from the device directory; authentication is confirmed by the selection owner. */
+export function speechServerOptions(peers: PeerConnectionStatus[], selectedDeviceId: string, now = Date.now()) {
+  const options = peers.map(peer => ({
+    title: peer.name,
+    value: peer.deviceId,
+    detail: peerServerDetail(peer, now),
+    props: { disabled: !peer.online || !peer.supported }
+  }));
+  if (selectedDeviceId && !options.some(option => option.value === selectedDeviceId)) {
+    options.push({ title: selectedDeviceId, value: selectedDeviceId, detail: "未发现设备", props: { disabled: true } });
+  }
+  return [{ title: "本机", value: "", detail: "本机调用", props: { disabled: false } }, ...options];
+}
+
 export function peerServerDetail(peer: PeerConnectionStatus, now = Date.now()): string {
   if (!peer.online) return "离线";
   if (!peer.supported) return "在线 · 需要升级";
-  if (!peer.trusted) return "在线 · 未授权";
+  if (!peer.trusted) return "在线 · 将自动连接";
   if (peer.state === "connecting") return "在线 · 检测连接中…";
   if (peer.state === "failed") return "在线 · 连接失败";
   if (peer.state !== "connected" || !peer.transport) return "在线 · 待检测";

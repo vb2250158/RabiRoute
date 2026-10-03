@@ -45,7 +45,7 @@ export function readKnowledgeOperation(app,binding,key) {
   if(!validOperationKey(key)) fail(400,'INVALID_OPERATION_KEY');
   if(!binding?.credentialHash || binding.enabled===false) fail(403,'DEVICE_CREDENTIAL_REQUIRED');
   const op=normalizeKnowledgeIntents(binding.knowledgeIntents||[]).find(x=>x.key===key);
-  const s=op?.scope, grant=binding.knowledgeGrantState?.grant;
-  if(s && (s.ownerAccountId!==app.ownerAccountId || s.targetDeviceId!==app.targetDeviceId || s.credentialHash!==binding.credentialHash || !grant?.allowWrites || !grant.allowedRoles?.includes(s.roleId) || !grant.allowedTools?.includes(s.tool))) fail(403,'KNOWLEDGE_OPERATION_DENIED');
+  const s=op?.scope;
+  if(app?.enabled===false || !app?.ownerAccountId || (s && (s.ownerAccountId!==app.ownerAccountId || s.targetDeviceId!==app.targetDeviceId || s.credentialHash!==binding.credentialHash))) fail(403,'KNOWLEDGE_OPERATION_DENIED');
   return {idempotencyKey:key, state:op?.outcome?.state||'unknown', ...(s && op.outcome?.receipt ? {receipt:structuredClone(op.outcome.receipt)} : {})};
 }

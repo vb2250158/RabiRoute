@@ -8,7 +8,8 @@ function Read-ReleaseTrackedManifest([string]$ManifestPath, [string]$SourceRoot)
     $result = @()
     foreach ($entry in $manifest.files) {
         $relative = [string]$entry.path
-        if ($relative -notmatch '^(assets|docs|skills|examples/data|apps/rabi-agent|plugin-adapters|plugins/contracts/plugin-sdk|scripts)/' -or $relative -match '[\\:\x00-\x1f\x7f]' -or $relative -match '(^|/)\.env[^/]*($|/)' -or ($relative -match '(^|/)data(/|$)' -and !$relative.StartsWith('examples/data/')) -or $relative -match '(^|/)(\.|\.\.|\.git|node_modules|logs|recordings|transcripts|\.env)(/|$)' -or $relative -match '(^|/)[^/]+[. ](/|$)' -or $relative.Contains('//') -or !$seen.Add($relative)) { throw 'Unsafe or duplicate tracked path' }
+        $allowedSourcePath = $relative -match '^(assets|docs|skills|examples/data|apps/rabi-agent|plugin-adapters|plugins/contracts/plugin-sdk|scripts)/' -or $relative -match '^packages/rabi-knowledge-contract/(schema|tools|receipt)\.mjs$' -or $relative -match '^apps/rabi-mcp/lib/knowledge-(tools|receipt)\.mjs$'
+        if (!$allowedSourcePath -or $relative -match '[\\:\x00-\x1f\x7f]' -or $relative -match '(^|/)\.env[^/]*($|/)' -or ($relative -match '(^|/)data(/|$)' -and !$relative.StartsWith('examples/data/')) -or $relative -match '(^|/)(\.|\.\.|\.git|node_modules|logs|recordings|transcripts|\.env)(/|$)' -or $relative -match '(^|/)[^/]+[. ](/|$)' -or $relative.Contains('//') -or !$seen.Add($relative)) { throw 'Unsafe or duplicate tracked path' }
         if ([string]$entry.sha256 -notmatch '^[a-fA-F0-9]{64}$') { throw 'Invalid tracked hash' }
         $cursor = $root
         foreach ($segment in $relative.Split('/')) {

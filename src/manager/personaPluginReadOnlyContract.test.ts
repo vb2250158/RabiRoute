@@ -16,11 +16,11 @@ test("persona plugin keeps persona and knowledge surfaces without synchronizatio
   assert.match(source, /await requestTracker\.stop\(\)/);
 });
 
-test("control plane has no synchronization owner and uses independently authorized fresh peer inventory", () => {
+test("control plane has no synchronization owner or retired peer permission file", () => {
   const source = fs.readFileSync(controlPlane, "utf8");
   assert.doesNotMatch(source, /persona[-_]?sync/i);
   assert.match(source, /readPeerPersonaManifest\(rolesRoot, role\(input\)\)/);
-  assert.match(source, /!access\(\)\.roleIds\.includes\(roleId\)/);
+  assert.doesNotMatch(source, /readRabiPeerAccess|peer-access\.json/);
   assert.match(source, /peerHandler:.*activePeerRuntime\?\.handler/);
   assert.match(source, /peerUpgrade:.*activePeerTunnel\?\.upgrade/);
   assert.match(source, /activePeerTunnel\?\.startLanDiscovery/);

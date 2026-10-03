@@ -22,6 +22,5 @@ for (const [endpoint, methods, mode, evidence] of [
 ['/api/rabilink/device/agent-profile/applied',['POST'],'device-profile','scripts/rabilink-agent-profile-http.test.mjs'],
 ['/api/rabilink/device/knowledge',['POST'],'device-knowledge','scripts/rabilink-knowledge-e2e.test.ts'],
 ['/manage/api/apps/:param/devices/:param/agent-profile',['GET','PUT'],'owner-profile','scripts/rabilink-agent-profile-http.test.mjs'],
-['/manage/api/apps/:param/devices/:param/knowledge-grant',['GET','PUT'],'owner-grant','scripts/rabilink-knowledge-http.test.mjs']
 ]) add(endpoint, methods, 'dedicated', 'Relay', mode, evidence);
 export const contracts = Object.freeze(rows);

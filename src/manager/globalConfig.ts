@@ -1,4 +1,3 @@
-import type { KnowledgeRuntimeConfig } from "./rabiLinkKnowledgeRuntime.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -35,9 +34,7 @@ export type RabiLinkRelayGlobalConfig = {
   deviceId: string;
   claimWaitMs: number;
   replyIdleTimeoutMs: number;
-  speechProxyEnabled: boolean;
   speechServiceUrl: string;
-  knowledgeBridge?: KnowledgeRuntimeConfig;
 };
 
 export class RabiGlobalConfigStore {
@@ -99,8 +96,7 @@ export class RabiGlobalConfigStore {
         ? patch.rabiName.trim()
         : current.rabiName,
       rabiLinkRelay: patch.rabiLinkRelay
-        ? normalizeRabiLinkRelayConfig({ ...current.rabiLinkRelay, ...patch.rabiLinkRelay,
-            ...(patch.rabiLinkRelay.knowledgeBridge !== undefined ? { knowledgeBridge: mergeKnowledgeBridge(current.rabiLinkRelay.knowledgeBridge, patch.rabiLinkRelay.knowledgeBridge) } : {}) })
+        ? normalizeRabiLinkRelayConfig({ ...current.rabiLinkRelay, ...patch.rabiLinkRelay })
         : current.rabiLinkRelay,
       webguiLan: patch.webguiLan
         ? normalizeWebguiLanAccessConfig({ ...current.webguiLan, ...patch.webguiLan })
@@ -153,8 +149,7 @@ export class RabiGlobalConfigStore {
         this.persist(normalized, "normalize", typeof parsed.updatedAt === "string" ? parsed.updatedAt : undefined, normalized.updatedAt);
       }
       return normalized;
-    } catch (error) {
-      if (error instanceof KnowledgeBridgeConfigError) throw error;
+    } catch {
       return null;
     }
   }
@@ -203,7 +198,7 @@ export class RabiGlobalConfigStore {
 function cloneGlobalConfig(config: RabiGlobalConfig): RabiGlobalConfig {
   return {
     ...config,
-    rabiLinkRelay: { ...config.rabiLinkRelay, ...(config.rabiLinkRelay.knowledgeBridge ? { knowledgeBridge: structuredClone(config.rabiLinkRelay.knowledgeBridge) } : {}) },
+    rabiLinkRelay: { ...config.rabiLinkRelay },
     webguiLan: { ...config.webguiLan },
     agentUploads: { ...config.agentUploads },
     performance: { ...config.performance }
@@ -212,14 +207,6 @@ function cloneGlobalConfig(config: RabiGlobalConfig): RabiGlobalConfig {
 
 function freezeGlobalConfig(config: RabiGlobalConfig): RabiGlobalConfig {
   const snapshot = cloneGlobalConfig(config);
-  if (snapshot.rabiLinkRelay.knowledgeBridge) {
-    const bridge = snapshot.rabiLinkRelay.knowledgeBridge;
-    bridge.grants?.forEach(Object.freeze);
-    Object.freeze(bridge.grants);
-    Object.freeze(bridge.allowedRoles);
-    Object.freeze(bridge.allowedTools);
-    Object.freeze(bridge);
-  }
   Object.freeze(snapshot.rabiLinkRelay);
   Object.freeze(snapshot.webguiLan);
   Object.freeze(snapshot.performance);
@@ -233,41 +220,6 @@ function normalizeNumber(value: unknown, fallback: number, min: number, max: num
   return Math.min(max, Math.max(min, numberValue));
 }
 
-class KnowledgeBridgeConfigError extends Error {
-  constructor() { super("Invalid knowledgeBridge configuration."); }
-}
-function mergeKnowledgeBridge(current: KnowledgeRuntimeConfig | undefined, patch: unknown): unknown {
-  if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new KnowledgeBridgeConfigError();
-  const value = patch as Record<string, unknown>;
-  if (value.token === "" || value.token === "********") throw new KnowledgeBridgeConfigError();
-  return { ...current, ...value };
-}
-export function normalizeKnowledgeBridgeConfig(raw: unknown): KnowledgeRuntimeConfig {
-  const fail = (): never => { throw new KnowledgeBridgeConfigError(); };
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return fail();
-  const value = raw as Record<string, unknown>;
-  const fields = ["enabled", "url", "token", "allowedRoles", "allowedTools", "allowWrites", "grants"];
-  if (Object.keys(value).some(key => !fields.includes(key))) return fail();
-  if (value.enabled !== undefined && typeof value.enabled !== "boolean") return fail();
-  if (value.allowWrites !== undefined && typeof value.allowWrites !== "boolean") return fail();
-  if (typeof value.url !== "string" || !/^http:\/\/127\.0\.0\.1:[1-9][0-9]{0,4}\/mcp$/.test(value.url)) return fail();
-  try { if (Number(new URL(value.url).port || 80) > 65535) return fail(); } catch { return fail(); }
-  if (typeof value.token !== "string" || !/^[\x21-\x7e]{32,4096}$/.test(value.token) || /^\*+$/.test(value.token)) return fail();
-  const identifiers = (input: unknown): string[] => {
-    if (!Array.isArray(input) || input.length > 256 || input.some(item => typeof item !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(item)) || new Set(input).size !== input.length) return fail();
-    return [...input] as string[];
-  };
-  const allowedRoles = identifiers(value.allowedRoles), allowedTools = identifiers(value.allowedTools);
-  if (!Array.isArray(value.grants) || value.grants.length > 256) return fail();
-  const grants = value.grants.map(item => {
-    if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some(key => !["appId", "deviceBindingId", "ownerAccountId"].includes(key))) return fail();
-    for (const key of ["appId", "deviceBindingId", "ownerAccountId"]) identifiers([item[key]]);
-    return { appId: item.appId as string, deviceBindingId: item.deviceBindingId as string, ownerAccountId: item.ownerAccountId as string };
-  });
-  if (new Set(grants.map(item => JSON.stringify(item))).size !== grants.length) return fail();
-  return { enabled: value.enabled === true, url: value.url, token: value.token, allowedRoles, allowedTools, allowWrites: value.allowWrites === true, grants };
-}
-
 function defaultRabiLinkRelayConfig(): RabiLinkRelayGlobalConfig {
   return {
     enabled: false,
@@ -276,7 +228,6 @@ function defaultRabiLinkRelayConfig(): RabiLinkRelayGlobalConfig {
     deviceId: os.hostname() || "rabilink-pc",
     claimWaitMs: 60000,
     replyIdleTimeoutMs: 60000,
-    speechProxyEnabled: false,
     speechServiceUrl: "http://127.0.0.1:8781"
   };
 }
@@ -295,10 +246,8 @@ function normalizeRabiLinkRelayConfig(raw: unknown): RabiLinkRelayGlobalConfig {
     deviceId: typeof source.deviceId === "string" && source.deviceId.trim() ? source.deviceId.trim() : defaults.deviceId,
     claimWaitMs: normalizeNumber(source.claimWaitMs, defaults.claimWaitMs, 0, 60000),
     replyIdleTimeoutMs: normalizeNumber(source.replyIdleTimeoutMs, defaults.replyIdleTimeoutMs, 1000, 120000),
-    speechProxyEnabled: source.speechProxyEnabled === true,
     speechServiceUrl: typeof source.speechServiceUrl === "string" && source.speechServiceUrl.trim()
       ? source.speechServiceUrl.trim()
-      : defaults.speechServiceUrl,
-    ...(source.knowledgeBridge !== undefined ? { knowledgeBridge: normalizeKnowledgeBridgeConfig(source.knowledgeBridge) } : {})
+      : defaults.speechServiceUrl
   };
 }

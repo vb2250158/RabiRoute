@@ -125,7 +125,7 @@ test("Relay never forwards local-only model directory settings", async (t) => {
   const runtime = new RabiLinkRelayRuntime();
   t.after(() => runtime.stop());
   runtime.sync({ enabled: true, url: `http://127.0.0.1:${relayPort}`, token: "test-only-token", deviceId: "test-pc", deviceGuid: "test-guid", deviceName: "Test PC", claimWaitMs: 60000,
-    localWebguiUrl: `http://127.0.0.1:${localPort}`, speechProxyEnabled: false, localSpeechUrl: `http://127.0.0.1:${localPort}` });
+    localWebguiUrl: `http://127.0.0.1:${localPort}`, localSpeechUrl: "" });
   await waitForRelayRuntime(runtime, "local-only settings rejection", () => completed.size === paths.length, () => ({ completed: completed.size }));
   assert.equal(forwarded, 0);
 });
@@ -176,7 +176,7 @@ test("Relay rejects retired persona synchronization paths before local fetch", a
   t.after(() => runtime.stop());
   await runtime.sync({ enabled: true, url: `http://127.0.0.1:${relayPort}`, token: "test-only-token",
     deviceId: "test-pc", deviceGuid: "test-guid", deviceName: "Test PC", claimWaitMs: 60000,
-    localWebguiUrl: `http://127.0.0.1:${localPort}`, speechProxyEnabled: false, localSpeechUrl: "" });
+    localWebguiUrl: `http://127.0.0.1:${localPort}`, localSpeechUrl: "" });
   await waitForRelayRuntime(runtime, "retired path rejection", () => completed.size === paths.length, () => ({ completed: completed.size }));
   assert.deepEqual(forwarded, []);
   for (const [path, receipt] of completed) {
@@ -265,8 +265,7 @@ test("global Relay runtime registers the PC and proxies remote WebGUI requests",
     localWebguiUrl: `http://127.0.0.1:${localPort}`,
     peerUrls: ["http://192.168.1.10:24001"],
     rabiPcVersion: "0.3.19",
-    speechProxyEnabled: false,
-    localSpeechUrl: "http://127.0.0.1:8781"
+    localSpeechUrl: `http://127.0.0.1:${localPort}`
   });
 
   await waitForRelayRuntime(
@@ -278,6 +277,7 @@ test("global Relay runtime registers the PC and proxies remote WebGUI requests",
   const finishedBody = relayState.finishedBody;
   assert.ok(finishedBody);
   assert.equal(runtime.status().state, "online", JSON.stringify(runtime.status()));
+  assert.equal(runtime.status().capabilities?.includes("speech"), false, "A configured address without a speech service must not advertise speech");
   assert.ok(relayEvents.some((event) => event.eventType === "ready"));
   assert.deepEqual(
     relayEvents.find((event) => event.eventType === "outbox_receipt")?.data,
@@ -290,7 +290,7 @@ test("global Relay runtime registers the PC and proxies remote WebGUI requests",
     deviceKind: "pc",
     deviceName: "Test PC",
     waitMs: "0",
-    capabilities: "wearable-observation-policy-v1,webgui,video-direct,peer-rpc-v1,peer-tunnel-v1,persona-reference-v1,rabi-pc-version-0.3.19",
+    capabilities: "wearable-observation-policy-v1,webgui,video-direct,peer-rpc-v1,peer-tunnel-v1,rabilink-application-access-v1,persona-reference-v1,rabi-pc-version-0.3.19",
     peerUrls: JSON.stringify(["http://192.168.1.10:24001"])
   });
   assert.equal(eventCapabilities, claimedIdentity.capabilities);
@@ -406,8 +406,7 @@ test("global Relay runtime forwards media ranges and Manager SSE events without 
     deviceName: "Range PC",
     claimWaitMs: 60000,
     localWebguiUrl: `http://127.0.0.1:${localPort}`,
-    speechProxyEnabled: false,
-    localSpeechUrl: "http://127.0.0.1:8781"
+    localSpeechUrl: ""
   });
 
   await waitForRelayRuntime(
@@ -522,8 +521,7 @@ test("global Relay runtime hot-forwards supported SSE channels without finite-re
     deviceName: "Hot PC",
     claimWaitMs: 60000,
     localWebguiUrl: `http://127.0.0.1:${localPort}`,
-    speechProxyEnabled: false,
-    localSpeechUrl: "http://127.0.0.1:8781"
+    localSpeechUrl: ""
   });
 
   await waitForRelayRuntime(
@@ -619,8 +617,7 @@ test("global Relay runtime bounds a stuck local GET and retries an uncertain Rel
     deviceName: "Test PC",
     claimWaitMs: 60000,
     localWebguiUrl: `http://127.0.0.1:${localPort}`,
-    speechProxyEnabled: false,
-    localSpeechUrl: "http://127.0.0.1:8781"
+    localSpeechUrl: ""
   });
 
   await waitForRelayRuntime(
@@ -643,6 +640,7 @@ test("global Relay runtime proxies the independent speech plugin without exposin
   const wavPayload = Buffer.from("RIFF-test-wave", "utf8");
   const localState: Record<string, unknown> = {};
   const localSpeech = http.createServer((request, response) => {
+    if (request.url === "/api/events" || request.url === "/api/speech/events") { openRelayEvents(response); return; }
     if (request.url === "/v1/capabilities") {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ providers: { asr: { fixture: { enabled: true } } } })); return;
@@ -720,8 +718,7 @@ test("global Relay runtime proxies the independent speech plugin without exposin
     deviceGuid: "guid-a",
     deviceName: "Test PC",
     claimWaitMs: 60000,
-    localWebguiUrl: "http://127.0.0.1:24001",
-    speechProxyEnabled: true,
+    localWebguiUrl: `http://127.0.0.1:${localSpeechPort}`,
     localSpeechUrl: `http://127.0.0.1:${localSpeechPort}`
   });
 
@@ -731,7 +728,7 @@ test("global Relay runtime proxies the independent speech plugin without exposin
     () => relayState.finishedBody !== undefined,
     () => ({ declaredCapabilities, localMethod: localState.method, relayReceiptReceived: relayState.finishedBody !== undefined })
   );
-  assert.equal(declaredCapabilities, "wearable-observation-policy-v1,webgui,video-direct,peer-rpc-v1,peer-tunnel-v1,persona-reference-v1,speech,asr");
+  assert.equal(declaredCapabilities, "wearable-observation-policy-v1,webgui,video-direct,peer-rpc-v1,peer-tunnel-v1,rabilink-application-access-v1,persona-reference-v1,speech,asr");
   assert.equal(localState.method, "POST");
   assert.equal(localState.url, "/v1/audio/transcriptions?language=zh");
   assert.equal(localState.authorization, undefined);
@@ -820,7 +817,6 @@ test("global Relay runtime sends completed mobile ASR messages to Manager instea
     deviceName: "Test PC",
     claimWaitMs: 60000,
     localWebguiUrl: `http://127.0.0.1:${managerPort}`,
-    speechProxyEnabled: true,
     localSpeechUrl: "http://127.0.0.1:8781"
   });
 
@@ -854,8 +850,7 @@ test("global Relay runtime reports incomplete configuration without making a req
     deviceName: "Test PC",
     claimWaitMs: 60000,
     localWebguiUrl: "http://127.0.0.1:24001",
-    speechProxyEnabled: false,
-    localSpeechUrl: "http://127.0.0.1:8781"
+    localSpeechUrl: ""
   });
   assert.equal(runtime.status().state, "incomplete");
 });
@@ -929,8 +924,7 @@ test("stop aborts active local proxies, suppresses completion writes, and permit
     deviceName: "Stop PC",
     claimWaitMs: 60_000,
     localWebguiUrl: `http://127.0.0.1:${localPort}`,
-    speechProxyEnabled: false,
-    localSpeechUrl: "http://127.0.0.1:8781"
+    localSpeechUrl: ""
   };
   await runtime.sync(config);
   await waitForRelayRuntime(
@@ -1005,8 +999,7 @@ test("WebGUI drain retries inside the same generation and returns to online", as
     deviceName: "WebGUI Retry PC",
     claimWaitMs: 60_000,
     localWebguiUrl: `http://127.0.0.1:${relayPort}`,
-    speechProxyEnabled: false,
-    localSpeechUrl: "http://127.0.0.1:8781"
+    localSpeechUrl: ""
   });
 
   await waitForRelayRuntime(
@@ -1060,7 +1053,6 @@ test("speech drain retries inside the same generation and returns to online", as
     deviceName: "Speech Retry PC",
     claimWaitMs: 60_000,
     localWebguiUrl: `http://127.0.0.1:${relayPort}`,
-    speechProxyEnabled: true,
     localSpeechUrl: "http://127.0.0.1:8781"
   });
 
@@ -1105,8 +1097,7 @@ test("stop cancels a pending channel retry without cross-generation relaunch", a
     deviceName: "Stop Retry PC",
     claimWaitMs: 60_000,
     localWebguiUrl: `http://127.0.0.1:${relayPort}`,
-    speechProxyEnabled: false,
-    localSpeechUrl: "http://127.0.0.1:8781"
+    localSpeechUrl: ""
   });
   await waitForRelayRuntime(
     runtime,
@@ -1209,8 +1200,7 @@ test("global Relay runtime preserves route mutation fencing and committed receip
     deviceName: "Test PC",
     claimWaitMs: 60_000,
     localWebguiUrl: `http://127.0.0.1:${localPort}`,
-    speechProxyEnabled: false,
-    localSpeechUrl: "http://127.0.0.1:8781"
+    localSpeechUrl: ""
   });
 
   await waitForRelayRuntime(
@@ -1271,8 +1261,7 @@ test("duplicate Relay availability events keep a single WebGUI drain flight", as
     deviceName: "Single Drain PC",
     claimWaitMs: 60_000,
     localWebguiUrl: `http://127.0.0.1:${relayPort}`,
-    speechProxyEnabled: false,
-    localSpeechUrl: "http://127.0.0.1:8781"
+    localSpeechUrl: ""
   });
   await waitForRelayRuntime(
     runtime,
@@ -1284,7 +1273,8 @@ test("duplicate Relay availability events keep a single WebGUI drain flight", as
 });
 
 
-test("idle Relay republishes ASR recovery and loss without speech requests", async (t) => {
+test("owner SSE republishes actual speech and ASR recovery and loss without idle polling", async (t) => {
+  let serviceRunning = false;
   let available = false;
   let probes = 0;
   let fetchStarts = 0;
@@ -1294,6 +1284,9 @@ test("idle Relay republishes ASR recovery and loss without speech requests", asy
   let heldProbe: http.ServerResponse | undefined;
   let probeAborted = false;
   let heldProbes = 0;
+  let activeProbes = 0;
+  let maximumActiveProbes = 0;
+  const speechStreams = new Set<http.ServerResponse>();
   const nativeFetch = globalThis.fetch;
   t.mock.method(globalThis, "fetch", (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
@@ -1305,14 +1298,23 @@ test("idle Relay republishes ASR recovery and loss without speech requests", asy
   });
   const advertisements: boolean[] = [];
   const local = http.createServer((request, response) => {
+    if (request.url === "/api/events") { openRelayEvents(response); return; }
+    if (request.url === "/api/speech/events") {
+      if (!serviceRunning) { response.writeHead(503).end(); return; }
+      speechStreams.add(response); response.once("close", () => speechStreams.delete(response));
+      openRelayEvents(response); return;
+    }
     if (request.url === "/v1/capabilities") {
       probes += 1;
+      activeProbes++; maximumActiveProbes = Math.max(maximumActiveProbes, activeProbes);
+      response.once("close", () => { activeProbes--; });
       if (holdProbe) {
         heldProbes++;
         heldProbe = response;
         response.once("close", () => { probeAborted = !response.writableEnded; });
         return;
       }
+      if (!serviceRunning) { response.writeHead(503).end(); return; }
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({ providers: { asr: { local: { enabled: available } } } }));
     } else response.writeHead(404).end();
@@ -1330,27 +1332,46 @@ test("idle Relay republishes ASR recovery and loss without speech requests", asy
   });
   const relayPort = await listen(relay);
   t.after(() => close(relay));
-  const runtime = new RabiLinkRelayRuntime({ asrRefreshIntervalMs: 50 });
+  const runtime = new RabiLinkRelayRuntime({ channelRetryDelayMs: 10 });
   t.after(() => runtime.stop());
   await runtime.sync({ enabled: true, url: `http://127.0.0.1:${relayPort}`, token: "test",
     deviceId: "pc", deviceGuid: "guid", deviceName: "PC", claimWaitMs: 0,
-    localWebguiUrl: `http://127.0.0.1:${localPort}`, speechProxyEnabled: true,
+    localWebguiUrl: `http://127.0.0.1:${localPort}`,
     localSpeechUrl: `http://127.0.0.1:${localPort}` });
-  const details = () => ({ advertisements, probes, fetchStarts, lateFetchStarts, heldProbes, probeAborted });
+  const details = () => ({ advertisements, probes, fetchStarts, lateFetchStarts, heldProbes, probeAborted, maximumActiveProbes });
   await waitForRelayRuntime(runtime, "initial unavailable ASR", () => advertisements.length > 0, details);
   assert.equal(advertisements[0], false);
+  assert.equal(runtime.status().capabilities?.includes("speech"), false);
+  serviceRunning = true;
+  await waitForRelayRuntime(runtime, "speech owner reconnect without ASR", () => runtime.status().capabilities?.includes("speech") === true && speechStreams.size > 0, details);
+  assert.equal(runtime.status().capabilities?.includes("asr"), false);
   available = true;
+  for (const stream of speechStreams) stream.write("event: capabilities_changed\ndata: {}\n\n");
   await waitForRelayRuntime(runtime, "idle ASR recovery", () => advertisements.includes(true), details);
+  assert.equal(runtime.status().capabilities?.includes("speech"), true);
+  serviceRunning = false;
   available = false;
+  for (const stream of speechStreams) stream.end();
   await waitForRelayRuntime(runtime, "ASR loss", () => advertisements.length >= 3 && advertisements.at(-1) === false, details);
+  assert.equal(runtime.status().capabilities?.includes("speech"), false);
   const claims = advertisements.length;
+  const idleProbes = probes;
   await new Promise(resolve => setTimeout(resolve, 160));
   assert.equal(advertisements.length, claims, "unchanged capabilities do not poll Relay queues");
+  assert.equal(probes, idleProbes, "known-offline retries reconnect SSE instead of polling capabilities");
+  serviceRunning = true; available = true;
+  await waitForRelayRuntime(runtime, "speech owner recovery", () => runtime.status().capabilities?.includes("asr") === true && speechStreams.size > 0, details);
+  const quietProbes = probes;
+  for (const stream of speechStreams) stream.write("event: microphone_level\ndata: {}\n\nevent: records_changed\ndata: {}\n\n");
+  await new Promise(resolve => setTimeout(resolve, 160));
+  assert.equal(probes, quietProbes, "telemetry and idle time do not refresh provider state");
   // A request dispatched before abort may still arrive at the HTTP fixture.
   // Stop at an acknowledged in-flight probe, not an arbitrary network boundary.
   holdProbe = true;
+  for (const stream of speechStreams) stream.write("event: capabilities_changed\ndata: {}\n\n");
   await waitForRelayRuntime(runtime, "acknowledged in-flight capability probe", () => heldProbe !== undefined, details);
   assert.equal(heldProbes, 1);
+  assert.equal(maximumActiveProbes, 1, "owner probes remain single-flight");
   assert.equal(fetchStarts, probes, "all dispatched probes have reached the fixture before stop");
   stopping = true;
   const stoppedFetchStarts = fetchStarts;
@@ -1362,4 +1383,167 @@ test("idle Relay republishes ASR recovery and loss without speech requests", asy
   assert.equal(lateFetchStarts, 0, "stop never initiates another capability fetch");
   assert.equal(fetchStarts, stoppedFetchStarts, "stop does not restart capability discovery");
   assert.equal(probes, stoppedProbes, "stop cancels capability discovery");
+});
+
+test("Manager owner readiness events recover knowledge without idle meta polling and stop aborts its probe", async (t) => {
+  let managerReady = false;
+  let managerEventsRunning = true;
+  let probes = 0;
+  let activeProbes = 0;
+  let maximumActiveProbes = 0;
+  let holdProbe = false;
+  let heldProbe: http.ServerResponse | undefined;
+  let probeAborted = false;
+  let stopping = false;
+  let lateFetchStarts = 0;
+  const ownerStreams = new Set<http.ServerResponse>();
+  const advertisements: boolean[] = [];
+  const nativeFetch = globalThis.fetch;
+  t.mock.method(globalThis, "fetch", (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    if (stopping && url.pathname === "/meta") lateFetchStarts++;
+    return nativeFetch(input, init);
+  });
+  const manager = http.createServer((request, response) => {
+    if (request.url === "/api/events") {
+      if (!managerEventsRunning) { response.writeHead(503).end(); return; }
+      ownerStreams.add(response); response.once("close", () => ownerStreams.delete(response));
+      openRelayEvents(response); return;
+    }
+    if (request.url === "/api/speech/events") { openRelayEvents(response); return; }
+    if (request.url === "/meta") {
+      probes++; activeProbes++; maximumActiveProbes = Math.max(maximumActiveProbes, activeProbes);
+      response.once("close", () => { activeProbes--; });
+      if (holdProbe) {
+        heldProbe = response;
+        response.writeHead(200, { "content-type": "application/json" }); response.flushHeaders();
+        response.once("close", () => { probeAborted = !response.writableEnded; }); return;
+      }
+      if (!managerReady) { response.writeHead(503).end(); return; }
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ applicationGenerationId: "owner-generation", managerInstanceId: "owner-instance",
+        health: { live: true, requiredReady: true, state: "healthy" } })); return;
+    }
+    response.writeHead(404).end();
+  });
+  const managerPort = await listen(manager); t.after(() => close(manager));
+  const relay = http.createServer((request, response) => {
+    const url = new URL(request.url || "/", "http://localhost");
+    if (url.pathname === "/api/rabilink/events") { openRelayEvents(response); return; }
+    if (url.pathname === "/worker/webgui-requests") advertisements.push((url.searchParams.get("capabilities") || "").split(",").includes("knowledgebridge"));
+    response.setHeader("content-type", "application/json"); response.end(JSON.stringify({ requests: [] }));
+  });
+  const relayPort = await listen(relay); t.after(() => close(relay));
+  const runtime = new RabiLinkRelayRuntime({ channelRetryDelayMs: 10, knowledge: {
+    endpoint: () => ({ managerBaseUrl: `http://127.0.0.1:${managerPort}`, applicationGenerationId: "owner-generation", managerInstanceId: "owner-instance" }),
+    roleIds: () => ["fixture"]
+  } });
+  t.after(() => runtime.stop());
+  await runtime.sync({ enabled: true, url: `http://127.0.0.1:${relayPort}`, token: "test",
+    deviceId: "pc", deviceGuid: "guid", deviceName: "PC", claimWaitMs: 0,
+    localWebguiUrl: `http://127.0.0.1:${managerPort}`, localSpeechUrl: "" });
+  const details = () => ({ probes, advertisements, maximumActiveProbes, probeAborted, lateFetchStarts });
+  await waitForRelayRuntime(runtime, "initial unavailable knowledge owner", () => advertisements.length > 0 && ownerStreams.size > 0 && activeProbes === 0, details);
+  assert.equal(runtime.status().knowledgeBridgeReady, false);
+  managerReady = true;
+  for (const stream of ownerStreams) stream.write('event: route_catalog_startup_changed\ndata: {"state":"ready"}\n\n');
+  await waitForRelayRuntime(runtime, "knowledge owner ready event", () => advertisements.includes(true), details);
+  assert.equal(runtime.status().knowledgeBridgeReady, true);
+  const idleProbes = probes;
+  for (const stream of ownerStreams) stream.write("event: conversation_changed\ndata: {}\n\n");
+  await new Promise(resolve => setTimeout(resolve, 160));
+  assert.equal(probes, idleProbes, "idle time and unrelated owner events do not read meta");
+  holdProbe = true;
+  for (const stream of ownerStreams) stream.write('event: route_catalog_startup_changed\ndata: {"state":"ready"}\n\n');
+  await waitForRelayRuntime(runtime, "in-flight probe before Manager SSE loss", () => heldProbe !== undefined, details);
+  managerEventsRunning = false;
+  for (const stream of ownerStreams) stream.end();
+  await waitForRelayRuntime(runtime, "Manager SSE loss revokes knowledge", () => ownerStreams.size === 0 && advertisements.at(-1) === false, details);
+  holdProbe = false;
+  heldProbe!.end(JSON.stringify({ applicationGenerationId: "owner-generation", managerInstanceId: "owner-instance",
+    health: { live: true, requiredReady: true, state: "healthy" } }));
+  await waitForRelayRuntime(runtime, "late probe completion after Manager SSE loss", () => activeProbes === 0, details);
+  await new Promise(resolve => setTimeout(resolve, 80));
+  assert.equal(runtime.status().knowledgeBridgeReady, false, "a disconnected owner's late probe cannot restore knowledge");
+  managerEventsRunning = true;
+  await waitForRelayRuntime(runtime, "Manager SSE reconnect restores knowledge", () => ownerStreams.size > 0 && advertisements.at(-1) === true, details);
+  managerReady = false;
+  for (const stream of ownerStreams) stream.write('event: route_catalog_startup_changed\ndata: {"state":"degraded"}\n\n');
+  await waitForRelayRuntime(runtime, "knowledge owner loses readiness", () => advertisements.length >= 3 && advertisements.at(-1) === false, details);
+  holdProbe = true;
+  heldProbe = undefined;
+  for (const stream of ownerStreams) stream.write('event: route_catalog_startup_changed\ndata: {"state":"ready"}\n\n');
+  await waitForRelayRuntime(runtime, "acknowledged in-flight meta body", () => heldProbe !== undefined, details);
+  assert.equal(maximumActiveProbes, 1);
+  stopping = true;
+  await runtime.stop();
+  await waitForRelayRuntime(runtime, "meta body cancellation", () => probeAborted, details);
+  const stoppedProbes = probes;
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(lateFetchStarts, 0);
+  assert.equal(probes, stoppedProbes);
+});
+
+test("nested uncertain knowledge receipts revoke advertised readiness while CAS rejection preserves it", async (t) => {
+  const owners = new Set<http.ServerResponse>();
+  const manager = http.createServer((request, response) => {
+    if (request.url === "/api/events") { owners.add(response); response.once("close", () => owners.delete(response)); openRelayEvents(response); return; }
+    if (request.url === "/api/speech/events") { openRelayEvents(response); return; }
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/meta") {
+      response.end(JSON.stringify({ applicationGenerationId: "receipt-generation", managerInstanceId: "receipt-instance",
+        health: { live: true, requiredReady: true, state: "healthy" } })); return;
+    }
+    request.resume();
+    if (request.method === "POST") { response.writeHead(503).end(JSON.stringify({ code: -1, uncertain: true, commitState: "unknown" })); return; }
+    if (request.method === "PATCH") { response.writeHead(412).end(JSON.stringify({ code: -1, commitState: "not_started" })); return; }
+    response.writeHead(404).end();
+  });
+  const managerPort = await listen(manager); t.after(() => close(manager));
+  const queue: Record<string, unknown>[] = [];
+  const receipts = new Map<string, Record<string, unknown>>();
+  const advertisements: boolean[] = [];
+  let relayStream: http.ServerResponse | undefined;
+  const relay = http.createServer((request, response) => { void (async () => {
+    const url = new URL(request.url || "/", "http://localhost");
+    if (url.pathname === "/api/rabilink/events") { relayStream = response; openRelayEvents(response); return; }
+    response.setHeader("content-type", "application/json");
+    if (url.pathname === "/worker/webgui-requests") {
+      advertisements.push((url.searchParams.get("capabilities") || "").split(",").includes("knowledgebridge"));
+      response.end(JSON.stringify({ requests: queue.splice(0, 1) })); return;
+    }
+    if (request.method === "POST" && url.pathname.endsWith("/response")) {
+      const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      const finished = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      receipts.set(url.pathname.split("/").at(-2)!, JSON.parse(Buffer.from(finished.bodyBase64, "base64").toString("utf8")));
+    }
+    response.end(JSON.stringify({ requests: [] }));
+  })().catch(error => { response.writeHead(500).end(String(error)); }); });
+  const relayPort = await listen(relay); t.after(() => close(relay));
+  const runtime = new RabiLinkRelayRuntime({ channelRetryDelayMs: 10, knowledge: {
+    endpoint: () => ({ managerBaseUrl: `http://127.0.0.1:${managerPort}`, applicationGenerationId: "receipt-generation", managerInstanceId: "receipt-instance" }), roleIds: () => ["fixture"]
+  } });
+  t.after(() => runtime.stop());
+  await runtime.sync({ enabled: true, url: `http://127.0.0.1:${relayPort}`, token: "test", deviceId: "pc", deviceGuid: "guid", deviceName: "PC", claimWaitMs: 0,
+    localWebguiUrl: `http://127.0.0.1:${managerPort}`, localSpeechUrl: "" });
+  const details = () => ({ advertisements, receipts: [...receipts.keys()] });
+  await waitForRelayRuntime(runtime, "receipt fixture owner ready", () => runtime.status().knowledgeBridgeReady === true && owners.size > 0 && advertisements.length > 0, details);
+  const enqueue = (id: string, name: string, args: Record<string, unknown>) => {
+    queue.push({ id, method: "POST", path: "/__rabilink/knowledge", nonReplayable: true,
+      knowledge: { appId: "app", deviceBindingId: "glass", ownerAccountId: "owner", targetDeviceId: "pc" },
+      bodyBase64: Buffer.from(JSON.stringify({ operation: "call", name, args })).toString("base64") });
+    relayStream!.write("event: webgui_available\ndata: {}\n\n");
+  };
+  enqueue("uncertain", "recent_memory_create", { roleId: "fixture", idempotencyKey: "unknown-key", body: { title: "Fixture", focus: "fixture", keywords: ["test"], content: "Synthetic fixture only" } });
+  await waitForRelayRuntime(runtime, "nested uncertainty revokes directory capabilities", () => receipts.has("uncertain") && advertisements.at(-1) === false, details);
+  assert.equal((receipts.get("uncertain")!.structuredContent as Record<string, unknown>).uncertain, true);
+  assert.equal(runtime.status().knowledgeBridgeReady, false);
+  for (const owner of owners) owner.write('event: route_catalog_startup_changed\ndata: {"state":"ready"}\n\n');
+  await waitForRelayRuntime(runtime, "receipt fixture owner recovery", () => advertisements.at(-1) === true, details);
+  enqueue("cas", "recent_memory_update", { roleId: "fixture", id: "fixture-memory", idempotencyKey: "cas-key", etag: '"fixture-etag"', body: { title: "Fixture" } });
+  await waitForRelayRuntime(runtime, "CAS receipt", () => receipts.has("cas"), details);
+  const cas = receipts.get("cas")!.structuredContent as Record<string, unknown>;
+  assert.equal(cas.statusCode, 412); assert.equal(cas.uncertain, false);
+  assert.equal(runtime.status().knowledgeBridgeReady, true, "business CAS rejection is not an unavailable knowledge owner");
+  assert.equal(advertisements.at(-1), true);
 });

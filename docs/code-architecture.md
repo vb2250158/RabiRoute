@@ -6,6 +6,8 @@
 
 # RabiRoute 代码架构
 
+0.3.22 连接合同：同一 RabiLink 应用已鉴权设备默认使用 PC 实际提供的全部服务。设备固定公钥与应用作用域继续复核；知识读写复用 Manager 接口，无额外 MCP 密钥或知识 grant。旧逐服务权限字段和知识表单已退役。实现与迁移见[通用连接](rabilink-peer-tunnel.md)及[知识运行合同](rabilink-knowledge-runtime.md)。
+
 设备接入边界已调整：手表、手环和眼镜在移动端记录系统设置，由记录系统统一投递事件。PC 独立设备入口已移除；下文旧设备协议仅作兼容维护，实施与退出条件见[移动端记录与事件边界](mobile-recording-event-boundary.md)。
 
 `webPatchCatalog.ts` 校验不可变候选；`WebPatchService` 通过既有 generation 串行边界原子保存指针和回执；`WebPatchWatcher` 消费完成标记。Host 命令复用身份校验与审计，客户端按文档版本请求模块。容量和旧入口退出条件见[Web 热补丁](web-hot-patches.md)。
@@ -14,7 +16,7 @@ Android 全天记录整合正在实施：`RabiConversationService` 是手机/眼
 
 通用跨 PC 连接由 `src/peerTunnel/` 拥有：认证、三线路选择、流复用、RTT 和请求转发。语音页面使用同一目标选择，设备采集与播放保留本机归属。见[通用连接](rabilink-peer-tunnel.md)。
 
-跨 PC 只读调用由 `rabiPeerProtocol.ts` 拥有加密合同和目标授权分派，`rabiPeerClient.ts` 编排 LAN/P2P/Relay，`rabiPeerDirect.ts` 拥有有界 WebRTC 连接。`rabiPeerDiscovery.ts` 是独立于已退役同步功能的通用设备发现；RabiLink 插件拥有 HTTP 入口及释放，`src/manager/peerLanServer.ts` 的 `PeerLanServer` 承载 peer RPC/tunnel，不开放完整 Manager。通用状态事件为 `peer_lan_status`，端口设置为 `RABILINK_PEER_LAN_PORT`，设备变更事件为 `peer_changed`；这些名称描述本轮源码调整，不代表已经部署或实机验收。见[跨电脑接口调用](rabilink-peer-rpc.md)。
+跨 PC 只读调用由 `rabiPeerProtocol.ts` 拥有加密合同和同一应用鉴权分派，`rabiPeerClient.ts` 编排 LAN/P2P/Relay，`rabiPeerDirect.ts` 拥有有界 WebRTC 连接。`rabiPeerDiscovery.ts` 是独立于已退役同步功能的通用设备发现；RabiLink 插件拥有 HTTP 入口及释放，`src/manager/peerLanServer.ts` 的 `PeerLanServer` 承载 peer RPC/tunnel；完整 Manager 仅通过已鉴权的 `manager` 服务转发，不在 peer LAN 端口直接暴露。通用状态事件为 `peer_lan_status`，端口设置为 `RABILINK_PEER_LAN_PORT`，设备变更事件为 `peer_changed`；这些名称描述本轮源码调整，不代表已经部署或实机验收。见[跨电脑接口调用](rabilink-peer-rpc.md)。
 
 实验视频直连由 `RabiDirectVideoSender.kt` 与 `src/manager/rabiDirectVideo.ts` 承担两端传输。RabiLink Manager 插件拥有接收器生命周期和本机文件；`rabiDirectVideoRoutes.ts` 仅接收有界 SDP，Relay 不接收视频字节。SDK 取流留在眼镜适配器。见 [能力与验收限制](rabilink-direct-video.md)。
 
@@ -245,7 +247,7 @@ data/roles/<RoleId>/conversation/archive/index.json
 - 角色路径、计划、记忆、日志路径如何注入。
 - `replyContextJson` 如何构造。
 - 当前人格、逻辑消息端和会话最近双向消息如何从 `conversation/current.jsonl` 取得。
-- 不再注入已退役的人格同步操作合同，也不创建后台同步任务；远端访问沿用 RabiLink 的目标授权边界。
+- 不再注入已退役的人格同步操作合同，也不创建后台同步任务；远端访问使用 RabiLink 的同一应用鉴权和固定公钥边界。
 - 当前消息询问全天/区间声纹、用户与他人发言或说话人身份时，如何注入当前人格的 `voice-transcripts` 查询和 `voice-identities` 追加修正合同；证据不足必须保持 unknown。
 - 当前 Route 配置持久计划管理秘书且本轮涉及计划、秘书、委派或计划反馈时，如何把每个秘书槽的完整任务 ID、名称、workspace 和控制面边界注入主任务；计划的业务 `taskBinding` 仍指向独立业务任务，秘书及其临时子 Agent只做计划盘点、查重、状态核对、结果消费和续投，不修改业务文件。
 
@@ -555,7 +557,7 @@ Gateway 配置的事实源 Module。
 
 ## WebGUI
 
-侧栏 RabiLink 统一承载 `#/rabilink?tab=home|agents|config`，旧 `#/lan-agents` 只重定向到 `agents`。`RabiLinkSettings` 复用 `/api/rabi/identity`，实例名称/GUID、Relay 连接及高级超时、语音中转和 Agent 上传上限仍以 `data/Config.json` 为唯一配置真源；Settings 不再保留副本，目录和 LAN 访问留在原设置页。主页改用紧凑的原生中文只读视图，不再嵌入 `/admin` 或 `/manage`。浏览器调用 `GET /api/rabi/link-home`，Manager 使用服务端保存的应用 token 请求配置 Relay 的固定 `GET /api/rabilink/peers`，按应用隔离并仅投影电脑名、标识、在线状态和服务白名单。token 不返回主页浏览器、不进入 URL，不以应用凭据取得管理员权限。Relay 地址不接受 userinfo、query、hash 或路径前缀。未配置、连接失败、认证失败及读取失败必须单独呈现，不能冒充零设备或首次初始化；只有成功读取的空列表才表示没有设备。管理员操作另从新窗口打开 `/manage`，需要独立账号登录，主页读取不依赖其 Cookie。此处描述现行方案，不代表部署或真实浏览器交互已验收。
+侧栏 RabiLink 统一承载 `#/rabilink?tab=home|agents|config`，旧 `#/lan-agents` 只重定向到 `agents`。`RabiLinkSettings` 复用 `/api/rabi/identity`，实例名称/GUID、Relay 连接、Agent 上传上限及高级连接参数（超时与本机语音服务地址）仍以 `data/Config.json` 为唯一配置真源；Settings 不再保留副本，目录和 LAN 访问留在原设置页。主页改用紧凑的原生中文只读视图，不再嵌入 `/admin` 或 `/manage`。浏览器调用 `GET /api/rabi/link-home`，Manager 使用服务端保存的应用 token 请求配置 Relay 的固定 `GET /api/rabilink/peers`，按应用隔离并仅投影电脑名、标识、在线状态和服务白名单。token 不返回主页浏览器、不进入 URL，该列表请求不取得 Relay 服务器的网页管理员身份；这不限制已鉴权设备使用目标 PC 的 `manager` 服务。Relay 地址不接受 userinfo、query、hash 或路径前缀。未配置、连接失败、认证失败及读取失败必须单独呈现，不能冒充零设备或首次初始化；只有成功读取的空列表才表示没有设备。管理员操作另从新窗口打开 `/manage`，需要独立账号登录，主页读取不依赖其 Cookie。此处描述现行方案，不代表部署或真实浏览器交互已验收。
 
 `ribiwebgui/` 是 Vue + Vuetify 最小宿主。页面、导航、设置区、状态卡和主题来自 Manager 的受控插件贡献目录；宿主负责路由外壳、安全渲染、连接与恢复，不维护第二份插件入口清单。
 

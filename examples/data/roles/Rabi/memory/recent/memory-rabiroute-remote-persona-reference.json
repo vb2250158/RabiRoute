@@ -1,11 +1,11 @@
 {
   "id": "memory-rabiroute-remote-persona-reference",
   "title": "本机 Route 引用远端人格时保持资料与执行归属",
-  "focus": "远端人格引用的只读权限与归属边界",
-  "content": "我在 0.3.19 中把远端人格作为引用使用：agentRoleDeviceId 指向稳定设备 ID，agentRoleId 保留来源 PC 的真实人格 ID；不复制人格目录，也不退回本机同名人格。本机 Route 继续拥有消息端、实际处理 Agent、工作目录和消息审计，正文、消息规则、上下文额度与知识仍由来源人格拥有。两端复用同一 RabiLink 应用认证，通过 bootstrap-persona 自动交换并固定公钥，再走既有 LAN/P2P/Relay 选路，只开放 persona 服务只读白名单；不新增手工完整 manager 授权，来源已有手工限权保留。每次消息读取来源 persona-reference 快照，核对两端 Manager 身份、Route capability、固定公钥和 revision；离线、鉴权失败、旧版或身份变化都停止投递。语言风格检查只提交正文、file、revision，由来源 PC 的已保存人格配置决定风格地址，拒绝调用方地址与检查期间变化；远端路径不在本机解释。人格及知识修改、定时任务、脚本、消息投递都不在 persona 服务权限内；本机不运行远端秘书、整理或人格 Hook。自动化测试与构建证据不能代替真实双 PC 投递、断线恢复和长期运行验收；当前实现仍为 experimental，操作合同见 docs/remote-persona-reference.md。 0.3.21 增加实例身份重置：两台电脑即使显示名称不同，也不能共用复制过来的 GUID 和连接密钥；Host 负责备份、停代、离线事务和重启，用户数据与固定对端权限保留。新版身份绑定操作系统机器归属，Config 单文件或完整数据复制到外机都会失败关闭；旧版无标记配置首次升级保留身份，已存在的重复需要在其中一台显式重置。完整操作系统克隆保留机器身份时仍需人工处理，机器归属不是网络授权。",
+  "focus": "远端人格引用的统一应用鉴权与资料、执行归属",
+  "content": "我从 0.3.19 起把远端人格作为引用使用：agentRoleDeviceId 指向稳定设备 ID，agentRoleId 保留来源 PC 的真实人格 ID；不复制人格目录，也不退回本机同名人格。本机 Route 继续拥有消息端、实际处理 Agent、工作目录、宿主审批和消息审计，正文、消息规则、上下文额度与知识仍由来源人格拥有。0.3.22 起，两端复用同一 RabiLink 应用鉴权，通过 bootstrap-application 自动交换并固定公钥，连接后默认可用来源 PC 实际提供的全部服务，包括 manager 和知识读写；逐服务、角色、工具与写权限 grant 已退役。人格引用本身继续走 persona 固定只读 API 别名和既有 LAN/P2P/Relay 选路；路径限制不是另一次设备授权。每个新请求复核当前应用作用域、设备凭据、启用状态与固定公钥，公钥变化不会自动覆盖。每次消息读取来源 persona-reference 快照，核对两端 Manager 身份、Route capability、固定公钥和 revision；离线、鉴权失败、旧版或身份变化都停止投递。语言风格检查只提交正文、file、revision，由来源 PC 已保存配置决定风格地址，拒绝调用方地址与检查期间变化；远端路径不在本机解释。修改远端知识或执行远端动作使用同一已鉴权连接的 manager 受管接口，保留实际业务校验和来源执行归属；引用不会在本机运行远端秘书、整理、定时任务、脚本或人格 Hook。自动化测试与构建不能代替真实双 PC 投递、断线恢复和长期运行验收；当前仍为 experimental，合同见 docs/remote-persona-reference.md。0.3.21 增加实例身份重置：两台电脑即使显示名不同，也不能共用复制过来的 GUID 和连接密钥；Host 负责备份、停代、离线事务和重启，用户数据与固定对端公钥保留。新版身份绑定操作系统机器归属，Config 单文件或完整数据复制到外机都会失败关闭；旧版无标记配置首次升级保留身份，已有重复需要在其中一台显式重置。完整操作系统克隆保留机器身份时仍需人工处理，机器归属不是网络鉴权。",
   "source": {
     "kind": "example",
-    "summary": "公开示例近期记忆：0.3.19 远端人格引用的归属、授权与待验收边界"
+    "summary": "公开示例近期记忆：0.3.22 远端人格引用的应用鉴权、归属与待验收边界"
   },
   "createdAt": "2026-10-01T00:00:00+08:00",
   "updatedAt": "2026-10-03T00:00:00+08:00",
@@ -17,7 +17,7 @@
     "persona-reference",
     "同名隔离",
     "persona service",
-    "bootstrap-persona",
+    "bootstrap-application",
     "RabiLink 应用鉴权",
     "设备公钥",
     "Manager 身份",
@@ -26,6 +26,9 @@
     "双 PC 验收",
     "实例身份重置",
     "复制配置",
-    "设备归属"
+    "设备归属",
+    "rabilink-application-access-v1",
+    "统一应用鉴权",
+    "Manager 知识工具"
   ]
 }

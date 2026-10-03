@@ -5,9 +5,8 @@ import { createAgentProfileService } from './rabilink-agent-profile.mjs';
 import { createProfileReceiptPolicy } from './rabilink-agent-profile-ui-receipt.mjs';
 import { createProfileSkillsEditor } from './rabilink-profile-skills-editor.mjs';
 import { createProfileMcpEditor } from './rabilink-profile-mcp-editor.mjs';
-import { createKnowledgeGrantEditor } from './rabilink-knowledge-grant-ui.mjs';
 import { normalizeAgentProfileState, assertProfileManagementCsrf } from './rabilink-agent-profile-state.mjs';
-import { createKnowledgeGrantService, normalizeKnowledgeGrantState, authorizeKnowledgeRequest, rejectReservedKnowledgePath } from './rabilink-knowledge-grant.mjs';
+import { authorizeKnowledgeRequest, rejectReservedKnowledgePath } from './rabilink-knowledge-access.mjs';
 import { normalizeKnowledgeIntents, knowledgeOutcome, readKnowledgeOperation } from './rabilink-knowledge-operations.mjs';
 import http from "node:http";
 import fs from "node:fs";
@@ -641,7 +640,8 @@ function normalizeDeviceBinding(binding) {
     claimedAt: String(binding.claimedAt || ""),
     claimExpiresAt: String(binding.claimExpiresAt || ""),
     ...(binding.knowledgeIntents === undefined ? {} : { knowledgeIntents: normalizeKnowledgeIntents(binding.knowledgeIntents) }),
-    ...(binding.knowledgeGrantState === undefined ? {} : { knowledgeGrantState: normalizeKnowledgeGrantState(binding.knowledgeGrantState) }),
+    // Retained historical receipts only; application membership owns current access.
+    ...(binding.knowledgeGrantState === undefined ? {} : { knowledgeGrantState: structuredClone(binding.knowledgeGrantState) }),
     ...(binding.agentProfileState === undefined ? {} : { agentProfileState: normalizeAgentProfileState(binding.agentProfileState) })
   };
 }
@@ -812,7 +812,6 @@ function writeAppStore(store) {
 }
 
 const agentProfileService = createAgentProfileService({ readStore: readAppStore, writeStore: writeAppStore });
-const knowledgeGrantService = createKnowledgeGrantService({ readStore: readAppStore, writeStore: writeAppStore });
 
 function hasEnabledRabiLinkApps() {
   return readAppStore().apps.some((app) => app.enabled !== false && app.token);
@@ -1973,13 +1972,14 @@ function claimWebguiRequests(limit, deviceId, appId = "", deviceGuid = "") {
       try {
         const currentApp = readAppStore().apps.find(a => a.id === request.appId && a.enabled !== false);
         const currentBinding = currentApp?.deviceBindings?.find(b => b.id === request.knowledge.deviceBindingId && b.enabled !== false);
-        if (!currentBinding || currentBinding.credentialHash !== request.knowledgeCredentialHash || currentApp.ownerAccountId !== request.knowledge.ownerAccountId) throw new Error('KNOWLEDGE_GRANT_REVOKED');
+        if (!currentBinding || currentBinding.credentialHash !== request.knowledgeCredentialHash || currentApp.ownerAccountId !== request.knowledge.ownerAccountId
+          || request.knowledge.appId !== request.appId || request.knowledge.targetDeviceId !== request.targetDeviceId) throw new Error('KNOWLEDGE_ACCESS_REVOKED');
         const currentWorker = { id: request.targetDeviceId, appId: request.appId };
         const authorized = authorizeKnowledgeRequest(currentApp, currentBinding, currentWorker, JSON.parse(Buffer.from(request.bodyBase64, 'base64').toString('utf8')));
-        request.knowledge = { ...authorized.metadata, grant: authorized.grant };
+        request.knowledge = authorized.metadata;
       } catch {
-        request.status = 'failed'; request.error = 'KNOWLEDGE_GRANT_REVOKED';
-        request.response = { statusCode: 403, bodyBase64: Buffer.from(JSON.stringify({ ok: false, code: 'KNOWLEDGE_GRANT_REVOKED', uncertain: false })).toString('base64') };
+        request.status = 'failed'; request.error = 'KNOWLEDGE_ACCESS_REVOKED';
+        request.response = { statusCode: 403, bodyBase64: Buffer.from(JSON.stringify({ ok: false, code: 'KNOWLEDGE_ACCESS_REVOKED', uncertain: false })).toString('base64') };
         finishWebguiWaiters(request); continue;
       }
     }
@@ -4639,7 +4639,6 @@ function adminPageHtml() {
     const createProfileReceiptPolicy = ${createProfileReceiptPolicy.toString()};
     const createProfileSkillsEditor = ${createProfileSkillsEditor.toString()};
     const createProfileMcpEditor = ${createProfileMcpEditor.toString()};
-    const createKnowledgeGrantEditor = ${createKnowledgeGrantEditor.toString()};
     const pendingProfileWrites = new Set();
     window.addEventListener("beforeunload", event => { if (pendingProfileWrites.size) { event.preventDefault(); event.returnValue = ""; } });
     // Device profile editor: user values only enter textContent/value, never HTML.
@@ -4798,14 +4797,7 @@ function adminPageHtml() {
           const label = document.createElement("span"); label.textContent = binding.serialPreview + " · " + (binding.claimed ? "已领取" : "等待眼镜领取");
           const button = document.createElement("button"); button.type = "button"; button.textContent = "Agent 设置";
           button.addEventListener("click", () => { if (!row.querySelector(".profile-state")) renderAgentProfileEditor(row, app.id, binding.id); });
-          const grantButton = document.createElement("button"); grantButton.type = "button"; grantButton.textContent = "知识授权";
-          grantButton.addEventListener("click", () => {
-            if (row.querySelector(".knowledge-grant-editor")) return;
-            const editor = createKnowledgeGrantEditor({ state, document, apiBase, headers, fetch: (...args) => fetch(...args), storage: sessionStorage, pending: pendingProfileWrites, uuid: () => crypto.randomUUID() });
-            const result = editor.render(row, app, binding.id);
-            if (result) result.panel.className = "tile knowledge-grant-editor";
-          });
-          row.appendChild(label); row.appendChild(button); row.appendChild(grantButton); bindingList.appendChild(row);
+          row.appendChild(label); row.appendChild(button); bindingList.appendChild(row);
         }
         renderTargetCombo(node.querySelector(".target-worker"), app);
         node.querySelector(".enabled").addEventListener("change", (event) => patchApp(app.id, { enabled: event.target.checked }).catch((error) => flash("alert", error.message)));
@@ -5751,17 +5743,14 @@ async function handleAdminApi(req, url, res) {
     const data = agentProfileService.readOperation({ kind: 'account', accountId: auth.account.id }, decodeURIComponent(profileOperationMatch[1]), decodeURIComponent(profileOperationMatch[2]), decodeURIComponent(profileOperationMatch[3]));
     return sendJson(res, 200, { code: 0, data });
   }
-  const grantOperationMatch = apiPath.match(/^\/apps\/([^/]+)\/devices\/([^/]+)\/knowledge-grant\/operations\/([^/]+)$/);
-  if (req.method === 'GET' && grantOperationMatch) {
-    const data = knowledgeGrantService.readOperation(auth.account.id, decodeURIComponent(grantOperationMatch[1]), decodeURIComponent(grantOperationMatch[2]), decodeURIComponent(grantOperationMatch[3]));
-    return sendJson(res, 200, { code: 0, data });
-  }
-  const grantMatch = apiPath.match(/^\/apps\/([^/]+)\/devices\/([^/]+)\/knowledge-grant$/);
-  if (grantMatch && ['GET', 'PUT'].includes(req.method)) {
-    if (req.method === 'PUT') assertProfileManagementCsrf(req);
-    const appId = decodeURIComponent(grantMatch[1]), bindingId = decodeURIComponent(grantMatch[2]);
-    const data = req.method === 'GET' ? knowledgeGrantService.read(auth.account.id, appId, bindingId) : knowledgeGrantService.save(auth.account.id, appId, bindingId, body);
-    return sendJson(res, 200, { code: 0, data });
+  const retiredGrantMatch = apiPath.match(/^\/apps\/([^/]+)\/devices\/([^/]+)\/knowledge-grant(?:\/operations\/[^/]+)?$/);
+  if (retiredGrantMatch) {
+    const appId = decodeURIComponent(retiredGrantMatch[1]), bindingId = decodeURIComponent(retiredGrantMatch[2]);
+    const app = readAppStore().apps.find(item => item.id === appId && item.enabled !== false && item.ownerAccountId === auth.account.id);
+    if (!app?.deviceBindings?.some(binding => binding.id === bindingId && binding.enabled !== false))
+      return sendJson(res, 404, { code: 'DEVICE_NOT_FOUND' });
+    // Old clients receive an explicit migration result; this endpoint never changes access.
+    return sendJson(res, 410, { code: 'KNOWLEDGE_GRANTS_RETIRED', message: '同一已认证应用的设备默认可用目标 PC 提供的知识服务，无需逐项授权。' });
   }
   const profileMatch = apiPath.match(/^\/apps\/([^/]+)\/devices\/([^/]+)\/agent-profile$/);
   if (profileMatch && ['GET', 'PUT'].includes(req.method)) {
@@ -5949,7 +5938,7 @@ const server = http.createServer(async (req, res) => {
         writeAppStore(store); // Durable intent before dispatch; restart never blindly re-executes a write.
       }
       const now = Date.now();
-      const request = { id: `knowledge-${randomUUID()}`, status: 'queued', createdAt: now, updatedAt: now, expiresAt: now + webguiRequestWaitMs, leaseUntil: 0, attempts: 0, appId: match.app.id, targetDeviceId: worker.id, method: 'POST', path: '/__rabilink/knowledge', headers: { 'content-type': 'application/json' }, bodyBase64: Buffer.from(JSON.stringify(authorized.request)).toString('base64'), knowledge: { ...authorized.metadata, grant: authorized.grant }, knowledgeCredentialHash: match.deviceBinding.credentialHash, nonReplayable: authorized.nonReplayable, response: null };
+      const request = { id: `knowledge-${randomUUID()}`, status: 'queued', createdAt: now, updatedAt: now, expiresAt: now + webguiRequestWaitMs, leaseUntil: 0, attempts: 0, appId: match.app.id, targetDeviceId: worker.id, method: 'POST', path: '/__rabilink/knowledge', headers: { 'content-type': 'application/json' }, bodyBase64: Buffer.from(JSON.stringify(authorized.request)).toString('base64'), knowledge: authorized.metadata, knowledgeCredentialHash: match.deviceBinding.credentialHash, nonReplayable: authorized.nonReplayable, response: null };
       webguiRequests.set(request.id, request);
       relayEventHub.publish('webgui_available', { appId: request.appId, targetDeviceId: worker.id, data: { requestId: request.id } });
       const finished = await waitForWebguiRequest(request, webguiRequestWaitMs);

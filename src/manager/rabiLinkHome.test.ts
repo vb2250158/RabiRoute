@@ -24,7 +24,7 @@ async function server(t: TestContext, handler: http.RequestListener): Promise<st
   return `http://127.0.0.1:${(instance.address() as AddressInfo).port}`;
 }
 function config(url: string): RabiLinkRelayGlobalConfig {
-  return { enabled: true, url, token: "test-only-app-token", deviceId: "test-device", claimWaitMs: 1000, replyIdleTimeoutMs: 1000, speechProxyEnabled: false, speechServiceUrl: "" };
+  return { enabled: true, url, token: "test-only-app-token", deviceId: "test-device", claimWaitMs: 1000, replyIdleTimeoutMs: 1000, speechServiceUrl: "" };
 }
 const peer = { id: "device-a", guid: "guid-a", name: "Device A", online: true, capabilities: ["peer-rpc-v1"] };
 function send(response: http.ServerResponse, body: unknown): void {

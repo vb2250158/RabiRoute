@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 const releaseScript = fs.readFileSync(
   new URL("./build-windows-release.ps1", import.meta.url),
@@ -51,6 +53,10 @@ test("Windows release explicitly includes required discovery and Agent transport
       "apps/rabi-agent/lib/manager-client.mjs",
       "apps/rabi-agent/lib/manager-cli.mjs",
       "packages/rabi-knowledge-contract/schema.mjs",
+      "packages/rabi-knowledge-contract/tools.mjs",
+      "packages/rabi-knowledge-contract/receipt.mjs",
+      "apps/rabi-mcp/lib/knowledge-tools.mjs",
+      "apps/rabi-mcp/lib/knowledge-receipt.mjs",
       "scripts/lib/release-tracked-manifest.ps1",
       "scripts/rabilink-relay-runtime-files.json",
       "docs/aiui-agent-profile-http.md",
@@ -79,6 +85,47 @@ test("Windows PowerShell 5.1 can parse every release path without a source-code 
   );
   assert.match(releaseScript, /\[char\]0x7248/);
   assert.match(releaseScript, /\$versionLogBaseName \+ "_en\.md"/);
+});
+
+test("tracked release manifests accept only the stable knowledge runtime files", {
+  skip: process.platform !== "win32",
+}, () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-knowledge-manifest-"));
+  const helper = fileURLToPath(new URL("./lib/release-tracked-manifest.ps1", import.meta.url));
+  const manifestFile = path.join(root, "tracked.json");
+  const known = [
+    "packages/rabi-knowledge-contract/schema.mjs",
+    "packages/rabi-knowledge-contract/tools.mjs",
+    "packages/rabi-knowledge-contract/receipt.mjs",
+    "apps/rabi-mcp/lib/knowledge-tools.mjs",
+    "apps/rabi-mcp/lib/knowledge-receipt.mjs"
+  ];
+  const entry = relative => {
+    const file = path.join(root, ...relative.split("/"));
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, "export const fixture = true;\n");
+    return { path: relative, sha256: createHash("sha256").update(fs.readFileSync(file)).digest("hex") };
+  };
+  const run = entries => {
+    fs.writeFileSync(manifestFile, JSON.stringify({ version: 1, files: entries }));
+    const quote = value => "'" + value.replaceAll("'", "''") + "'";
+    return spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", `$ErrorActionPreference='Stop'; . ${quote(helper)}; $manifestEntries = Read-ReleaseTrackedManifest ${quote(manifestFile)} ${quote(root)}; if ($manifestEntries.Count -ne ${entries.length}) { throw 'Unexpected entry count' }`], { encoding: "utf8" });
+  };
+  try {
+    const accepted = known.map(entry);
+    const result = run(accepted);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    for (const denied of ["packages/unknown-owner/schema.mjs", "packages/rabi-knowledge-contract/private.mjs", "apps/rabi-mcp/lib/knowledge-http-client.mjs"]) {
+      const rejected = run([entry(denied)]);
+      assert.notEqual(rejected.status, 0, denied);
+      assert.match(rejected.stderr + rejected.stdout, /Unsafe or duplicate tracked path/);
+    }
+    const mismatch = run([{ ...accepted[0], sha256: "0".repeat(64) }]);
+    assert.notEqual(mismatch.status, 0);
+    assert.match(mismatch.stderr + mismatch.stdout, /Tracked hash mismatch/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("Windows PowerShell 5.1 removes a payload junction without deleting its target", {

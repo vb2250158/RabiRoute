@@ -22,9 +22,11 @@
 ## 远端调用前准备
 
 1. 在目标 Rabi PC 的“RabiLink → 配置”中连接 Relay。
-2. 打开“允许语音中转”，本机语音地址保持 `http://127.0.0.1:8781`。
+2. 在“语音服务”页启动 RabiSpeech，确认目标 PC 已上报 `speech` 能力。本机语音地址在 RabiLink 高级连接参数中保持 `http://127.0.0.1:8781`。
 3. 在 Relay `/manage` 的目标应用中选择这台在线 Rabi PC。
 4. 复制该应用的 token。只把它放入当前进程的临时变量或密钥存储，不写进仓库、日志或 URL。
+
+从 0.3.22 起，同一 RabiLink 应用内已鉴权设备默认可使用目标 PC 实际提供的服务，无需额外语音授权开关。RabiSpeech 必须真实运行；Manager 成功读取 `/v1/capabilities` 后才上报 `speech`。连接成功不代表模型已经安装或就绪，仍需按下面步骤验收。
 
 下面命令使用 Windows PowerShell 和系统自带的 `curl.exe`。先设置两个变量：
 
@@ -93,7 +95,7 @@ $Token = $null
 | `401` | 应用 token 缺失、错误或已重置 | 从目标应用重新复制 token，检查请求头 |
 | `403` | 使用了设备 token 等不允许的凭据 | 改用应用 token |
 | `404` | 路径不在 Relay 语音 allowlist | 核对完整 `/api/rabilink/speech/...` 路径 |
-| `409` | 应用没有选择可用 PC，或目标 PC 未启用语音中转 | 在 `/manage` 选 PC，并检查 PC 在线与开关 |
+| `409` | 应用未选择可用 PC，或目标 PC 未提供 `speech` 能力 | 在 `/manage` 选 PC；核对 PC 在线、实际运行版本，以及 RabiSpeech 状态、`/v1/capabilities` 和 `speech` 广告 |
 | `413` | 上传超过当前限制，默认 25 MiB | 缩短或压缩音频后重试 |
 | `502` | PC 或本机 RabiSpeech 在处理时失败 | 到目标 PC 查看语音服务状态和日志 |
 | `504` | 模型冷启动或处理超过 Relay 等待时间 | 先跑健康检查/预热，或调整受控部署的超时 |

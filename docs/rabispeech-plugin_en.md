@@ -6,7 +6,7 @@ English | <a href="./rabispeech-plugin.md">简体中文</a>
 
 # RabiSpeech TTS / ASR provider service
 
-Use the “Speech server” selector beside the page title in the top bar to choose the local host or an authorized remote server. Open the menu to inspect connection paths, latency, and unavailable entries. After a successful change, the page reloads speech status and models from the selected server.
+Use the “Speech server” selector beside the page title in the top bar to choose the local host or a remote server in the same RabiLink application. An online remote server providing speech can be selected directly; connecting automatically completes the application-authenticated handshake without per-service grants. Open the menu to inspect connection paths, latency, and unavailable entries. After a successful change, the page reloads speech status and models from the selected server.
 
 The speech service page offers direct synthesis and preview through “TTS speech synthesis”, using the same parameter component as the media workspace audio node. After selecting a model, adjust its supported system or configured voices, speed, language, overall emotion, and speaking style. Changing models resets the parameters; unavailable models cannot be submitted. Selecting a voice does not replace the page's model, language, speed, or expression settings with persona defaults. Audio can enter the host playback queue or play in the current browser.
 
@@ -222,7 +222,9 @@ Later stages proceed in this order, with input priority remaining the primary ac
 
 Closing the browser does not change the ASR streaming switch. The ignored `plugin-adapters/rabi-speech/microphone.json` persists host configuration. At startup and configuration reload, Manager restores capture directly from `streaming_enabled`: `true` starts or keeps continuous recording active, while `false` stops it. Route saves change only delivery subscriptions and do not change recording state. A legacy configuration without the field migrates from its former `enabled` state so a previously stopped host does not become always-recording. Legacy `route_id` is migrated to `null`, and the session ID is host-generated/persisted rather than user-configured. Microphone control is loopback-only and is intentionally excluded from the public RabiLink generic-token allowlist; remote clients may call normal TTS/ASR APIs but cannot control the PC microphone with that token.
 
-For remote use, enable the global RabiLink connection and **Allow speech relay**. Keep the local target at `http://127.0.0.1:8781`. Public calls use the common application token at `https://<relay>/api/rabilink/speech/*` through either `Authorization: Bearer <token>` or `X-RabiLink-Token: <token>`.
+From 0.3.22, authenticated devices in the same RabiLink application may use speech services actually provided by the target PC by default, without an additional permission switch. Connect to RabiLink Relay in WebGUI and start RabiSpeech from **Speech Service**. Manager advertises `speech` only after successfully reading the local `/v1/capabilities`. Keep the service address under RabiLink's advanced connection parameters at `http://127.0.0.1:8781`; Manager rejects LAN or public addresses as the local speech target. Application authentication does not replace service startup, model installation, or model readiness checks. Public calls use the common application token at `https://<relay>/api/rabilink/speech/*` through either `Authorization: Bearer <token>` or `X-RabiLink-Token: <token>`.
+
+Capability updates follow actual service events. RabiSpeech emits `capabilities_changed` when provider registration, warmup, or a model request changes its public capabilities; Manager forwards it through `/api/speech/events`. The event only requests a fresh `/v1/capabilities` read, carries no secrets, and is not evidence of capability or authorization itself. Stream reconnection and Manager model-management changes also trigger a check; a disconnected stream withdraws speech advertisements. No idle polling is needed.
 
 The public base URL is `https://<relay>/api/rabilink/speech`, so the common complete paths are:
 
@@ -242,7 +244,7 @@ Do not give a remote client the local `http://127.0.0.1:8781/v1/...` URL. Ordina
 
 Providers implement `TtsProvider` or `AsrProvider` and register locally through `providers.extensions`. Remote clients may select only allowlisted installed models; they cannot install models, load code, or alter provider configuration.
 
-Enabling an external provider changes `/health.local_only` and `/v1/capabilities.relay_safe` accordingly. RabiLink speech relay remains a separate explicit user opt-in.
+External API providers still require explicit local configuration. `/v1/capabilities.providers` and `relay_safe` describe current providers and whether they all run locally. The lightweight `/health` proves only process liveness, not model readiness, and does not determine RabiLink access.
 
 The API currently returns complete audio/results rather than a streaming first chunk. The default upload limit is 25 MiB. On the tested 16 GiB GPU, large GPU workers load on demand and the global FIFO prevents concurrent model contention.
 

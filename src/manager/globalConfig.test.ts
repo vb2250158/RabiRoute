@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { RabiGlobalConfigStore } from "./globalConfig.js";
+import { DeviceIdentityOwner, deviceIdentityConfigField } from "./deviceIdentity.js";
+import { publicRabiLinkRelayConfig } from "./rabiApi.js";
 
 function tempRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-global-config-"));
@@ -40,7 +43,8 @@ test("RabiLink Relay uses an explicit global enabled switch", () => {
     maxDiskMb: 256,
     slowOperationMs: 2000
   });
-  assert.equal(store.read().rabiLinkRelay.speechProxyEnabled, false);
+  assert.equal("speechProxyEnabled" in store.read().rabiLinkRelay, false);
+  assert.equal("knowledgeBridge" in store.read().rabiLinkRelay, false);
   assert.equal(store.read().rabiLinkRelay.speechServiceUrl, "http://127.0.0.1:8781");
 
   const configuredButOff = store.patch({
@@ -55,6 +59,57 @@ test("RabiLink Relay uses an explicit global enabled switch", () => {
 
   const enabled = store.patch({ rabiLinkRelay: { enabled: true } });
   assert.equal(enabled.rabiLinkRelay.enabled, true);
+});
+
+test("retired service permissions are removed without changing identity, credentials or local data", t => {
+  const root = tempRoot();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new RabiGlobalConfigStore(root);
+  store.patch({
+    rabiName: "Saved PC",
+    rabiLinkRelay: { enabled: true, url: "https://relay.example.test", token: "fixture-app-secret", deviceId: "saved-pc", claimWaitMs: 321, replyIdleTimeoutMs: 4321, speechServiceUrl: "http://127.0.0.1:54321" },
+    webguiLan: { enabled: true, accessToken: randomUUID() },
+    agentUploads: { maxFileMiB: 123 },
+    performance: { enabled: true, retentionHours: 72 }
+  });
+  const owner = new DeviceIdentityOwner(root, { machineIdentity: () => "fixture-os-owner" });
+  owner.ensureBound();
+  const saved = JSON.parse(fs.readFileSync(store.configPath, "utf8"));
+  const personaFile = path.join(root, "data", "roles", "fixture", "persona.md");
+  const historyFile = path.join(root, "data", "history", "events.jsonl");
+  for (const file of [personaFile, historyFile]) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, "fixture data\n");
+  }
+  const legacy = {
+    ...saved,
+    rabiLinkRelay: {
+      ...saved.rabiLinkRelay,
+      speechProxyEnabled: false,
+      knowledgeBridge: { enabled: false, url: "invalid-retired-url", token: "fixture-retired-knowledge-secret", allowedRoles: ["fixture"], allowedTools: ["plan_list"], allowWrites: false, grants: "invalid-retired-grants" }
+    }
+  };
+  fs.writeFileSync(store.configPath, JSON.stringify(legacy));
+  const migrated = new RabiGlobalConfigStore(root);
+  const persisted = JSON.parse(fs.readFileSync(store.configPath, "utf8"));
+  assert.deepEqual(persisted, saved);
+  assert.deepEqual(persisted[deviceIdentityConfigField], saved[deviceIdentityConfigField]);
+  assert.deepEqual(new RabiGlobalConfigStore(root).read(), migrated.read());
+  owner.assertStartup();
+  assert.equal(fs.readFileSync(personaFile, "utf8"), "fixture data\n");
+  assert.equal(fs.readFileSync(historyFile, "utf8"), "fixture data\n");
+  const stalePatch = { deviceId: "renamed-pc", speechProxyEnabled: false, knowledgeBridge: legacy.rabiLinkRelay.knowledgeBridge };
+  migrated.patch({ rabiLinkRelay: stalePatch });
+  const updated = JSON.parse(fs.readFileSync(store.configPath, "utf8"));
+  assert.equal("speechProxyEnabled" in updated.rabiLinkRelay, false);
+  assert.equal("knowledgeBridge" in updated.rabiLinkRelay, false);
+  assert.equal(updated.rabiLinkRelay.deviceId, "renamed-pc");
+  assert.equal(updated.rabiLinkRelay.token, saved.rabiLinkRelay.token);
+  assert.equal(updated.rabiGuid, saved.rabiGuid);
+  assert.deepEqual(updated[deviceIdentityConfigField], saved[deviceIdentityConfigField]);
+  const exposed = JSON.stringify(publicRabiLinkRelayConfig(legacy.rabiLinkRelay));
+  assert.doesNotMatch(exposed, /fixture-app-secret|fixture-retired-knowledge-secret|knowledgeBridge|speechProxyEnabled|machineOwner/);
+  assert.equal(JSON.parse(exposed).tokenConfigured, true);
 });
 
 test("LAN WebGUI access is persisted in the Rabi PC global config", () => {

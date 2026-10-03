@@ -28,7 +28,6 @@ export function rabiLinkDraftFromMeta(meta: MetaPayload) {
     deviceId: relay?.deviceId || meta.computerName || "",
     claimWaitMs: relay?.claimWaitMs ?? 60000,
     replyIdleTimeoutMs: relay?.replyIdleTimeoutMs ?? 60000,
-    speechProxyEnabled: relay?.speechProxyEnabled === true,
     speechServiceUrl: relay?.speechServiceUrl || ""
   };
 }

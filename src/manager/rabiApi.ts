@@ -68,11 +68,13 @@ type RabiInstance = {
 };
 
 export function publicRabiLinkRelayConfig(config: RabiLinkRelayGlobalConfig): Record<string, unknown> {
-  const { token: _token, knowledgeBridge, ...safe } = config;
-  const { token: _knowledgeToken, ...safeKnowledge } = knowledgeBridge || {};
   return {
-    ...safe,
-    ...(knowledgeBridge ? { knowledgeBridge: { ...safeKnowledge, tokenConfigured: Boolean(knowledgeBridge.token) } } : {}),
+    enabled: config.enabled,
+    url: config.url,
+    deviceId: config.deviceId,
+    claimWaitMs: config.claimWaitMs,
+    replyIdleTimeoutMs: config.replyIdleTimeoutMs,
+    speechServiceUrl: config.speechServiceUrl,
     tokenConfigured: Boolean(config.token)
   };
 }

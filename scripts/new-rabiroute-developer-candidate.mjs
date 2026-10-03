@@ -7,6 +7,28 @@ import { assertDeveloperLocksCompatible } from "./lib/developer-lock-compatibili
 
 import { writeManifest } from "./create-windows-release-manifest.mjs";
 
+const knowledgeRuntimeFiles = Object.freeze([
+  "packages/rabi-knowledge-contract/schema.mjs",
+  "packages/rabi-knowledge-contract/tools.mjs",
+  "packages/rabi-knowledge-contract/receipt.mjs",
+  "apps/rabi-mcp/lib/knowledge-tools.mjs",
+  "apps/rabi-mcp/lib/knowledge-receipt.mjs"
+]);
+const relayManifestPath = 'scripts/rabilink-relay-runtime-files.json';
+const retiredRelayFiles = Object.freeze(['scripts/rabilink-knowledge-grant.mjs', 'scripts/rabilink-knowledge-grant-ui.mjs']);
+
+function readRelayRuntimeFiles(root) {
+  const files = JSON.parse(fs.readFileSync(requireFile(root, relayManifestPath), 'utf8'));
+  if (!Array.isArray(files) || !files.length || new Set(files).size !== files.length
+    || !files.includes('scripts/rabilink-relay-server.mjs')
+    || files.some(relative => typeof relative !== 'string'
+      || !/^(scripts\/(lib\/)?[a-z0-9-]+|packages\/rabi-knowledge-contract\/(schema|tools|receipt))\.mjs$/.test(relative))) {
+    throw new Error('Invalid Relay runtime manifest.');
+  }
+  for (const relative of files) requireFile(root, relative);
+  return files;
+}
+
 function requireFile(root, relativePath) {
   const target = path.join(root, ...relativePath.split("/"));
   if (!fs.statSync(target, { throwIfNoEntry: false })?.isFile()) {
@@ -67,6 +89,8 @@ function createDeveloperCandidate(options) {
   const buildLock = fs.readFileSync(requireFile(buildRoot, "package-lock.json"));
   assertDeveloperLocksCompatible(baseLock.toString("utf8"), buildLock.toString("utf8"));
   requireFile(hostCoreRoot, "RabiRouteHost.Core.dll");
+  for (const relative of knowledgeRuntimeFiles) requireFile(buildRoot, relative);
+  const relayRuntimeFiles = readRelayRuntimeFiles(buildRoot);
 
   fs.mkdirSync(versionsRoot, { recursive: true });
   const stagingRoot = path.join(versionsRoot, `.developer-staging-${randomUUID()}`);
@@ -79,6 +103,12 @@ function createDeveloperCandidate(options) {
     replaceDirectory(path.join(buildRoot, "dist"), path.join(stagingRoot, "dist"));
     replaceDirectory(path.join(buildRoot, "ribiwebgui", "dist"), path.join(stagingRoot, "ribiwebgui", "dist"));
     replaceDirectory(path.join(buildRoot, "assets"), path.join(stagingRoot, "assets"));
+    // Overlay the shared owner and compatibility wrappers even if the immutable base contains older MCP code.
+    for (const relative of knowledgeRuntimeFiles) {
+      const destination = path.join(stagingRoot, ...relative.split("/"));
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.copyFileSync(requireFile(buildRoot, relative), destination);
+    }
     const speechRelative = "plugin-adapters/rabi-speech";
     if (fs.existsSync(path.join(baseRoot, speechRelative, "rabispeech"))) {
       const baseRequirements = fs.readFileSync(requireFile(baseRoot, `${speechRelative}/requirements.txt`));
@@ -111,9 +141,13 @@ function createDeveloperCandidate(options) {
     for (const name of ["README.md", "README_zh.md", "版本更新日志.md", "版本更新日志_en.md"]) {
       fs.copyFileSync(requireFile(buildRoot, name), path.join(stagingRoot, name));
     }
-    if (fs.statSync(path.join(buildRoot, "scripts"), { throwIfNoEntry: false })?.isDirectory()) {
-      replaceDirectory(path.join(buildRoot, "scripts"), path.join(stagingRoot, "scripts"));
+    // Relay imports must match this build; unrelated installed maintenance scripts remain intact.
+    for (const relative of [...relayRuntimeFiles, relayManifestPath]) {
+      const destination = path.join(stagingRoot, ...relative.split('/'));
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.copyFileSync(requireFile(buildRoot, relative), destination);
     }
+    for (const relative of retiredRelayFiles) fs.rmSync(path.join(stagingRoot, ...relative.split('/')), { force: true });
     replaceDirectory(traySourceRoot, path.join(stagingRoot, "desktop-runtime"));
     for (const name of ["RabiRouteHost.Core.dll", "RabiRouteHost.Core.deps.json"]) {
       const source = path.join(hostCoreRoot, name);

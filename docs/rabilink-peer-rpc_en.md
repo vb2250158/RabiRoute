@@ -23,23 +23,13 @@ Both online PCs must use the same RabiLink application token and advertise `peer
 }
 ```
 
-The response includes `transport` (`lan`, `p2p` or `relay`) and `reply`. Business success requires `reply.ok`; the reply also identifies the request, device and runtime instance. `plans.list` returns only plan ID, title, status and update time. `persona.manifest` returns the selected persona's file manifest. `system.describe` requires no business grant and returns the instance and exposed operations.
+The response includes `transport` (`lan`, `p2p` or `relay`) and `reply`. Business success requires `reply.ok`; the reply also identifies the request, device and runtime instance. `plans.list` returns only plan ID, title, status and update time. `persona.manifest` returns the selected persona's file manifest. `system.describe` returns the instance and exposed operations after same-application authentication.
 
-## Target-owned access
+## Target PC and available operations
 
 PC event connections and worker requests explicitly report `deviceKind=pc`. Phone and glasses clients retain their existing `deviceKind` reporting. The updated Relay preserves a registered kind when an older client later omits it. Historical entries are not rewritten from their names; devices must explicitly report their kind again. Types are self-reported categories, not authorization credentials, and support custom extensions.
 
-The target's runtime data root contains the sole grant source, `data/rabilink/peer-access.json`. Missing, malformed or oversized files (over 64 KiB) deny business access. Changes take effect on the next request.
-
-```json
-{
-  "schemaVersion": 1,
-  "operations": ["plans.list", "persona.manifest"],
-  "roleIds": ["Example"]
-}
-```
-
-Grants cover the entire trusted application group. Members sharing a token share a cryptographic identity; device IDs provide addressing and wrong-target checks, not independent member authentication. Keep mutually untrusted PCs in separate applications. Joining does not automatically enable business reads, arbitrary Manager paths, task execution, outbound messages or file mutation.
+Since 0.3.22, current same-application authentication allows all read-only operations actually registered by this protocol and personas actually owned by Manager's global `rolesRoot`. Same-name personas in custom Route directories do not enter this knowledge catalog. `peer-access.json` operation/role allowlists are retired and never authorize requests. Other applications, wrong generations and unknown personas still fail. Administration and writes use [generic connections](rabilink-peer-tunnel_en.md); this protocol registers no writes.
 
 ## Transport and lifecycle
 
@@ -53,6 +43,6 @@ This protocol version registers read operations only. Adding mutations requires 
 
 ## Existing contracts
 
-Persona data synchronization has been removed from the source: LAN synchronization file transfer, merge and `/persona-sync/proxy` are no longer provided. Cross-PC access reads data on the target computer through RabiLink without creating synchronized replicas; read RPC does not acquire mutation permissions. Existing personas, plans, memories and conflict evidence are retained. Video retains its separate channel and prohibition on server-carried video bytes.
+Persona data synchronization has been removed from the source: LAN synchronization file transfer, merge and `/persona-sync/proxy` are no longer provided. Cross-PC access reads data on the target computer through RabiLink without creating synchronized replicas; this RPC registers only reads, while mutations use the generic Manager connection. Existing personas, plans, memories and conflict evidence are retained. Video retains its separate channel and prohibition on server-carried video bytes.
 
 Checks: `src/rabiPeer.test.ts`, `scripts/rabilink-relay-peers.test.mjs`, and Relay runtime and shared peer LAN regressions. Source changes and automated success do not establish managed local deployment, remote Relay upgrades or physical dual-PC acceptance.

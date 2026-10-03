@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { managerEventSource } from "../managerApi";
-import { peerServerDetail } from "../speech/peerServerPresentation";
+import { speechServerOptions } from "../speech/peerServerPresentation";
 import type { PeerConnectionStatus, SpeechServerDirectory } from "@shared/peerTunnelContract";
 const emit = defineEmits<{ changed: [deviceId: string] }>();
 const selected = ref("");
@@ -15,12 +15,7 @@ let events: EventSource | undefined;
 let disposed = false;
 let requestSequence = 0;
 let expiration: ReturnType<typeof setTimeout> | undefined;
-const options = computed(() => {
-  const values = peers.value.map(peer => ({ title: peer.name, value: peer.deviceId,
-    detail: peerServerDetail(peer, now.value), props: { disabled: !peer.online || !peer.supported || !peer.trusted } }));
-  if (selected.value && !values.some(item => item.value === selected.value)) values.push({ title: selected.value, value: selected.value, detail: "未发现设备", props: { disabled: true } });
-  return [{ title: "本机", value: "", detail: "本机调用", props: { disabled: false } }, ...values];
-});
+const options = computed(() => speechServerOptions(peers.value, selected.value, now.value));
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch("/api/rabilink/peer/" + path, init);
   const body = await response.json();
@@ -33,7 +28,7 @@ function expireLatency() {
 }
 function subscribe() {
   events?.close();
-  const ids = peers.value.filter(peer => (menuOpen.value || peer.deviceId === selected.value) && peer.online && peer.supported && peer.trusted).slice(0, 10).map(peer => peer.deviceId);
+  const ids = peers.value.filter(peer => (menuOpen.value || peer.deviceId === selected.value) && peer.online && peer.supported).slice(0, 10).map(peer => peer.deviceId);
 
   events = managerEventSource("/api/rabilink/peer/events?ids=" + encodeURIComponent(JSON.stringify(ids)));
   events.addEventListener("selection", () => { if (!disposed) void refresh(false); });
@@ -52,7 +47,7 @@ async function refresh(probe = false) {
     selected.value = directory.selectedDeviceId; peers.value = directory.peers; error.value = ""; expireLatency(); subscribe();
     if (changed) emit("changed", selected.value);
     if (probe || selected.value) {
-      const ids = peers.value.filter(peer => (probe || peer.deviceId === selected.value) && peer.online && peer.supported && peer.trusted).slice(0, 10).map(peer => peer.deviceId);
+      const ids = peers.value.filter(peer => (probe || peer.deviceId === selected.value) && peer.online && peer.supported).slice(0, 10).map(peer => peer.deviceId);
       if (ids.length) {
         const result = await api<SpeechServerDirectory>("probe", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ deviceIds: ids }) });
         if (!disposed && sequence === requestSequence) { peers.value = result.peers; expireLatency(); }

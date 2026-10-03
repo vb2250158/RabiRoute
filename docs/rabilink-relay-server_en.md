@@ -130,7 +130,7 @@ POST /api/rabilink/speech/v1/audio-streams/rabilink/stop
 POST /api/rabilink/speech/messages  # compatibility/debug, not the Android main path
 ```
 
-Prefix these paths with the Relay HTTPS origin. The application must select an online PC whose **Allow speech relay** switch is enabled. See [Call TTS and ASR remotely](user-guide/speech-api_en.md) for copyable calls, acceptance, and error recovery. The machine-readable contract is available at `/api/rabilink/speech/openapi.json`.
+Prefix these paths with the Relay HTTPS origin. The application must select an online PC whose RabiSpeech is actually running and advertising `speech`. From 0.3.22, authenticated devices in the same application may use actually provided speech services by default, without an additional permission switch; the public application token's fixed paths and model scope still apply. See [Call TTS and ASR remotely](user-guide/speech-api_en.md) for copyable calls, acceptance, and error recovery. The machine-readable contract is available at `/api/rabilink/speech/openapi.json`.
 
 ## Publish Relay and verify documentation parity
 
@@ -328,8 +328,8 @@ Public acceptance must prove account/application isolation, record-first input, 
 
 ## Mobile ASR priority
 
-Application-authenticated `GET/PATCH /api/rabilink/mobile/asr-settings` returns computers advertising `asr` and their priority. PATCH accepts `{ "priority": ["computer-a", "computer-b"] }`, rejecting duplicates and non-ASR computers. Availability affects selection without removing saved ranks. Computers must enable speech sharing and advertise ASR through local `/v1/capabilities`; TTS-only computers are excluded.
+Application-authenticated `GET/PATCH /api/rabilink/mobile/asr-settings` returns computers advertising `asr` and their priority. PATCH accepts `{ "priority": ["computer-a", "computer-b"] }`, rejecting duplicates and non-ASR computers. Availability affects selection without removing saved ranks. RabiSpeech must actually run, with an enabled ASR provider declared by local `/v1/capabilities.providers.asr`. Same-application authentication allows access by default without a separate sharing permission; TTS-only computers are excluded.
 
 Audio uses an end-to-end encrypted connection established through authenticated signalling: LAN, then P2P, then Relay. Deployment must include `rabilink-event-hub.mjs`, `rabilink-proxy-request-queue.mjs`, `lib/rabilink-tunnel-broker.mjs`, `lib/rabilink-asr-priority.mjs` and `ws`. Replacing only the main server script cannot upgrade older installations.
 
-The PC independently rechecks local ASR capabilities every 30 seconds and republishes changes. Slow startup and service recovery do not require an incoming speech request. Stopping sharing cancels discovery.
+The PC reads local `/v1/capabilities` on connection, then reads and republishes capabilities in response to speech-stream `ready` and `capabilities_changed` events or Manager model-management changes, without idle timer polling. A disconnected speech event stream withdraws speech advertisements; reconnection verifies them again. Disabling the global RabiLink connection cancels this generation's subscriptions and requests. Slow startup and service recovery do not require an incoming speech request.

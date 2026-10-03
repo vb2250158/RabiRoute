@@ -242,7 +242,6 @@ export type MetaPayload = {
     deviceId?: string;
     claimWaitMs?: number;
     replyIdleTimeoutMs?: number;
-    speechProxyEnabled?: boolean;
     speechServiceUrl?: string;
   };
   rabiLinkRelayRuntime?: {

@@ -2,11 +2,13 @@
 
 [English](aiui-agent-acceptance_en.md) | 简体中文
 
-状态：实施中的验收快照，不是全部目标完成报告。AIUI 灵珠应用自身执行 Agent，手机管理 Skill/MCP 配置，PC 通过 HTTP 提供计划与记忆工具；不以 PC 推理代理替代 AIUI。本文整理证据，不修改业务状态。
+状态：0.3.15 阶段的历史实现与候选验收记录，不是当前 0.3.22 验收，也不是全部目标完成报告。下文的 PC 知识权限表单、手机 grant 编辑器及 RabiLink 外接 MCP 路径已退役。所有测试数、截图、产物哈希和剩余项表只对应原源码切点；历史“最新”不表示当前发布，也不是当前操作指引。AIUI 仍自行执行 Agent，不以 PC 推理代理替代。
 
-## 已验证项与范围
+0.3.22 起，同一 RabiLink 应用已鉴权设备使用 PC 内置 Manager 知识工具，包括写入，无需另配角色、工具、写权限 grant 或 MCP 密钥。当前入口见[知识运行合同](rabilink-knowledge-runtime.md)、[连接合同](rabilink-peer-tunnel.md)和[旧页面迁移](user-guide/knowledge-bridge-settings.md)。新构建、安装版 Host/静态资源和真机验收分别需要新证据，下文旧版通过记录不能证明这条新路径。
 
-| 层级 | 当前证据 | 不能推出的结论 |
+## 历史证据与范围
+
+| 层级 | 当时的证据 | 不能推出的结论 |
 |---|---|---|
 | 根应用 | 最新完整本机根构建退出 0。此前知识桥 4 项与原 Relay runtime 17 项合计 21 项通过；Relay/UI/知识集合 30/30；动态 Manager 合同 6/6 | 尚无正式安装、Host 更新及实际页面加载新资源的完整证据 |
 | 独立 MCP | 共享 schema 抽取后 51/51；官方 SDK HTTP/stdio 初始化与目录查询通过；3643 个产物文件大小及 SHA-256 核验 | 真实 Host 仅用于身份预检，没有真实计划/记忆 CRUD 验收 |
@@ -48,7 +50,7 @@ payload SHA-256：`d1ae4d59404853d6b752b91ad40b85450157ffe77682a7c8ca32f38f2ce7e
 
 新包仍未正式安装，不代表生产就绪；历史 persist 超时根因仍未确定，独立 MCP 服务仍不包含在 Setup 中。
 
-### 最新完整候选 0.3.15-397c589c9e64（未安装，非生产就绪）
+### 历史完整候选 0.3.15-397c589c9e64（未安装，非生产就绪）
 
 此前 d1ae 的验证仍是有效历史证据，但不包含后续 MCP 可视化 UI。最新 payload SHA-256：`397c589c9e644fdde7d5c449f1e52ba9db942f4483204b77a0be4fd318ca4cbf`。14 模块、manifest 和 6 份文档共 21 文件 source hash 匹配；build、selftest、ZIP 回读、ISCC 与 import 检查通过。
 
@@ -63,12 +65,12 @@ Node 22 联合回归 **64/64**、跨端合同 **53/53** 通过，不将两个集
 
 官方合同补查：六次定向公开抓取核对重定向后的官方仓库、main 与 v0.18.x 模型正文，仍未证实按 callId 提交结果续轮的合同；没有运行真实宿主，不把 main 等同发行 runtime，也不据此断言 API 不存在。详见[工具合同核对](../apps/rabilink-aiui/docs/agent-tool-contract.md)，当前保持单步边界。
 
-## 必要剩余项
+## 当时的剩余项（非当前操作指引）
 
 | 分类 | 当前差距 | 验收出口 | 可直接推进 / 所需外部信息 |
 |---|---|---|---|
 | 部署 | 最新 `397c589c9e64` 完整候选已包含后续 MCP UI 与修复并完成产物验证，未签名、未安装且非生产就绪；旧 `e6e3709e82f8` 含已知缺陷 | 核准候选风险与目标后受管安装，核对真实资源与健康；MCP 独立部署 | 不安装旧 Setup，不将临时 payload 浏览器测试冒充正式服务验收；保留私有配置 |
-| 部署 | MCP 未正式受管启动；PC 知识桥默认关闭，安全配置 UI 已有 | 配置持久化、MCP ready、PC 能力广告、实际调用与断连恢复分别验证 | 用现有安全 UI 配置，不把 PC 密钥存入 Relay profile；真实设备归属须核准 |
+| 旧部署路径（已退役） | 当时外接 MCP 与 PC 知识权限 UI 未正式部署；0.3.22 已由内置 Manager 路径替代 | 原验收缺口不能推为新版已通过；新版需独立验证实际调用与恢复 | 不再配置旧知识 URL、密钥或权限表单 |
 | 真机缺证 | 手机保存→AIUI 持久化→下一轮模型→一次应用回执尚未实机验收 | 同版本及角色/工具绑定一致；离线、重启、换归属、失败保存不虚报；手机可操作 | 需可连接的手机/眼镜、型号、固件及 AIUI 版本、当前应用和连接方式；不索取明文 Token |
 | 真机缺证 | ASR/TTS、真实工具事件及结果读出/翻页没有真实宿主证据 | 语音、显式角色选择、只读调用、取消/超时、无双回复/回声，多尺寸实际可读 | 同上；宿主模型不等于物理离线模型 |
 | 功能未实现 | 官方工具结果回传与自动模型续轮接口尚未证实 | 官方合同或实际宿主证明受支持的结果提交，再验证多步循环 | 可继续公开资料和版本核对；普通 prompt 拼接不能冒充工具响应 |
@@ -78,7 +80,7 @@ Node 22 联合回归 **64/64**、跨端合同 **53/53** 通过，不将两个集
 | 配置并发边界 | PC 设置沿现有 identity API，尚无配置 revision CAS | 多管理员场景有明确冲突保护；未知写入不因刷新被误判为本次密钥提交成功 | 可做版本化配置合同；密钥只写不读，保持当前不确定提示 |
 | 需求边界 | “所有 Agent 能力”不能由配置命令数证明 | 多步任务、取消、上下文/记忆、权限、长期恢复、第三方工具分别具备用户可见验收出口 | 继续分项验收，不能因本机部分成功标记整体完成 |
 
-## 下一步
+## 当时的下一步（退役路径已失效）
 
 1. 包内 Chrome 保存已验证，新完整候选已构建；继续核对历史 receipt persist 超时与候选风险，再确认正式安装目标、未签名风险和恢复方案。旧包不可推荐生产部署。
 2. 在安全配置 UI 上验证完整首次成功流程；继续实现具体写确认和受控长期恢复，不重复造已实现 PC UI。
@@ -90,8 +92,8 @@ Node 22 联合回归 **64/64**、跨端合同 **53/53** 通过，不将两个集
 ## 相关合同
 
 - [单步执行](../apps/rabilink-aiui/docs/knowledge-single-step.md)、[页面接线](../apps/rabilink-aiui/docs/knowledge-tool-page.md)、[一次应用回执](../apps/rabilink-aiui/docs/agent-profile-runtime.md)
-- [PC 安全设置 UI](user-guide/knowledge-bridge-settings.md)、[PC 运行配置](rabilink-knowledge-runtime.md)
-- [手机知识授权](knowledge-grant-phone-ui.md)、[配置 HTTP](aiui-agent-profile-http.md)
+- [旧 PC 设置迁移](user-guide/knowledge-bridge-settings.md)、[当前 PC 运行合同](rabilink-knowledge-runtime.md)
+- [旧手机知识授权页迁移](knowledge-grant-phone-ui.md)、[配置 HTTP](aiui-agent-profile-http.md)
 - [官方工具合同](../apps/rabilink-aiui/docs/agent-tool-contract.md)
 
-PC 安全设置 UI 与运行专题均记录当前入口；API 是底层管理合同，不是唯一用户入口。
+迁移页说明历史权限编辑器已删除；当前内置 Manager 知识访问以运行专题为准。

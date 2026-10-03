@@ -1,4 +1,5 @@
-import { KNOWLEDGE_PATH, executeKnowledgeQueue, probeKnowledgeBridge, isCanonicalKnowledgeDeviceId, type KnowledgeRuntimeConfig, type KnowledgeQueueMetadata } from './rabiLinkKnowledgeRuntime.js';
+import { KNOWLEDGE_PATH, executeKnowledgeQueue, probeKnowledgeBridge, isCanonicalKnowledgeDeviceId, type KnowledgeRuntimeContext, type KnowledgeQueueMetadata } from './rabiLinkKnowledgeRuntime.js';
+import { APPLICATION_ACCESS_CAPABILITY } from '../peerTunnel/runtime.js';
 import { PERSONA_REFERENCE_CAPABILITY } from "../shared/personaPeerService.js";
 import { normalizeRabiPcVersion, rabiPcVersionAdvertisement } from "../shared/rabiPcVersionContract.js";
 const knowledgeReady = new WeakMap<RabiLinkRelayRuntimeConfig, boolean>();
@@ -25,9 +26,7 @@ export type RabiLinkRelayRuntimeConfig = {
   localWebguiUrl: string;
   /** Direct Manager endpoints advertised only to PCs using the same application token. */
   peerUrls?: string[];
-  speechProxyEnabled: boolean;
   localSpeechUrl: string;
-  knowledgeBridge?: KnowledgeRuntimeConfig;
 };
 
 export type RabiLinkRelayRuntimeStatus = {
@@ -41,13 +40,13 @@ export type RabiLinkRelayRuntimeStatus = {
 };
 
 export type RabiLinkRelayRuntimeOptions = {
+  knowledge?: KnowledgeRuntimeContext;
   localRequestTimeoutMs?: number;
   localRequestAttempts?: number;
   localSpeechRequestTimeoutMs?: number;
   relayWriteTimeoutMs?: number;
   relayWriteAttempts?: number;
   channelRetryDelayMs?: number;
-  asrRefreshIntervalMs?: number;
   onStatus?: (status: RabiLinkRelayRuntimeStatus) => void;
   onEvent?: (eventType: string, data: Record<string, unknown>) => void;
 };
@@ -269,7 +268,7 @@ async function consumeLocalWebguiEvents(
         const line = buffer.slice(0, newline).replace(/\r$/, "");
         buffer = buffer.slice(newline + 1);
         if (!line) {
-          if (hasEventFields && eventType !== "ready") await onEvent(eventType, parseEventData(dataLines.join("\n")));
+          if (hasEventFields) await onEvent(eventType, parseEventData(dataLines.join("\n")));
           eventType = "message";
           dataLines = [];
           hasEventFields = false;
@@ -295,7 +294,9 @@ async function forwardLocalWebguiEvents(
   config: RabiLinkRelayRuntimeConfig,
   streamPath: string,
   signal: AbortSignal,
-  options: Required<Pick<RabiLinkRelayRuntimeOptions, "relayWriteAttempts" | "relayWriteTimeoutMs">>
+  options: Required<Pick<RabiLinkRelayRuntimeOptions, "relayWriteAttempts" | "relayWriteTimeoutMs" | "channelRetryDelayMs">>,
+  onOwnerEvent: (eventType: string, data: Record<string, unknown>) => Promise<void>,
+  onUnavailable: () => void
 ): Promise<void> {
   let failures = 0;
   while (!signal.aborted) {
@@ -304,13 +305,18 @@ async function forwardLocalWebguiEvents(
         config,
         streamPath,
         signal,
-        (eventType, data) => publishWebguiEvent(config, streamPath, eventType, data, options, signal)
+        async (eventType, data) => {
+          if (eventType === "ready") failures = 0;
+          await onOwnerEvent(eventType, data);
+          if (eventType !== "ready" && !signal.aborted) await publishWebguiEvent(config, streamPath, eventType, data, options, signal);
+        }
       );
       if (!signal.aborted) throw new Error("Local Manager event stream closed.");
     } catch (error) {
       if (signal.aborted || abortError(error)) return;
+      onUnavailable();
       failures += 1;
-      await delay(Math.min(RETRY_DELAY_MS * failures, 30_000), signal);
+      await delay(Math.min(options.channelRetryDelayMs * failures, MAX_CHANNEL_RETRY_DELAY_MS), signal);
       continue;
     }
     failures = 0;
@@ -375,27 +381,28 @@ function appendWorkerDiscovery(params: URLSearchParams, config: RabiLinkRelayRun
   if (config.peerUrls?.length) params.set("peerUrls", JSON.stringify(config.peerUrls));
 }
 
-const asrAdvertisements = new WeakMap<RabiLinkRelayRuntimeConfig, { checkedAt: number; available: boolean }>();
+type SpeechAdvertisement = { available: boolean; speechAvailable: boolean };
+const asrAdvertisements = new WeakMap<RabiLinkRelayRuntimeConfig, SpeechAdvertisement>();
 
-async function refreshAsrAdvertisement(config: RabiLinkRelayRuntimeConfig, signal: AbortSignal, force = false): Promise<void> {
-  if (!config.speechProxyEnabled) return;
-  const prior = asrAdvertisements.get(config);
-  if (!force && prior && Date.now() - prior.checkedAt < 30_000) return;
+async function probeSpeechAdvertisement(config: RabiLinkRelayRuntimeConfig, signal: AbortSignal): Promise<SpeechAdvertisement> {
+  if (!config.localSpeechUrl || signal.aborted) return { available: false, speechAvailable: false };
   let available = false;
+  let speechAvailable = false;
   try {
     const response = await fetch(`${config.localSpeechUrl}/v1/capabilities`, {
       signal: AbortSignal.any([signal, AbortSignal.timeout(3000)]), redirect: "error"
     });
     if (response.ok) {
       const body = await response.json() as { providers?: { asr?: Record<string, { enabled?: boolean }> } };
-      available = Object.values(body.providers?.asr || {}).some(provider => provider.enabled !== false);
+      speechAvailable = !!body.providers && typeof body.providers === "object";
+      available = speechAvailable && Object.values(body.providers?.asr || {}).some(provider => provider.enabled !== false);
     }
   } catch { /* An unavailable local service must not be advertised as usable ASR. */ }
-  asrAdvertisements.set(config, { checkedAt: Date.now(), available });
+  return { available, speechAvailable };
 }
 
 function workerCapabilities(config: RabiLinkRelayRuntimeConfig): string {
-  return ["wearable-observation-policy-v1", "webgui", "video-direct", "peer-rpc-v1", "peer-tunnel-v1", PERSONA_REFERENCE_CAPABILITY, rabiPcVersionAdvertisement(config.rabiPcVersion), config.speechProxyEnabled ? "speech" : "", knowledgeReady.get(config) ? "knowledgebridge" : "", asrAdvertisements.get(config)?.available ? "asr" : ""]
+  return ["wearable-observation-policy-v1", "webgui", "video-direct", "peer-rpc-v1", "peer-tunnel-v1", APPLICATION_ACCESS_CAPABILITY, PERSONA_REFERENCE_CAPABILITY, rabiPcVersionAdvertisement(config.rabiPcVersion), asrAdvertisements.get(config)?.speechAvailable ? "speech" : "", knowledgeReady.get(config) ? "knowledgebridge" : "", asrAdvertisements.get(config)?.available ? "asr" : ""]
     .filter(Boolean)
     .join(",");
 }
@@ -489,8 +496,9 @@ async function finishWebguiRequest(
 async function proxyWebguiRequest(
   config: RabiLinkRelayRuntimeConfig,
   request: RelayProxyRequest,
-  options: Required<RabiLinkRelayRuntimeOptions>,
-  signal: AbortSignal
+  options: Required<Omit<RabiLinkRelayRuntimeOptions, 'knowledge'>> & Pick<RabiLinkRelayRuntimeOptions, 'knowledge'>,
+  signal: AbortSignal,
+  onKnowledgeUnavailable: () => void
 ): Promise<void> {
   const requestId = stringValue(request.id);
   if (!requestId || signal.aborted) return;
@@ -514,8 +522,10 @@ async function proxyWebguiRequest(
       let statusCode = 200;
       try {
         if (localPath !== KNOWLEDGE_PATH || method !== 'POST' || !request.knowledge || !requestBody || requestBody.length > 65536) throw new Error('KNOWLEDGE_REQUEST_DENIED');
-        result = await executeKnowledgeQueue(config.knowledgeBridge, config.deviceId, request.knowledge, JSON.parse(requestBody.toString('utf8')), request.nonReplayable === true);
-        if ((result as { code?: string })?.code === 'KNOWLEDGE_TRANSPORT_FAILED' || (result as { uncertain?: boolean })?.uncertain) knowledgeReady.set(config, false);
+        result = await executeKnowledgeQueue(options.knowledge, config.deviceId, request.knowledge, JSON.parse(requestBody.toString('utf8')), request.nonReplayable === true);
+        const envelope = result as { code?: string; uncertain?: boolean; structuredContent?: { code?: string; uncertain?: boolean } };
+        const receipt = envelope?.structuredContent ?? envelope;
+        if (envelope?.code === 'KNOWLEDGE_TRANSPORT_FAILED' || receipt?.code === 'KNOWLEDGE_TRANSPORT_FAILED' || receipt?.uncertain === true) onKnowledgeUnavailable();
       } catch { statusCode = 403; result = { ok: false, code: 'KNOWLEDGE_REQUEST_DENIED', uncertain: false }; }
       if (!signal.aborted) await finishWebguiRequest(config, requestId, { ok: true, statusCode, headers: { 'content-type': 'application/json' }, bodyBase64: Buffer.from(JSON.stringify(result)).toString('base64') }, options, signal);
       return;
@@ -616,7 +626,7 @@ async function finishSpeechRequest(
 async function proxySpeechRequest(
   config: RabiLinkRelayRuntimeConfig,
   request: RelayProxyRequest,
-  options: Required<RabiLinkRelayRuntimeOptions>,
+  options: Required<Omit<RabiLinkRelayRuntimeOptions, 'knowledge'>> & Pick<RabiLinkRelayRuntimeOptions, 'knowledge'>,
   signal: AbortSignal
 ): Promise<void> {
   const requestId = stringValue(request.id);
@@ -631,7 +641,7 @@ async function proxySpeechRequest(
     }
     const requestBody = request.bodyBase64 ? Buffer.from(request.bodyBase64, "base64") : undefined;
     const managerVideoOffer = method === "POST" && localPath === "/api/rabilink/video/offer";
-    if (!managerVideoOffer && !config.speechProxyEnabled) throw new Error("Speech proxy is disabled.");
+    if (!managerVideoOffer && !Boolean(config.localSpeechUrl)) throw new Error("Local speech service is not configured.");
     const managerSpeechIngress = localPath === "/api/speech/messages" || managerVideoOffer;
     if (!managerSpeechIngress) headers["x-rabilink-tunnel-local"] = "relay-speech";
     const response = await localFetchWithTimeout(
@@ -670,7 +680,6 @@ async function claimSpeechRequests(
   waitMs: number,
   signal: AbortSignal
 ): Promise<RelayProxyRequest[]> {
-  await refreshAsrAdvertisement(config, signal);
   const params = new URLSearchParams({
     limit: "1",
     deviceId: config.deviceId,
@@ -700,7 +709,6 @@ function normalizeConfig(config: RabiLinkRelayRuntimeConfig): RabiLinkRelayRunti
     claimWaitMs: Math.max(0, Math.min(60000, Number(config.claimWaitMs) || 0)),
     localWebguiUrl: normalizeBaseUrl(config.localWebguiUrl),
     peerUrls: [...new Set((config.peerUrls || []).map(normalizeBaseUrl).filter(Boolean))].slice(0, 8),
-    speechProxyEnabled: Boolean(config.speechProxyEnabled),
     localSpeechUrl: normalizeBaseUrl(config.localSpeechUrl)
   };
 }
@@ -716,7 +724,7 @@ export class RabiLinkRelayRuntime {
     state: "disabled",
     message: "RabiLink Relay 全局连接已关闭。"
   };
-  private readonly options: Required<RabiLinkRelayRuntimeOptions>;
+  private readonly options: Required<Omit<RabiLinkRelayRuntimeOptions, 'knowledge'>> & Pick<RabiLinkRelayRuntimeOptions, 'knowledge'>;
   private readonly onStatus?: (status: RabiLinkRelayRuntimeStatus) => void;
   private readonly onEvent?: (eventType: string, data: Record<string, unknown>) => void;
 
@@ -724,6 +732,7 @@ export class RabiLinkRelayRuntime {
     this.onStatus = options.onStatus;
     this.onEvent = options.onEvent;
     this.options = {
+      knowledge: options.knowledge,
       localRequestTimeoutMs: Math.max(100, Number(options.localRequestTimeoutMs) || DEFAULT_LOCAL_REQUEST_TIMEOUT_MS),
       localRequestAttempts: Math.max(1, Math.min(5, Number(options.localRequestAttempts) || DEFAULT_LOCAL_REQUEST_ATTEMPTS)),
       localSpeechRequestTimeoutMs: Math.max(1000, Number(options.localSpeechRequestTimeoutMs) || DEFAULT_LOCAL_SPEECH_REQUEST_TIMEOUT_MS),
@@ -734,7 +743,6 @@ export class RabiLinkRelayRuntime {
         Number(options.channelRetryDelayMs) || RETRY_DELAY_MS
       )),
       onStatus: options.onStatus ?? (() => undefined),
-      asrRefreshIntervalMs: Math.max(50, Number(options.asrRefreshIntervalMs) || 30_000),
       onEvent: options.onEvent ?? (() => undefined)
     };
   }
@@ -746,7 +754,7 @@ export class RabiLinkRelayRuntime {
 
   status(): RabiLinkRelayRuntimeStatus {
     const config = this.currentConfig;
-    const ready = !!config?.enabled && config.knowledgeBridge?.enabled === true && knowledgeReady.get(config) === true;
+    const ready = !!config?.enabled && knowledgeReady.get(config) === true;
     return { ...this.runtimeStatus, knowledgeBridgeReady: ready, capabilities: config ? workerCapabilities(config).split(',').filter(Boolean) : [] };
   }
 
@@ -795,7 +803,7 @@ export class RabiLinkRelayRuntime {
       this.setStatus({ state: "incomplete", message: "本机 Rabi WebGUI 地址必须使用 127.0.0.1、localhost 或 ::1。" });
       return previousDone;
     }
-    if (config.speechProxyEnabled && !isLoopbackUrl(config.localSpeechUrl)) {
+    if (Boolean(config.localSpeechUrl) && !isLoopbackUrl(config.localSpeechUrl)) {
       this.setStatus({ state: "incomplete", message: "本机语音服务地址必须使用 127.0.0.1、localhost 或 ::1。" });
       return previousDone;
     }
@@ -854,27 +862,49 @@ export class RabiLinkRelayRuntime {
   }
 
   private async run(config: RabiLinkRelayRuntimeConfig, generation: number, signal: AbortSignal): Promise<void> {
-    knowledgeReady.set(config, isCanonicalKnowledgeDeviceId(config.deviceId) && await probeKnowledgeBridge(config.knowledgeBridge));
-    if (signal.aborted) { knowledgeReady.set(config, false); return; }
-    await refreshAsrAdvertisement(config, signal);
-    if (!this.active(generation, signal)) return;
     let webguiDrain: Promise<void> | null = null;
     let speechDrain: Promise<void> | null = null;
     let webguiDrainFailures = 0;
     let speechDrainFailures = 0;
+    let relayReady = false;
+    let knowledgeAvailabilityEpoch = 0;
+    let speechAvailabilityEpoch = 0;
+    let capabilityFlight: Promise<void> | null = null;
+    let pendingKnowledge = false;
+    let pendingSpeech = false;
+    let publishedCapabilities = workerCapabilities(config);
     const webguiEvents = new Map<string, Promise<void>>();
     const markChannelsOnline = (): void => {
       if (webguiDrainFailures === 0
-        && (!config.speechProxyEnabled || speechDrainFailures === 0)
+        && (!Boolean(config.localSpeechUrl) || speechDrainFailures === 0)
         && this.active(generation, signal)) {
-        this.markOnline(config.speechProxyEnabled);
+        this.markOnline(asrAdvertisements.get(config)?.speechAvailable === true);
       }
     };
     const startWebguiEvents = (): void => {
       if (signal.aborted) return;
       for (const streamPath of WEBGUI_EVENT_STREAM_PATHS) {
         if (webguiEvents.has(streamPath)) continue;
-        const running = forwardLocalWebguiEvents(config, streamPath, signal, this.options)
+        const running = forwardLocalWebguiEvents(config, streamPath, signal, this.options,
+          async eventType => {
+            if (!this.active(generation, signal)) return;
+            if (streamPath === "/api/events" && (eventType === "ready" || eventType === "route_catalog_startup_changed")) {
+              void refreshCapabilities(true, false).catch(() => {});
+            } else if (streamPath === "/api/events" && eventType === "speech_model_management_changed"
+              || streamPath === "/api/speech/events" && (eventType === "ready" || eventType === "capabilities_changed")) {
+              void refreshCapabilities(false, true).catch(() => {});
+            }
+          }, () => {
+            if (!this.active(generation, signal)) return;
+            if (streamPath === "/api/events") {
+              knowledgeAvailabilityEpoch++;
+              knowledgeReady.set(config, false);
+            } else {
+              speechAvailabilityEpoch++;
+              asrAdvertisements.set(config, { available: false, speechAvailable: false });
+            }
+            publishCapabilities();
+          })
           .finally(() => webguiEvents.delete(streamPath));
         webguiEvents.set(streamPath, running);
       }
@@ -885,7 +915,12 @@ export class RabiLinkRelayRuntime {
       const attempt: Promise<void> = this.drainChannel(
         signal,
         (waitMs, channelSignal) => claimWebguiRequests(config, waitMs, channelSignal),
-        (request) => proxyWebguiRequest(config, request, this.options, signal)
+        (request) => proxyWebguiRequest(config, request, this.options, signal, () => {
+          if (!this.active(generation, signal)) return;
+          knowledgeAvailabilityEpoch++;
+          knowledgeReady.set(config, false);
+          publishCapabilities();
+        })
       ).then(() => {
         webguiDrainFailures = 0;
         markChannelsOnline();
@@ -943,18 +978,45 @@ export class RabiLinkRelayRuntime {
       });
       speechDrain = attempt;
     };
-    // Capability discovery must progress even when the empty ASR directory prevents requests.
-    // Only a capability change triggers a Relay update; idle queues remain event driven.
-    const capabilityMonitor = (async () => {
-      if (!config.speechProxyEnabled) return;
-      while (this.active(generation, signal)) {
-        await delay(this.options.asrRefreshIntervalMs, signal);
-        if (!this.active(generation, signal)) return;
-        const before = workerCapabilities(config);
-        await refreshAsrAdvertisement(config, signal, true);
-        if (this.active(generation, signal) && before !== workerCapabilities(config)) drainSpeech();
-      }
-    })();
+    const publishCapabilities = (): void => {
+      if (!this.active(generation, signal)) return;
+      const capabilities = workerCapabilities(config);
+      if (publishedCapabilities === capabilities) return;
+      publishedCapabilities = capabilities;
+      this.onStatus?.(this.status());
+      if (relayReady) { drainWebgui(); drainSpeech(); }
+    };
+    // Manager/Speech own readiness. Coalesce their events; idle connections never poll business state.
+    const refreshCapabilities = (knowledge: boolean, speech: boolean): Promise<void> => {
+      if (!this.active(generation, signal)) return Promise.resolve();
+      pendingKnowledge ||= knowledge;
+      pendingSpeech ||= speech;
+      if (capabilityFlight) return capabilityFlight;
+      const flight = (async () => {
+        while (this.active(generation, signal) && (pendingKnowledge || pendingSpeech)) {
+          const checkKnowledge = pendingKnowledge, checkSpeech = pendingSpeech;
+          pendingKnowledge = pendingSpeech = false;
+          if (checkKnowledge) {
+            const epoch = knowledgeAvailabilityEpoch;
+            const ready = isCanonicalKnowledgeDeviceId(config.deviceId) && await probeKnowledgeBridge(this.options.knowledge, signal);
+            if (!this.active(generation, signal)) return;
+            if (epoch === knowledgeAvailabilityEpoch) knowledgeReady.set(config, ready);
+          }
+          if (checkSpeech) {
+            const epoch = speechAvailabilityEpoch;
+            const advertisement = await probeSpeechAdvertisement(config, signal);
+            if (!this.active(generation, signal)) return;
+            if (epoch === speechAvailabilityEpoch) asrAdvertisements.set(config, advertisement);
+          }
+          publishCapabilities();
+        }
+      })();
+      const tracked = flight.finally(() => { if (capabilityFlight === tracked) capabilityFlight = null; });
+      capabilityFlight = tracked;
+      return tracked;
+    };
+    await refreshCapabilities(true, true);
+    if (!this.active(generation, signal)) return;
     try {
       while (this.active(generation, signal)) {
         try {
@@ -965,6 +1027,7 @@ export class RabiLinkRelayRuntime {
               // Relay ownership and proxy delivery do not depend on observers.
             }
             if (eventType === "ready") {
+              relayReady = true;
               markChannelsOnline();
               startWebguiEvents();
               drainWebgui();
@@ -991,7 +1054,7 @@ export class RabiLinkRelayRuntime {
       }
     } finally {
       await Promise.allSettled([
-        capabilityMonitor,
+        ...(capabilityFlight ? [capabilityFlight] : []),
         ...webguiEvents.values(),
         ...(webguiDrain ? [webguiDrain] : []),
         ...(speechDrain ? [speechDrain] : [])

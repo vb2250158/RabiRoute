@@ -6,6 +6,16 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.22 - 2026-10-03
+
+### Unify service access after RabiLink connection
+
+- Authenticated connections in the same application allow services actually provided by the PC: speech, personas, resources, Manager administration and knowledge reads/writes. Keys are exchanged and pinned automatically; application isolation, current connection scope, encryption, instance identity and local Host ownership remain enforced.
+- Remove the speech permission toggle, local knowledge MCP secret and role/tool/device grant forms. Knowledge reuses existing Manager APIs and receipts. Normalization removes retired permission fields; old knowledge-grant APIs report migration status, and historical data no longer decides access.
+- Compatible online speech peers awaiting a handshake can be selected and connected automatically. Offline, older versions and unavailable services report separate states. New PCs use application-access capability and the unified handshake; older phone/glasses bootstrap wire kinds remain protocol compatibility only.
+- Speech and knowledge readiness update on startup, actual owner events and reconnection. Service loss revokes readiness without idle capability polling. Speech warmup and model-state changes publish capability-change events.
+- Synchronize bilingual contracts and examples, and update shared knowledge SDK closure for Windows, developer candidates and Relay. Writes retain stable idempotency keys, bounded receipts and no replay. PC and Relay both require updates; source/local tests do not prove public Relay deployment or physical dual-PC acceptance.
+
 ## 0.3.21 - 2026-10-03
 
 ### Reset instance IDs and prevent copied PC identities

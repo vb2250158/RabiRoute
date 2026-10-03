@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 
 import { assertDeveloperLocksCompatible } from "./lib/developer-lock-compatibility.mjs";
 
@@ -12,6 +14,24 @@ function write(root, relative, content) {
   const target = path.join(root, ...relative.split("/"));
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, content);
+}
+
+const knowledgeRuntimeFiles = [
+  "packages/rabi-knowledge-contract/schema.mjs",
+  "packages/rabi-knowledge-contract/tools.mjs",
+  "packages/rabi-knowledge-contract/receipt.mjs",
+  "apps/rabi-mcp/lib/knowledge-tools.mjs",
+  "apps/rabi-mcp/lib/knowledge-receipt.mjs"
+];
+function writeKnowledgeRuntime(build) {
+  for (const relative of knowledgeRuntimeFiles) {
+    write(build, relative, fs.readFileSync(new URL(`../${relative}`, import.meta.url), "utf8"));
+  }
+  const relayManifest = fs.readFileSync(new URL('./rabilink-relay-runtime-files.json', import.meta.url), 'utf8');
+  write(build, 'scripts/rabilink-relay-runtime-files.json', relayManifest);
+  for (const relative of JSON.parse(relayManifest)) {
+    write(build, relative, fs.readFileSync(new URL(`../${relative}`, import.meta.url), 'utf8'));
+  }
 }
 
 test("developer candidate overlays only built runtime layers and leaves the immutable base unchanged", () => {
@@ -46,6 +66,15 @@ test("developer candidate overlays only built runtime layers and leaves the immu
     write(build, "package-lock.json", '{"version":"0.3.1","lockfileVersion":3,"packages":{"":{"version":"0.3.1"}}}');
     write(base, "node_modules/dep/index.js", "dependency\n");
     write(base, "release-manifest.json", "old manifest\n");
+    write(base, "apps/rabi-mcp/lib/knowledge-tools.mjs", "throw new Error('retired MCP owner');\n");
+    write(base, "apps/rabi-mcp/lib/knowledge-receipt.mjs", "throw new Error('retired receipt owner');\n");
+    write(base, "packages/rabi-knowledge-contract/tools.mjs", "throw new Error('retired shared owner');\n");
+    write(base, 'scripts/rabilink-relay-server.mjs', "throw new Error('retired Relay entry');\n");
+    write(base, 'scripts/rabilink-knowledge-grant.mjs', 'retired grant owner\n');
+    write(base, 'scripts/rabilink-knowledge-grant-ui.mjs', 'retired grant editor\n');
+    write(base, 'scripts/local-maintenance.ps1', 'keep local maintenance\n');
+    fs.cpSync(new URL('../node_modules/ws', import.meta.url), path.join(base, 'node_modules/ws'), { recursive: true });
+    writeKnowledgeRuntime(build);
     write(build, "dist/manager.js", "new manager\n");
     write(build, "ribiwebgui/dist/index.html", "new web\n");
     write(build, "assets/default-persona-plan-workflow.json", "new workflow\n");
@@ -76,6 +105,42 @@ test("developer candidate overlays only built runtime layers and leaves the immu
     });
 
     assert.equal(fs.existsSync(path.join(result.packageRoot, "apps/rabi-agent/data")), false);
+    for (const relative of knowledgeRuntimeFiles) {
+      assert.equal(fs.readFileSync(path.join(result.packageRoot, relative), "utf8"), fs.readFileSync(path.join(build, relative), "utf8"));
+      assert.ok(result.manifest.files.some(entry => entry.path === relative));
+    }
+    assert.equal(fs.readFileSync(path.join(base, "apps/rabi-mcp/lib/knowledge-tools.mjs"), "utf8"), "throw new Error('retired MCP owner');\n");
+    const wrapperUrl = pathToFileURL(path.join(result.packageRoot, "apps/rabi-mcp/lib/knowledge-tools.mjs")).href;
+    const imported = spawnSync(process.execPath, ["--input-type=module", "--eval", `const module = await import(${JSON.stringify(wrapperUrl)}); const tools = module.createKnowledgeTools({client:{invoke:async()=>({})},allowedRoles:['fixture'],allowWrites:true}); if(tools.list().length!==10) throw new Error('Incomplete shared tool catalog');`], { encoding: "utf8" });
+    assert.equal(imported.status, 0, imported.stderr || imported.stdout);
+    for (const relative of JSON.parse(fs.readFileSync(path.join(build, 'scripts/rabilink-relay-runtime-files.json'), 'utf8'))) {
+      assert.equal(fs.readFileSync(path.join(result.packageRoot, relative), 'utf8'), fs.readFileSync(path.join(build, relative), 'utf8'));
+      assert.ok(result.manifest.files.some(entry => entry.path === relative));
+    }
+    for (const name of ['rabilink-knowledge-grant.mjs', 'rabilink-knowledge-grant-ui.mjs']) {
+      assert.equal(fs.existsSync(path.join(result.packageRoot, 'scripts', name)), false);
+      assert.equal(fs.existsSync(path.join(base, 'scripts', name)), true);
+    }
+    assert.equal(fs.readFileSync(path.join(result.packageRoot, 'scripts/local-maintenance.ps1'), 'utf8'), 'keep local maintenance\n');
+    const relayUrl = pathToFileURL(path.join(result.packageRoot, 'scripts/rabilink-relay-server.mjs')).href;
+    const relayImported = spawnSync(process.execPath, ['--input-type=module', '--eval', `await import(${JSON.stringify(relayUrl)}); process.exit(0);`], {
+      encoding: 'utf8', timeout: 10000, windowsHide: true,
+      env: { ...process.env, PORT: '0', HOST: '127.0.0.1', RABILINK_RELAY_DATA_DIR: path.join(root, 'relay-import-data') },
+      cwd: result.packageRoot
+    });
+    assert.equal(relayImported.status, 0, relayImported.stderr || relayImported.stdout);
+    const baseWithoutMcp = path.join(root, "base-without-mcp");
+    fs.cpSync(base, baseWithoutMcp, { recursive: true });
+    fs.rmSync(path.join(baseWithoutMcp, "apps/rabi-mcp"), { recursive: true });
+    fs.rmSync(path.join(baseWithoutMcp, "packages/rabi-knowledge-contract"), { recursive: true });
+    const addedRuntime = createDeveloperCandidate({ baseRoot: baseWithoutMcp, buildRoot: build, traySourceRoot: tray, hostCoreRoot: host, versionsRoot: versions, packageVersion: "0.2.2-dev.base-without-mcp" });
+    for (const relative of knowledgeRuntimeFiles) assert.equal(fs.readFileSync(path.join(addedRuntime.packageRoot, relative), "utf8"), fs.readFileSync(path.join(build, relative), "utf8"));
+    const receiptFile = path.join(build, "packages/rabi-knowledge-contract/receipt.mjs");
+    const receiptSource = fs.readFileSync(receiptFile);
+    fs.unlinkSync(receiptFile);
+    assert.throws(() => createDeveloperCandidate({ baseRoot: base, buildRoot: build, traySourceRoot: tray, hostCoreRoot: host, versionsRoot: versions, packageVersion: "0.2.2-dev.missing-knowledge" }), /packages\/rabi-knowledge-contract\/receipt\.mjs/);
+    fs.writeFileSync(receiptFile, receiptSource);
+    assert.equal(fs.readdirSync(versions).some(name => name.startsWith(".developer-staging-")), false);
     assert.equal(fs.readFileSync(path.join(result.packageRoot,"plugin-adapters/rabi-speech/rabispeech/all_day_capture.py"),"utf8"),"new capture\n");
     assert.equal(fs.existsSync(path.join(result.packageRoot,"plugin-adapters/rabi-speech/config.json")),false);
     assert.equal(fs.existsSync(path.join(result.packageRoot, "apps/rabi-agent/lib/client.mjs")), true);

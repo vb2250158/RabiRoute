@@ -6,6 +6,8 @@ English | <a href="./project-function-map.md">简体中文</a>
 
 # RabiRoute Project Function Map
 
+0.3.22 connection contract: authenticated devices in the same RabiLink application can use all services actually provided by the PC. Pinned keys and application scope remain checked. Knowledge reads/writes reuse Manager APIs, without separate MCP secrets or knowledge grants. Per-service permission fields and the grant editor are retired. See [generic connections](rabilink-peer-tunnel_en.md) and [knowledge runtime](rabilink-knowledge-runtime_en.md).
+
 Remote Agents are execution targets, not message endpoints. Select an instance and Agent through [remote enrollment](lan-rabi-agent-bootstrap_en.md).
 
 Device ownership has changed: configure watches, bands, and glasses in mobile recording, which submits recording events. Separate PC device entries are removed; legacy device protocols below are retained for compatibility maintenance. See [implementation and retirement criteria](mobile-recording-event-boundary_en.md).
@@ -14,7 +16,7 @@ See [Web hot patches](web-hot-patches_en.md) for installed WebGUI, resource and 
 
 Mobile integration is moving to [all-day recording](rabilink-all-day-recording_en.md): one `RabiConversationService` owner coordinates phone, glasses and health; audio/audio-video/health-only are independent of pause, and old standalone capture services have been removed from source. Durable audio freezes provenance/target/policy; video audio is derived after stop. PC transcription-only capability/worker fencing and captureId association are connected in source; unsupported work is deferred. Association manually refreshes at most 200 results over 24 hours by processedAt; missing IDs are not guessed. Health unifies capture/status, not full PC-owned history. autoResume is internal false, boot pauses, and automatic resume is not implemented. New records are not automatically deleted by transport-ACK cache age, and rolling capacity management is incomplete. See [mobile recording UI](rabilink-mobile-recording-ui_en.md) for the daily entry and historical evidence; end-to-end acceptance remains pending.
 
-See [Cross-PC calls and target grants](rabilink-peer-rpc_en.md) for discovery, plan summaries and persona file manifests. LAN preference, P2P attempts and Relay fallback share an encrypted contract. Public-network and sustained dual-PC acceptance remain pending.
+See [Cross-PC calls and application authentication](rabilink-peer-rpc_en.md) for discovery, plan summaries and persona file manifests. LAN preference, P2P attempts and Relay fallback share an encrypted contract. Public-network and sustained dual-PC acceptance remain pending.
 
 See [Direct-video integration and acceptance](rabilink-direct-video_en.md) for the experimental phone-to-PC path. Android owns SDK capture and sending, the RabiLink plugin owns PC reception, and Relay exchanges SDP only. Data-channel transfer is verified; glasses capture and cross-network connectivity remain unverified.
 

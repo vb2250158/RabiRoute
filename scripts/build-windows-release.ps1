@@ -84,6 +84,10 @@ $requiredPortableRuntimeFiles = @(
     "apps/rabi-agent/lib/manager-cli.mjs",
     # The compiled runtime imports ../../packages from dist/manager; copy even in untracked local snapshots.
     "packages/rabi-knowledge-contract/schema.mjs",
+    "packages/rabi-knowledge-contract/tools.mjs",
+    "packages/rabi-knowledge-contract/receipt.mjs",
+    "apps/rabi-mcp/lib/knowledge-tools.mjs",
+    "apps/rabi-mcp/lib/knowledge-receipt.mjs",
     "scripts/lib/release-tracked-manifest.ps1",
     "scripts/rabilink-relay-runtime-files.json",
     "docs/aiui-agent-profile-http.md",
@@ -95,8 +99,8 @@ $requiredPortableRuntimeFiles = @(
 )
 $relayRuntimeFiles = Get-Content -LiteralPath (Join-Path $repo 'scripts/rabilink-relay-runtime-files.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 foreach ($relative in $relayRuntimeFiles) {
-    if ($relative -notmatch '^(lib/)?[a-z0-9-]+\.mjs$') { throw 'Unsafe Relay runtime manifest path' }
-    $requiredPortableRuntimeFiles += "scripts/$relative"
+    if ($relative -notmatch '^(scripts/(lib/)?[a-z0-9-]+|packages/rabi-knowledge-contract/(schema|tools|receipt))\.mjs$') { throw 'Unsafe Relay runtime manifest path' }
+    $requiredPortableRuntimeFiles += $relative
 }
 
 $trackedManifestEntries = $null

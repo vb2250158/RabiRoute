@@ -25,23 +25,13 @@
 }
 ```
 
-返回的 `transport` 为 `lan`、`p2p` 或 `relay`。`reply.ok` 才表示业务成功；`reply` 同时包含请求 ID、目标设备和运行实例身份。`plans.list` 只返回计划 ID、标题、状态和更新时间；`persona.manifest` 查询指定人格的文件清单。`system.describe` 不需要业务授权，返回当前实例与已开放操作。
+返回的 `transport` 为 `lan`、`p2p` 或 `relay`。`reply.ok` 才表示业务成功；`reply` 同时包含请求 ID、目标设备和运行实例身份。`plans.list` 只返回计划 ID、标题、状态和更新时间；`persona.manifest` 查询指定人格的文件清单。`system.describe` 在同一应用鉴权后返回当前实例与已开放操作。
 
-## 目标电脑授权
+## 目标电脑与可用操作
 
 PC 在事件连接和 worker 请求中明确上报 `deviceKind=pc`；手机和眼镜沿用已有的 `deviceKind` 上报。新版 Relay 保留已登记类型，旧客户端后续省略该字段不会清空它。历史登记不会按名称批量改写，需设备重新明确上报。客户端上报属于自述分类，不作为权限凭据；支持自定义类型扩展。
 
-目标 PC 的运行数据根目录下 `data/rabilink/peer-access.json` 是唯一授权源；不存在、格式错误或超过 64 KiB 时关闭业务访问。修改后下次请求直接生效，不需要重启。
-
-```json
-{
-  "schemaVersion": 1,
-  "operations": ["plans.list", "persona.manifest"],
-  "roleIds": ["Example"]
-}
-```
-
-授权面向整个可信 RabiLink 应用组。共享 token 的成员具有相同的密码学身份，设备 ID 是寻址和误投检查，不是成员之间的独立身份认证。不要把互不信任的电脑放进同一个应用。加入应用不会自动开放业务查询、任意 Manager 路径、任务执行、消息发送或文件修改。
+0.3.22 起，目标在同一 RabiLink 应用鉴权通过后默认开放本协议实际注册的只读操作和 Manager 全局 `rolesRoot` 实际拥有的人格。Route 自定义目录中的同名人格不进入这份知识目录。不再读取 `peer-access.json` 的操作与角色白名单；旧文件不参与授权。其它应用、错误 generation 或未知人格继续拒绝。通用管理和写入使用[通用连接](rabilink-peer-tunnel.md)，本协议不注册写操作。
 
 ## 传输与生命周期
 
@@ -55,6 +45,6 @@ Manager RabiLink 插件拥有调用入口和 WebRTC 连接；停用时撤销路�
 
 ## 现有功能的兼容边界
 
-人格数据同步功能已从源码移除：不再提供 LAN 同步文件传输、合并或 `/persona-sync/proxy`。跨电脑访问继续通过 RabiLink 在目标电脑读取数据，不创建同步副本；只读 RPC 不因此获得写入权限。已有的人格、计划、记忆和历史冲突证据不删除。视频仍保留独立通道和“禁止服务器承载视频字节”的带宽合同。
+人格数据同步功能已从源码移除：不再提供 LAN 同步文件传输、合并或 `/persona-sync/proxy`。跨电脑访问继续通过 RabiLink 在目标电脑读取数据，不创建同步副本；此 RPC 只注册读取操作，写入使用 Manager 通用连接。已有的人格、计划、记忆和历史冲突证据不删除。视频仍保留独立通道和“禁止服务器承载视频字节”的带宽合同。
 
 验证入口：`src/rabiPeer.test.ts`、`scripts/rabilink-relay-peers.test.mjs`，以及 Relay runtime 与共用 peer LAN 通道回归。源码变更和自动化传输成功不代替本机受管部署、远程 Relay 升级或真实双 PC 验收。

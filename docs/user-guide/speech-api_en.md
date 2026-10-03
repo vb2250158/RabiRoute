@@ -22,9 +22,11 @@ Do not copy the loopback address to another device. Do not use a glasses device 
 ## Prepare the remote path
 
 1. Connect the target Rabi PC to Relay from **RabiLink → Configuration**.
-2. Enable **Allow speech relay** and keep the local speech target at `http://127.0.0.1:8781`.
+2. Start RabiSpeech from **Speech Service** and confirm that the target PC advertises `speech`. Keep the local speech address under RabiLink's advanced connection parameters at `http://127.0.0.1:8781`.
 3. In the application's Relay `/manage` page, select that online Rabi PC.
 4. Copy the application's token. Keep it in a temporary process variable or secret store, not in the repository, logs, or URL.
+
+From 0.3.22, authenticated devices in the same RabiLink application may use services actually provided by the target PC by default, without an additional speech permission switch. RabiSpeech must be running; Manager advertises `speech` only after successfully reading `/v1/capabilities`. A successful connection does not prove that a model is installed or ready; complete the checks below.
 
 The commands below use Windows PowerShell and the system `curl.exe`. Define two values first:
 
@@ -93,7 +95,7 @@ $Token = $null
 | `401` | The application token is missing, invalid, or was reset | Copy it again from the target application and inspect the request header |
 | `403` | A device token or another unsupported credential was used | Use the application token |
 | `404` | The path is not in the Relay speech allowlist | Verify the complete `/api/rabilink/speech/...` path |
-| `409` | No usable PC is selected, or speech relay is disabled on the target | Select the PC in `/manage`; verify that it is online and enabled |
+| `409` | No usable PC is selected, or the target PC does not provide `speech` | Select the PC in `/manage`; check that it is online, its actual running version, and RabiSpeech status, `/v1/capabilities`, and the `speech` advertisement |
 | `413` | The upload exceeds the current limit, 25 MiB by default | Shorten or compress the audio |
 | `502` | The PC or local RabiSpeech failed while processing | Inspect Speech service status and logs on the target PC |
 | `504` | Model startup or processing exceeded the Relay wait | Run health/warmup first, or adjust the controlled deployment timeout |

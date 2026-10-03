@@ -21,7 +21,7 @@ import { agentRequestReminderPrompt } from "../agentRequests/replyParameters.js"
 import fs from "node:fs";
 import { createVideoRuntime } from "./videoRuntime.js";
 import { createRabiPeerRuntime } from "./rabiPeerRoutes.js";
-import { readRabiPeerAccess } from "./rabiPeerAccess.js";
+import { localKnowledgeRoleIds } from "./rabiLinkKnowledgeCatalog.js";
 import { discoverRabiPeers } from "../rabiPeerDiscovery.js";
 import http from "node:http";
 import os from "node:os";
@@ -1434,6 +1434,10 @@ function recordRabiLinkRelayReceipt(data: Record<string, unknown>): void {
 }
 
 const rabiLinkRelayRuntime = new RabiLinkRelayRuntime({
+  knowledge: {
+    endpoint: () => ({ managerBaseUrl, applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, managerInstanceId }),
+    roleIds: () => localKnowledgeRoleIds(routeCatalogPersonas(), rolesRoot)
+  },
   onStatus: status => {
     publishManagerEvent("rabilink_status", status);
   },
@@ -1498,7 +1502,7 @@ function remotePersonaReadContext(): RemotePersonaReadContext {
     managerBaseUrl,
     remoteGeneration: async deviceId => {
       if (!activePeerTunnel) throw new Error("Peer tunnel is not ready.");
-      await activePeerTunnel.ensurePersonaService(deviceId);
+      await activePeerTunnel.ensureApplicationConnection(deviceId);
       return (await activePeerTunnel.session(deviceId)).remote.generation;
     },
     fetchRemote: async (deviceId, pathname, init) => {
@@ -1618,10 +1622,9 @@ let activePeerRuntime: ReturnType<typeof createRabiPeerRuntime> | undefined;
 let activePeerTunnel: PeerTunnelRuntime | undefined;
 function createManagerPeerRuntime() {
   let tunnel: PeerTunnelRuntime;
-  const access = () => readRabiPeerAccess(path.join(rootDir, "data", "rabilink", "peer-access.json"));
   const role = (input: unknown) => {
     const roleId = (input as { roleId?: unknown })?.roleId;
-    if (typeof roleId !== "string" || !access().roleIds.includes(roleId)) throw new Error("peer_role_denied");
+    if (typeof roleId !== "string" || !localKnowledgeRoleIds(routeCatalogPersonas(), rolesRoot).includes(roleId)) throw new Error("peer_role_denied");
     return roleId;
   };
   const runtime = createRabiPeerRuntime({
@@ -1629,7 +1632,7 @@ function createManagerPeerRuntime() {
     identity: () => ({ deviceId: rabiLinkRelayConfigForMeta().deviceId,
       generation: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, instanceId: managerInstanceId }),
     token: () => rabiLinkRelayConfigForMeta().token,
-    allowed: () => access().operations,
+    allowed: () => rabiLinkRelayConfigForMeta().enabled ? ["plans.list", "persona.manifest"] : [],
     peers: () => discoverRabiPeers(peerRelayConfig()),
     relay: () => peerRelayConfig(),
     readJson: readJsonBody, json: jsonResponse,
@@ -1645,9 +1648,7 @@ function createManagerPeerRuntime() {
   });
   tunnel = new PeerTunnelRuntime({
     readOnly: managerReadOnly,
-    allowResourceBootstrap: () => rabiLinkRelayConfigForMeta().enabled,
-    allowPersonaBootstrap: () => rabiLinkRelayConfigForMeta().enabled,
-    allowSpeechBootstrap: () => rabiLinkRelayConfigForMeta().enabled && rabiGlobalConfig.read().rabiLinkRelay.speechProxyEnabled,
+    allowApplicationConnection: () => rabiLinkRelayConfigForMeta().enabled,
     allowControl: (request, url) => request.socket.localPort === managerPort && webguiLanRequestAllowed(request, url),
     dataDir: path.join(rootDir, "data", "rabilink"),
     deviceId: rabiLinkRelayConfigForMeta().deviceId,
@@ -1666,7 +1667,7 @@ function createManagerPeerRuntime() {
       allowed: (req, target) => !managerReadOnly && req.socket.localPort === managerPort && webguiLanRequestAllowed(req, target),
       identity: () => ({ applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, managerInstanceId }),
       readJson: readJsonBody,
-      ensure: async deviceId => { if (activePeerTunnel !== tunnel) throw new Error("Peer tunnel is stopping."); await tunnel.ensurePersonaService(deviceId); },
+      ensure: async deviceId => { if (activePeerTunnel !== tunnel) throw new Error("Peer tunnel is stopping."); await tunnel.ensureApplicationConnection(deviceId); },
       json: jsonResponse
     })) return true;
     return tunnel.handler(request, url, response, readJsonBody) || runtime.handler(request, url, response);
@@ -2057,9 +2058,7 @@ function rabiLinkRelayConfigFor(definition: GatewayDefinition): RabiLinkRelayGlo
     deviceId: definition.rabiLinkRelayDeviceId?.trim() || globalRelay.deviceId || globalConfig.rabiName || definition.id,
     claimWaitMs: definition.rabiLinkRelayClaimWaitMs ?? globalRelay.claimWaitMs,
     replyIdleTimeoutMs: definition.rabiLinkRelayReplyIdleTimeoutMs ?? globalRelay.replyIdleTimeoutMs,
-    speechProxyEnabled: globalRelay.speechProxyEnabled,
-    speechServiceUrl: globalRelay.speechServiceUrl,
-    knowledgeBridge: globalRelay.knowledgeBridge
+    speechServiceUrl: globalRelay.speechServiceUrl
   };
 }
 
@@ -2077,9 +2076,7 @@ function firstRouteLevelRabiLinkRelayConfig(): RabiLinkRelayGlobalConfig | null 
       deviceId: definition.rabiLinkRelayDeviceId?.trim() || globalConfig.rabiLinkRelay.deviceId || globalConfig.rabiName || definition.id,
       claimWaitMs: definition.rabiLinkRelayClaimWaitMs ?? globalConfig.rabiLinkRelay.claimWaitMs,
       replyIdleTimeoutMs: definition.rabiLinkRelayReplyIdleTimeoutMs ?? globalConfig.rabiLinkRelay.replyIdleTimeoutMs,
-      speechProxyEnabled: globalConfig.rabiLinkRelay.speechProxyEnabled,
-      speechServiceUrl: globalConfig.rabiLinkRelay.speechServiceUrl,
-      knowledgeBridge: globalConfig.rabiLinkRelay.knowledgeBridge
+      speechServiceUrl: globalConfig.rabiLinkRelay.speechServiceUrl
     };
   }
   return null;
@@ -2110,7 +2107,6 @@ async function syncRabiLinkRelayRuntime(onLanReady?: () => void | Promise<void>)
     rabiPcVersion: rabiRoutePackageVersion(),
     localWebguiUrl: `http://127.0.0.1:${managerPort}`,
     peerUrls: lanEnabled ? peerLanServer.peerUrls() : [],
-    speechProxyEnabled: relay.speechProxyEnabled,
     localSpeechUrl: relay.speechServiceUrl
   });
   if (lanEnabled && peerLanServer.status().state !== "listening") {

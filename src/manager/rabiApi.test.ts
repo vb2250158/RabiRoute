@@ -66,7 +66,6 @@ test("public Rabi identity never exposes the Relay application token", () => {
     deviceId: "pc-test",
     claimWaitMs: 60_000,
     replyIdleTimeoutMs: 60_000,
-    speechProxyEnabled: false,
     speechServiceUrl: "http://127.0.0.1:8781"
   });
 

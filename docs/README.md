@@ -86,7 +86,7 @@
 - [本地语音模型下载说明](local-speech-model-downloads.md) — 使用模型管理页按需下载，并查看每个 TTS/ASR 模型的来源、隔离环境与验证要求。
 - [RabiSpeech 性能与功能报告](rabispeech-performance-report.md) — 六个 TTS、五个主要 ASR 的冷/热态、效果、硬件与 CUDA 问题。
 - [语音服务器与通用连接](rabilink-peer-tunnel.md) — 选择另一台电脑的语音服务，查看在线状态、实际线路和往返延迟。
-- [跨电脑接口调用](rabilink-peer-rpc.md) — 按设备 ID 查询另一台 PC，配置目标授权并检查 LAN、P2P 或 Relay 的实际调用结果。
+- [跨电脑接口调用](rabilink-peer-rpc.md) — 按设备 ID 查询同一应用的另一台 PC，检查 LAN、P2P 或 Relay 的实际调用结果。
 - [RabiLink Relay](rabilink-relay-server.md) — Relay server、PC worker、远程 WebGUI、统一会话账本和下行流。
 - [RabiLink Cloudflare Worker](rabilink-relay-cloudflare-worker.md) — Relay 边缘代理实现。
 - [RabiLink 眼镜端三条路线对比](rabilink-glasses-route-comparison.md) — 原生灵珠智能体、AIUI 与原生 App 的宿主、生命周期、设备能力、发布成本和当前建议。
@@ -99,12 +99,12 @@
 - [AIUI 手机设备配置 HTTP](aiui-agent-profile-http.md) — **实验实现**：手机设置页、设备归属、版本冲突和眼镜应用回执；尚未整体验收。
 - [AIUI 配置应用生命周期](../apps/rabilink-aiui/docs/agent-profile-runtime.md) — 缓存、当前对话结束后应用与模型状态说明。
 - [AIUI 工具合同核对](../apps/rabilink-aiui/docs/agent-tool-contract.md) — 官方工具调用事件与尚未证实的结果续轮接口。
-- [RabiPC 知识 MCP](../apps/rabi-mcp/README.md) — 计划、记忆查询写入及受控 HTTP/stdio 接入；默认只读。
-- [本机知识桥设置](user-guide/knowledge-bridge-settings.md) — 设置 PC 工具连接和设备授权，分别确认保存与连接结果。
-- [手机知识授权](knowledge-grant-phone-ui.md) — 为眼镜选择可用角色和工具，核对权限是否就绪。
-- [PC 知识桥运行配置](rabilink-knowledge-runtime.md) — 本机 MCP 连接、密钥脱敏、设备授权交集与就绪确认。
-- [知识写入回执查询](rabilink-knowledge-operation-receipts.md) — 开发维护：冻结发布后的源码扩展，鉴权恢复已持久化回执；未部署，未知结果不重放。
-- [AIUI Agent 验收矩阵](aiui-agent-acceptance.md) — 开发维护：分清构建、运行与真机证据，查看未完成能力和验收出口。
+- [独立 RabiPC 知识 MCP](../apps/rabi-mcp/README.md) — 为独立 MCP 客户端提供 HTTP/stdio 工具；RabiLink 使用内置 Manager 路径，无需部署此服务。
+- [本机知识桥设置](user-guide/knowledge-bridge-settings.md) — 连接后使用 PC 知识工具，核对服务就绪和业务结果。
+- [手机知识授权](knowledge-grant-phone-ui.md) — 了解旧知识授权页面的退役和迁移入口。
+- [PC 知识桥运行配置](rabilink-knowledge-runtime.md) — 复用 Manager 知识接口、应用鉴权与就绪确认。
+- [知识写入回执查询](rabilink-knowledge-operation-receipts.md) — 按真实设备凭据查询原操作键的持久回执，未知结果不重放。
+- [AIUI Agent 历史验收记录](aiui-agent-acceptance.md) — 开发维护：分清构建、运行与真机证据，查看未完成能力和验收出口。
 - [AIUI 单步知识工具](../apps/rabilink-aiui/docs/knowledge-single-step.md) — 只读工具、显式角色选择、真实结果与不自动续轮边界。
 - [RabiLink AIUI 常驻边界](rabilink-aiui-residency-plan.md) — 已实现链路与常驻能力限制混合文档，阅读时区分代码事实和计划。
 - [RabiLink 主动智能需求](rabilink-active-intelligence-requirements.md) — 用户状态、情景识别、群消息命中计划/记忆后的处理闭环和主动介入的目标合同与实施追踪，不等同于全部完成。

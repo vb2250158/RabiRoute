@@ -14,7 +14,7 @@ import type { TunnelChannel } from "./channel.js";
 import { serveTunnel, serviceEndpoint, tunnelFetch } from "./http.js";
 import { PeerConnections, type TunnelCandidate } from "./connections.js";
 import { TunnelRtc } from "./rtc.js";
-import { PeerTunnelRuntime } from "./runtime.js";
+import { APPLICATION_ACCESS_CAPABILITY, PeerTunnelRuntime } from "./runtime.js";
 import { handleInstanceIdentityReset } from "../manager/identityResetRoutes.js";
 
 function channelPair(): [TunnelChannel, TunnelChannel] {
@@ -26,11 +26,11 @@ function channelPair(): [TunnelChannel, TunnelChannel] {
   return [a,b];
 }
 
-test("application-authenticated speech bootstrap pins identity and grants only speech", async t => {
+test("legacy speech bootstrap pins identity under the unified application connection", async t => {
   const { a, b, folder } = identities(t);
   const directory = path.join(folder,"bootstrap");
-  const runtime = new PeerTunnelRuntime({ dataDir:directory,deviceId:"pc",generation:"test",allowSpeechBootstrap:()=>true,
-    discover:async()=>[],signal:async()=>{},relay:()=>({url:"http://127.0.0.1",token:""}),services:()=>({}),onStatus:()=>{} });
+  const runtime = new PeerTunnelRuntime({ dataDir:directory,deviceId:"pc",generation:"test",allowApplicationConnection:()=>true,
+    discover:async()=>[],signal:async()=>{},relay:()=>({url:"http://127.0.0.1",token:"application-token"}),services:()=>({}),onStatus:()=>{} });
   t.after(()=>runtime.stop());
   const request = (identity: typeof a, expiresAt = Date.now()+30_000) => {
     const fields={source:"phone",publicKey:identity.publicKey,target:"pc",expiresAt};
@@ -40,24 +40,26 @@ test("application-authenticated speech bootstrap pins identity and grants only s
   assert.equal(response.deviceId,"pc");
   const config=JSON.parse(readFileSync(path.join(directory,"tunnel.json"),"utf8"));
   assert.equal(config.trustedDevices[0].publicKey,a.publicKey);
-  assert.deepEqual(config.trustedDevices[0].services,["speech"]);
+  assert.deepEqual(config.trustedDevices[0].services,[]);
   assert.match(config.trustedDevices[0].bootstrapScope,/^[a-f0-9]{64}$/);
   await runtime.offer(request(a));
   await assert.rejects(runtime.offer(request(b)),/peer_identity_changed/);
   await assert.rejects(runtime.offer(request(a,Date.now()-1)),/peer_bootstrap_denied/);
   await assert.rejects(runtime.offer({...request(a),signature:"invalid"}),/peer_signature_denied/);
 });
-test("resource bootstrap is independent of speech and cannot grant Manager", async t => {
+test("legacy resource/persona bootstrap signatures reuse the same application policy", async t => {
   const { a, folder } = identities(t);
   const directory=path.join(folder,"resource-bootstrap");
-  const runtime=new PeerTunnelRuntime({dataDir:directory,deviceId:"pc",generation:"test",allowResourceBootstrap:()=>true,
-    discover:async()=>[],signal:async()=>{},relay:()=>({url:"http://127.0.0.1",token:""}),services:()=>({}),onStatus:()=>{}});
+  const runtime=new PeerTunnelRuntime({dataDir:directory,deviceId:"pc",generation:"test",allowApplicationConnection:()=>true,
+    discover:async()=>[],signal:async()=>{},relay:()=>({url:"http://127.0.0.1",token:"application-token"}),services:()=>({}),onStatus:()=>{}});
   t.after(()=>runtime.stop());
   const fields={source:"phone",publicKey:a.publicKey,target:"pc",expiresAt:Date.now()+30000};
   const request={...fields,kind:"bootstrap-resources",signature:sign(null,Buffer.from("rabi-resources-bootstrap-v1"+JSON.stringify(fields)),a.privateKey).toString("base64")};
   await runtime.offer(request);
-  assert.deepEqual(JSON.parse(readFileSync(path.join(directory,"tunnel.json"),"utf8")).trustedDevices[0].services,["resources"]);
-  await assert.rejects(runtime.offer({...request,kind:"bootstrap-speech"}),/peer_service_denied/);
+  assert.deepEqual(JSON.parse(readFileSync(path.join(directory,"tunnel.json"),"utf8")).trustedDevices[0].services,[]);
+  await assert.rejects(runtime.offer({...request,kind:"bootstrap-speech"}),/peer_signature_denied/);
+  const persona = { ...fields, kind: "bootstrap-persona", signature: sign(null, Buffer.from("rabi-persona-bootstrap-v1" + JSON.stringify(fields)), a.privateKey).toString("base64") };
+  await runtime.offer(persona);
   await assert.rejects(runtime.offer({...request,signature:"invalid"}),/peer_signature_denied/);
 });
 function identities(t: test.TestContext) {
@@ -157,10 +159,10 @@ test("runtime LAN discovery uses pinned identity and selection is persisted",{ti
   const dir=mkdtempSync(path.join(os.tmpdir(),"rabi-runtime-test-"));t.after(()=>rmSync(dir,{recursive:true,force:true}));
   const upstream=await fixtureServer(t,(_req,res)=>res.end("remote"));
   let b:PeerTunnelRuntime; const lan=await fixtureServer(t,(_req,res)=>res.end());
-  const options={generation:"generation",relay:()=>({url:"http://127.0.0.1",token:"test-token"}),services:()=>({test:{baseUrl:upstream.url}}),onStatus:()=>{}};
+  const options={generation:"generation",relay:()=>({url:"http://127.0.0.1",token:"test-token"}),allowApplicationConnection:()=>true,services:()=>({test:{baseUrl:upstream.url}}),onStatus:()=>{}};
   b=new PeerTunnelRuntime({...options,dataDir:path.join(dir,"b"),deviceId:"b",discover:async()=>[],signal:async()=>{throw new Error("unused");}});
   lan.server.on("upgrade",(req,socket,head)=>b.upgrade(req,socket,head));
-  const a=new PeerTunnelRuntime({...options,dataDir:path.join(dir,"a"),deviceId:"a",discover:async()=>[{id:"b",name:"B",deviceKind:"pc",online:true,capabilities:["peer-tunnel-v1"],peerUrls:[lan.url]}],signal:async()=>{throw new Error("LAN must win");}});
+  const a=new PeerTunnelRuntime({...options,dataDir:path.join(dir,"a"),deviceId:"a",discover:async()=>[{id:"b",name:"B",deviceKind:"pc",online:true,capabilities:["peer-tunnel-v1",APPLICATION_ACCESS_CAPABILITY],peerUrls:[lan.url]}],signal:async call=>{assert.equal((call.input as {kind:string}).kind,"bootstrap-application");return b.offer(call.input);}});
   t.after(()=>{a.stop();b.stop();});
   writeFileSync(path.join(dir,"a","tunnel.json"),JSON.stringify({selectedDeviceId:"",trustedDevices:[{deviceId:"b",publicKey:b.identity.publicKey,services:[]}]}));
   writeFileSync(path.join(dir,"b","tunnel.json"),JSON.stringify({selectedDeviceId:"",trustedDevices:[{deviceId:"a",publicKey:a.identity.publicKey,services:["test"]}]}));
@@ -239,6 +241,7 @@ test("upgrade drains old streams and stop closes both generations", async t => {
 test("read-only runtime rejects selection and proxy access", async t => {
   const { folder } = identities(t);
   const runtime = new PeerTunnelRuntime({ dataDir:path.join(folder,"readonly"), deviceId:"readonly", generation:"test", readOnly:true,
+    allowApplicationConnection:()=>false,
     discover:async()=>[], signal:async()=>{}, relay:()=>({url:"http://127.0.0.1",token:""}), services:()=>({}), onStatus:()=>{} });
   t.after(()=>runtime.stop());
   await assert.rejects(runtime.select(""), /manager_read_only/);
@@ -253,6 +256,7 @@ test("read-only runtime rejects selection and proxy access", async t => {
 test("control endpoints use the injected WebGUI authorization without bypassing denials", async t => {
   const {folder} = identities(t);
   const runtime = new PeerTunnelRuntime({dataDir:path.join(folder,"authorized"),deviceId:"test",generation:"test",
+    allowApplicationConnection:()=>false,
     discover:async()=>[],signal:async()=>{},relay:()=>({url:"http://127.0.0.1",token:""}),services:()=>({}),onStatus:()=>{},
     allowControl:(request)=>request.headers["x-test-authorized"]==="yes"});
   t.after(()=>runtime.stop());

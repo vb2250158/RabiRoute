@@ -36,8 +36,7 @@ test('real HTTP operation lookup isolates bindings and rechecks current owner an
   const created=await req('/manage/api/apps','POST',{name:'receipt-boundaries'},{cookie:owner.cookie});assert.equal(created.status,200);
   const file=path.join(directory,'apps.json');const store=JSON.parse(fs.readFileSync(file,'utf8'));const app=store.apps[0];app.targetDeviceId='pc';
   const row={...intent,scope:{...scope,ownerAccountId:app.ownerAccountId},outcome:knowledgeOutcome({structuredContent:receipt},200,key)};
-  const grant={revision:1,grant:{allowedRoles:['example'],allowedTools:['recent_memory_create'],allowWrites:true},operations:[]};
-  app.deviceBindings=[{id:'first',serialHash:'first',credentialHash:digest('rbd_first'),knowledgeGrantState:grant,knowledgeIntents:[row]},{id:'second',serialHash:'second',credentialHash:digest('rbd_second'),knowledgeGrantState:grant,knowledgeIntents:[]}];fs.writeFileSync(file,JSON.stringify(store));
+  app.deviceBindings=[{id:'first',serialHash:'first',credentialHash:digest('rbd_first'),knowledgeIntents:[row]},{id:'second',serialHash:'second',credentialHash:digest('rbd_second'),knowledgeIntents:[]}];fs.writeFileSync(file,JSON.stringify(store));
   const route='/api/rabilink/device/knowledge/operations/'+key;
   const first=await req(route,'GET',null,{'x-rabilink-token':'rbd_first'});assert.equal(first.body.data.state,'confirmed');
   const second=await req(route,'GET',null,{'x-rabilink-token':'rbd_second'});assert.equal(second.status,200);assert.equal(second.body.data.state,'unknown');assert(!second.body.data.receipt);assert(!JSON.stringify(second.body).includes('private fixture'));

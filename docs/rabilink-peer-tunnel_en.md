@@ -10,11 +10,11 @@ RabiLink Home and persona source selection show the RabiPC version advertised by
 
 The Speech service page provides a Speech server selector. Rows show the device name, online status, actual transport and measured round-trip latency. Local calls are labelled as local, never as a fabricated zero-millisecond measurement.
 
-Opening the menu checks up to ten eligible peers with at most two concurrent connection attempts. The selected target has priority. Older devices require an upgrade; untrusted devices require explicit trust. Offline peers cannot be newly selected. A selected peer going offline remains selected, without silent fallback to this PC.
+Opening the menu checks up to ten eligible peers with at most two concurrent connection attempts. The selected target has priority. Older devices require an upgrade; same-application peers awaiting a handshake show automatic connection. Offline peers cannot be newly selected. A selected peer going offline remains selected, without silent fallback to this PC.
 
 Presence, connectivity and speech readiness are separate states. Disconnected channels never retain a current-transport label. RTT expires after thirty seconds and is measured with encrypted channel ping/pong, excluding model loading and speech computation. Status uses events. Visible peers receive transport keepalives while the menu is open; afterwards only the selected peer does. Unused connections expire after sixty seconds.
 
-Selecting B sends model, voice, TTS and manual ASR operations to B. Capture devices and the host FIFO remain on A. Remote synthesis always disables playback on B; completed PCM WAV enters A's existing queue. When a Manager address is configured, resident microphone transcription checks its selected server: remote selection uses Manager transcription; local selection preserves local inference. Remote failures never trigger local inference. Model management and runtime controls address B and require its manager-service grant.
+Selecting B sends model, voice, TTS and manual ASR operations to B. Capture devices and the host FIFO remain on A. Remote synthesis always disables playback on B; completed PCM WAV enters A's existing queue. When a Manager address is configured, resident microphone transcription checks its selected server: remote selection uses Manager transcription; local selection preserves local inference. Remote failures never trigger local inference. Model management and runtime controls address B and use its manager service through the same application connection.
 
 ## Automatic connection policy
 
@@ -26,42 +26,19 @@ Healthy connections are reused. Trusted LAN peers are discovered through DNS-SD'
 
 Connection budgets are separate from business deadlines. Accepted requests are not replayed automatically: interruption may leave an unknown result. Cancellation propagates to the target. Started audio is not restarted. Exactly-once writes require the endpoint's own idempotency contract.
 
-## Application authentication for read-only personas
+## Unified RabiLink device connections
 
-Remote persona references in 0.3.19 reuse enabled connections to the same RabiLink application. The source PC advertises `persona-reference-v1`. Local managed `POST /api/rabilink/peer/persona/bootstrap` accepts only `{ "deviceId": "peer-b" }`, uses existing WebGUI authorization, and sends `bootstrap-persona` through encrypted `transport.tunnel` signalling to exchange and pin Ed25519 public keys automatically. Establishing new records requires current application authentication; LAN discovery alone cannot establish trust in an unknown peer.
+Since 0.3.22, PCs enabled in the same RabiLink application use existing application authentication to exchange and pin Ed25519 keys automatically. New PCs advertise `rabilink-application-access-v1`, send `bootstrap-application`, and sign with `rabi-application-bootstrap-v1`. Selection, probing and first requests use one connection flow, without separate speech, persona, resource or full `manager` grants. The source PC must support the new capability.
 
-Client A records B's key for outgoing access, while source B opens only the `persona` service; no `manager` grant is added automatically. This service reuses LAN, P2P and Relay selection through `/api/rabilink/peer/http/<device>/persona/...`. A fixed allowlist permits persona catalogs, text and configuration snapshots, knowledge search, read-only plan/memory/skill lists and details, and non-mutating persona language-style checks. Configuration and knowledge writes, scripts, schedules, message delivery, WebSocket, redirects and arbitrary management paths are denied. See [remote persona references](remote-persona-reference_en.md) for paths, limits and identity checks.
+Authenticated devices can use all services actually provided by the PC, including Manager administration and knowledge writes. Application isolation, device credentials, pinned keys, encryption and current connection scope still apply. Anonymous LAN advertisements cannot establish trust. Default access does not mean a service is running, a device is online or an endpoint exists. Host lifecycle and instance-reset operations still require the local Host owner interface.
 
-Automatic handshake records are bound to the Relay address and application token. Requests still check the current application connection and pinned keys; changed keys deny access. Existing manual records for A on source B permitting neither `persona` nor `manager` are not expanded automatically; A's client record can retain an empty inbound `services` list. An existing full `manager` grant can use the persona subset, but this feature does not add full-management access. The application is the trust scope for these restricted reads; do not share its token with devices that should not read the material.
+`tunnel.json` retains selection, pinned keys and application scope rather than per-device service permissions. Existing keys are preserved; successful current-application authentication migrates old records into unified connection records. An old file alone cannot prove current authentication. Every new request rechecks enablement, token scope and the pinned key. Disabling the connection, changing credentials or deleting records rejects old sessions. Changed keys are never silently replaced.
 
-<a id="establish-trust-once"></a>
-## Manual device trust and full-management grants
+The `persona` service remains the fixed read-only API alias used by references; its path restrictions are not another device permission. Full administration uses `manager`; knowledge uses existing Manager APIs. The target PC owns service registration and URLs, so remote callers cannot choose arbitrary local addresses.
 
-Both endpoints need peer-tunnel-v1 and the Relay needs /api/rabilink/tunnel/socket. Discover the current managerBaseUrl using Host status --json and verify health, generation and instance through /meta. Do not persist Manager ports.
+Compatibility: supported older phone/glasses clients may send `bootstrap-speech`, `bootstrap-resources` or `bootstrap-persona`. Their original signature domains are validated, but all use the unified application connection policy. New PCs send only the new signal. Remove legacy wire kinds once supported clients are upgraded and old usage reaches zero. `POST /api/rabilink/peer/persona/bootstrap` remains for released persona pages, accepting only a device ID and invoking the unified handshake; remove the alias after page migration.
 
-Local GET /api/rabilink/peer/identity returns the device ID, generation and public Ed25519 key. The application-generated private key lives in runtime data/rabilink/tunnel-identity.json, is never returned by that API, and must never enter version control.
-
-After verifying each peer's public key, configure runtime data/rabilink/tunnel.json on each PC:
-
-~~~json
-{
-  "selectedDeviceId": "",
-  "trustedDevices": [
-    {
-      "deviceId": "peer-b",
-      "publicKey": "Complete verified peer PEM public key",
-      "services": ["speech"]
-    }
-  ],
-  "services": {}
-}
-~~~
-
-The services list grants that peer access to this PC. An outgoing-only trust record may use an empty services list. B must grant speech to A before accepting its synthesis requests. A manager grant grants full Manager administration and must be an explicit administrator choice.
-
-These manual records establish explicit service grants, particularly full `manager` administration. The persona read-only service uses the application-authenticated handshake above and requires no new manual full-management grant. A shared application token does not automatically grant arbitrary services or full administration. Changed keys fail closed until reverified. Invalid configuration disables access instead of resetting selection to local. Grants are checked for every new request.
-
-Read-only acceptance mode rejects server selection changes, incoming tunnels and generic proxy requests.
+Read-only acceptance mode still rejects selection changes and tunnels.
 
 ## Generic API
 

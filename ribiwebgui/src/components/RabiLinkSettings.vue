@@ -7,7 +7,6 @@ import { registerPageSaveAction } from "../pageSaveAction";
 import { rabiLinkDraftFromMeta, rabiLinkIdentityPatch } from "../rabiLinkPresentation";
 import { userFacingError } from "../userFacingError";
 import { InstanceIdentityResetClient, readResetIdentity } from "../instanceIdentityResetClient";
-import KnowledgeBridgeSettings from "./KnowledgeBridgeSettings.vue";
 
 const props = defineProps<{ ready: boolean }>();
 const emit = defineEmits<{ saving: [value: boolean] }>();
@@ -120,7 +119,7 @@ onBeforeUnmount(() => { disposed = true; identityRequest?.abort(); reset.dispose
       </div>
       <v-divider class="my-3" />
       <div class="section-title">RabiLink 服务器连接</div>
-      <p class="section-note">连接后，手机、眼镜和其他电脑可通过服务器与本机通信。</p>
+      <p class="section-note">同一 RabiLink 应用内已鉴权的设备，默认可使用本机提供的服务，无需逐项授权。</p>
       <v-switch v-model="draft.enabled" label="连接服务器" color="success" inset density="compact" hide-details />
       <div class="form-grid">
         <v-text-field v-model="draft.url" label="服务器地址" placeholder="https://relay.example.com" density="compact" hide-details="auto" />
@@ -128,17 +127,13 @@ onBeforeUnmount(() => { disposed = true; identityRequest?.abort(); reset.dispose
         <v-text-field v-model="draft.deviceId" label="本机连接标识" density="compact" hide-details="auto" />
       </div>
       <v-divider class="my-3" />
-      <div class="section-title">语音服务转接</div>
-      <p class="section-note">允许持有应用令牌的客户端通过服务器调用本机语音合成与识别服务；本机服务仍仅限本地访问。</p>
-      <v-switch v-model="draft.speechProxyEnabled" label="允许语音转接" color="success" inset density="compact" hide-details />
-      <v-text-field v-if="draft.speechProxyEnabled" v-model="draft.speechServiceUrl" label="本机语音服务地址" density="compact" hide-details="auto" />
-      <v-divider class="my-3" />
       <div class="section-title mb-2">远端智能体上传</div>
       <v-text-field v-model.number="draft.maxFileMiB" label="单文件上传上限（MiB）" type="number" min="1" max="2048" step="1" density="compact" hint="允许 1–2048 MiB；保存后重启 RabiRoute 生效。QQ 群文件仍受平台限制。" persistent-hint />
       <v-expansion-panels variant="accordion" class="mt-3">
-        <v-expansion-panel title="高级设置">
+        <v-expansion-panel title="高级连接参数">
           <v-expansion-panel-text>
             <div class="form-grid">
+              <v-text-field v-model="draft.speechServiceUrl" label="本机语音服务地址" density="compact" hide-details="auto" />
               <v-text-field v-model.number="claimWaitSeconds" label="领取任务等待（秒）" type="number" min="0" max="60" step="1" density="compact" hide-details="auto" />
               <v-text-field v-model.number="replyIdleSeconds" label="回复空闲超时（秒）" type="number" min="1" max="120" step="1" density="compact" hide-details="auto" />
             </div>
@@ -146,7 +141,6 @@ onBeforeUnmount(() => { disposed = true; identityRequest?.abort(); reset.dispose
         </v-expansion-panel>
       </v-expansion-panels>
     </fieldset>
-    <KnowledgeBridgeSettings v-if="ready" />
     <v-dialog :model-value="reset.dialogOpen" max-width="560" @update:model-value="value => { if (!value) reset.cancel(); }">
       <v-card class="pa-4">
         <v-card-title class="px-0">重置实例 ID？</v-card-title>

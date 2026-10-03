@@ -8,7 +8,7 @@ English | <a href="./remote-persona-reference.md">简体中文</a>
 
 Both PCs need distinct instance IDs, connection keys and local connection IDs. If copied configuration causes a remote source to be treated as local, [reset instance identity](user-guide/instance-identity_en.md) on one PC. Changing a display name cannot separate copied identities.
 
-> Status: experimental implementation in 0.3.19. Automated tests cover configuration, bounded reads, identity checks, message delivery packaging and page selection. Complete delivery, recovery and sustained operation across two physical PCs still require acceptance. Both PCs reuse authentication for the same RabiLink application and automatically exchange and pin device public keys for persona reads; no additional manual full-management grant is required. The source PC must provide the new `persona-reference-v1` capability and endpoints; older versions need an upgrade.
+> Status: introduced in 0.3.19 and using unified application authentication in 0.3.22; still experimental. Automated tests cover configuration, bounded reads, identity checks, message delivery packaging and page selection. Complete delivery, recovery and sustained operation across two physical PCs still require acceptance. Both PCs reuse authentication for the same RabiLink application to exchange and pin public keys. Connected devices can use all services actually provided by the PC; persona references retain a fixed read-only alias. The source PC must provide `persona-reference-v1`, `rabilink-application-access-v1` and the corresponding endpoints; older versions need an upgrade.
 
 A local message Route can use persona text, message rules and recent-message budgets owned by another PC. Message inputs, the Agent that actually handles the work, its workspace and message auditing remain those configured for the local Route. Selecting a remote persona does not automatically select a remote Agent or import or synchronize a persona directory.
 
@@ -22,7 +22,7 @@ A local message Route can use persona text, message rules and recent-message bud
 
 The local source option shows this device's name and RabiPC version. Other PCs show their advertised version; older devices without an advertisement show an unknown version. RabiLink Home also labels this device and displays each PC's version. A device name is not its identity: a row matching this device's ID and GUID belongs to the local option and is not another remote source. If two PCs copied the same identity configuration, verify and separate their identities before selecting a remote persona; changing a display name or disabling self-filtering does not resolve the shared identity. Version text does not replace the `persona-reference-v1` capability or authentication checks.
 
-Offline, authentication-failure, upgrade-required and read-failure states are distinct. A saved remote reference remains selected; a failed read stops Agent delivery through that Route and never substitutes a same-name local persona. The application-authenticated persona handshake does not add full-management access or change an administrator's existing manual restrictions.
+Offline, authentication-failure, upgrade-required and read-failure states are distinct. A saved remote reference remains selected; a failed read stops Agent delivery through that Route and never substitutes a same-name local persona. The 0.3.22 connection allows all services actually provided by the source PC; persona references themselves still read through the fixed read-only alias.
 
 ## Data and execution ownership
 
@@ -31,9 +31,9 @@ Offline, authentication-failure, upgrade-required and read-failure states are di
 | Persona text, message rules and recent-message budgets | The source PC's persona. Each delivery reads a request snapshot; it is not copied into local persona configuration. |
 | Message inputs, actual handling Agent, workspace and input switches | The local Route. The persona reference does not change these selections. |
 | Locally received messages, recent-message context, delivery and reply audits | Local `data/route/<configName>/`. They are not appended to a same-name local persona directory. |
-| Remote plans, memories, skills and historical material | The source PC. Query them on demand through the restricted peer `persona` entry for read-only access; remote paths do not identify local files. |
+| Remote plans, memories, skills and historical material | Manager's global knowledge directory on the source PC. Query on demand through the fixed read-only peer `persona` entry, without substituting same-name material from a custom Route directory; remote paths do not identify local files. |
 | Remote schedules, scripts, plan secretaries and memory consolidation | The reference does not start them locally. Their execution still depends on configuration and authorization on the source PC. |
-| Hooks and host permissions | A reference grants no additional permissions and does not apply remote Hook settings to the local host. |
+| Hooks and host permissions | A reference does not change local host approvals or apply remote Hook settings to the local host. |
 
 When an outbound message requires language-style validation, the local PC reads the current remote persona configuration and calls source-PC `POST /api/roles/<RoleId>/persona-reference/language-style` with only `{ "text": "text to check", "file": "persona.md", "revision": "current snapshot revision" }`. The source PC obtains the style address from its stored persona configuration and reads its own style files; caller-provided `styleSkillUrl` is rejected. The local PC does not interpret remote file paths. Both Manager identities and the source snapshot revision are checked before and after validation; changes reject the result. Explicit one-send `styleValidation=0` retains existing rules but still requires a successful remote configuration read and cannot bypass offline state, identity failure or denied authentication. A persona preview does not prove complete local integration of avatars, voices or identity material.
 
@@ -41,7 +41,7 @@ Only remote `automationRules` with a message trigger and an Agent-delivery actio
 
 Persona text enters the current Agent context. Associated messages and delivery evidence remain subject to local logging and retention policies. “No persona replication” means there is no second source of truth for persona material, plans or memories; it does not mean that network reads and the current context leave no local data.
 
-The local persona directory and Route message diagnostics do not mix in a same-name local persona. Current local cross-persona messaging, role-panel and plan-feedback entries reject a remote reference as a local persona. Local persona Hooks reject both ordinary remote bindings and older mixed bindings where one Agent owns local and remote Routes. Read remote knowledge only through the `persona` service. Remote data changes or actions require the source PC's separate managed interfaces and authorization contracts.
+The local persona directory and Route message diagnostics do not mix in a same-name local persona. Current local cross-persona messaging, role-panel and plan-feedback entries reject a remote reference as a local persona. Local persona Hooks reject both ordinary remote bindings and older mixed bindings where one Agent owns local and remote Routes. Knowledge reads made by a persona reference use the read-only `persona` alias. Remote mutations or actions use managed `manager` interfaces on the same authenticated connection, retaining source-PC business validation and execution ownership without another service grant.
 
 ## Configuration contract
 
@@ -61,17 +61,13 @@ Gateway processes receive the same reference through `AGENT_ROLE_DEVICE_ID`, `AG
 
 For remote references, `roleDir` and `rolePath` are empty. Local runtime data and transient context use the Route directory. Code must not construct a local role path from a same-name ID as a fallback.
 
-## RabiLink authentication and version requirements
+## Unified RabiLink device connections
 
-Both PCs need enabled connections to the same RabiLink application and `peer-tunnel-v1`. The source PC must also advertise `persona-reference-v1` and provide the new endpoints on this page. Existing application authentication carries the `bootstrap-persona` signal, which exchanges and pins both Ed25519 public keys. Subsequent requests reuse [generic cross-PC connections](rabilink-peer-tunnel_en.md) and their LAN, P2P and Relay selection. Establishing new trust requires current application authentication; LAN discovery alone cannot establish it.
+Since 0.3.22, PCs enabled in the same RabiLink application authenticate with existing application credentials and automatically exchange and pin Ed25519 keys. New PCs advertise `rabilink-application-access-v1`; selection, probing and first requests share the `bootstrap-application` handshake. Connected devices can use all services actually provided, including Manager and knowledge writes. The source PC must upgrade. Each request still checks application scope, device credentials, current enablement and pinned keys. Changed keys are not silently replaced, and anonymous LAN advertisements cannot establish trust.
 
-The page uses local `POST /api/rabilink/peer/persona/bootstrap` with only `{ "deviceId": "peer-b" }`. This endpoint uses existing Manager WebGUI authorization and accepts no public keys, service lists or arbitrary addresses. Actual delivery uses the same managed handshake. Automatic records pin source B's public key on local client A; B grants A only the `persona` service, without adding `manager`. Automatic handshake records are bound to the current Relay address and application token. Disabling the application or changing keys denies access. Changed credentials cannot reuse old records and require another handshake through current application authentication.
+`persona` is the fixed read-only API alias used by references; path restrictions belong to that endpoint contract. Full administration uses `manager`. A reference does not automatically execute remote tasks or change local host approvals. Host lifecycle and instance resets remain local Host-owner operations.
 
-An existing manual `trustedDevices` entry for caller A on source B that permits neither `persona` nor `manager` continues to deny access; administrator restrictions are not expanded automatically. An existing full `manager` grant can use restricted persona reads, but this feature never adds or expands a full-management grant. A's outgoing-only record for server B can still have an empty inbound `services` list. An administrator must review any change to manual restrictions.
-
-The `persona` service has a fixed allowlist for `GET /meta`, `GET /api/personas`, `GET /api/agent/help`, and specified read-only persona text, knowledge search, plan, memory and skill list/detail paths. It also permits the non-mutating language-style check described above. It rejects WebSocket, redirects, arbitrary Manager paths, persona configuration or knowledge writes, schedules, scripts, message delivery and host Hooks. Membership in the same application is the trust scope for these reads; do not share its token with devices that should not read persona material.
-
-For installed applications, obtain the current `managerBaseUrl`, `applicationGenerationId` and `managerInstanceId` from `RabiRouteHost.exe --command status --json`, then verify `/meta`. Source mode uses the current structured READY address. Do not persist ports, scan ports or reuse a previous generation's address. LAN, P2P and Relay selection and device-identity checks follow the generic tunnel contract.
+`tunnel.json` retains selection, pinned keys and application scope; per-service permission lists are retired. Only successful current-application authentication migrates old records. The released-page `POST /api/rabilink/peer/persona/bootstrap` alias accepts only a device ID and invokes the unified handshake; remove it after page migration. Supported legacy wire kinds, key and transport limits follow the [generic connection contract](rabilink-peer-tunnel_en.md). Read-only acceptance mode still rejects selection changes and tunnels.
 
 ## Endpoint and identity fences
 
@@ -95,12 +91,12 @@ Manager remote HTTP reads have a 20-second budget and a 4 MiB response limit; th
 | Situation | Result and investigation |
 | --- | --- |
 | Source PC offline or connection failure | Retain the reference and stop delivery. Check device runtime and the generic connection. |
-| Failed application authentication, changed keys or explicit manual restrictions | Deny access. Check the application connection, device identity and existing manual restrictions; full-management permissions are not expanded automatically. |
+| Failed application authentication, changed keys or a pinned-key mismatch | Deny access. Check the application connection, device identity and current connection scope. |
 | Missing new endpoint or old response format | Report an upgrade requirement. Upgrade the source PC and reread. |
 | Missing persona or file, malformed JSON or size limit exceeded | Report a read error. Repair source material without substituting a same-name local file. |
 | Either Manager changes generation, the Route binding changes or identities mismatch | Reject the current result. Rediscover the current address and reread. |
 | No remote rule matches the message | Record a miss. Inspect source persona rules without defaulting to delivery. |
 
-Automated tests cover save/reload, same-name local isolation, path restrictions, remote policy projection, identity changes, permission failures and stale page responses. Two-PC acceptance still needs both versions and identities, actual transport, denied authorization, same-name persona isolation, a reread after source configuration changes, target Agent receipt and failure closure after disconnection. Local simulations do not replace that evidence.
+Automated tests cover save/reload, same-name local isolation, path restrictions, remote policy projection, identity changes, authentication failures and stale page responses. Two-PC acceptance still needs both versions and identities, actual transport, rejection across applications or mismatched pinned keys, same-name persona isolation, a reread after source configuration changes, target Agent receipt and failure closure after disconnection. Local simulations do not replace that evidence.
 
 Further reading: [Routing and personas](routing-and-personas_en.md), [Routing configuration](routing-configuration_en.md), [Persona synchronization retirement](persona-data-sync_en.md), [Generic cross-PC connections](rabilink-peer-tunnel_en.md).

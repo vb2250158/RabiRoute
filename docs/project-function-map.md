@@ -6,6 +6,8 @@
 
 # RabiRoute 项目功能手册
 
+0.3.22 连接合同：同一 RabiLink 应用已鉴权设备默认使用 PC 实际提供的全部服务。设备固定公钥与应用作用域继续复核；知识读写复用 Manager 接口，无额外 MCP 密钥或知识 grant。旧逐服务权限字段和知识表单已退役。实现与迁移见[通用连接](rabilink-peer-tunnel.md)及[知识运行合同](rabilink-knowledge-runtime.md)。
+
 远端 Agent 归 Agent 执行端，不再作为消息端添加；通过[远端接入](lan-rabi-agent-bootstrap.md)选择实例与 Agent。
 
 设备接入边界已调整：手表、手环和眼镜在移动端记录系统设置，由记录系统统一投递事件。PC 独立设备入口已移除；下文旧设备协议仅作兼容维护，实施与退出条件见[移动端记录与事件边界](mobile-recording-event-boundary.md)。
@@ -14,7 +16,7 @@
 
 移动端正在整合为[全天记录](rabilink-all-day-recording.md)：唯一 `RabiConversationService` owner 协调手机、眼镜和健康，音频/音视频/仅健康与暂停分离，旧独立采集 service 已从源码移除。音频可靠分片冻结来源/目标/策略，视频停止后派生音轨；仅转写 PC 能力/worker 围栏与 captureId 关联已接入源码，不支持时 deferred。关联仅人工刷新 processedAt 最近24小时最多200条，无ID不猜；健康仅采集/状态统一，完整历史仍PC。autoResume内部false、开机暂停，自动恢复未实现。新记录不因传输 ACK 自动按缓存期限删除，自动滚动容量管理未完成。日常入口和旧版本证据见[移动端记录界面](rabilink-mobile-recording-ui.md)，整体验收仍待。
 
-跨电脑只读接口见[调用与目标授权](rabilink-peer-rpc.md)：支持设备发现、计划摘要、人格文件清单；LAN 优先、P2P 尝试及 Relay 回退共用加密合同。公网和双 PC 长期运行待验收。
+跨电脑只读接口见[调用与应用鉴权](rabilink-peer-rpc.md)：支持设备发现、计划摘要、人格文件清单；LAN 优先、P2P 尝试及 Relay 回退共用加密合同。公网和双 PC 长期运行待验收。
 
 手机与电脑的实验视频直连见 [接入与验收状态](rabilink-direct-video.md)：Android 负责 SDK 取流和发送，RabiLink 插件负责电脑接收，Relay 只交换 SDP。当前已验证数据通道，眼镜画面和公网打洞尚未验收。
 

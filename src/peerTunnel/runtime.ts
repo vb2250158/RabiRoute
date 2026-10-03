@@ -16,6 +16,8 @@ import type { PeerCall } from "../rabiPeerClient.js";
 import { PERSONA_BOOTSTRAP_DOMAIN, PERSONA_PEER_SERVICE, PERSONA_REFERENCE_CAPABILITY, personaPeerRequestAllowed } from "../shared/personaPeerService.js";
 
 type Config = { selectedDeviceId: string; trustedDevices: TunnelGrant[]; services: Record<string, TunnelService> };
+export const APPLICATION_ACCESS_CAPABILITY = "rabilink-application-access-v1";
+export const APPLICATION_BOOTSTRAP_DOMAIN = "rabi-application-bootstrap-v1";
 export class PeerTunnelRuntime {
   private readonly file: string;
   private readonly rtc = new TunnelRtc();
@@ -31,8 +33,9 @@ export class PeerTunnelRuntime {
   private peers: DiscoveredRabiPeer[] = [];
   private directoryFlight?: Promise<DiscoveredRabiPeer[]>;
   private directoryAt = 0;
-  private readonly personaBootstrapFlights = new Map<string, Promise<void>>();
-  private readonly personaBootstrapReady = new Map<string, { scope: string; publicKey: string }>();
+  private readonly applicationBootstrapFlights = new Map<string, Promise<void>>();
+  private readonly applicationBootstrapReady = new Map<string, { scope: string; publicKey: string }>();
+  private readonly sessionScopes = new WeakMap<TunnelSession, string>();
   readonly identity;
   constructor(private readonly options: {
     dataDir: string; deviceId: string; generation: string; readOnly?: boolean;
@@ -42,9 +45,7 @@ export class PeerTunnelRuntime {
     services(): Record<string, TunnelService>;
     onStatus(value: unknown): void;
     allowControl?(request: http.IncomingMessage, url: URL): boolean;
-    allowSpeechBootstrap?(): boolean;
-    allowResourceBootstrap?(): boolean;
-    allowPersonaBootstrap?(): boolean;
+    allowApplicationConnection(): boolean;
   }) {
     this.file = path.join(options.dataDir, "tunnel.json");
     this.identity = loadTunnelIdentity(path.join(options.dataDir, "tunnel-identity.json"), options.deviceId, options.generation);
@@ -56,7 +57,7 @@ export class PeerTunnelRuntime {
     try {
       const bytes = readFileSync(this.file); if (bytes.length > 65_536) throw new Error("Tunnel config too large.");
       const value = JSON.parse(bytes.toString()) as Config;
-      if (typeof value.selectedDeviceId !== "string" || !Array.isArray(value.trustedDevices) || value.trustedDevices.some(grant => typeof grant.deviceId !== "string" || typeof grant.publicKey !== "string" || !Array.isArray(grant.services) || grant.services.some(service => typeof service !== "string"))) throw new Error("Invalid tunnel grants.");
+      if (typeof value.selectedDeviceId !== "string" || !Array.isArray(value.trustedDevices) || value.trustedDevices.some(grant => typeof grant.deviceId !== "string" || typeof grant.publicKey !== "string" || !Array.isArray(grant.services) || grant.services.some(service => typeof service !== "string") || grant.bootstrapScope !== undefined && (typeof grant.bootstrapScope !== "string" || !/^[a-f0-9]{64}$/.test(grant.bootstrapScope)))) throw new Error("Invalid tunnel grants.");
       return { ...value, services: value.services || {} };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return { selectedDeviceId: "", trustedDevices: [], services: {} };
@@ -70,13 +71,17 @@ export class PeerTunnelRuntime {
   private grant(id: string): TunnelGrant {
     const grant = this.config().trustedDevices.find(item => item.deviceId === id);
     if (!grant) throw new TunnelDenied("peer_device_not_trusted");
-    if (grant.bootstrapScope && (!(this.options.allowSpeechBootstrap?.() || this.options.allowResourceBootstrap?.() || this.options.allowPersonaBootstrap?.()) || grant.bootstrapScope !== this.bootstrapScope())) throw new TunnelDenied("peer_service_denied");
+    if (!this.applicationConnectionAllowed() || grant.bootstrapScope !== this.bootstrapScope()) throw new TunnelDenied("peer_service_denied");
     return grant;
+  }
+  private applicationConnectionAllowed(): boolean {
+    return !this.options.readOnly && !this.controller.signal.aborted && this.options.allowApplicationConnection()
+      && Boolean(this.options.relay().token.trim());
   }
   private bootstrapScope() { const relay=this.options.relay(); return createHash("sha256").update(relay.url.replace(/\/+$/,"")+"\n"+relay.token).digest("hex"); }
   async select(id: string) {
     if (this.options.readOnly) throw new TunnelDenied("manager_read_only");
-    if (id) { this.grant(id); const peer = await this.target(id); if (!peer.supported) throw new Error("peer_upgrade_required"); }
+    if (id) { await this.ensureApplicationConnection(id); const peer = await this.target(id); if (!peer.supported) throw new Error("peer_upgrade_required"); }
     const config = this.config(); config.selectedDeviceId = id;
     mkdirSync(path.dirname(this.file), { recursive: true });
     const temp = this.file + "." + randomUUID() + ".tmp";
@@ -87,7 +92,7 @@ export class PeerTunnelRuntime {
     if (this.bonjour || !Number.isInteger(port) || port < 1) return;
     this.bonjour = new Bonjour({}, () => { /* LAN discovery may be unavailable; other transports remain usable. */ });
     this.lanPublication = this.bonjour.publish({ name: "RabiTunnel-" + this.options.generation.slice(0, 12), type: "rabitunnel", protocol: "tcp", port,
-      txt: { protocol: "1", deviceId: this.identity.deviceId, generation: this.identity.generation, ...(this.options.allowPersonaBootstrap ? { personaReference: "1" } : {}) } });
+      txt: { protocol: "1", deviceId: this.identity.deviceId, generation: this.identity.generation, personaReference: "1", applicationAccess: "1" } });
     this.lanBrowser = this.bonjour.find({ type: "rabitunnel", protocol: "tcp" });
     this.lanBrowser.on("up", service => {
       const id = String(service.txt?.deviceId || "");
@@ -95,7 +100,7 @@ export class PeerTunnelRuntime {
       try { this.grant(id); } catch { return; }
       const addresses = (service.addresses || []).filter(value => /^\d+\.\d+\.\d+\.\d+$/.test(value)).slice(0, 4);
       const known = this.peers.find(peer => peer.id === id);
-      const peer: DiscoveredRabiPeer = { id, name: known?.name || id, online: true, deviceKind: "pc", capabilities: ["peer-tunnel-v1", ...(String(service.txt?.personaReference) === "1" ? [PERSONA_REFERENCE_CAPABILITY] : [])], peerUrls: addresses.map(address => "http://" + address + ":" + service.port) };
+      const peer: DiscoveredRabiPeer = { id, name: known?.name || id, online: true, deviceKind: "pc", capabilities: ["peer-tunnel-v1", ...(String(service.txt?.personaReference) === "1" ? [PERSONA_REFERENCE_CAPABILITY] : []), ...(String(service.txt?.applicationAccess) === "1" ? [APPLICATION_ACCESS_CAPABILITY] : [])], peerUrls: addresses.map(address => "http://" + address + ":" + service.port) };
       this.lanPeers.set(id, peer);
       void this.connections.reconsider(this.candidate(peer));
       this.options.onStatus(this.connections.snapshot(this.candidate(peer)));
@@ -119,19 +124,22 @@ export class PeerTunnelRuntime {
       void flight.finally(() => { if (this.directoryFlight === flight) this.directoryFlight = undefined; }).catch(() => {});
     }
     if (this.directoryFlight) await this.directoryFlight;
-    return { selectedDeviceId: this.selected(), peers: this.mergedPeers().filter(peer => peer.id !== this.identity.deviceId).map(peer => ({ ...this.connections.snapshot(this.candidate(peer)), personaSupported: peer.capabilities.includes(PERSONA_REFERENCE_CAPABILITY) })) };
+    return { selectedDeviceId: this.selected(), peers: this.mergedPeers().filter(peer => peer.id !== this.identity.deviceId).map(peer => ({ ...this.connections.snapshot(this.candidate(peer)), personaSupported: peer.capabilities.includes(PERSONA_REFERENCE_CAPABILITY) && peer.capabilities.includes(APPLICATION_ACCESS_CAPABILITY) })) };
   }
   private candidate(peer: DiscoveredRabiPeer): TunnelCandidate & DiscoveredRabiPeer {
-    return { ...peer, supported: peer.capabilities.includes("peer-tunnel-v1"), trusted: this.config().trustedDevices.some(grant => grant.deviceId === peer.id) };
+    let trusted = false; try { this.grant(peer.id); trusted = true; } catch { /* A pin is not a current application connection. */ }
+    return { ...peer, supported: peer.capabilities.includes("peer-tunnel-v1") && peer.capabilities.includes(APPLICATION_ACCESS_CAPABILITY), trusted };
   }
   private async target(id: string) {
     await this.directory(); const peer = this.mergedPeers().find(item => item.id === id);
     if (!peer) throw new Error("peer_not_discovered"); return this.candidate(peer);
   }
   async session(id: string, probe = false) {
+    await this.ensureApplicationConnection(id);
     const grant = this.grant(id);
     const session = await this.connections.get(await this.target(id), probe);
     if (session.remote.publicKey !== grant.publicKey) { session.close(); throw new TunnelDenied("peer_identity_changed"); }
+    if (this.sessionScopes.get(session) !== this.bootstrapScope()) { session.close(); throw new TunnelDenied("peer_service_denied"); }
     return session;
   }
   async probe(ids: string[]) {
@@ -139,40 +147,40 @@ export class PeerTunnelRuntime {
     await Promise.all(ids.map(async id => { try { await this.session(id, true); } catch { /* Status remains visible in the directory. */ } }));
     return this.directory();
   }
-  /** Existing application-authenticated signalling grants only the bounded persona service. */
-  async ensurePersonaService(id: string): Promise<void> {
+  /** Authenticate the current application once before using any offered service. */
+  async ensureApplicationConnection(id: string): Promise<void> {
     if (this.options.readOnly) throw new TunnelDenied("manager_read_only");
-    if (this.controller.signal.aborted || !this.options.allowPersonaBootstrap?.() || !this.options.relay().token.trim()) throw new TunnelDenied("peer_service_denied");
+    if (!this.applicationConnectionAllowed()) throw new TunnelDenied("peer_service_denied");
     const scope = this.bootstrapScope();
     const prior = this.config().trustedDevices.find(grant => grant.deviceId === id);
-    const ready = this.personaBootstrapReady.get(id);
-    if (ready?.scope === scope && ready.publicKey === prior?.publicKey && (!prior.bootstrapScope || prior.bootstrapScope === scope)) return;
-    const pending = this.personaBootstrapFlights.get(id);
+    const ready = this.applicationBootstrapReady.get(id);
+    if (ready?.scope === scope && ready.publicKey === prior?.publicKey && prior.bootstrapScope === scope) return;
+    const pending = this.applicationBootstrapFlights.get(id);
     if (pending) return pending;
-    const flight = this.bootstrapPersonaService(id, scope);
-    this.personaBootstrapFlights.set(id, flight);
+    const flight = this.bootstrapApplicationConnection(id, scope);
+    this.applicationBootstrapFlights.set(id, flight);
     try { await flight; }
-    finally { if (this.personaBootstrapFlights.get(id) === flight) this.personaBootstrapFlights.delete(id); }
+    finally { if (this.applicationBootstrapFlights.get(id) === flight) this.applicationBootstrapFlights.delete(id); }
   }
-  private async bootstrapPersonaService(id: string, scope: string): Promise<void> {
+  private async bootstrapApplicationConnection(id: string, scope: string): Promise<void> {
     const peer = await this.target(id);
-    if (!peer.capabilities.includes(PERSONA_REFERENCE_CAPABILITY)) throw new Error("peer_persona_upgrade_required");
+    if (!peer.capabilities.includes(APPLICATION_ACCESS_CAPABILITY)) throw new Error("peer_upgrade_required");
     if (!peer.supported) throw new Error("peer_upgrade_required");
     if (!peer.online) throw new Error("peer_device_offline");
     const fields = { source: this.identity.deviceId, publicKey: this.identity.publicKey, target: id, expiresAt: Date.now() + 30_000 };
-    const input = { ...fields, kind: "bootstrap-persona", signature: sign(null, Buffer.from(PERSONA_BOOTSTRAP_DOMAIN + JSON.stringify(fields)), this.identity.privateKey).toString("base64") };
+    const input = { ...fields, kind: "bootstrap-application", signature: sign(null, Buffer.from(APPLICATION_BOOTSTRAP_DOMAIN + JSON.stringify(fields)), this.identity.privateKey).toString("base64") };
     const reply = await this.options.signal({ targetDeviceId: id, capability: "transport", operation: "tunnel", input }, AbortSignal.any([this.controller.signal, AbortSignal.timeout(20_000)])) as { deviceId?: string; publicKey?: string; generation?: string };
-    if (this.controller.signal.aborted || !this.options.allowPersonaBootstrap?.() || !this.options.relay().token.trim() || this.bootstrapScope() !== scope) throw new TunnelDenied("peer_service_denied");
+    if (!this.applicationConnectionAllowed() || this.bootstrapScope() !== scope) throw new TunnelDenied("peer_service_denied");
     if (reply?.deviceId !== id || typeof reply.generation !== "string" || !reply.generation.trim() || reply.generation.length > 128
       || !isTunnelPublicKey(reply.publicKey)) throw new TunnelDenied("peer_identity_denied");
     const config = this.config();
     const prior = config.trustedDevices.find(grant => grant.deviceId === id);
     if (prior && prior.publicKey !== reply.publicKey) throw new TunnelDenied("peer_identity_changed");
     if (!prior) config.trustedDevices.push({ deviceId: id, publicKey: reply.publicKey, services: [], bootstrapScope: scope });
-    else if (prior.bootstrapScope && prior.bootstrapScope !== scope) prior.bootstrapScope = scope;
-    if (!prior || prior.bootstrapScope === scope) this.persist(config);
-    this.personaBootstrapReady.set(id, { scope, publicKey: reply.publicKey });
-    this.options.onStatus({ deviceId: id, personaSupported: true, trusted: true });
+    else { prior.bootstrapScope = scope; prior.services = []; }
+    this.persist(config);
+    this.applicationBootstrapReady.set(id, { scope, publicKey: reply.publicKey });
+    this.options.onStatus({ deviceId: id, trusted: true });
   }
   private persist(config: Config): void {
     mkdirSync(path.dirname(this.file), { recursive: true });
@@ -186,7 +194,7 @@ export class PeerTunnelRuntime {
   }
   fetch(id: string, service: string, pathname: string, init: RequestInit = {}) {
     if (service === PERSONA_PEER_SERVICE && !personaPeerRequestAllowed({ method: init.method || "GET", path: pathname })) return Promise.reject(new TunnelDenied("peer_service_denied"));
-    return (service === PERSONA_PEER_SERVICE ? this.ensurePersonaService(id) : Promise.resolve()).then(() => this.session(id)).then(session => tunnelFetch(session, service, pathname, init));
+    return this.session(id).then(session => tunnelFetch(session, service, pathname, init));
   }
   private relayUrl(room: string) {
     const relay = this.options.relay(); const url = new URL(relay.url);
@@ -197,6 +205,7 @@ export class PeerTunnelRuntime {
   private accept(channel: TunnelChannel, source: string) {
     if (this.accepting + this.incoming.size >= 8 || this.controller.signal.aborted) { channel.close(); return; }
     let grant: TunnelGrant; try { grant = this.grant(source); } catch { channel.close(); return; }
+    const sessionScope = this.bootstrapScope();
     this.accepting++;
     void establishTunnel(channel, this.identity, grant, false, AbortSignal.any([this.controller.signal, AbortSignal.timeout(5_000)]))
       .then(session => {
@@ -211,42 +220,35 @@ export class PeerTunnelRuntime {
           return services;
         }, service => {
           const current = this.grant(source);
-          const permitted = current.services.includes(service) || service === PERSONA_PEER_SERVICE && current.services.includes("manager");
-          return current.publicKey === session.remote.publicKey && permitted
-            && (service !== PERSONA_PEER_SERVICE || this.options.allowPersonaBootstrap?.() === true && Boolean(this.options.relay().token.trim()))
-            && (service !== "resources" || this.options.allowResourceBootstrap?.() === true) && (service !== "speech" || !current.bootstrapScope || this.options.allowSpeechBootstrap?.() === true);
+          return current.publicKey === session.remote.publicKey && current.bootstrapScope === sessionScope;
         });
       }).catch(() => channel.close()).finally(() => this.accepting--);
   }
   async offer(input: unknown): Promise<unknown> {
     if (this.options.readOnly) throw new TunnelDenied("manager_read_only");
-    // The caller reached this method through the application-authenticated encrypted
-    // signalling dispatcher. Bootstrap grants only the requested service, never Manager access.
+    // This entry is owned by the application-authenticated encrypted signal dispatcher.
+    // Legacy mobile bootstrap kinds retain their signatures, with the same application policy.
     const bootstrap = input as { kind?: string; source?: string; publicKey?: string; target?: string; expiresAt?: number; signature?: string };
-    if (bootstrap?.kind === "bootstrap-speech" || bootstrap?.kind === "bootstrap-resources" || bootstrap?.kind === "bootstrap-persona") {
+    if (bootstrap?.kind === "bootstrap-application" || bootstrap?.kind === "bootstrap-speech" || bootstrap?.kind === "bootstrap-resources" || bootstrap?.kind === "bootstrap-persona") {
+      const application = bootstrap.kind === "bootstrap-application";
       const resource = bootstrap.kind === "bootstrap-resources";
       const persona = bootstrap.kind === "bootstrap-persona";
-      const service = persona ? PERSONA_PEER_SERVICE : resource ? "resources" : "speech";
-      if (!(persona ? this.options.allowPersonaBootstrap?.() && Boolean(this.options.relay().token.trim()) : resource ? this.options.allowResourceBootstrap?.() : this.options.allowSpeechBootstrap?.())) throw new TunnelDenied("peer_service_denied");
-      if (typeof bootstrap.source !== "string" || !(persona ? /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/ : /^[A-Za-z0-9_-]{1,120}$/).test(bootstrap.source)
+      if (!this.applicationConnectionAllowed()) throw new TunnelDenied("peer_service_denied");
+      if (typeof bootstrap.source !== "string" || !((persona || application) ? /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/ : /^[A-Za-z0-9_-]{1,120}$/).test(bootstrap.source)
           || bootstrap.target !== this.identity.deviceId || typeof bootstrap.publicKey !== "string" || bootstrap.publicKey.length > 2048
           || !Number.isFinite(bootstrap.expiresAt) || bootstrap.expiresAt! < Date.now() || bootstrap.expiresAt! > Date.now() + 60_000)
         throw new TunnelDenied("peer_bootstrap_denied");
       const fields = { source: bootstrap.source, publicKey: bootstrap.publicKey, target: bootstrap.target, expiresAt: bootstrap.expiresAt };
-      if (!isTunnelPublicKey(bootstrap.publicKey) || !verify(null, Buffer.from((persona ? PERSONA_BOOTSTRAP_DOMAIN : resource ? "rabi-resources-bootstrap-v1" : "rabi-speech-bootstrap-v1") + JSON.stringify(fields)), bootstrap.publicKey, Buffer.from(bootstrap.signature || "", "base64")))
+      if (!isTunnelPublicKey(bootstrap.publicKey) || !verify(null, Buffer.from((application ? APPLICATION_BOOTSTRAP_DOMAIN : persona ? PERSONA_BOOTSTRAP_DOMAIN : resource ? "rabi-resources-bootstrap-v1" : "rabi-speech-bootstrap-v1") + JSON.stringify(fields)), bootstrap.publicKey, Buffer.from(bootstrap.signature || "", "base64")))
         throw new TunnelDenied("peer_signature_denied");
       const config = this.config();
       const prior = config.trustedDevices.find(grant => grant.deviceId === bootstrap.source);
       if (prior && prior.publicKey !== bootstrap.publicKey) throw new TunnelDenied("peer_identity_changed");
-      if (!prior) config.trustedDevices.push({ deviceId: bootstrap.source, publicKey: bootstrap.publicKey, services: [service], bootstrapScope: this.bootstrapScope() });
-      else if (!prior.services.includes(service) && !prior.bootstrapScope && !(persona && prior.services.includes("manager"))) throw new TunnelDenied("peer_service_denied");
-      const addedService = prior?.bootstrapScope && !prior.services.includes(service);
-      if (addedService) prior.services.push(service);
-      const changedScope = prior?.bootstrapScope && prior.bootstrapScope !== this.bootstrapScope();
-      if (changedScope) prior!.bootstrapScope = this.bootstrapScope();
-      if (!prior || changedScope || addedService) {
-        this.persist(config);
-      }
+      const scope = this.bootstrapScope();
+      if (!prior) config.trustedDevices.push({ deviceId: bootstrap.source, publicKey: bootstrap.publicKey, services: [], bootstrapScope: scope });
+      else { prior.services = []; prior.bootstrapScope = scope; }
+      this.persist(config);
+      this.applicationBootstrapReady.set(bootstrap.source, { scope, publicKey: bootstrap.publicKey });
       return { deviceId: this.identity.deviceId, generation: this.identity.generation, publicKey: this.identity.publicKey };
     }
     const value = input as { source?: string; kind?: string; sdp?: string; room?: string };
@@ -275,15 +277,21 @@ export class PeerTunnelRuntime {
     const url = new URL(request.url || "/", "http://peer.local");
     if (url.pathname !== "/api/rabilink/peer/tunnel/socket") return false;
     const source = url.searchParams.get("source") || "";
-    try { if (this.options.readOnly) throw new TunnelDenied("manager_read_only"); this.grant(source); if (this.accepting + this.incoming.size >= 8) throw new Error("busy"); }
-    catch { socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n"); return true; }
-    this.websocket.handleUpgrade(request, socket, head, ws => this.accept(websocketChannel(ws), source)); return true;
+    void this.ensureApplicationConnection(source).then(() => {
+      this.grant(source);
+      if (this.accepting + this.incoming.size >= 8 || socket.destroyed) throw new Error("busy");
+      this.websocket.handleUpgrade(request, socket, head, ws => this.accept(websocketChannel(ws), source));
+    }).catch(() => socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n"));
+    return true;
   }
   private async connect(peer: TunnelCandidate, transport: "lan" | "p2p" | "relay", signal: AbortSignal): Promise<TunnelSession> {
+    await this.ensureApplicationConnection(peer.id);
     const grant = this.grant(peer.id);
+    const scope = this.bootstrapScope();
     const establish = async (channel: TunnelChannel) => {
       const session = await establishTunnel(channel, this.identity, grant, true, signal);
-      if (signal.aborted) { session.close(); throw new Error("Tunnel attempt cancelled."); } return session;
+      if (signal.aborted || !this.applicationConnectionAllowed() || scope !== this.bootstrapScope()) { session.close(); throw new Error("Tunnel attempt cancelled."); }
+      this.sessionScopes.set(session, scope); return session;
     };
     if (transport === "lan") {
       const controllers = peer.peerUrls.slice(0, 4).map(() => new AbortController());
@@ -296,7 +304,8 @@ export class PeerTunnelRuntime {
           const attempt = AbortSignal.any([signal, controllers[index].signal]);
           const channel = await connectWebsocket(url.toString(), {}, attempt);
           const session = await establishTunnel(channel, this.identity, grant, true, attempt);
-          if (attempt.aborted) { session.close(); throw new Error("Candidate cancelled."); }
+          if (attempt.aborted || !this.applicationConnectionAllowed() || scope !== this.bootstrapScope()) { session.close(); throw new Error("Candidate cancelled."); }
+          this.sessionScopes.set(session, scope);
           return { session, index };
         }));
         controllers.forEach((controller, index) => { if (index !== winner.index) controller.abort(); }); return winner.session;
@@ -353,14 +362,13 @@ export class PeerTunnelRuntime {
         const id = decodeURIComponent(match[1]), service = decodeURIComponent(match[2]), pathname = match[3] + url.search;
         if (service === PERSONA_PEER_SERVICE) {
           if (!personaPeerRequestAllowed({ method: request.method || "GET", path: pathname })) throw new TunnelDenied("peer_service_denied");
-          await this.ensurePersonaService(id);
         }
         await proxyTunnel(await this.session(id), service, pathname, request, response); return;
       }
       send(405, { error: "Method not allowed." });
     };
-    void run().catch(error => send(error instanceof TunnelDenied ? 403 : error?.message === "peer_persona_upgrade_required" ? 426 : 502, {
-      error: error instanceof TunnelDenied || error?.message === "peer_persona_upgrade_required" ? error.message : "远端连接失败，请检查设备版本、授权与网络。"
+    void run().catch(error => send(error instanceof TunnelDenied ? 403 : error?.message === "peer_upgrade_required" ? 426 : 502, {
+      error: error instanceof TunnelDenied || error?.message === "peer_upgrade_required" ? error.message : "远端连接失败，请检查设备版本、连接与网络。"
     }));
     return true;
   }
