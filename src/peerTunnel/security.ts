@@ -11,15 +11,18 @@ export function isTunnelPublicKey(value: unknown): value is string {
   try { return createPublicKey(value).asymmetricKeyType === "ed25519"; } catch { return false; }
 }
 const protocol = "rabi-tunnel-v1";
-export function loadTunnelIdentity(file: string, deviceId: string, generation: string, options: { create?: boolean } = {}): TunnelIdentity {
+export function loadTunnelIdentity(file: string, deviceId: string, generation: string, options: { create?: boolean; persist?: boolean } = {}): TunnelIdentity {
   let keys: { publicKey: string; privateKey: string };
   try { keys = JSON.parse(readFileSync(file, "utf8")); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT" || options.create === false) throw error;
     const pair = generateKeyPairSync("ed25519");
     keys = { publicKey: pair.publicKey.export({ type: "spki", format: "pem" }).toString(), privateKey: pair.privateKey.export({ type: "pkcs8", format: "pem" }).toString() };
-    mkdirSync(path.dirname(file), { recursive: true });
-    writeFileSync(file, JSON.stringify(keys), { flag: "wx", mode: 0o600 });
+    // Read-only acceptance can use an in-memory identity without creating credentials on disk.
+    if (options.persist !== false) {
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, JSON.stringify(keys), { flag: "wx", mode: 0o600 });
+    }
   }
   if (createPrivateKey(keys.privateKey).asymmetricKeyType !== "ed25519"
     || createPublicKey(keys.privateKey).export({ type: "spki", format: "pem" }).toString() !== keys.publicKey) throw new Error("Invalid tunnel identity.");

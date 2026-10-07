@@ -49,17 +49,18 @@ Use Setup for installation and upgrades; extract the portable ZIP only into a ne
 
 For a full Windows source build, double-click `Start-RabiRoute-FromSource.bat`. It builds and starts Host, Manager, WebGUI, and the tray while retaining installed data. Requires an existing RabiRoute installation, Node.js/npm, and the .NET 9 SDK; see [source startup](docs/getting-started_en.md).
 
-The commands below run only the backend and require Node.js 20 or newer and npm.
+For Linux, use the new minimal Host with Node.js 20+, npm, and util-linux `flock`:
 
 ```bash
 git clone https://github.com/vb2250158/RabiRoute.git
 cd RabiRoute
-npm install
-npm run build
-npm run start:manager
+bash Start-RabiRoute-FromSource.sh
+npm run status:linux -- --json
 ```
 
-Manager prints its actual loopback URL after startup; the operating system assigns an unused port. Source-mode users open that printed URL. Packaged Windows users start RabiRoute Host and let Host status or the tray open the current URL; no fixed localhost port is part of the product contract. When no local runtime data exists, Manager creates a sanitized sample configuration from `examples/data/`.
+The script runs `npm ci` and the full build, then starts Host in the background. Host owns Manager and prints its current loopback WebGUI URL; no fixed localhost port is part of the product contract. Use `npm run start:linux` after an existing build and `npm run stop:linux` to request shutdown. See [Linux Host](docs/linux-host_en.md) for foreground/read-only modes, logs, and lifecycle boundaries. It provides a browser interface; Windows tray, screenshots, and global hotkeys are not part of this Linux path. Real Relay, device, and endurance acceptance remains pending.
+
+For backend-only development on other supported environments, see [source startup](docs/getting-started_en.md). An ordinary first start creates local device identity and sanitized sample configuration from `examples/data/` when runtime data is absent. RabiLink remains unconfigured until you explicitly save a verified Relay address and application token.
 
 ### Complete the first Route
 

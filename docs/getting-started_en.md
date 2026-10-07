@@ -20,7 +20,32 @@ The Windows installer launches RabiRoute Host from the Start menu. Host creates 
 
 For a full Windows source build, double-click `Start-RabiRoute-FromSource.bat` in the repository root. Requires an existing Windows RabiRoute installation, Node.js/npm, and the .NET 9 SDK. It builds Manager, WebGUI, plugins, Host, and the tray, then activates the source build through Host while retaining installed settings and data. The first build downloads Python/Qt dependencies. Closing the command window does not stop Host; quit from the tray. Failure logs are in `logs/source-start/`. If the dependency lock differs from the installed package, update the full installation first.
 
-To run only the backend from source (without the tray):
+### Linux Host
+
+Linux requires Node.js 20+, npm, and util-linux `flock`. To start the existing WebGUI:
+
+1. Enter the checkout and run the initial build/start script:
+
+   ```bash
+   cd /path/to/RabiRoute
+   bash Start-RabiRoute-FromSource.sh
+   ```
+
+2. After `npm ci` and the full build, Host runs in the background. Query status and open the returned `managerBaseUrl`:
+
+   ```bash
+   npm run status:linux -- --json
+   node scripts/linux-host.mjs --command open
+   ```
+
+3. To inspect pages without automatic integrations, quit any existing Host, then run `npm run start:linux -- --foreground --read-only`. Normal writable startup creates local device identity; read-only mode does not create a persistent tunnel key but still writes runtime logs and leases.
+4. For an existing build, use `npm run start:linux`; request shutdown with `npm run stop:linux`. Logs are at `<stateRoot>/logs/linux-host/host.log`; the repository is the default state root. An alternate state root must be an absolute path.
+
+This Linux path does not include Windows/Qt tray features, screenshots, or global hotkeys, and installs no service. Configure RabiLink through its existing page with a manually supplied verified Relay URL and reusable application token. Saving persists the connection; authenticated devices in the same application can use all services actually provided by this computer. See [Linux Host](linux-host_en.md) for full commands, security, and process-cleanup boundaries. Real Relay, two-device, and endurance acceptance remains pending.
+
+### Backend-only development
+
+The following entry points are for Windows/macOS backend-only development without the tray. Use Host above for everyday Linux operation.
 
 Windows PowerShell:
 
@@ -31,7 +56,7 @@ npm run build
 npm run start:manager
 ```
 
-macOS or Linux:
+macOS:
 
 ```bash
 cd /path/to/RabiRoute
@@ -53,7 +78,7 @@ Use that run's `<managerBaseUrl>` instead of preserving one port as a permanent 
 
 ## First route
 
-On a clean start, the Manager prefers copying the complete public `examples/data` package into `data/`. Only the `main` route is enabled by default; experimental examples remain disabled until credentials, ports, and workspaces are configured. If examples are unavailable, the Manager can still create a minimal QQ/NapCat-to-Codex setup.
+On a normal writable clean start, the Manager prefers copying the complete public `examples/data` package into `data/`. Only the `main` route is enabled by default; experimental examples remain disabled until credentials, ports, and workspaces are configured. If examples are unavailable, the Manager can still create a minimal QQ/NapCat-to-Codex setup.
 
 In RibiWebGUI, check:
 
@@ -119,7 +144,7 @@ Use real line breaks in WebUI text areas. Let JSON serialization escape them onc
 
 ## Verify the path
 
-1. Start Host in the Windows package, or run `npm run start:manager` in source mode and record stdout `<managerBaseUrl>`.
+1. Start Windows Host or Linux Host and obtain the current `managerBaseUrl` from Host. For backend-only development, record the current Manager startup output.
 2. Open RibiWebGUI from the tray or `<managerBaseUrl>` and confirm the route is running.
 3. Confirm NapCat is connected to port 8789.
 4. Mention the bot in a QQ group, send a private message, or run a heartbeat/manual trigger.

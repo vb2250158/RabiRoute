@@ -6,6 +6,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## Unreleased - Linux Host (2026-10-07)
+
+- Add a Linux source-start script and minimal Host: build, run the existing WebGUI in background/foreground mode, and query status, open, restart, or quit through a live loopback control connection. Preserve structured READY, dynamic addresses, and `/meta` runtime identity validation.
+- Use util-linux `flock` kernel FD leases for Linux single-instance ownership and a per-run token in a `0600` control descriptor. Add bounded recovery, signal-based process-group teardown, and shutdown requests on parent IPC loss. Full descendant containment still requires optional, manually configured systemd `KillMode=control-group`; no service is installed automatically.
+- Read-only mode does not create persistent tunnel keys. RabiLink retains its manually supplied verified Relay address and application-token setup. Synchronize bilingual startup, security, and runtime boundaries; add no Windows/Qt tray features and claim no real Relay, two-device, or endurance acceptance. Version remains 0.3.22.
+
 ## 0.3.22 - 2026-10-03
 
 ### Unify service access after RabiLink connection

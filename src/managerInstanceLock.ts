@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { acquireLinuxProcessLease, LinuxProcessLeaseAlreadyHeldError, type LinuxProcessLease } from "./linuxProcessLease.js";
 
 export type ManagerInstanceOwner = {
   pid: number;
@@ -205,10 +206,50 @@ export async function acquireManagerInstanceLock(options: ManagerInstanceLockOpt
   };
   fs.mkdirSync(runtimeDir, { recursive: true });
 
-  let lease: net.Server;
+  let linuxLease: LinuxProcessLease | undefined;
+  if (process.platform === "linux") {
+    try {
+      linuxLease = await acquireLinuxProcessLease({ namespace: `rabiroute-manager:${ownershipNamespace}`, owner });
+    } catch (error) {
+      if (!(error instanceof LinuxProcessLeaseAlreadyHeldError)) throw error;
+      const metadata = error.owner;
+      const existing = metadata && Number.isInteger(metadata.pid) && Number(metadata.pid) > 0 && typeof metadata.ownerId === "string"
+        ? metadata as ManagerInstanceOwner
+        : { pid: 0, ownerId: "os-lease-owner", startedAt: "", projectRoot: rootDir };
+      throw new ManagerInstanceAlreadyRunningError(lockPath, existing);
+    }
+  }
+  let lease: net.Server | undefined;
   try {
-    lease = await acquireOsLease(leaseAddress, owner);
+    if (process.platform === "linux") {
+      try {
+        const legacy = fs.lstatSync(leaseAddress);
+        if (!legacy.isSocket() || legacy.uid !== process.getuid!()) {
+          throw new Error("The legacy Linux Manager lease path is not a socket owned by the current user.");
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    try {
+      // Also reserve the legacy socket where supported, so older Linux builds
+      // cannot become a second writer during migration to the flock lease.
+      lease = await acquireOsLease(leaseAddress, owner);
+    } catch (error) {
+      if (process.platform !== "linux" || (error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+      // Some Linux sandboxes prohibit AF_UNIX entirely. Flock remains mandatory;
+      // an existing legacy socket is ambiguous and must never be bypassed.
+      let legacyAbsent = false;
+      try { fs.lstatSync(leaseAddress); }
+      catch (statError) {
+        if ((statError as NodeJS.ErrnoException).code === "ENOENT") legacyAbsent = true;
+        else throw statError;
+      }
+      if (!legacyAbsent) throw error;
+      lease = undefined;
+    }
   } catch (error) {
+    await linuxLease?.release();
     if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error;
     const existing = await readOsLeaseOwner(leaseAddress) ?? readManagerInstanceOwner(lockPath) ?? {
       pid: 0,
@@ -223,26 +264,30 @@ export async function acquireManagerInstanceLock(options: ManagerInstanceLockOpt
     removeDiagnosticLock(lockPath, owner.ownerId);
     writeExclusive(lockPath, owner);
   } catch (error) {
-    await closeLease(lease);
+    if (lease) await closeLease(lease);
+    await linuxLease?.release();
     throw error;
   }
 
   let released = false;
   return {
     lockPath,
-    leaseAddress,
+    leaseAddress: linuxLease?.leasePath ?? leaseAddress,
     owner,
     async release() {
       if (released) return;
       released = true;
-      await closeLease(lease);
+      if (lease) await closeLease(lease);
       const current = readManagerInstanceOwner(lockPath);
       if (current?.ownerId === owner.ownerId) {
         try { fs.unlinkSync(lockPath); } catch { }
       }
-      if (process.platform !== "win32") {
+      // Node removes its Unix socket when close completes. On Linux a second
+      // unlink could remove a replacement owner's socket after lease release.
+      if (process.platform !== "win32" && process.platform !== "linux") {
         try { fs.unlinkSync(leaseAddress); } catch { }
       }
+      await linuxLease?.release();
     }
   };
 }

@@ -49,17 +49,18 @@ Agent 负责回答、写代码、调用工具和执行任务。RabiRoute 负责�
 
 Windows 完整源码构建启动：双击根目录 `Start-RabiRoute-FromSource.bat`，构建并启动 Host、Manager、WebGUI 和托盘，沿用现有安装版的数据。需要已安装 RabiRoute、Node.js/npm 和 .NET 9 SDK；详见[源码启动说明](docs/getting-started.md)。
 
-以下命令只启动后端，需要 Node.js 20 或更高版本，以及 npm。
+Linux 使用新增的最小 Host，需要 Node.js 20+、npm 与 util-linux `flock`：
 
 ```bash
 git clone https://github.com/vb2250158/RabiRoute.git
 cd RabiRoute
-npm install
-npm run build
-npm run start:manager
+bash Start-RabiRoute-FromSource.sh
+npm run status:linux -- --json
 ```
 
-Manager 启动后会打印真实的回环地址，端口由操作系统分配。从源码运行时打开这条输出中的地址；Windows 安装版由 Host 状态或托盘打开当前地址，产品合同不包含固定本机端口。首次启动且没有本机运行数据时，Manager 会从 `examples/data/` 创建脱敏示例配置。
+脚本执行 `npm ci` 和完整构建后在后台启动 Host。Host 管理 Manager，并打印当前回环 WebGUI 地址；产品合同不包含固定本机端口。已有构建时用 `npm run start:linux`，退出用 `npm run stop:linux`。前台/只读模式、日志和生命周期边界见 [Linux Host](docs/linux-host.md)。这条 Linux 路径使用浏览器界面，不提供 Windows 托盘、系统截图和全局快捷键；真实 Relay、设备与长期运行仍待验收。
+
+其他支持环境的纯后端开发见[源码启动说明](docs/getting-started.md)。普通首次启动且没有本机数据时，会生成本机设备身份，并从 `examples/data/` 创建脱敏示例配置。RabiLink 需要显式保存已核实的 Relay 地址和应用令牌后才完成配置。
 
 ### 跑通第一条 Route
 

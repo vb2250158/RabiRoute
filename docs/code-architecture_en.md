@@ -6,6 +6,8 @@ English | <a href="./code-architecture.md">简体中文</a>
 
 # RabiRoute Code Architecture
 
+The Linux source Host lives in `scripts/linux-host.mjs` and `scripts/lib/linux-host-runtime.mjs`: it reuses Manager READY/health identities, holds a per-user kernel `flock` lease, and exposes only a live loopback control endpoint. `src/linuxHostParent.ts` requests normal Manager shutdown when its parent's IPC channel closes. Its interface is WebGUI, without Windows tray or Qt parity; see [Linux Host](linux-host_en.md) for operation and container limits.
+
 0.3.22 connection contract: authenticated devices in the same RabiLink application can use all services actually provided by the PC. Pinned keys and application scope remain checked. Knowledge reads/writes reuse Manager APIs, without separate MCP secrets or knowledge grants. Per-service permission fields and the grant editor are retired. See [generic connections](rabilink-peer-tunnel_en.md) and [knowledge runtime](rabilink-knowledge-runtime_en.md).
 
 Device ownership has changed: configure watches, bands, and glasses in mobile recording, which submits recording events. Separate PC device entries are removed; legacy device protocols below are retained for compatibility maintenance. See [implementation and retirement criteria](mobile-recording-event-boundary_en.md).

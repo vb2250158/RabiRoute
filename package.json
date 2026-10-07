@@ -54,7 +54,11 @@
     "send:onebot": "node scripts/send-onebot-message.mjs",
     "build:plugins": "node scripts/build-plugin-packages.mjs && node scripts/build-agent-hook-packages.mjs",
     "check:plugin-architecture": "node scripts/check-plugin-platform-architecture.mjs",
-    "check:skills": "node --test scripts/sync-agent-skills.test.mjs scripts/skill-catalog.test.mjs scripts/dynamic-manager-active-truth.test.mjs"
+    "check:skills": "node --test scripts/sync-agent-skills.test.mjs scripts/skill-catalog.test.mjs scripts/dynamic-manager-active-truth.test.mjs",
+    "start:linux": "node scripts/linux-host.mjs",
+    "status:linux": "node scripts/linux-host.mjs --command status",
+    "stop:linux": "node scripts/linux-host.mjs --command quit",
+    "test:linux-host": "node --test scripts/linux-host.test.mjs && node --import tsx --test src/linuxProcessLease.test.ts src/managerInstanceLock.test.ts src/linuxHostParent.test.ts src/peerTunnel/runtimeReadOnly.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.1",

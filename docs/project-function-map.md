@@ -6,6 +6,8 @@
 
 # RabiRoute 项目功能手册
 
+Linux 启动、状态、重启和退出由 `scripts/linux-host.mjs` 统一拥有；动态 Manager 身份和 RibiWebGUI 继续复用现有合同。`src/linuxProcessLease.ts` 提供进程生命周期内核锁，Linux 原生托盘、截图和热键不在本次范围内，见 [Linux Host](linux-host.md)。
+
 0.3.22 连接合同：同一 RabiLink 应用已鉴权设备默认使用 PC 实际提供的全部服务。设备固定公钥与应用作用域继续复核；知识读写复用 Manager 接口，无额外 MCP 密钥或知识 grant。旧逐服务权限字段和知识表单已退役。实现与迁移见[通用连接](rabilink-peer-tunnel.md)及[知识运行合同](rabilink-knowledge-runtime.md)。
 
 远端 Agent 归 Agent 执行端，不再作为消息端添加；通过[远端接入](lan-rabi-agent-bootstrap.md)选择实例与 Agent。

@@ -48,7 +48,7 @@ export class PeerTunnelRuntime {
     allowApplicationConnection(): boolean;
   }) {
     this.file = path.join(options.dataDir, "tunnel.json");
-    this.identity = loadTunnelIdentity(path.join(options.dataDir, "tunnel-identity.json"), options.deviceId, options.generation);
+    this.identity = loadTunnelIdentity(path.join(options.dataDir, "tunnel-identity.json"), options.deviceId, options.generation, { persist: !options.readOnly });
     this.connections = new PeerConnections((peer, transport, signal) => this.connect(peer, transport, signal));
     this.connections.select(this.config().selectedDeviceId);
     this.connections.on("status", value => options.onStatus(value));
@@ -89,7 +89,7 @@ export class PeerTunnelRuntime {
     this.connections.select(id); this.connections.emit("selection", { selectedDeviceId: id }); this.options.onStatus({ selectedDeviceId: id });
   }
   startLanDiscovery(port: number) {
-    if (this.bonjour || !Number.isInteger(port) || port < 1) return;
+    if (this.options.readOnly || this.bonjour || !Number.isInteger(port) || port < 1) return;
     this.bonjour = new Bonjour({}, () => { /* LAN discovery may be unavailable; other transports remain usable. */ });
     this.lanPublication = this.bonjour.publish({ name: "RabiTunnel-" + this.options.generation.slice(0, 12), type: "rabitunnel", protocol: "tcp", port,
       txt: { protocol: "1", deviceId: this.identity.deviceId, generation: this.identity.generation, personaReference: "1", applicationAccess: "1" } });

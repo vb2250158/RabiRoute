@@ -6,6 +6,8 @@ English | <a href="./project-function-map.md">简体中文</a>
 
 # RabiRoute Project Function Map
 
+Linux startup, status, restart and shutdown belong to `scripts/linux-host.mjs`; current Manager identity and RibiWebGUI reuse their existing contracts. `src/linuxProcessLease.ts` provides process-lifetime kernel ownership. Native Linux tray, screenshots and hotkeys are outside this initial port; see [Linux Host](linux-host_en.md).
+
 0.3.22 connection contract: authenticated devices in the same RabiLink application can use all services actually provided by the PC. Pinned keys and application scope remain checked. Knowledge reads/writes reuse Manager APIs, without separate MCP secrets or knowledge grants. Per-service permission fields and the grant editor are retired. See [generic connections](rabilink-peer-tunnel_en.md) and [knowledge runtime](rabilink-knowledge-runtime_en.md).
 
 Remote Agents are execution targets, not message endpoints. Select an instance and Agent through [remote enrollment](lan-rabi-agent-bootstrap_en.md).

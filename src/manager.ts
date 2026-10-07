@@ -6,6 +6,9 @@ import {
 } from "./managerInstanceLock.js";
 import { installManagerRuntimeDiagnostics } from "./managerRuntimeDiagnostics.js";
 import { resolveRuntimeLayout } from "./shared/runtimeLayout.js";
+import { bindLinuxHostParentLifetime } from "./linuxHostParent.js";
+
+bindLinuxHostParentLifetime();
 
 const managerRuntimeLayout = resolveRuntimeLayout(
   path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")

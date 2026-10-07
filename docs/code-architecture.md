@@ -6,6 +6,8 @@
 
 # RabiRoute 代码架构
 
+Linux 源码 Host 由 `scripts/linux-host.mjs` 和 `scripts/lib/linux-host-runtime.mjs` 拥有：复用 Manager 的 READY/健康身份合同，以内核 `flock` 保证同用户单实例，使用仅回环的当前进程控制接口。`src/linuxHostParent.ts` 在父 Host 的 IPC 断开后请求 Manager 正常退出。界面复用 WebGUI，不替代 Windows 托盘或 Qt 功能；运行和容器边界见 [Linux Host](linux-host.md)。
+
 0.3.22 连接合同：同一 RabiLink 应用已鉴权设备默认使用 PC 实际提供的全部服务。设备固定公钥与应用作用域继续复核；知识读写复用 Manager 接口，无额外 MCP 密钥或知识 grant。旧逐服务权限字段和知识表单已退役。实现与迁移见[通用连接](rabilink-peer-tunnel.md)及[知识运行合同](rabilink-knowledge-runtime.md)。
 
 设备接入边界已调整：手表、手环和眼镜在移动端记录系统设置，由记录系统统一投递事件。PC 独立设备入口已移除；下文旧设备协议仅作兼容维护，实施与退出条件见[移动端记录与事件边界](mobile-recording-event-boundary.md)。

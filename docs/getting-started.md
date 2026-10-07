@@ -22,7 +22,32 @@ Windows 安装包直接从开始菜单运行 RabiRoute Host。Host 创建同一�
 
 Windows 完整源码构建启动：双击仓库根目录的 `Start-RabiRoute-FromSource.bat`。需要已安装 Windows RabiRoute、Node.js/npm 和 .NET 9 SDK。脚本构建 Manager、WebGUI、插件、Host 与托盘，通过 Host 切换到源码构建版，沿用安装版配置和数据；首次构建会下载 Python/Qt 依赖。关闭命令窗口不会退出已启动的 Host，退出应用请使用托盘。失败日志在 `logs/source-start/`。依赖锁文件与安装版不一致时，需要先更新完整安装包。
 
-只运行源码后端（不含托盘）：
+### Linux Host
+
+Linux 需要 Node.js 20+、npm 和 util-linux `flock`。按以下步骤启动已有 WebGUI：
+
+1. 进入源码目录，运行首次构建启动脚本：
+
+   ```bash
+   cd /path/to/RabiRoute
+   bash Start-RabiRoute-FromSource.sh
+   ```
+
+2. 脚本完成 `npm ci` 和完整构建后，在后台运行 Host。查询当前状态并打开输出的 `managerBaseUrl`：
+
+   ```bash
+   npm run status:linux -- --json
+   node scripts/linux-host.mjs --command open
+   ```
+
+3. 初次只检查页面、不启用自动集成时，先退出已有 Host，再运行 `npm run start:linux -- --foreground --read-only`。普通可写启动会生成本机设备身份；只读模式不新建持久隧道密钥，但仍写运行日志和租约。
+4. 日常已有构建时用 `npm run start:linux`；通过 `npm run stop:linux` 请求退出。日志在 `<stateRoot>/logs/linux-host/host.log`，默认状态根是仓库目录。独立状态根必须通过绝对路径指定。
+
+这条 Linux 路径不包含 Windows/Qt 托盘、截图或全局快捷键，不自动安装服务。RabiLink 仍在已有配置页手动填写已核实的 Relay URL 与可复用应用令牌；保存会持久化连接，同应用已鉴权设备可使用本机实际提供的全部服务。完整命令、安全与进程清理边界见 [Linux Host](linux-host.md)。真实 Relay、双设备和长期运行仍待验收。
+
+### 纯后端开发
+
+以下入口用于 Windows/macOS 纯后端开发，不含托盘；Linux 日常运行使用上面的 Host。
 
 Windows PowerShell：
 
@@ -33,7 +58,7 @@ npm run build
 npm run start:manager
 ```
 
-macOS / Linux：
+macOS：
 
 ```bash
 cd /path/to/RabiRoute
@@ -55,7 +80,7 @@ RabiRoute manager listening at <managerBaseUrl>
 
 ## 配置第一条路由
 
-首次启动时，如果没有 `data/route` 和 `data/roles`，manager 会优先复制整包 `examples/data`，这样默认 QQ 路由、Rabi 示例人格与脱敏的 RabiLink 主动智能模板会一起落地。只有 `main` 默认启用；其他接入先保持禁用，配置完成后再逐条开启。RabiLink 模板不会自动获得 Relay 地址或 token；即使发布包里没有 examples，manager 也能自己建立最小 QQ / NapCat 到 Codex 配置。
+普通可写模式首次启动时，如果没有 `data/route` 和 `data/roles`，manager 会优先复制整包 `examples/data`，这样默认 QQ 路由、Rabi 示例人格与脱敏的 RabiLink 主动智能模板会一起落地。只有 `main` 默认启用；其他接入先保持禁用，配置完成后再逐条开启。RabiLink 模板不会自动获得 Relay 地址或 token；即使发布包里没有 examples，manager 也能自己建立最小 QQ / NapCat 到 Codex 配置。
 
 在 RibiWebGUI 里重点检查：
 
@@ -126,7 +151,7 @@ npm run check:config
 
 ## 验证链路
 
-1. 安装版启动 Host；源码模式运行 `npm run start:manager` 并记录标准输出中的 `<managerBaseUrl>`。
+1. 启动 Windows Host 或 Linux Host，从当前 Host 状态取得 `managerBaseUrl`；纯后端开发使用当前 Manager 启动输出。
 2. 从托盘或 `<managerBaseUrl>` 打开 RibiWebGUI，确认 gateway 为运行中。
 3. 在 NapCat 侧确认 WebSocket 已连到 `127.0.0.1:8789`。
 4. 在 QQ 群里 @ 机器人，或发一条私聊。
