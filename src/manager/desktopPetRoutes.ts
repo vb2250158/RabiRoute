@@ -1,8 +1,10 @@
 import { errorResponsePresentation } from "../shared/errorPresentation.js";
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
+import { managerReadWorkerPool } from "./managerReadWorkerPool.js";
 import http from "node:http";
 import path from "node:path";
-import { copyDesktopPetPackDirectory, importDesktopPetPack } from "./desktopPetPackImport.js";
+import { copyDesktopPetPackDirectoryAsync, importDesktopPetPack } from "./desktopPetPackImport.js";
 import {
   DEFAULT_DESKTOP_PET_BINDING,
   normalizeDesktopPetBinding,
@@ -58,6 +60,7 @@ export type DesktopPetPackCatalog = {
 
 export type DesktopPetPackCatalogOptions = {
   includeSharedSource?: boolean;
+  packId?: string;
 };
 
 export type DesktopPetSettingsAccess = {
@@ -92,12 +95,12 @@ function resolveInside(root: string, relativePath: string): string | undefined {
   return inside(path.resolve(root), candidate) ? candidate : undefined;
 }
 
-function syncImportedPackToRuntimeCache(
+async function syncImportedPackToRuntimeCache(
   roleId: string,
   roleDir: string,
   packId: string,
   cacheRoot: string
-): void {
+): Promise<void> {
   const sourceRoot = path.resolve(roleDir, "desktop-pet", "packs");
   const sourcePack = path.resolve(sourceRoot, packId);
   const runtimePacksRoot = path.resolve(cacheRoot, roleId, "desktop-pet", "packs");
@@ -112,7 +115,16 @@ function syncImportedPackToRuntimeCache(
     throw new Error("Desktop pet runtime cache already contains this pack id.");
   }
   fs.mkdirSync(runtimePacksRoot, { recursive: true });
-  copyDesktopPetPackDirectory(sourcePack, runtimePack);
+  const stagingPack = path.join(runtimePacksRoot, `.staging-${randomUUID()}`);
+  try {
+    await copyDesktopPetPackDirectoryAsync(sourcePack, stagingPack);
+    // COPYFILE_EXCL and the immutable id check prevent an existing pack overwrite.
+    if (fs.existsSync(runtimePack)) throw new Error("Desktop pet runtime cache already contains this pack id.");
+    await fs.promises.rename(stagingPack, runtimePack);
+  } catch (error) {
+    await fs.promises.rm(stagingPack, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 function naturalCompare(left: string, right: string): number {
@@ -260,12 +272,14 @@ export function listDesktopPetPacks(
   const locations = [{ label: "cache", roleDir: path.join(cacheRoot, roleId) }];
   if (options.includeSharedSource !== false) locations.push({ label: "source", roleDir });
   for (const location of locations) {
+    if (options.packId && seenPackIds.has(options.packId)) break;
     const packsRoot = path.join(location.roleDir, "desktop-pet", "packs");
     if (!fs.existsSync(packsRoot)) continue;
     try {
       const entries = fs.readdirSync(packsRoot, { withFileTypes: true }).sort((a, b) => naturalCompare(a.name, b.name));
       for (const entry of entries) {
-        if (!entry.isDirectory() || !PACK_ID_PATTERN.test(entry.name) || seenPackIds.has(entry.name)) continue;
+        if (!entry.isDirectory() || !PACK_ID_PATTERN.test(entry.name) || seenPackIds.has(entry.name)
+            || (options.packId && entry.name !== options.packId)) continue;
         const packDir = path.join(packsRoot, entry.name);
         if (!fs.existsSync(path.join(packDir, "pet-pack.json"))) continue;
         try {
@@ -317,26 +331,28 @@ function readBinding(settings: DesktopPetSettingsAccess, roleId: string): Deskto
   return settings.read().pets[roleId] ?? { ...DEFAULT_DESKTOP_PET_BINDING };
 }
 
-function updateBinding(
+async function updateBinding(
   settings: DesktopPetSettingsAccess,
   roleId: string,
   body: unknown,
   roleDir: string,
   cacheRoot: string
-): DesktopPetBinding {
+): Promise<DesktopPetBinding> {
   const row = objectValue(body);
   if (typeof row.personaId === "string" && row.personaId !== roleId) {
     throw new Error("Desktop pet personaId must match the role path.");
   }
   const current = settings.read();
   const binding = normalizeDesktopPetBinding({ ...(current.pets[roleId] ?? DEFAULT_DESKTOP_PET_BINDING), ...row });
-  if (binding.packId) {
-    const catalog = listDesktopPetPacks(roleId, roleDir, cacheRoot);
+  if (binding.packId && binding.packId !== current.pets[roleId]?.packId) {
+    const catalog = await managerReadWorkerPool.queryDesktopPetCatalog(roleId, roleDir, cacheRoot, { packId: binding.packId }, { timeoutMs: 120_000 });
     if (!catalog.packs.some(pack => pack.id === binding.packId)) {
       throw new Error("Desktop pet pack does not belong to this persona or is not runnable.");
     }
   }
-  return settings.write({ ...current, pets: { ...current.pets, [roleId]: binding } }).pets[roleId]!;
+  const latest = settings.read();
+  const updated = normalizeDesktopPetBinding({ ...(latest.pets[roleId] ?? DEFAULT_DESKTOP_PET_BINDING), ...row });
+  return settings.write({ ...latest, pets: { ...latest.pets, [roleId]: updated } }).pets[roleId]!;
 }
 
 function serveAsset(
@@ -428,7 +444,7 @@ export function handleDesktopPetApi(
     }
     const roleDir = resolveRoleDir(roleId);
     void readBinaryBody(request)
-      .then(payload => {
+      .then(async payload => {
         const packId = importDesktopPetPack(
           roleId,
           roleDir,
@@ -441,8 +457,8 @@ export function handleDesktopPetApi(
             name: requestUrl.searchParams.get("name") || undefined
           }
         );
-        syncImportedPackToRuntimeCache(roleId, roleDir, packId, cacheRoot);
-        const catalog = listDesktopPetPacks(roleId, roleDir, cacheRoot);
+        await syncImportedPackToRuntimeCache(roleId, roleDir, packId, cacheRoot);
+        const catalog = listDesktopPetPacks(roleId, roleDir, cacheRoot, { includeSharedSource: false, packId });
         const pack = catalog.packs.find(item => item.id === packId);
         if (!pack) {
           const target = path.join(roleDir, "desktop-pet", "packs", packId);
@@ -489,24 +505,22 @@ export function handleDesktopPetApi(
       jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
       return true;
     }
-    try {
+    void (async () => {
       const roleId = sanitizeRoleId(decodeURIComponent(cacheMatch[1]));
       const packId = safePackId(decodeURIComponent(cacheMatch[2]));
       if (!roleId || !packId) throw new Error("Invalid role or pack id.");
       const roleDir = resolveRoleDir(roleId);
-      const sharedCatalog = listDesktopPetPacks(roleId, roleDir, cacheRoot);
+      const sharedCatalog = await managerReadWorkerPool.queryDesktopPetCatalog(roleId, roleDir, cacheRoot, { packId }, { timeoutMs: 120_000 });
       if (!sharedCatalog.packs.some(pack => pack.id === packId)) {
         throw new Error("Desktop pet pack is not available from the shared role source.");
       }
-      syncImportedPackToRuntimeCache(roleId, roleDir, packId, cacheRoot);
-      const runtimeCatalog = listDesktopPetPacks(roleId, roleDir, cacheRoot, { includeSharedSource: false });
+      await syncImportedPackToRuntimeCache(roleId, roleDir, packId, cacheRoot);
+      const runtimeCatalog = listDesktopPetPacks(roleId, roleDir, cacheRoot, { includeSharedSource: false, packId });
       const pack = runtimeCatalog.packs.find(item => item.id === packId);
       if (!pack) throw new Error("Desktop pet pack was not readable from the runtime cache.");
       publishEvent?.("desktop_pet_catalog_changed", { personaId: roleId, packId });
       jsonResponse(response, 201, { code: 0, data: { personaId: roleId, pack } });
-    } catch (error) {
-      jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
-    }
+    })().catch(error => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
     return true;
   }
   if (request.method !== "GET") {
@@ -531,7 +545,9 @@ export function handleDesktopPetApi(
       const options: DesktopPetPackCatalogOptions = {
         includeSharedSource: requestUrl.searchParams.get("scope") !== "runtime"
       };
-      jsonResponse(response, 200, { code: 0, data: listDesktopPetPacks(roleId, roleDir, cacheRoot, options) });
+      void managerReadWorkerPool.queryDesktopPetCatalog(roleId, roleDir, cacheRoot, options, { timeoutMs: options.includeSharedSource ? 120_000 : 30_000 })
+        .then(catalog => jsonResponse(response, 200, { code: 0, data: catalog }))
+        .catch(error => jsonResponse(response, 503, { code: -1, message: error instanceof Error ? error.message : String(error) }));
     }
   } catch (error) {
     if (assetMatch && isTransientAssetReadError(error)) {

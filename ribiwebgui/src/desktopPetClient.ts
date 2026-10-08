@@ -30,8 +30,8 @@ export const desktopPetClient = {
     return (await responseData<{ personaId: string; binding: DesktopPetBinding }>(response)).binding;
   },
 
-  async packs(personaId: string): Promise<{ packs: DesktopPetPackSummary[]; diagnostics: Array<{ packId: string; message: string }> }> {
-    const response = await fetch(`/api/desktop-pet/roles/${encodeURIComponent(personaId)}/packs`);
+  async packs(personaId: string, scope?: "runtime"): Promise<{ packs: DesktopPetPackSummary[]; diagnostics: Array<{ packId: string; message: string }> }> {
+    const response = await fetch(`/api/desktop-pet/roles/${encodeURIComponent(personaId)}/packs${scope ? `?scope=${scope}` : ""}`);
     return responseData(response);
   },
 

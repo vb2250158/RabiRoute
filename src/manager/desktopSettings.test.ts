@@ -110,6 +110,25 @@ test("desktop settings disable legacy pet bindings that have no runnable pack", 
   assert.equal(settings.pets.YeYu?.packId, "");
 });
 
+test("pet wandering settings survive storage, bound waiting and preserve explicit empty corners", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-pet-wander-"));
+  try {
+    const store = new DesktopSettingsStore(path.join(root, "settings.json"));
+    store.write({ pets: { sample: { packId: "walk-pack", enabled: true, wanderEnabled: true,
+      wanderToActiveWindow: true, wanderCorners: ["top-left", "top-left", "invalid"],
+      wanderWaitMinSeconds: 120, wanderWaitMaxSeconds: 10 } } });
+    const binding = store.read().pets.sample!;
+    assert.equal(binding.wanderEnabled, true);
+    assert.equal(binding.wanderToActiveWindow, true);
+    assert.deepEqual(binding.wanderCorners, ["top-left"]);
+    assert.equal(binding.wanderWaitMaxSeconds, 120);
+    assert.deepEqual(normalizeDesktopSettings({ pets: { sample: { wanderCorners: [] } } }).pets.sample!.wanderCorners, []);
+    assert.equal(normalizeDesktopSettings({ pets: { sample: {} } }).pets.sample!.wanderEnabled, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("autostart configuration remains tri-state for missing or corrupt settings", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-desktop-autostart-state-"));
   const filePath = path.join(root, "settings.json");

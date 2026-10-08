@@ -6,6 +6,15 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.27 - 2026-10-09
+
+- Read shared pet catalogs through bounded read processes, validate only the selected pack, and copy cache assets in the background. Load cached settings first so NAS reads cannot block Manager health checks.
+
+- Add Pet wandering with an optional active-window destination, four independently selected random corners and a configurable minimum/maximum wait in seconds.
+- Play preloaded walking animation on the same monitor and for nearby cross-monitor travel; use fade-out, portal halo and fade-in when cross-monitor distance exceeds the departure monitor diagonal. Focus changes do not immediately trigger travel.
+- Pause for locks, dragging, sleep, menus and fullscreen hiding; retain manual placement. Monitor matching supports negative coordinates and mixed DPI.
+- Cover settings persistence, randomized waits, corner constraints, walking and teleport interruption; resource packs, packaging, installation and visible acceptance are verified separately.
+
 ## 0.3.26 - 2026-10-09
 
 - Read valid all-day indexes without rewriting the recent preview, and load date shards concurrently. Damaged indexes still recover from original records.

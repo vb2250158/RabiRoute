@@ -60,6 +60,11 @@ class DesktopPetBinding:
     hide_on_fullscreen: bool = True
     bubble_enabled: bool = True
     fps_cap: int = 15
+    wander_enabled: bool = False
+    wander_to_active_window: bool = False
+    wander_corners: tuple[str, ...] = ("bottom-right", "bottom-left")
+    wander_wait_min_seconds: float = 45.0
+    wander_wait_max_seconds: float = 90.0
 
 
 @dataclass(frozen=True)
@@ -92,6 +97,14 @@ def parse_desktop_pet_binding(value: object) -> DesktopPetBinding:
         hide_on_fullscreen=row.get("hideOnFullscreen") is not False,
         bubble_enabled=row.get("bubbleEnabled") is not False,
         fps_cap=int(_bounded_number(row.get("fpsCap"), 15, 6, 24)),
+        wander_enabled=row.get("wanderEnabled") is True,
+        wander_to_active_window=row.get("wanderToActiveWindow") is True,
+        wander_corners=tuple(corner for corner in ("bottom-right", "bottom-left", "top-right", "top-left")
+                             if corner in row.get("wanderCorners", ["bottom-right", "bottom-left"]))
+        if isinstance(row.get("wanderCorners", []), list) else (),
+        wander_wait_min_seconds=_bounded_number(row.get("wanderWaitMinSeconds"), 45, 5, 3600),
+        wander_wait_max_seconds=_bounded_number(row.get("wanderWaitMaxSeconds"), 90,
+                                               _bounded_number(row.get("wanderWaitMinSeconds"), 45, 5, 3600), 3600),
     )
 
 

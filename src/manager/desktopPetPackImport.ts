@@ -76,6 +76,34 @@ export function copyDesktopPetPackDirectory(source: string, destination: string)
     ));
 }
 
+/** Keep network copies off the Manager event loop; publish the manifest last. */
+export async function copyDesktopPetPackDirectoryAsync(source: string, destination: string): Promise<void> {
+  await fs.promises.mkdir(destination, { recursive: false });
+  const files: Array<{ source: string; destination: string }> = [];
+  const collect = async (from: string, to: string, root: boolean): Promise<void> => {
+    for (const entry of await fs.promises.readdir(from, { withFileTypes: true })) {
+      if (root && entry.name.toLowerCase() === "pet-pack.json") continue;
+      const sourcePath = path.join(from, entry.name), destinationPath = path.join(to, entry.name);
+      if (entry.isDirectory()) {
+        await fs.promises.mkdir(destinationPath, { recursive: false });
+        await collect(sourcePath, destinationPath, false);
+      } else if (entry.isFile()) files.push({ source: sourcePath, destination: destinationPath });
+      else throw new Error(`Unsupported desktop pet staging entry: ${entry.name}`);
+    }
+  };
+  await collect(source, destination, true);
+  let cursor = 0;
+  const results = await Promise.allSettled(Array.from({ length: Math.min(8, files.length) }, async () => {
+    while (cursor < files.length) {
+      const file = files[cursor++]!;
+      await fs.promises.copyFile(file.source, file.destination, fs.constants.COPYFILE_EXCL);
+    }
+  }));
+  const failed = results.find(result => result.status === "rejected");
+  if (failed?.status === "rejected") throw failed.reason;
+  await fs.promises.copyFile(path.join(source, "pet-pack.json"), path.join(destination, "pet-pack.json"), fs.constants.COPYFILE_EXCL);
+}
+
 export function commitDesktopPetPackDirectory(
   source: string,
   destination: string,

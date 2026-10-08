@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { userFacingError } from "../userFacingError";
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
-import type { DesktopPetBinding } from "@shared/desktopSettingsContract";
+import { DESKTOP_PET_CORNERS, type DesktopPetBinding } from "@shared/desktopSettingsContract";
 import { desktopPetClient, type DesktopPetPackSummary } from "../desktopPetClient";
 import { registerPageSaveAction } from "../pageSaveAction";
 import { useGatewayStore } from "../stores/gatewayStore";
@@ -52,13 +52,21 @@ async function load(): Promise<void> {
   try {
     const [nextBinding, catalog] = await Promise.all([
       desktopPetClient.binding(personaId),
-      desktopPetClient.packs(personaId)
+      desktopPetClient.packs(personaId, "runtime")
     ]);
     if (revision !== loadRevision) return;
     binding.value = nextBinding;
     packs.value = catalog.packs;
     error.value = catalog.diagnostics[0]?.message || "";
     loaded.value = true;
+    // Cached actions and settings are usable while the shared library loads.
+    void desktopPetClient.packs(personaId).then(sharedCatalog => {
+      if (revision !== loadRevision) return;
+      packs.value = sharedCatalog.packs;
+      error.value = sharedCatalog.diagnostics[0]?.message || "";
+    }).catch(cause => {
+      if (revision === loadRevision) error.value = userFacingError(cause);
+    });
     await nextTick();
     petDirty.value = false;
   } catch (cause) {
@@ -103,8 +111,15 @@ async function save(): Promise<void> {
   try {
     if (store.dirty) await store.save();
     if (petDirty.value && binding.value) {
-      binding.value = await desktopPetClient.update(props.personaId, binding.value);
-      petDirty.value = false;
+      const savedBinding = await desktopPetClient.update(props.personaId, binding.value);
+      hydrating.value = true;
+      try {
+        binding.value = savedBinding;
+        await nextTick();
+        petDirty.value = false;
+      } finally {
+        hydrating.value = false;
+      }
       error.value = "";
     }
   } catch (cause) {
@@ -260,6 +275,21 @@ onBeforeUnmount(() => {
         <v-btn-toggle v-model="binding.fpsCap" color="secondary" density="compact" mandatory divided :disabled="!binding.enabled">
           <v-btn v-for="fps in [6, 12, 15, 24]" :key="fps" :value="fps">{{ fps }} FPS</v-btn>
         </v-btn-toggle>
+        <div class="section-title small-title mt-6">移动与传送</div>
+        <v-switch v-model="binding.wanderEnabled" label="桌宠闲逛" color="secondary" density="compact" hide-details :disabled="!binding.enabled" />
+        <div v-if="binding.wanderEnabled" class="pet-wander-settings">
+        <div v-if="!selectedPack?.states.move" class="section-note mt-2">当前动作包没有走路动作，请选择包含走路动作的动作包。</div>
+        <v-checkbox v-model="binding.wanderToActiveWindow" label="尝试走到激活窗口" color="secondary" density="compact" hide-details :disabled="!binding.enabled" />
+        <div v-if="binding.wanderToActiveWindow" class="desktop-pet-switch-grid pet-corner-settings">
+          <v-checkbox v-for="corner in DESKTOP_PET_CORNERS" :key="corner.id" v-model="binding.wanderCorners" :value="corner.id" :label="corner.label" color="secondary" density="compact" hide-details :disabled="!binding.enabled || !binding.wanderToActiveWindow" />
+        </div>
+        <div v-if="binding.wanderToActiveWindow && !binding.wanderCorners.length" class="section-note">勾选至少一个角落后才会自动移动。</div>
+        <div class="pet-wait-grid mt-4">
+          <v-number-input v-model="binding.wanderWaitMinSeconds" label="最短等待（秒）" :min="5" :max="3600" :step="5" :disabled="!binding.enabled" />
+          <v-number-input v-model="binding.wanderWaitMaxSeconds" label="最长等待（秒）" :min="binding.wanderWaitMinSeconds" :max="3600" :step="5" :disabled="!binding.enabled" />
+        </div>
+        <div class="section-note mt-2">近处走过去，超过一屏距离时传送。锁定位置、拖动、休眠或全屏隐藏时暂停闲逛；拖动后暂留 30 秒。</div>
+        </div>
       </div>
     </v-card>
   </div>
@@ -272,6 +302,10 @@ onBeforeUnmount(() => {
   gap: 18px;
   align-items: start;
 }
+
+.pet-wander-settings { padding-left: 16px; border-left: 2px solid var(--rr-border-soft); }
+.pet-corner-settings { padding-left: 16px; }
+.pet-wait-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 
 .pet-action-group { margin-top: 14px; }
 .pet-action-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--rr-border-soft); }

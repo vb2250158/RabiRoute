@@ -1,10 +1,35 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QPoint, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QMouseEvent, QMovie, QPixmap
-from PySide6.QtWidgets import QApplication, QLabel, QWidget
+import math
+import time
+
+from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QPoint, QSize, Qt, QTimer, Signal, qInfo
+from PySide6.QtGui import QColor, QMouseEvent, QMovie, QPainter, QPen, QPixmap
+from PySide6.QtWidgets import QApplication, QGraphicsOpacityEffect, QLabel, QWidget
 
 from .desktop_pet_client import DesktopPetPack, LoadedDesktopPetAnimation
+
+class _TravelHalo(QWidget):
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.progress = 0.0
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.hide()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        strength = math.sin(math.pi * self.progress)
+        color = QColor(130, 185, 255, round(220 * strength))
+        painter.setPen(QPen(color, 3))
+        radius = self.width() * (0.2 + 0.23 * strength)
+        center_x, center_y = self.width() / 2, self.height() * 0.84
+        painter.drawEllipse(QPoint(round(center_x), round(center_y)), round(radius), round(radius * 0.23))
+        for index in range(6):
+            angle = index * math.tau / 6 + self.progress * math.pi
+            x, y = center_x + math.cos(angle) * radius, center_y + math.sin(angle) * radius * 0.4
+            painter.drawLine(round(x - 4), round(y), round(x + 4), round(y))
+            painter.drawLine(round(x), round(y - 4), round(x), round(y + 4))
 
 
 class DesktopPetWindow(QWidget):
@@ -15,6 +40,8 @@ class DesktopPetWindow(QWidget):
     context_menu_requested = Signal(object)
     drag_started = Signal()
     drag_finished = Signal()
+    travel_phase_changed = Signal(str)
+    travel_finished = Signal()
 
     def __init__(self, persona_name: str = "人格", default_slot: int = 0) -> None:
         flags = (
@@ -32,6 +59,19 @@ class DesktopPetWindow(QWidget):
         self._label = QLabel(self)
         self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._travel_opacity = QGraphicsOpacityEffect(self._label)
+        self._travel_opacity.setOpacity(1)
+        self._label.setGraphicsEffect(self._travel_opacity)
+        self._travel_halo = _TravelHalo(self)
+        self._travel_timer = QTimer(self)
+        self._travel_timer.setSingleShot(True)
+        self._travel_timer.timeout.connect(self._advance_travel)
+        self._travel_origin = QPoint()
+        self._travel_target = QPoint()
+        self._travel_started = 0.0
+        self._travel_duration = 0.0
+        self._travel_kind = ""
+        self._travel_arrived = False
         self._drag_offset: QPoint | None = None
         self._dragging = False
         self._movie: QMovie | None = None
@@ -73,6 +113,69 @@ class DesktopPetWindow(QWidget):
     def set_persona_name(self, persona_name: str) -> None:
         self._persona_name = str(persona_name or "人格")
         self.setWindowTitle(f"{self._persona_name}桌宠")
+
+    @property
+    def travelling(self) -> bool:
+        return bool(self._travel_kind)
+
+    @property
+    def pointer_engaged(self) -> bool:
+        return self._drag_offset is not None
+
+    def travel_to(self, target: QPoint, kind: str) -> bool:
+        if self._locked or self.pointer_engaged or not self.isVisible() or self.travelling:
+            return False
+        distance = math.hypot(target.x() - self.x(), target.y() - self.y())
+        if distance < 8:
+            return False
+        self.hide_bubble()
+        self._travel_origin = self.pos()
+        self._travel_target = QPoint(target)
+        self._travel_kind = kind
+        self._travel_started = time.monotonic()
+        self._travel_duration = 0.9 if kind == "teleport" else max(0.5, min(5.0, distance / 300))
+        self._travel_arrived = False
+        self._travel_timer.start(33)
+        qInfo(f"rabiroute.desktop-pet.motion desktop_pet_travel_started kind={kind}")
+        self.travel_phase_changed.emit("teleport-out" if kind == "teleport" else "move")
+        if kind == "teleport":
+            self._travel_halo.setGeometry(self.rect())
+            self._travel_halo.show()
+            self._travel_halo.raise_()
+        return True
+
+    def cancel_travel(self, *, completed: bool = False) -> None:
+        active = self.travelling
+        self._travel_kind = ""
+        self._travel_timer.stop()
+        self._travel_opacity.setOpacity(1)
+        self._label.setGeometry(self.rect())
+        self._travel_halo.hide()
+        if active:
+            qInfo("rabiroute.desktop-pet.motion " + ("desktop_pet_travel_completed" if completed else "desktop_pet_travel_cancelled"))
+            self.travel_finished.emit()
+
+    def _advance_travel(self) -> None:
+        progress = min(1.0, (time.monotonic() - self._travel_started) / self._travel_duration)
+        if self._travel_kind == "teleport":
+            self._travel_opacity.setOpacity(abs(2 * progress - 1))
+            if progress >= 0.5 and not self._travel_arrived:
+                self._travel_arrived = True
+                self.move(self._travel_target)
+                self.travel_phase_changed.emit("teleport-in")
+            self._travel_halo.progress = progress
+            self._travel_halo.update()
+        else:
+            eased = progress * progress * (3 - 2 * progress)
+            self.move(self._travel_origin + (self._travel_target - self._travel_origin) * eased)
+            hop = round(abs(math.sin((time.monotonic() - self._travel_started) * 12)) * 7 * math.sin(math.pi * progress))
+            self._label.move(0, -hop)
+        if progress >= 1:
+            self.move(self._travel_target)
+            self._keep_visible()
+            self.cancel_travel(completed=True)
+        elif self.travelling:
+            self._travel_timer.start(33)
 
     def show_placeholder(self, text: str) -> None:
         self.stop_animation()
@@ -332,10 +435,12 @@ class DesktopPetWindow(QWidget):
 
     def resizeEvent(self, event) -> None:
         self._label.setGeometry(self.rect())
+        self._travel_halo.setGeometry(self.rect())
         super().resizeEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton and not self._locked:
+            self.cancel_travel()
             self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             self._dragging = False
             event.accept()
@@ -382,6 +487,7 @@ class DesktopPetWindow(QWidget):
         super().mouseDoubleClickEvent(event)
 
     def closeEvent(self, event) -> None:
+        self.cancel_travel()
         self.stop_animation()
         self._single_click_timer.stop()
         self._bubble_timer.stop()

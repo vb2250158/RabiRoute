@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import time
+import math
+import random
 from collections import deque
 from collections.abc import Callable
 
@@ -11,6 +13,7 @@ from .desktop_pet_client import DesktopPetBinding, DesktopPetClient, DesktopPetP
 from .desktop_pet_events import DesktopPetEventStream
 from .desktop_pet_fullscreen import is_foreground_fullscreen
 from .desktop_pet_idle import DesktopPetIdleScheduler
+from .desktop_pet_motion import corner_positions, foreground_window, logical_bounds, matches_monitor, travel_kind
 from .desktop_pet_window import DesktopPetWindow
 from .qt_async import QtAsyncTask, start_qt_task
 
@@ -24,6 +27,9 @@ DESKTOP_PET_STATE_LABELS = {
     "attention": "回应",
     "sleep": "睡觉",
     "drag": "拖动",
+    "move": "走路",
+    "teleport-out": "传送离开",
+    "teleport-in": "传送抵达",
     "idle-reading": "读书",
     "idle-wave": "挥手",
     "idle-pout": "噘嘴",
@@ -61,6 +67,8 @@ class DesktopPetController(QObject):
         self.window.context_menu_requested.connect(self._show_context_menu)
         self.window.drag_started.connect(self._drag_started)
         self.window.drag_finished.connect(self._drag_finished)
+        self.window.travel_phase_changed.connect(self._travel_phase_changed)
+        self.window.travel_finished.connect(self._travel_finished)
         self._application = QApplication.instance()
         if self._application is not None:
             self._application.screenRemoved.connect(self._screen_removed)
@@ -84,6 +92,13 @@ class DesktopPetController(QObject):
         self._preload_queue: deque[str] = deque()
         self._requested_state = "idle"
         self._state_before_drag = "idle"
+        self._state_before_travel = "idle"
+        self._closed = False
+        self._manual_pause_until = 0.0
+        self._random = random.Random()
+        self._wander_timer = QTimer(self)
+        self._wander_timer.setSingleShot(True)
+        self._wander_timer.timeout.connect(self._attempt_wander)
         self._click_through = False
         self._preferred_pack_id = ""
         self._binding_task: QtAsyncTask | None = None
@@ -132,10 +147,13 @@ class DesktopPetController(QObject):
             self.set_state(self._requested_state)
             self._enqueue_animation_preloads()
         self._persist({"enabled": True})
+        self._arm_wander()
 
     def hide(self) -> None:
         self._hidden_for_fullscreen = False
         self._idle_scheduler.set_active(False)
+        self.window.cancel_travel()
+        self._wander_timer.stop()
         self.window.hide()
         self.window.stop_animation()
         self.visibility_changed.emit(False)
@@ -148,6 +166,8 @@ class DesktopPetController(QObject):
         self._persist({"clickThrough": self._click_through})
 
     def close(self) -> None:
+        self._closed = True
+        self._wander_timer.stop()
         self._fullscreen_timer.stop()
         self._idle_scheduler.stop()
         if self._application is not None:
@@ -162,6 +182,7 @@ class DesktopPetController(QObject):
         self.window.close()
 
     def _screen_removed(self, _screen: object) -> None:
+        self.window.cancel_travel()
         self.window.recover_to_visible_screen()
 
     def update_persona(self, persona_name: str, binding: DesktopPetBinding) -> None:
@@ -235,10 +256,14 @@ class DesktopPetController(QObject):
         self._catalog_task = start_qt_task(self._client.packs, completed, on_error=lambda error: error)
 
     def _animation_finished(self, next_state: str) -> None:
+        if self.window.travelling:
+            return
         self.set_state(next_state or "idle")
 
     def _clicked(self) -> None:
         if self.visible:
+            self.window.cancel_travel()
+            self._manual_pause_until = time.monotonic() + 30
             self._idle_scheduler.note_activity()
             self.set_state("attention")
 
@@ -253,6 +278,7 @@ class DesktopPetController(QObject):
         if not self.visible:
             return
         self._idle_scheduler.note_activity()
+        self.window.cancel_travel()
         self._state_before_drag = self._requested_state or "idle"
         self.set_state("drag")
 
@@ -261,6 +287,7 @@ class DesktopPetController(QObject):
             return
         next_state = self._state_before_drag if self._state_before_drag != "drag" else "idle"
         self._state_before_drag = "idle"
+        self._manual_pause_until = time.monotonic() + 30
         self.set_state(next_state)
 
     def _load_binding(self) -> None:
@@ -301,13 +328,18 @@ class DesktopPetController(QObject):
             bubble_enabled=binding.bubble_enabled,
             fps_cap=binding.fps_cap,
         )
-        if binding.placement:
+        if binding.placement and (previous is None or previous.placement != binding.placement):
+            self.window.cancel_travel()
             self.window.restore_placement(binding.placement)
+        if binding.locked or not binding.wander_enabled:
+            self.window.cancel_travel()
+        self._arm_wander()
         self.window.set_click_through(binding.click_through)
         self.click_through_changed.emit(binding.click_through)
 
         if not binding.enabled or not binding.pack_id:
             if self.visible:
+                self.window.cancel_travel()
                 self._idle_scheduler.set_active(False)
                 self.window.stop_animation()
                 self.window.hide()
@@ -355,6 +387,7 @@ class DesktopPetController(QObject):
         if not self.visible or time.monotonic() < self._muted_until:
             return
         self._idle_scheduler.note_activity()
+        self.window.cancel_travel()
         status = str(event.get("status") or "")
         self.set_state("success" if status == "completed" else "concerned")
         summary = str(event.get("summary") or "").strip()
@@ -384,6 +417,7 @@ class DesktopPetController(QObject):
         if fullscreen and self.visible:
             self._hidden_for_fullscreen = True
             self._idle_scheduler.set_active(False)
+            self.window.cancel_travel()
             self.window.hide_bubble()
             self.window.hide()
             self.window.stop_animation()
@@ -394,7 +428,66 @@ class DesktopPetController(QObject):
             self._idle_scheduler.set_active(True)
             self.set_state(self._requested_state)
 
+    def _arm_wander(self) -> None:
+        binding = self._binding_snapshot
+        if self._closed or not binding or not binding.enabled or not binding.wander_enabled:
+            self._wander_timer.stop()
+            return
+        seconds = self._random.uniform(binding.wander_wait_min_seconds, binding.wander_wait_max_seconds)
+        self._wander_timer.start(round(seconds * 1000))
+
+    def _attempt_wander(self) -> None:
+        self._arm_wander()
+        binding = self._binding_snapshot
+        if (not binding or not binding.wander_enabled or binding.locked or not self.visible
+                or self.window.pointer_engaged or self.window.travelling or self._context_menu is not None
+                or time.monotonic() < max(self._manual_pause_until, self._muted_until)
+                or self._requested_state != "idle" or self._pack is None):
+            return
+        origin_screen = QApplication.screenAt(self.window.frameGeometry().center()) or QApplication.primaryScreen()
+        if origin_screen is None:
+            return
+        screen = origin_screen
+        if binding.wander_to_active_window:
+            native = foreground_window()
+            if native is None or not binding.wander_corners:
+                return
+            screen = next((candidate for candidate in QApplication.screens()
+                           if candidate.name() == native.screen_name or matches_monitor(
+                               native.monitor_bounds, candidate.geometry().getRect(), candidate.devicePixelRatio())), None)
+            if screen is None:
+                return
+            geometry, area = screen.geometry(), screen.availableGeometry()
+            bounds = logical_bounds(native, (geometry.x(), geometry.y(), geometry.width(), geometry.height()))
+            targets = corner_positions(bounds, (area.x(), area.y(), area.width(), area.height()),
+                                       (self.window.width(), self.window.height()), binding.wander_corners)
+            candidates = [point for point in targets.values() if math.dist((self.window.x(), self.window.y()), point) >= 24]
+            if not candidates:
+                return
+            destination = self._random.choice(candidates)
+        else:
+            area = screen.availableGeometry()
+            destination = (self._random.randint(area.left(), area.left() + max(0, area.width() - self.window.width())),
+                           self._random.randint(area.top(), area.top() + max(0, area.height() - self.window.height())))
+        origin_geometry = origin_screen.geometry()
+        kind = travel_kind(origin_screen is screen, (self.window.x(), self.window.y()), destination,
+                           (origin_geometry.width(), origin_geometry.height()))
+        # A walking action must be ready before the character starts travelling.
+        if kind == "move" and not self._is_action_ready("move"):
+            return
+        self._state_before_travel = self._requested_state
+        self.window.travel_to(QPoint(*destination), kind)
+
+    def _travel_phase_changed(self, state: str) -> None:
+        self.set_state(state if self._pack and state in self._pack.states else "idle")
+
+    def _travel_finished(self) -> None:
+        self.set_state(self._state_before_travel)
+        self._arm_wander()
+
     def _show_context_menu(self, position: object) -> None:
+        self.window.cancel_travel()
+        self._manual_pause_until = time.monotonic() + 30
         self._idle_scheduler.note_activity()
         point = position if isinstance(position, QPoint) else self.window.mapToGlobal(self.window.rect().center())
         menu = QMenu(self.window)
@@ -463,6 +556,8 @@ class DesktopPetController(QObject):
 
     def _set_locked(self, enabled: bool) -> None:
         self._locked = bool(enabled)
+        if self._locked:
+            self.window.cancel_travel()
         self._apply_presentation()
         self._persist({"locked": self._locked})
 
@@ -485,6 +580,8 @@ class DesktopPetController(QObject):
         self._persist({"scale": scale})
 
     def _play_manual_action(self, state_name: str) -> None:
+        self.window.cancel_travel()
+        self._manual_pause_until = time.monotonic() + 30
         if not self._is_action_ready(state_name):
             return
         self._idle_scheduler.note_activity()

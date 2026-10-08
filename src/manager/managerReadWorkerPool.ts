@@ -498,6 +498,14 @@ export class ManagerReadWorkerPool {
     return this.run<T>({ type: "role_memory_counts", roleDir }, options);
   }
 
+  queryDesktopPetCatalog(
+    roleId: string, roleDir: string, cacheRoot: string,
+    catalogOptions: import("./desktopPetRoutes.js").DesktopPetPackCatalogOptions = {},
+    options: { signal?: AbortSignal; timeoutMs?: number } = {}
+  ): Promise<import("./desktopPetRoutes.js").DesktopPetPackCatalog> {
+    return this.run({ type: "desktop_pet_catalog", roleId, roleDir, cacheRoot, options: catalogOptions }, options);
+  }
+
   queryRolePanelTimeline(
     rolesRoot: string,
     roleId: string,

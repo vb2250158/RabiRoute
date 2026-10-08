@@ -37,7 +37,20 @@ export type DesktopPetBinding = {
   hideOnFullscreen: boolean;
   bubbleEnabled: boolean;
   fpsCap: 6 | 12 | 15 | 24;
+  wanderEnabled: boolean;
+  wanderToActiveWindow: boolean;
+  wanderCorners: DesktopPetCorner[];
+  wanderWaitMinSeconds: number;
+  wanderWaitMaxSeconds: number;
 };
+
+export const DESKTOP_PET_CORNERS = [
+  { id: "bottom-right", label: "右下角" },
+  { id: "bottom-left", label: "左下角" },
+  { id: "top-right", label: "右上角" },
+  { id: "top-left", label: "左上角" }
+] as const;
+export type DesktopPetCorner = typeof DESKTOP_PET_CORNERS[number]["id"];
 
 export type DesktopSettings = {
   screenshot: DesktopScreenshotSettings;
@@ -59,7 +72,12 @@ export const DEFAULT_DESKTOP_PET_BINDING: DesktopPetBinding = {
   locked: false,
   hideOnFullscreen: true,
   bubbleEnabled: true,
-  fpsCap: 15
+  fpsCap: 15,
+  wanderEnabled: false,
+  wanderToActiveWindow: false,
+  wanderCorners: ["bottom-right", "bottom-left"],
+  wanderWaitMinSeconds: 45,
+  wanderWaitMaxSeconds: 90
 };
 
 export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
@@ -110,6 +128,7 @@ export function normalizeDesktopPetBinding(value: unknown): DesktopPetBinding {
   const packId = typeof row.packId === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(row.packId.trim())
     ? row.packId.trim()
     : "";
+  const wanderWaitMinSeconds = boundedNumber(row.wanderWaitMinSeconds, 45, 5, 3600);
   return {
     enabled: row.enabled === true && Boolean(packId),
     packId,
@@ -121,7 +140,14 @@ export function normalizeDesktopPetBinding(value: unknown): DesktopPetBinding {
     locked: row.locked === true,
     hideOnFullscreen: row.hideOnFullscreen !== false,
     bubbleEnabled: row.bubbleEnabled !== false,
-    fpsCap: fps
+    fpsCap: fps,
+    wanderEnabled: row.wanderEnabled === true,
+    wanderToActiveWindow: row.wanderToActiveWindow === true,
+    wanderCorners: Array.isArray(row.wanderCorners)
+      ? DESKTOP_PET_CORNERS.filter(corner => (row.wanderCorners as unknown[]).includes(corner.id)).map(corner => corner.id)
+      : [...DEFAULT_DESKTOP_PET_BINDING.wanderCorners],
+    wanderWaitMinSeconds,
+    wanderWaitMaxSeconds: boundedNumber(row.wanderWaitMaxSeconds, 90, wanderWaitMinSeconds, 3600)
   };
 }
 
