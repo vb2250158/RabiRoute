@@ -6,11 +6,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
-## 0.3.24 - 2026-10-08
+## 0.3.25 - 2026-10-08
 
 ### Local feature integration and upstream updates
 
-- Integrate local work on upstream 0.3.23 while preserving Linux Host, direct-local QQ message/attachment reads, send receipt recovery and sharded plan history. Authenticated model-directory settings and local-only QQ reads retain separate boundaries.
+- Integrate local work on upstream 0.3.24 while retaining the new one-time PC onboarding flow and preserving Linux Host, direct-local QQ message/attachment reads, send receipt recovery and sharded plan history. Authenticated model-directory settings and local-only QQ reads retain separate boundaries.
 - Mobile Agent calls reuse recording, transcription, records and playback. Freeze the actual computer and Route, enforce the 90-second input lifetime and reply correlation, list deliverable computer/Route targets, and prevent late replies from playing after hangup. Physical mobile and listening acceptance remain separate from source tests.
 - Recording archives use file-change notifications, durable chunks and final-transcription ordering. Speech records include recognized language, emotion and event metadata; installation scripts support lightweight local speech and offline environments.
 - Fix high-DPI Windows screenshot previews. Home Assistant all-day recording consumes real events with filtering and deduplication; preserve separate installation, physical action, video and speech acceptance limits.
@@ -19,6 +19,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 - Backend regression: 2992 tests, with 2982 passing and 10 skipped. All 473 WebGUI tests pass. Speech and screenshot Python regression passes 126 tests and four subtests; configuration and skill checks pass, and `npm run build` completes.
 - Release and operations scripts: 217 tests, with 181 passing, 36 retained as TODO markers and no failures. Windows installation transactions, rollback and uninstall run against isolated fixtures.
+- After integrating upstream PC onboarding, all 24 matching onboarding, event, mobile discovery, speech, WebGUI proxy and dynamic-address regressions pass. Prepare and verify the Relay runtime-file package locally without connecting to or deploying a remote server.
 - Durable mobile voice claims now emit mutation audit events with digest identifiers only. Audit, privacy and duplicate-dispatch regressions pass. Nine Host tests that require the Linux kernel are skipped on Windows; platform-independent checks still run.
 - Android compilation is blocked by a missing SDK. This update publishes source changes without upgrading the installed application or creating a GitHub Release. These checks do not replace physical mobile, speech listening or home-device action acceptance.
 
@@ -109,6 +110,15 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - Synchronize bilingual API contracts, discovery and automated regressions; real audibility still requires local device acceptance.
 
 
+
+## 0.3.24 - 2026-10-08
+
+### RabiPC one-time onboarding prompt
+
+- Unify public-console onboarding behind Copy onboarding prompt. Issue an application-bound code valid for thirty minutes. The target Agent downloads and verifies pinned client hashes, redeems the code, preserves its independent identity, saves private connection settings, and starts through its original Host before verifying presence.
+- Relay stores only hashes of enrollment codes, recovery proofs and long-term PC credentials. One durable commit consumes the code and grants access, with original-request recovery, expiry/replay rejection, account isolation, device identity checks, and immediate event/tunnel closure on disconnection.
+- Back up configuration, detect concurrent edits and fully read back writes. Supply codes through stdin and clear them from the private request record after success. Collapse ordinary settings and logs; isolate legacy token and glasses-SN operations in a developer compatibility page while retaining released client contracts.
+- Add RuntimeOnly and PrepareOnly deployment modes to prepare and publish Relay runtime files while preserving remote WebGUI, OpenAPI, Caddy, accounts, applications and queues. Synchronize bilingual onboarding, recovery, access and deployment guidance.
 
 ## 0.3.23 - 2026-10-08
 

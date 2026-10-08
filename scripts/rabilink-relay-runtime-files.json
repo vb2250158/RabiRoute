@@ -1,5 +1,8 @@
 [
   "scripts/rabilink-relay-server.mjs",
+  "scripts/rabilink-pc-pairing.mjs",
+  "scripts/rabilink-pc-pairing-ui.mjs",
+  "scripts/rabilink-pair-pc.mjs",
   "scripts/rabilink-device-log-store.mjs",
   "scripts/rabilink-proxy-request-queue.mjs",
   "scripts/rabilink-event-hub.mjs",

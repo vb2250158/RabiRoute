@@ -51,11 +51,11 @@ Open the management console:
 https://<relay-host>/manage
 ```
 
-Create an account and RabiLink application there. Copy the application token to the PC's **RabiLink → Configuration** page or client tool. Do not use the retired `RABILINK_RELAY_TOKEN` shared-token model.
+Create an account and RabiLink application, then click **复制接入提示词** (Copy onboarding prompt). Give the complete prompt to a private Agent task on the target PC. A one-time code valid for thirty minutes enables automatic configuration and connection without entering the master application token. See [PC onboarding prompt](rabilink-pc-pairing_en.md). Released token clients remain compatible through the separate `/manage?integration=1` page; normal onboarding does not offer parallel authentication methods. Do not use the retired `RABILINK_RELAY_TOKEN` model.
 
 ## Device enrollment and status
 
-An AIUI installation without a token can show its full device serial number and the `/manage` address. The user enters that SN in the application card and opens a bounded claim window. AIUI polls:
+An AIUI installation without a token can show its full device serial number and the `/manage` address. For released AIUI compatibility, the user enters that SN in the application card at `/manage?integration=1` and opens a bounded claim window. AIUI polls:
 
 ```http
 POST /api/rabilink/devices/token
@@ -89,7 +89,9 @@ Remote WebGUI uses the `/manage` login cookie, while the PC worker uses a separa
 
 ## Application management after login
 
-After signing in at `/manage`, the left sidebar lists the account's applications. Selecting an application displays its details, token actions, target PC, glasses SN bindings, connected PCs, and logs on the right. Refreshing retains the current selection; creating an application selects it, and deleting the selected application selects the first remaining one. With no applications, the right pane displays the creation form. The sidebar's **New application** button also opens that form. On narrow screens, the application list appears above the details.
+When a computer or cloud session cannot expose its local configuration page to the user's browser, use [PC onboarding prompt](rabilink-pc-pairing_en.md): the console copies a complete prompt with a one-time code, and the target Agent redeems it, saves private configuration, and verifies the connection. The updated Relay must be deployed; source implementation alone is not public acceptance.
+
+After signing in at `/manage`, the left sidebar lists the account's applications. Selecting an application displays the Copy onboarding prompt button and connected PCs. Application settings and logs are collapsed by default; existing glasses bindings retain their Agent configuration controls. Refreshing retains the current selection; creating an application selects it, and deleting the selected application selects the first remaining one. With no applications, the right pane displays the creation form. The sidebar's **New application** button also opens that form. On narrow screens, the application list appears above the details.
 
 The PC list, recent events, glasses logs, and glasses log filters follow the selected application. Account authentication and application-token authorization boundaries remain unchanged.
 

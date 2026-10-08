@@ -2,7 +2,7 @@ English | [简体中文](connection-access.md)
 
 # Connections and API access
 
-Status: implemented in 0.3.24. Authenticate a connection once, then use its provided APIs without another grant for each feature, persona or skill. The API catalog describes capabilities and parameters; it is not another permission allowlist.
+Status: implemented in 0.3.25. Authenticate a connection once, then use its provided APIs without another grant for each feature, persona or skill. The API catalog describes capabilities and parameters; it is not another permission allowlist.
 
 Local operations use the Manager address published by the current Host. LAN WebGUI uses its existing connection key, remote Agents use their enrolled node credential and registered Agent identity, and devices in the same RabiLink application reuse application authentication. Requests continue carrying the existing credential without another pairing or feature grant. Revoked connections, disabled Agents and stopped services still take effect.
 
@@ -36,6 +36,6 @@ The `/api/internal/` persona projection endpoints bind Manager child processes t
 
 ## Old configuration migration
 
-For existing installations, 0.3.24 still accepts `writeEnabled`, `artifactReadTokenEnv`, `personaAutomationScriptsEnabled` and `codexHooks.onlyPrimaryPersonaCanSendMessages`. They no longer determine access: device control and local scripts are available, primary-only sending is disabled, and recording reads reuse connection authentication. The UI and new examples no longer provide these fields. Compatibility input remains only at configuration boundaries and is scheduled for removal in 0.4.0. Remove these fields during migration; use normal connection setup, automation configuration or `dryRun` rehearsal instead.
+For existing installations, 0.3.25 still accepts `writeEnabled`, `artifactReadTokenEnv`, `personaAutomationScriptsEnabled` and `codexHooks.onlyPrimaryPersonaCanSendMessages`. They no longer determine access: device control and local scripts are available, primary-only sending is disabled, and recording reads reuse connection authentication. The UI and new examples no longer provide these fields. Compatibility input remains only at configuration boundaries and is scheduled for removal in 0.4.0. Remove these fields during migration; use normal connection setup, automation configuration or `dryRun` rehearsal instead.
 
 Older changelog entries describe behavior at their release date. Use this page and the running API for current operation.

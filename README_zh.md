@@ -17,7 +17,7 @@
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="许可证：MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 20 或更高版本" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="当前版本：0.3.24" src="https://img.shields.io/badge/version-0.3.24-3178c6">
+  <img alt="当前版本：0.3.25" src="https://img.shields.io/badge/version-0.3.25-3178c6">
   <img alt="状态：积极开发中" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
@@ -77,7 +77,7 @@ npm run status:linux -- --json
 
 ## 当前能力
 
-仓库当前版本为 `0.3.24`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
+仓库当前版本为 `0.3.25`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
 
 | 范围 | 当前状态 | 用户可以完成什么 |
 | --- | --- | --- |
@@ -99,7 +99,15 @@ npm run status:linux -- --json
 
 ## 近期变化
 
-### 0.3.24：一次连接，默认使用服务
+### 0.3.25：手机通话与家庭设备接口
+
+手机 Agent 通话复用录音、转写和播放链，固定电脑与路线并隔离迟到回复。家庭设备共用查询与原动作回执，已鉴权连接不再重复按功能授权。使用和限制见[手机通话](docs/mobile-voice-call.md)、[家庭设备](docs/home-device-agent-api.md)及[连接与接口](docs/connection-access.md)；真机和物理动作仍需独立验收。
+
+### 0.3.24：复制提示词接入电脑
+
+在公网 RabiLink 控制台选中应用，复制接入提示词给目标电脑的私密 Agent 任务。三十分钟有效的一次性接入码绑定当前应用，Agent 自动核对下载内容、保留独立身份、保存私有配置，并通过原 Host 连接。电脑长期凭据由本机生成和保管。安装、恢复与验证见[电脑接入提示词](docs/rabilink-pc-pairing.md)。
+
+### 0.3.23：一次连接，默认使用服务
 
 同一 RabiLink 应用已鉴权设备默认可以使用 PC 提供的服务，包括语音、人格、资源、管理和知识读写。配置页移除重复权限开关、MCP 密钥和白名单；设备身份、应用隔离和服务就绪仍分别核对。见[通用连接](docs/rabilink-peer-tunnel.md)及[知识服务](docs/rabilink-knowledge-runtime.md)。
 

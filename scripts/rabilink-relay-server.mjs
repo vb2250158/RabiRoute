@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { attachTunnelBroker } from "./lib/rabilink-tunnel-broker.mjs";
+import { createPcPairingService, findPcCredential, assertPcPairingCsrf } from './rabilink-pc-pairing.mjs';
+import { pcPairingPanelHtml, pcPairingBrowserScript } from './rabilink-pc-pairing-ui.mjs';
 import { orderedAsrWorkers, selectAsrWorker, validateAsrPriority } from "./lib/rabilink-asr-priority.mjs";
 import { createAgentProfileService } from './rabilink-agent-profile.mjs';
 import { createProfileReceiptPolicy } from './rabilink-agent-profile-ui-receipt.mjs';
@@ -11,6 +13,7 @@ import { normalizeKnowledgeIntents, knowledgeOutcome, readKnowledgeOperation } f
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from 'node:url';
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import { appendDeviceLogs, deviceLogFacets, readDeviceLogs } from "./rabilink-device-log-store.mjs";
 import { RabiLinkEventHub } from "./rabilink-event-hub.mjs";
@@ -770,10 +773,12 @@ function normalizeStoredWorker(worker) {
 
 function readAppStore() {
   if (!fs.existsSync(appStorePath)) {
-    return { accounts: [], apps: [], workers: [] };
+    return { accounts: [], apps: [], workers: [], pcPairings: [], pcPairingTickets: [] };
   }
   try {
     const raw = JSON.parse(fs.readFileSync(appStorePath, "utf8").replace(/^\uFEFF/, ""));
+    if (raw.pcPairings !== undefined && !Array.isArray(raw.pcPairings)) throw new Error('Invalid stored PC pairings.');
+    if (raw.pcPairingTickets !== undefined && !Array.isArray(raw.pcPairingTickets)) throw new Error('Invalid stored PC tickets.');
     return {
       accounts: Array.isArray(raw.accounts) ? raw.accounts : [],
       apps: Array.isArray(raw.apps)
@@ -787,7 +792,9 @@ function readAppStore() {
             : []
         }))
         : [],
-      workers: Array.isArray(raw.workers) ? raw.workers.map(normalizeStoredWorker).filter(Boolean) : []
+      workers: Array.isArray(raw.workers) ? raw.workers.map(normalizeStoredWorker).filter(Boolean) : [],
+      pcPairings: Array.isArray(raw.pcPairings) ? raw.pcPairings : [],
+      pcPairingTickets: Array.isArray(raw.pcPairingTickets) ? raw.pcPairingTickets : []
     };
   } catch (error) {
     writeEvent("app_store_read_failed", { path: appStorePath, message: error instanceof Error ? error.message : String(error) });
@@ -801,7 +808,7 @@ function writeAppStore(store) {
   let descriptor;
   try {
     descriptor = fs.openSync(temporary, 'wx', 0o600);
-    fs.writeFileSync(descriptor, JSON.stringify({ accounts: store.accounts, apps: store.apps, workers: store.workers || [] }, null, 2), 'utf8');
+    fs.writeFileSync(descriptor, JSON.stringify({ accounts: store.accounts, apps: store.apps, workers: store.workers || [], pcPairings: store.pcPairings || [], pcPairingTickets: store.pcPairingTickets || [] }, null, 2), 'utf8');
     fs.fsyncSync(descriptor);
     fs.closeSync(descriptor); descriptor = undefined;
     fs.renameSync(temporary, appStorePath);
@@ -812,6 +819,9 @@ function writeAppStore(store) {
 }
 
 const agentProfileService = createAgentProfileService({ readStore: readAppStore, writeStore: writeAppStore });
+const pcPairingService = createPcPairingService({ readStore: readAppStore, writeStore: writeAppStore,
+  onEvent: (event, details) => writeEvent(event, details) });
+const pcPairingRequestWindows = new Map();
 
 function hasEnabledRabiLinkApps() {
   return readAppStore().apps.some((app) => app.enabled !== false && app.token);
@@ -823,6 +833,8 @@ function findEnabledAppByToken(value) {
   const store = readAppStore();
   const appTokenMatch = store.apps.find((app) => app.enabled !== false && app.token === requestText);
   if (appTokenMatch) return { app: appTokenMatch, deviceBinding: null };
+  const pcMatch = findPcCredential(store, requestText);
+  if (pcMatch) return pcMatch;
   if (!requestText.startsWith("rbd_")) return null;
   const credentialHash = sha256(requestText);
   for (const app of store.apps) {
@@ -876,6 +888,8 @@ function publicApp(app, options = {}) {
     token: options.revealToken ? app.token : undefined,
     notes: app.notes || "",
     targetDeviceId: app.targetDeviceId || "",
+    pcCredentials: (app.pcCredentials || []).map(({ id, deviceId, deviceGuid, deviceName, enabled, createdAt, appTokenHash }) =>
+      ({ id, deviceId, deviceGuid, deviceName, enabled: enabled !== false && appTokenHash === sha256(app.token), createdAt })),
     deviceBindings: (app.deviceBindings || []).map((binding) => ({
       id: binding.id,
       serialPreview: binding.serialPreview,
@@ -922,7 +936,7 @@ function accountStorePayload(account, options = {}) {
     ok: true,
     setupRequired: store.accounts.length === 0,
     account: account ? publicAccount(account) : null,
-    apps: apps.map((app) => publicApp(app, { revealToken: true })),
+    apps: apps.map((app) => publicApp(app, { revealToken: options.revealToken === true })),
     workers: workers
       .filter(workerCanProcessMobileRequests)
       .map((worker) => publicWorker(worker, appsById.get(worker.appId))),
@@ -1341,6 +1355,22 @@ function authorizeRabiLinkRequest(req, url, body) {
   const requestTokenValue = requestToken(req, url, body);
   const match = findEnabledAppByToken(requestTokenValue);
   if (match?.app) {
+    if (match.pcCredential) {
+      const credential = match.pcCredential;
+      const identities = [url.searchParams, body || {}];
+      const keys = { deviceId: credential.deviceId, workerId: credential.deviceId, sourceDeviceId: credential.deviceId,
+        deviceGuid: credential.deviceGuid, workerGuid: credential.deviceGuid, sourceDeviceGuid: credential.deviceGuid };
+      for (const identity of identities) for (const [key, expected] of Object.entries(keys)) {
+        const value = identity instanceof URLSearchParams ? identity.get(key) : identity[key];
+        if (value && value !== expected) return { ok: false, statusCode: 403, message: 'PC_CREDENTIAL_IDENTITY_MISMATCH' };
+      }
+      if (url.pathname.startsWith('/worker/') || url.pathname === '/api/rabilink/events') {
+        const id = url.searchParams.get('deviceId') || body?.deviceId || body?.workerId || body?.sourceDeviceId;
+        const guid = url.searchParams.get('deviceGuid') || body?.deviceGuid || body?.workerGuid || body?.sourceDeviceGuid;
+        if (id !== credential.deviceId || guid !== credential.deviceGuid)
+          return { ok: false, statusCode: 403, message: 'PC_CREDENTIAL_IDENTITY_REQUIRED' };
+      }
+    }
     return { ok: true, app: match.app, deviceBinding: match.deviceBinding || null, insecure: false };
   }
   return { ok: false, app: null, deviceBinding: null, insecure: false };
@@ -3743,7 +3773,7 @@ function handleTaskRead(req, url, res, body) {
   sendJson(res, 200, { code: 0, ok: true, task: taskForResponse(task) });
 }
 
-function adminPageHtml() {
+function adminPageHtml(integrationMode = false) {
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -3952,7 +3982,7 @@ function adminPageHtml() {
         <div class="mark">Rb</div>
         <div>
           <h1>RabiLink服务器控制台</h1>
-          <div class="subtitle">管理控制台：账号、应用 token、PC Rabi 连接和远程 WebGUI</div>
+          <div class="subtitle">连接设备，查看状态并打开远程电脑</div>
         </div>
       </div>
       <div class="actions">
@@ -4004,15 +4034,16 @@ function adminPageHtml() {
       </aside>
 
       <div id="appView" class="app-view hidden">
+        ${pcPairingPanelHtml()}
         <div id="appCard" class="card hidden">
           <div class="title-row">
             <div>
               <div class="title">创建应用</div>
-              <div class="note">为 Rokid、手机或调试入口生成独立 token。</div>
+              <div class="note">同一个应用内的设备可以互相连接。</div>
             </div>
           </div>
           <div class="form">
-            <label class="rabi-field"><span class="field-label">应用名称</span><input id="appName" value="Rokid Glass" /></label>
+            <label class="rabi-field"><span class="field-label">应用名称</span><input id="appName" value="我的设备" /></label>
             <label class="rabi-field"><span class="field-label">备注</span><textarea id="appNotes" placeholder="例如：生产眼镜、测试手机、家里局域网"></textarea></label>
           </div>
           <div class="actions">
@@ -4023,9 +4054,10 @@ function adminPageHtml() {
         <div id="appDetailsCard" class="card hidden">
           <div class="title-row">
             <div>
-              <div class="title">应用详情</div>
-              <div class="note">管理所选应用的 token、通讯 PC 和眼镜绑定。</div>
+              <div class="title">设备连接</div>
+              <div class="note">复制提示词给目标电脑上的 Agent，它会自动安装并连接到当前应用。</div>
             </div>
+            <button id="addDeviceButton" type="button" class="primary hidden">复制接入提示词</button>
           </div>
           <div id="apps" class="app-list"></div>
         </div>
@@ -4038,10 +4070,11 @@ function adminPageHtml() {
             </div>
           </div>
           <div id="workers" class="worker-list"></div>
-          <div id="workersEmpty" class="empty">还没有 PC Rabi 上线。启动已绑定服务器 token 的 RabiRoute 后会自动出现。</div>
+          <div id="pcPairingCredentials" class="worker-list"></div>
+          <div id="workersEmpty" class="empty">还没有电脑连接。复制接入提示词，粘贴给目标电脑上的 Agent。</div>
         </div>
 
-        <div id="logsCard" class="card hidden">
+        <details id="logsCard" class="card hidden"><summary>连接日志</summary>
           <div class="title-row">
             <div>
               <div class="title">最近日志</div>
@@ -4051,9 +4084,9 @@ function adminPageHtml() {
           </div>
           <div id="logs" class="log-list"></div>
           <div id="logsEmpty" class="empty">还没有日志。提交消息、连接 PC Rabi 或打开 WebGUI 后会显示在这里。</div>
-        </div>
+        </details>
 
-        <div id="deviceLogsCard" class="card hidden">
+        <details id="deviceLogsCard" class="card hidden"><summary>眼镜日志</summary>
           <div class="title-row">
             <div>
               <div class="title">眼镜云日志</div>
@@ -4069,19 +4102,21 @@ function adminPageHtml() {
           </div>
           <div id="deviceLogs" class="log-list"></div>
           <div id="deviceLogsEmpty" class="empty">还没有眼镜日志。新版本 AIUI 连接 Relay 后会自动批量上报。</div>
-        </div>
+        </details>
       </div>
     </section>
   </main>
 
   <script>
     const apiBase = "/manage/api";
+    const integrationMode = ${integrationMode};
     const credentialStorageKey = "rabilinkManageCredentials";
     const legacyCredentialStorageKey = "rabilinkAdminCredentials";
     const state = { account: null, apps: [], selectedAppId: "", creatingApp: false, workers: [], logs: [], deviceLogs: [], deviceLogFacets: {}, revealed: {}, credentials: loadCredentials(), setupRequired: false };
     let logStream = null;
     let logStreamAccountId = "";
     const el = (id) => document.getElementById(id);
+    ${pcPairingBrowserScript()}
 
     function encodeAuth(username, password) {
       return btoa(unescape(encodeURIComponent(username + ":" + password)));
@@ -4115,7 +4150,7 @@ function adminPageHtml() {
 
     function setConsolePath(username, replace = true) {
       if (!username) return;
-      const target = consolePathFor(username);
+      const target = consolePathFor(username) + (integrationMode ? '?integration=1' : '');
       if (window.location.pathname === target) return;
       const method = replace ? "replaceState" : "pushState";
       window.history[method](null, "", target);
@@ -4174,7 +4209,7 @@ function adminPageHtml() {
       if (pendingProfileWrites.size) { flash("alert", "存在待确认的设备配置，请在 Agent 设置中回读后再刷新列表。"); return; }
       flash("alert", "");
       try {
-        const body = await request(apiBase + "/state");
+        const body = await request(apiBase + "/state" + (integrationMode ? '?integration=1' : ''));
         state.account = body.account;
         state.apps = body.apps || [];
         state.workers = body.workers || [];
@@ -4257,14 +4292,14 @@ function adminPageHtml() {
       try {
         const body = await request(apiBase + "/apps", {
           method: "POST",
-          body: JSON.stringify({ name: el("appName").value, notes: el("appNotes").value })
+          body: JSON.stringify({ name: el("appName").value, notes: el("appNotes").value, revealToken: integrationMode })
         });
         if (body.app?.token) state.revealed[body.app.id] = body.app.token;
         state.selectedAppId = body.app.id;
         state.creatingApp = false;
         resetDeviceLogFilters();
         el("appNotes").value = "";
-        flash("notice", "应用已创建，可随时复制完整 token。");
+        flash("notice", "应用已创建。复制接入提示词给目标电脑上的 Agent。");
         await load();
       } catch (error) {
         flash("alert", error.message);
@@ -4562,7 +4597,7 @@ function adminPageHtml() {
       const container = el("workers");
       container.innerHTML = "";
       const workers = workersForApp(state.selectedAppId);
-      el("workersEmpty").classList.toggle("hidden", workers.length > 0);
+      el("workersEmpty").classList.toggle("hidden", workers.length > 0 || el('pcPairingCredentials').childElementCount > 0);
       for (const worker of workers) {
         const node = document.createElement("div");
         node.className = "worker";
@@ -4574,9 +4609,11 @@ function adminPageHtml() {
           '<div class="worker-actions"><a class="webgui" target="_blank" rel="noopener">打开 PC WebGUI</a><span class="dot"></span></div>';
         node.querySelector(".worker-name").textContent = workerLabel(worker);
         const appLabel = worker.appName || worker.appId || "-";
-        const tokenLabel = worker.appTokenPreview ? "（" + worker.appTokenPreview + "）" : "";
         node.querySelector(".worker-meta").textContent =
-          "应用 token：" + appLabel + tokenLabel + " · GUID：" + (worker.guid || "-") + " · 最近连接：" + (worker.lastSeenAt || "-");
+          appLabel + " · 最近连接：" + (worker.lastSeenAt || "-");
+        const app = state.apps.find(item => item.id === state.selectedAppId);
+        const credential = app?.pcCredentials?.find(item => item.enabled && (item.deviceId === worker.id || item.deviceGuid === worker.guid));
+        if (credential) node.querySelector('.worker-actions').append(pcRevokeButton(app, credential));
         const webgui = node.querySelector(".webgui");
         const webguiUrl = workerWebguiUrl(worker);
         if (webguiUrl) {
@@ -4805,6 +4842,7 @@ function adminPageHtml() {
     }
 
     function render() {
+      syncPcPairingUi();
       if (!state.account || [...pendingProfileWrites].some(panel => panel.profileOwnerId !== state.account.id)) { pendingProfileWrites.clear(); el("apps").innerHTML = ""; }
       if (pendingProfileWrites.size) return; // Preserve frozen uncertain writes during unrelated UI refreshes.
       const loggedIn = Boolean(state.account);
@@ -4815,6 +4853,7 @@ function adminPageHtml() {
       el("appView").classList.toggle("hidden", !loggedIn);
       el("appCard").classList.toggle("hidden", !loggedIn || (!state.creatingApp && Boolean(selectedApp)));
       for (const id of ["appDetailsCard", "workersCard", "logsCard", "deviceLogsCard"]) el(id).classList.toggle("hidden", !showDetails);
+      el('deviceLogsCard').classList.toggle('hidden', !showDetails || !(selectedApp?.deviceBindings || []).length);
       el("cancelCreateAppButton").classList.toggle("hidden", !selectedApp);
       el("logoutButton").classList.toggle("hidden", !loggedIn);
       el("setupPill").textContent = state.setupRequired ? "首次初始化" : "已初始化";
@@ -4839,31 +4878,30 @@ function adminPageHtml() {
         node.className = "app";
         node.innerHTML =
           '<div class="app-head">' +
-            '<div><div class="app-name"></div><div class="app-id"></div></div>' +
-            '<label class="switch-field"><input class="enabled" type="checkbox"><span class="switch-track"><span class="switch-thumb"></span></span><b>启用</b></label>' +
+            '<div><div class="app-name"></div><div class="app-id hidden"></div></div>' +
           '</div>' +
+          '<details class="app-settings"><summary>应用设置</summary>' +
+          '<label class="switch-field"><input class="enabled" type="checkbox"><span class="switch-track"><span class="switch-thumb"></span></span><b>启用应用</b></label>' +
           '<div class="meta">' +
-            '<div class="tile"><span>Token</span><b class="token"></b></div>' +
+            (integrationMode ? '<div class="tile"><span>Token</span><b class="token"></b></div>' : '') +
             '<div class="tile"><span>备注</span><b class="notes"></b></div>' +
             '<div class="tile"><div class="rabi-field combo target-worker"><span class="field-label">通讯 Rabi PC</span><button class="combo-trigger" type="button"><span class="combo-value"></span></button><div class="combo-panel hidden"><input class="combo-search" placeholder="搜索 Rabi PC / GUID"><div class="combo-options"></div></div></div></div>' +
             '<div class="tile"><span>更新时间</span><b class="updated"></b></div>' +
           '</div>' +
-          '<div class="device-binding-row"><div class="rabi-field"><span class="field-label">眼镜 SN</span><input class="device-sn" autocomplete="off" placeholder="输入眼镜上显示的完整 SN"></div><button class="bind-device" type="button">绑定 / 重置</button></div>' +
-          '<div class="device-binding-list"></div>' +
+          (integrationMode ? '<div class="device-binding-row"><div class="rabi-field"><span class="field-label">眼镜 SN</span><input class="device-sn" autocomplete="off" placeholder="输入眼镜上显示的完整 SN"></div><button class="bind-device" type="button">绑定 / 重置</button></div>' : '') +
           '<div class="actions">' +
-            '<button class="copy">复制 token</button>' +
-            '<button class="regen">重新生成 token</button>' +
-            '<button class="danger delete">删除</button>' +
-          '</div>';
+            (integrationMode ? '<button class="copy">复制 token</button><button class="regen">重新生成 token</button>' : '') +
+            '<button class="danger delete">删除应用</button>' +
+          '</div></details><div class="device-binding-list"></div>';
         node.querySelector(".app-name").textContent = app.name;
         node.querySelector(".app-id").textContent = app.id;
         node.querySelector(".enabled").checked = app.enabled !== false;
-        node.querySelector(".token").textContent = token;
+        if (integrationMode) node.querySelector(".token").textContent = token;
         node.querySelector(".notes").textContent = app.notes || "-";
         node.querySelector(".updated").textContent = app.updatedAt || "-";
         const bindings = Array.isArray(app.deviceBindings) ? app.deviceBindings : [];
         const bindingList = node.querySelector(".device-binding-list");
-        if (!bindings.length) bindingList.textContent = "尚未绑定眼镜 SN。";
+        if (!bindings.length && integrationMode) bindingList.textContent = "尚未绑定眼镜 SN。";
         for (const binding of bindings) {
           const row = document.createElement("div"); row.className = "actions";
           const label = document.createElement("span"); label.textContent = binding.serialPreview + " · " + (binding.claimed ? "已领取" : "等待眼镜领取");
@@ -4873,10 +4911,13 @@ function adminPageHtml() {
         }
         renderTargetCombo(node.querySelector(".target-worker"), app);
         node.querySelector(".enabled").addEventListener("change", (event) => patchApp(app.id, { enabled: event.target.checked }).catch((error) => flash("alert", error.message)));
-        node.querySelector(".copy").addEventListener("click", () => copyToken(app.id));
-        node.querySelector(".regen").addEventListener("click", () => patchApp(app.id, { regenerateToken: true }).catch((error) => flash("alert", error.message)));
-        node.querySelector(".bind-device").addEventListener("click", () => bindDeviceSerial(app.id, node));
-        node.querySelector(".device-sn").addEventListener("keydown", (event) => { if (event.key === "Enter") bindDeviceSerial(app.id, node); });
+        if (integrationMode) {
+          node.querySelector(".copy").addEventListener("click", () => copyToken(app.id));
+          node.querySelector(".regen").addEventListener("click", () => patchApp(app.id, { regenerateToken: true }).catch((error) => flash("alert", error.message)));
+          node.querySelector(".bind-device").addEventListener("click", () => bindDeviceSerial(app.id, node));
+          node.querySelector(".device-sn").addEventListener("keydown", (event) => { if (event.key === "Enter") bindDeviceSerial(app.id, node); });
+          node.querySelector('.app-settings').open = true;
+        }
         node.querySelector(".delete").addEventListener("click", () => deleteApp(app.id, app.name).catch((error) => flash("alert", error.message)));
         container.appendChild(node);
       }
@@ -5795,7 +5836,7 @@ async function handleAdminApi(req, url, res) {
     const auth = authorizeAdmin(req, url, body);
     if (!auth.ok && !auth.setupRequired) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
     const headers = auth.account ? { "set-cookie": manageSessionCookie(createManageSession(auth.account)) } : {};
-    return sendJson(res, 200, accountStorePayload(auth.account), headers);
+    return sendJson(res, 200, accountStorePayload(auth.account, { revealToken: url.searchParams.get('integration') === '1' }), headers);
   }
   if (req.method === "POST" && apiPath === "/login") {
     const account = loginAccount(body);
@@ -5812,12 +5853,32 @@ async function handleAdminApi(req, url, res) {
   }
   const auth = authorizeAdmin(req, url, body);
   if (!auth.ok) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
+  const pcTicketMatch = apiPath.match(/^\/apps\/([^/]+)\/pc-pairing-tickets$/);
+  if (pcTicketMatch && req.method === 'POST') {
+    assertPcPairingCsrf(req);
+    const data = pcPairingService.issue(auth.account.id, decodeURIComponent(pcTicketMatch[1]), body);
+    data.files = ['rabilink-pair-pc.mjs', 'rabilink-pc-pairing.mjs'].map(name => {
+      const source = fs.readFileSync(fileURLToPath(new URL(name, import.meta.url)));
+      return { name, size: source.length, sha256: createHash('sha256').update(source).digest('hex') };
+    });
+    return sendJson(res, 200, { code: 0, data }, { 'cache-control': 'no-store' });
+  }
+  const pcCredentialMatch = apiPath.match(/^\/apps\/([^/]+)\/pc-credentials\/([^/]+)$/);
+  if (pcCredentialMatch && req.method === 'DELETE') {
+    assertPcPairingCsrf(req);
+    const appId = decodeURIComponent(pcCredentialMatch[1]), credentialId = decodeURIComponent(pcCredentialMatch[2]);
+    const credential = readAppStore().apps.find(app => app.id === appId && app.ownerAccountId === auth.account.id)?.pcCredentials?.find(item => item.id === credentialId);
+    const data = pcPairingService.revoke(auth.account.id, appId, credentialId);
+    relayEventHub.disconnect({ appId, targetDeviceId: credential.deviceId });
+    tunnelBroker.revalidate();
+    return sendJson(res, 200, { code: 0, data });
+  }
   if (req.method === "GET" && apiPath === "/logs/stream") {
     return handleAccountLogStream(req, res, auth.account);
   }
   if (req.method === "POST" && apiPath === "/apps") {
     const app = createAppForAccount(auth.account, body);
-    return sendJson(res, 200, { code: 0, ok: true, app: publicApp(app, { revealToken: true }) });
+    return sendJson(res, 200, { code: 0, ok: true, app: publicApp(app, { revealToken: body.revealToken !== false }) });
   }
   const profileOperationMatch = apiPath.match(/^\/apps\/([^/]+)\/devices\/([^/]+)\/agent-profile\/operations\/([^/]+)$/);
   if (req.method === 'GET' && profileOperationMatch) {
@@ -5890,10 +5951,12 @@ async function handleAdminApi(req, url, res) {
   const appMatch = apiPath.match(/^\/apps\/([^/]+)$/);
   if (appMatch && req.method === "PATCH") {
     const { app, revealToken } = patchOwnedApp(auth.account, decodeURIComponent(appMatch[1]), body);
+    if (body.enabled === false || body.regenerateToken) { relayEventHub.disconnect({ appId: app.id }); tunnelBroker.revalidate(); }
     return sendJson(res, 200, { code: 0, ok: true, app: publicApp(app, { revealToken }) });
   }
   if (appMatch && req.method === "DELETE") {
     deleteOwnedApp(auth.account, decodeURIComponent(appMatch[1]));
+    relayEventHub.disconnect({ appId: decodeURIComponent(appMatch[1]) }); tunnelBroker.revalidate();
     return sendJson(res, 200, { code: 0, ok: true });
   }
   return sendJson(res, 404, { code: -1, ok: false, message: "Not found" });
@@ -5907,10 +5970,40 @@ const server = http.createServer(async (req, res) => {
       return await handleManageWebgui(req, url, res);
     }
     if (req.method === "GET" && (url.pathname === "/manage" || url.pathname === "/manage/" || /^\/manage\/[^/]+\/?$/.test(url.pathname))) {
-      return sendHtml(res, adminPageHtml());
+      return sendHtml(res, adminPageHtml(url.searchParams.get('integration') === '1'));
     }
     if (url.pathname.startsWith("/manage/api/")) {
       return await handleAdminApi(req, url, res);
+    }
+    const pairingClientFiles = {
+      '/api/rabilink/pc-pairings/client/rabilink-pair-pc.mjs': 'rabilink-pair-pc.mjs',
+      '/api/rabilink/pc-pairings/client/rabilink-pc-pairing.mjs': 'rabilink-pc-pairing.mjs'
+    };
+    const pairingClientFile = pairingClientFiles[url.pathname];
+    if (req.method === 'GET' && pairingClientFile) {
+      const source = fs.readFileSync(fileURLToPath(new URL(pairingClientFile, import.meta.url)));
+      res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store',
+        'x-content-type-options': 'nosniff', 'x-rabilink-content-sha256': createHash('sha256').update(source).digest('hex') });
+      return res.end(source);
+    }
+    if (req.method === 'POST' && url.pathname === '/api/rabilink/pc-pairings') {
+      const address = req.socket.remoteAddress || 'unknown', time = Date.now();
+      for (const [key, window] of pcPairingRequestWindows) if (window.until <= time) pcPairingRequestWindows.delete(key);
+      const window = pcPairingRequestWindows.get(address) || { count: 0, until: time + 60_000 };
+      if (window.count >= 20 || pcPairingRequestWindows.size >= 1024)
+        return sendJson(res, 429, { code: 'PAIRING_RATE_LIMIT' }, { 'retry-after': '60' });
+      window.count++; pcPairingRequestWindows.set(address, window);
+      let body;
+      try { body = JSON.parse((await readRawBody(req, { maxBytes: 4096, label: 'Pairing' })).toString('utf8')); }
+      catch (error) { return sendJson(res, error.statusCode || 400, { code: 'PAIRING_INVALID_REQUEST' }); }
+      const ticket = String(req.headers.authorization || '').replace(/^Bearer /i, '');
+      return sendJson(res, 200, { code: 0, data: pcPairingService.begin(body, ticket) }, { 'cache-control': 'no-store' });
+    }
+    const pairingReceiptMatch = url.pathname.match(/^\/api\/rabilink\/pc-pairings\/([a-f0-9-]+)\/receipt$/);
+    if (req.method === 'POST' && pairingReceiptMatch) {
+      const proof = String(req.headers.authorization || '').replace(/^Bearer /i, '');
+      const data = pcPairingService.read(pairingReceiptMatch[1], proof);
+      return sendJson(res, 200, { code: 0, data }, { 'cache-control': 'no-store' });
     }
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/health")) {
       cleanupTasks();
