@@ -81,6 +81,7 @@ export function allDayRecordingHandler(runtime: ReturnType<typeof createAllDayRe
       let data: unknown;
       if (request.method === "GET" && !action) data = { ...await runtime.service.snapshot(roleId), devices: await runtime.store.mobileDevices() };
       else if (request.method === "GET" && action === "recent") data = { events: await runtime.store.recent(roleId) };
+      else if (request.method === "GET" && action === "catalog") data = await runtime.store.catalog(roleId, url.searchParams.get("day") ?? undefined);
       else if (request.method === "GET" && action === "page") {
         const direction = url.searchParams.get("direction");
         if (direction !== "older" && direction !== "newer") throw new Error("Invalid event direction");

@@ -128,6 +128,69 @@ test("indexed history reads do not rewrite the recent preview or require writabl
   assert.deepEqual((await store.recent("one")).map(row => row.id), ["first"]);
 });
 
+test("catalog returns all indexed dates without scanning originals, taking write locks, or truncating history", async t => {
+  const store = await fixture(t), first = Date.parse("2025-01-01"), last = Date.parse("2026-09-01");
+  await store.append("one", event("recent", last));
+  const indexRoot = path.join(store.directory("one"), "events-index");
+  await fs.mkdir(indexRoot, { recursive: true });
+  const older = Array.from({ length: 600 }, (_, i) => event(`old-${i}`, first + i));
+  await fs.writeFile(path.join(indexRoot, "2025-01-01.json"), JSON.stringify({ schemaVersion: 2, events: older }));
+  await fs.writeFile(path.join(indexRoot, "2026-09-01.json"), JSON.stringify({ schemaVersion: 2, events: [event("recent", last)] }));
+  await fs.rm(path.join(indexRoot, "2026-09-01.dirty.json"));
+  const original = fs.readFile;
+  t.mock.method(fs, "readFile", async (...args: Parameters<typeof fs.readFile>) => {
+    assert.ok(!String(args[0]).includes(`${path.sep}events${path.sep}`), "catalog must not enumerate individual event records");
+    return original(...args);
+  });
+  t.mock.method(fs, "open", async () => { throw new Error("Catalog must remain read only"); });
+  const directory = await store.catalog("one");
+  assert.deepEqual(directory.days, ["2025-01-01", "2026-09-01"]);
+  assert.deepEqual(directory.incompleteDays, []);
+  const pages = await Promise.all(directory.days.map(day => store.catalog("one", day)));
+  assert.equal(pages.flatMap(page => page.events).length, 601);
+  assert.equal(pages[0].events.length, 600);
+  assert.deepEqual((await store.catalog("another")).events, []);
+});
+
+test("dirty catalog remains available during raw-history reconstruction and merges saved recent events", async t => {
+  const store = await fixture(t), time = Date.now(), day = new Date(time).toISOString().slice(0, 10);
+  await store.append("one", event("first", time));
+  await store.timeline("one", time - 1, time + 10000);
+  await store.append("one", event("new", time + 1));
+  await fs.writeFile(path.join(store.directory("one"), "events-index", `${day}.json`), JSON.stringify({ schemaVersion: 2, events: [event("first", time)] }));
+  await fs.writeFile(path.join(store.directory("one"), "events-index", `${day}.dirty.json`), "{}");
+  const original = fs.readFile;
+  let release!: () => void, entered!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  t.mock.method(fs, "readFile", async (...args: Parameters<typeof fs.readFile>) => {
+    if (String(args[0]).includes(`${path.sep}events${path.sep}`)) { entered(); await blocked; }
+    return original(...args);
+  });
+  t.mock.method(Date, "now", () => time + 60000);
+  const rebuilding = store.timeline("one", time - 1, time + 10000);
+  await started;
+  try {
+    const catalog = await store.catalog("one", day);
+    assert.deepEqual(catalog.events.map(row => row.id), ["first"]);
+    assert.deepEqual((await store.catalog("one")).events.map(row => row.id), ["first", "new"]);
+    assert.deepEqual(catalog.incompleteDays, [day]);
+  } finally { release(); await rebuilding; }
+  assert.deepEqual((await store.catalog("one")).incompleteDays, []);
+});
+
+test("missing and damaged derived indexes are explicitly incomplete, not empty history", async t => {
+  const store = await fixture(t), time = Date.now(), day = new Date(time).toISOString().slice(0, 10);
+  await store.append("one", event("saved", time));
+  assert.deepEqual((await store.catalog("one")).incompleteDays, [day]);
+  await fs.writeFile(path.join(store.directory("one"), "events-index", `${day}.json`), "{broken");
+  const catalog = await store.catalog("one");
+  assert.deepEqual(catalog.events.map(row => row.id), ["saved"]);
+  assert.deepEqual(catalog.incompleteDays, [day]);
+  assert.deepEqual((await store.catalog("one", day)).incompleteDays, [day]);
+  await assert.rejects(store.catalog("one", "../other"), /Invalid recording day/);
+});
+
 test("a damaged day index rebuilds from originals and concurrent writes retain every event", async t => {
   const store = await fixture(t), time = Date.now();
   await store.append("one",event("first",time));

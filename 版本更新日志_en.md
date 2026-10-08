@@ -6,6 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.28 - 2026-10-09
+
+- Fix Manager health stalls and repeated Host recovery caused by synchronous shared gateway-status.json reads during NapCat polling: bounded background workers perform physical reads while the control plane uses generation-owned snapshots, coalesces refreshes, retains the last successful status with an explicit stale marker on failure, and cancels pending work on teardown.
+- Show persona cache and a lightweight date catalog first, then progressively load available daily indexes with up to four concurrent reads. Store the full preview in IndexedDB and rebuild missing or dirty indexes independently; displayed records remain selectable after failures.
+- Prevent the live clock from retrying failed history reads. Merge recent and SSE increments without dropping history or the current selection, avoiding loading loops and amplified requests.
+- Retain the pet walking, teleportation, settings and resource-pack support from 0.3.27, with stable motion diagnostics.
+
 ## 0.3.27 - 2026-10-09
 
 - Read shared pet catalogs through bounded read processes, validate only the selected pack, and copy cache assets in the background. Load cached settings first so NAS reads cannot block Manager health checks.

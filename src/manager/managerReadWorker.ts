@@ -46,8 +46,10 @@ import type {
 import { buildPerformanceSummary, isPerformanceSample } from "./performanceStore.js";
 import { listOpenPlanFeedbackRecoveryCandidates } from "./planFeedbackRecoveryDiscovery.js";
 import type { GatewayDiagnosticsWorkerInput } from "./gatewayDiagnosticsSnapshot.js";
+import { readGatewayStatusInWorker } from "./gatewayStatusSnapshot.js";
 
 export type ManagerReadWorkerTask =
+  | { type: "gateway_status_snapshot"; statusPath: string }
   | { type: "desktop_pet_catalog"; roleId: string; roleDir: string; cacheRoot: string; options: import("./desktopPetRoutes.js").DesktopPetPackCatalogOptions }
   | { type: "role_message_endpoint_history"; roleDir: string; query: RecentMessageContextQuery }
   | { type: "message_processing_send_context"; input: MessageProcessingReadInput }
@@ -262,6 +264,8 @@ async function readRecentPerformanceSamples(logDirectory: string, limit: number)
 
 async function execute(task: ManagerReadWorkerTask): Promise<unknown> {
   switch (task.type) {
+    case "gateway_status_snapshot":
+      return readGatewayStatusInWorker(task.statusPath);
     case "desktop_pet_catalog": {
       const { listDesktopPetPacks } = await import("./desktopPetRoutes.js");
       return listDesktopPetPacks(task.roleId, task.roleDir, task.cacheRoot, task.options);

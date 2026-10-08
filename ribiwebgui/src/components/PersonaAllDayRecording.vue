@@ -2,9 +2,9 @@
 import { computed, nextTick, onBeforeUnmount, ref, shallowRef, toRaw, watch } from "vue";
 import { useI18n } from "../i18n";
 import { managerEventSource } from "../managerApi";
-import { readAllDayResource } from "../allDayRecordingClient";
+import { readAllDayResource, recordingPreview, restoreRecordingPreview, rememberRecordingPreview } from "../allDayRecordingClient";
 import { reviewIndex, reviewWindow, latestReviewEvent, adjacentLoadedEvent, mergeReviewEvents } from "../allDayReviewModel";
-import { ALL_DAY_SOURCES, DEFAULT_ALL_DAY_SETTINGS, isReviewEvent, matchesReviewType, type AllDayEvent, type AllDaySettings, type AllDaySnapshot } from "@shared/allDayRecording";
+import { ALL_DAY_SOURCES, DEFAULT_ALL_DAY_SETTINGS, matchesReviewType, type AllDayEvent, type AllDaySettings, type AllDaySnapshot, type AllDayCatalog } from "@shared/allDayRecording";
 
 const props = defineProps<{ roleId: string }>();
 const { isEnglish } = useI18n();
@@ -50,9 +50,13 @@ let velocity = 0;
 let lastMove = 0;
 let lastX = 0;
 const events = shallowRef<AllDayEvent[]>([]);
-let rangeEvents: AllDayEvent[] = [];
 let recentEvents: AllDayEvent[] = [];
-let recentValidated = false;
+let catalogController: AbortController | undefined;
+let catalogComplete = false;
+let catalogReceived = false;
+const catalogDays = new Set<string>();
+const validatedCatalogDays = new Set<string>();
+const historyMessage = ref("");
 const fetching = ref(false);
 const hasLoaded = ref(false);
 const cachedPreview = ref(false);
@@ -189,20 +193,51 @@ async function data<T>(suffix: string, init: RequestInit = {}, signal?: AbortSig
     return result.data;
   }, init, signal, init.method ? 45000 : 12000);
 }
-async function load(direction: -1 | 0 | 1 = 0, refresh = false) {
-  if (listDriving && refresh) { reachedNewer.value = false; void loadRecent(); return; }
+async function loadRange() {
   pageController?.abort(); pageController = undefined; loadingMore.value = false;
   reachedOlder.value = false; reachedNewer.value = false;
-  if (!direction && live.value) void loadRecent();
-  if (refresh && controller) { refreshQueued = true; return; }
   const margin = Math.max(15 * 60_000, span.value / 4);
-  const step = Math.max(30 * 60_000, (loadedRange.end - loadedRange.start) / 2);
-  const start = direction ? Math.max(0, loadedRange.start + direction * step) : Math.max(0, viewStart.value - margin);
-  const end = direction ? loadedRange.end + direction * step : viewEnd.value + margin;
+  const start = Math.max(0, viewStart.value - margin);
+  const end = viewEnd.value + margin;
   controller?.abort();
   const pending = new AbortController(); controller = pending;
   requestedRange = { start, end }; fetching.value = true;
-  statusController?.abort();
+  try {
+    const timeline = await (async () => {
+        const rows: AllDayEvent[] = [];
+        // Keep each storage query bounded while the viewport crosses arbitrary dates.
+        for (let since = start; since < end; since += 86400_000) {
+          const page = await data<{ events: AllDayEvent[] }>(`/events?since=${since}&until=${Math.min(end, since + 86400_000)}`, {}, pending.signal);
+          rows.push(...page.events);
+        }
+        return { events: [...new Map(rows.map(event => [event.id, event])).values()].sort((a, b) => a.startedAt - b.startedAt) };
+      })();
+    if (pending.signal.aborted) return;
+    const anchor = listDriving ? listAnchor() : undefined;
+    loadedRange = { start, end }; completeRange = true;
+    events.value = mergeReviewEvents(events.value, mergeReviewEvents(timeline.events, recentEvents));
+    error.value = ""; hasLoaded.value = true;
+    cacheRecords();
+    await nextTick();
+    if (pending.signal.aborted) return;
+    if (anchor && listDriving) {
+      const index = listEvents.value.findIndex(item => item.id === anchor.id);
+      if (index >= 0) scrollListTo(index * rowStride - anchor.offset);
+    } else if (!listDriving) syncListToCursor();
+  } catch (failure) {
+    if (!pending.signal.aborted) error.value = failureMessage(failure);
+  } finally {
+    if (controller === pending) {
+      requestedRange = undefined; controller = undefined; fetching.value = false;
+      if (refreshQueued && !disposed) {
+        refreshQueued = false; clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(() => void refreshOverview(), 1000);
+      }
+    }
+  }
+}
+function loadStatus() {
+  if (statusController || disposed) return;
   const statusPending = new AbortController(); statusController = statusPending;
   void data<NonNullable<typeof state.value>>("", {}, statusPending.signal).then(snapshot => {
     if(statusPending.signal.aborted || disposed) return;
@@ -220,51 +255,83 @@ async function load(direction: -1 | 0 | 1 = 0, refresh = false) {
     }
   }).catch(failure => {
     if(!statusPending.signal.aborted && !disposed) stateError.value = failureMessage(failure);
-  });
-  try {
-    const timeline = await (async () => {
-        const rows: AllDayEvent[] = [];
-        // Keep each storage query bounded while the viewport crosses arbitrary dates.
-        for (let since = start; since < end; since += 86400_000) {
-          const page = await data<{ events: AllDayEvent[] }>(`/events?since=${since}&until=${Math.min(end, since + 86400_000)}`, {}, pending.signal);
-          rows.push(...page.events);
-        }
-        return { events: [...new Map(rows.map(event => [event.id, event])).values()].sort((a, b) => a.startedAt - b.startedAt) };
-      })();
-    if (pending.signal.aborted) return;
-    const anchor = listDriving ? listAnchor() : undefined;
-    loadedRange = { start, end }; completeRange = true; rangeEvents = timeline.events;
-    events.value = live.value ? mergeReviewEvents(rangeEvents, recentEvents) : rangeEvents;
-    error.value = ""; hasLoaded.value = true;
-    cachedPreview.value = live.value && !recentValidated && recentEvents.length > 0;
-    // Bounded read-only preview; the owner is always revalidated on entry.
-    clearTimeout(cacheTimer);
-    const cacheRole = props.roleId;
-    const cacheEvents = events.value;
-    if (!cachedPreview.value) cacheTimer = setTimeout(() => {
-      try {
-        const cached = JSON.stringify({ at: Date.now(), events: cacheEvents.slice(-200) });
-        if (cached.length <= 1_000_000) localStorage.setItem(`all-day-preview:${cacheRole}`, cached);
-      } catch { /* Storage may be disabled or full; live reads remain authoritative. */ }
-    },300);
-    await nextTick();
-    if (pending.signal.aborted) return;
-    if (anchor && listDriving) {
-      const index = listEvents.value.findIndex(item => item.id === anchor.id);
-      if (index >= 0) scrollListTo(index * rowStride - anchor.offset);
-    } else if (!listDriving) syncListToCursor();
-  } catch (failure) {
-    if (!pending.signal.aborted) error.value = failureMessage(failure);
-  } finally {
-    if (controller === pending) {
-      requestedRange = undefined; controller = undefined; fetching.value = false;
-      if (refreshQueued && !disposed) {
-        refreshQueued = false; clearTimeout(refreshTimer);
-        refreshTimer = setTimeout(() => void load(0, true), 1000);
-      }
-    }
-  }
+  }).finally(() => { if (statusController === statusPending) statusController = undefined; });
 }
+function preserveList(anchor: ReturnType<typeof listAnchor>) {
+  if (!anchor || live.value) return;
+  const index = listEvents.value.findIndex(row => row.id === anchor.id);
+  if (index >= 0) scrollListTo(index * rowStride - anchor.offset);
+}
+function cacheRecords() {
+  if (cachedPreview.value) return;
+  clearTimeout(cacheTimer);
+  const role = props.roleId, rows = events.value;
+  cacheTimer = setTimeout(() => rememberRecordingPreview(role, rows), 300);
+}
+async function loadCatalog() {
+  catalogController?.abort();
+  const pending = new AbortController(); catalogController = pending;
+  fetching.value = true; historyMessage.value = "";
+  try {
+    const catalog = await data<AllDayCatalog>("/catalog", {}, pending.signal);
+    if (pending.signal.aborted || disposed) return;
+    catalogReceived = true;
+    catalogDays.clear(); validatedCatalogDays.clear();
+    for (const day of catalog.days) catalogDays.add(day);
+    const anchor = listAnchor();
+    events.value = mergeReviewEvents(events.value, mergeReviewEvents(catalog.events, recentEvents));
+    hasLoaded.value = true; error.value = "";
+    loadedRange = { start: 0, end: Date.now() + 86400_000 };
+    catalogComplete = completeRange = false;
+    reachedOlder.value = reachedNewer.value = false;
+    await nextTick(); preserveList(anchor);
+    const pendingDays = new Set<string>();
+    const days = catalog.days.slice().reverse();
+    let nextDay = 0, completed = 0;
+    const failures: unknown[] = [];
+    await Promise.all(Array.from({ length: Math.min(4, days.length) }, async () => {
+      while (nextDay < days.length && !pending.signal.aborted && !disposed) {
+        const day = days[nextDay++];
+        let page: AllDayCatalog;
+        try { page = await data<AllDayCatalog>(`/catalog?day=${day}`, {}, pending.signal); }
+        catch (failure) { failures.push(failure); continue; }
+        if (pending.signal.aborted || disposed) return;
+        for (const incomplete of page.incompleteDays) pendingDays.add(incomplete);
+        if (!page.incompleteDays.length) validatedCatalogDays.add(day);
+        const anchor = listAnchor();
+        const previous = page.incompleteDays.length ? events.value : events.value.filter(row => new Date(row.startedAt).toISOString().slice(0, 10) !== day);
+        events.value = mergeReviewEvents(mergeReviewEvents(previous, page.events), recentEvents);
+        completed++;
+        historyMessage.value = completed < days.length ? label(`历史日期 ${completed}/${days.length}，事件可直接查看`, `History dates ${completed}/${days.length}; events are ready to view`) : "";
+        await nextTick(); preserveList(anchor);
+      }
+    }));
+    if (pending.signal.aborted || disposed) return;
+    cachedPreview.value = false; cacheRecords();
+    if (failures.length) throw failures[0];
+    const repairDays = [...pendingDays].sort().reverse();
+    // A missing/dirty day's repair never hides indexed rows or locks selection.
+    for (const day of repairDays) {
+      historyMessage.value = label("部分历史正在补齐，已显示事件可直接查看", "Completing history; displayed events are ready to view");
+      const since = Date.parse(day);
+      const page = await data<{ events: AllDayEvent[] }>(`/events?since=${since}&until=${since + 86400_000}`, {}, pending.signal);
+      if (pending.signal.aborted || disposed) return;
+      const anchor = listAnchor();
+      events.value = mergeReviewEvents(events.value, page.events);
+      await nextTick(); preserveList(anchor); cacheRecords();
+    }
+    catalogComplete = completeRange = true; reachedOlder.value = reachedNewer.value = true;
+    historyMessage.value = "";
+  } catch (failure) {
+    if (!pending.signal.aborted && !disposed) {
+      error.value = failureMessage(failure);
+      historyMessage.value = label("历史更新失败，已显示事件仍可查看；点击刷新重试", "History update failed; displayed events remain available. Refresh to retry.");
+    }
+  } finally { if (catalogController === pending) { catalogController = undefined; fetching.value = false; } }
+}
+function refreshOverview() { loadStatus(); void loadRecent(); }
+function refreshRecords() { refreshOverview(); void loadCatalog(); }
+
 async function loadRecent() {
   if (recentController || disposed) return;
   const pending = new AbortController(); recentController = pending;
@@ -273,19 +340,12 @@ async function loadRecent() {
   try {
     const result = await data<{ events: AllDayEvent[] }>("/recent", {}, pending.signal);
     if (pending.signal.aborted || disposed || role !== props.roleId) return;
-    recentEvents = result.events; recentValidated = true;
-    if (!live.value) {
-      const updates = new Map(result.events.map(row => [row.id,row]));
-      events.value = events.value.map(row => updates.get(row.id) ?? row);
-      return;
-    }
-    events.value = mergeReviewEvents(rangeEvents, recentEvents);
-    cachedPreview.value = false;
-    try {
-      const preview = JSON.stringify({ at: Date.now(), events: result.events.slice(-200) });
-      if (preview.length <= 1_000_000) localStorage.setItem(`all-day-preview:${role}`, preview);
-    } catch { /* Preview storage is optional; original records remain on the server. */ }
-  } catch { /* The full range request reports errors and remains authoritative. */ }
+    const anchor = listAnchor();
+    recentEvents = result.events;
+    events.value = mergeReviewEvents(events.value, recentEvents);
+    if (events.value.length) hasLoaded.value = true;
+    await nextTick(); preserveList(anchor); cacheRecords();
+  } catch { /* Catalog failures are visible; recent refresh never erases cached history. */ }
   finally { clearTimeout(timeout); if (recentController === pending) recentController = undefined; }
 }
 async function action(name: "start" | "stop" | "settings") {
@@ -294,7 +354,7 @@ async function action(name: "start" | "stop" | "settings") {
   try {
     await data(`/${name}`, { method: name === "settings" ? "PUT" : "POST", headers: { "content-type": "application/json" }, ...(name === "settings" ? { body: JSON.stringify(settings.value) } : {}) });
     if (name === "settings") settingsOpen.value = false;
-    await load();
+    refreshRecords();
   } catch (failure) { error.value = failureMessage(failure); }
   finally { busy.value = false; }
 }
@@ -343,8 +403,8 @@ async function loadPage(direction: "older" | "newer") {
     error.value = ""; hasLoaded.value = true;
     const anchor = listAnchor();
     const merged = [...new Map([...events.value, ...page.events].map(row => [row.id,row])).values()].sort((a,b) => a.startedAt-b.startedAt || a.id.localeCompare(b.id));
-    if (merged.length > 2000) completeRange = false;
-    events.value = direction === "older" ? merged.slice(0,2000) : merged.slice(-2000);
+    completeRange = false;
+    events.value = merged;
     if (direction === "older") { reachedOlder.value = !page.hasMore; if (merged.length > 2000) reachedNewer.value = false; }
     else { reachedNewer.value = !page.hasMore; if (merged.length > 2000) reachedOlder.value = false; }
     await nextTick();
@@ -401,7 +461,7 @@ async function adjacentEvent(direction: "older" | "newer") {
     if (!next) { navigationMessage.value = direction === "older" ? label('已到最早事件', 'First event reached') : label('已到最新事件', 'Latest event reached'); return; }
     events.value = [...new Map([...events.value, ...page.events].map(row => [row.id,row])).values()]
       .sort((a,b) => a.startedAt-b.startedAt || a.id.localeCompare(b.id));
-    if (events.value.length > 2000) { completeRange = false; events.value = direction === "older" ? events.value.slice(0,2000) : events.value.slice(-2000); }
+    completeRange = false;
     error.value = "";
     select(next);
   } catch (failure) { if (!disposed && role === props.roleId) error.value = failureMessage(failure); }
@@ -412,7 +472,7 @@ function jumpDate(value: string) {
   if (!Number.isFinite(time)) return;
   stopMotion(); span.value = 86400_000; position(time);
 }
-function now() { stopMotion(); live.value = true; position(Date.now()); selectedId.value = latestReviewEvent(events.value.filter(matchesFilter),filter.value)?.id ?? ""; void load(); }
+function now() { stopMotion(); live.value = true; position(Date.now()); selectedId.value = latestReviewEvent(events.value.filter(matchesFilter),filter.value)?.id ?? ""; refreshRecords(); }
 function zoom(factor: number) { takeTimelineControl(); span.value = Math.max(minSpan, Math.min(maxSpan, span.value * factor)); }
 function beginDrag(event: PointerEvent) {
   if (!ruler.value || event.button !== 0 || (event.target as HTMLElement).closest('button, input, audio')) return;
@@ -464,53 +524,58 @@ liveFrame = requestAnimationFrame(animateClock);
 watch([cursor, selectedId, filter, eventType], () => { navigationMessage.value = ""; if (!listDriving) void nextTick(syncListToCursor); });
 watch([filter,eventType], () => { pageController?.abort(); pageController = undefined; loadingMore.value = false; reachedOlder.value = false; reachedNewer.value = false; });
 watch([viewStart, viewEnd], () => {
-  if (listDriving || navigatingEvent.value) return;
+  if (live.value || catalogController || listDriving || navigatingEvent.value || catalogComplete) return;
   const range = requestedRange ?? loadedRange;
   if (viewStart.value >= range.start && viewEnd.value <= range.end) return;
-  clearTimeout(rangeTimer); rangeTimer = setTimeout(() => void load(), 120);
+  clearTimeout(rangeTimer); rangeTimer = setTimeout(() => void loadRange(), 120);
 });
 function openSettings() { if (state.value) settings.value = structuredClone(toRaw(state.value.settings)); settingsOpen.value = true; }
 watch(() => props.roleId, () => {
   pageController?.abort(); pageController = undefined; loadingMore.value = false; reachedOlder.value = false; reachedNewer.value = false;
   recentController?.abort(); recentController = undefined; cachedPreview.value = false;
-  recentEvents = []; rangeEvents = []; recentValidated = false;
+  catalogController?.abort(); catalogController = undefined; catalogComplete = false; catalogReceived = false; historyMessage.value = ""; fetching.value = false;
+  catalogDays.clear(); validatedCatalogDays.clear();
+  recentEvents = [];
   clearImages(); clearTimeout(cacheTimer); live.value = true;
   statusController?.abort(); stateError.value = "";
   controller?.abort(); controller = undefined; refreshQueued = false; listScrollTop.value = 0; eventSource?.close(); clearTimeout(refreshTimer);
   stopMotion(); loadedRange = { start: 0, end: 0 }; completeRange = false; navigationController?.abort(); state.value = null; events.value = []; selectedId.value = ""; settingsOpen.value = false;
   hasLoaded.value = false;
-  try {
-    const cached = JSON.parse(localStorage.getItem(`all-day-preview:${props.roleId}`) || "null");
-    if (cached && Date.now() - cached.at < 86400_000 && Array.isArray(cached.events)) {
-      events.value = cached.events.filter((item: AllDayEvent) => item && typeof item.id === 'string' && isReviewEvent(item) && sources.value.some(source => source.id === item.source));
-      recentEvents = events.value;
-      cachedPreview.value = events.value.length > 0;
-    }
-  } catch { /* Ignore an unavailable or invalid preview cache. */ }
+  events.value = recordingPreview(props.roleId);
+  cachedPreview.value = events.value.length > 0;
+  const role = props.roleId;
+  void restoreRecordingPreview(role).then(rows => {
+    if (disposed || role !== props.roleId || catalogComplete || !rows.length) return;
+    const provisional = rows.filter(row => {
+      const day = new Date(row.startedAt).toISOString().slice(0, 10);
+      return !validatedCatalogDays.has(day) && (!catalogReceived || catalogDays.has(day));
+    });
+    events.value = mergeReviewEvents(mergeReviewEvents(provisional, events.value), recentEvents); cachedPreview.value = true; hasLoaded.value = true;
+  });
   takeTimelineControl(); expectedScrollTop = undefined;
-  void load();
+  refreshRecords();
   eventSource = managerEventSource("/api/events");
   eventSource.addEventListener("all_day_recording", raw => {
     try { const event = JSON.parse((raw as MessageEvent).data); if (!event.mobile && event.roleId !== props.roleId) return; } catch { return; }
     if (document.hidden) { refreshQueued = true; return; }
     if (navigatingEvent.value) { refreshQueued = true; return; }
-    if (controller) { refreshQueued = true; if (live.value) void loadRecent(); return; }
-    clearTimeout(refreshTimer); refreshTimer = setTimeout(() => void load(0, true), 500);
+    if (recentController) { refreshQueued = true; return; }
+    clearTimeout(refreshTimer); refreshTimer = setTimeout(() => void refreshOverview(), 500);
   });
 }, { immediate: true });
 
-function resumeVisible() { if (!document.hidden && refreshQueued) { refreshQueued = false; void load(0, true); } }
+function resumeVisible() { if (!document.hidden && refreshQueued) { refreshQueued = false; refreshOverview(); } }
 document.addEventListener("visibilitychange", resumeVisible);
 onBeforeUnmount(() => recentController?.abort());
 onBeforeUnmount(() => pageController?.abort());
-onBeforeUnmount(() => { disposed = true; navigationController?.abort(); clearImages(); clearTimeout(cacheTimer); statusController?.abort(); document.removeEventListener("visibilitychange", resumeVisible); stopMotion(); cancelAnimationFrame(listFrame); cancelAnimationFrame(liveFrame); clearTimeout(rangeTimer); controller?.abort(); eventSource?.close(); clearTimeout(refreshTimer); });
+onBeforeUnmount(() => { disposed = true; catalogController?.abort(); navigationController?.abort(); clearImages(); clearTimeout(cacheTimer); statusController?.abort(); document.removeEventListener("visibilitychange", resumeVisible); stopMotion(); cancelAnimationFrame(listFrame); cancelAnimationFrame(liveFrame); clearTimeout(rangeTimer); controller?.abort(); eventSource?.close(); clearTimeout(refreshTimer); });
 </script>
 
 <template>
   <section class="all-day" data-testid="persona-all-day-recording">
     <div class="recording-toolbar">
       <div><h2>{{ label('全天记录', 'All-day recording') }}</h2><span class="muted">{{ label('电脑、手机与家庭设备 · 时间轴和事件', 'Computer, mobile and home devices · Timeline and events') }}</span></div>
-    <div class="event-heading"><h3>{{ label('事件', 'Events') }} <span class="muted">{{ listEvents.length }}</span></h3><span v-if="loadingMore || fetching" role="status" class="muted">{{ label('正在加载…', 'Loading…') }}</span><v-select v-model="eventType" :items="[{id: 'all', name: label('全部类型','All types')}, {id: 'asr', name: label('ASR 事件','ASR events')}, {id: 'image', name: label('画面','Images')}, {id: 'window', name: label('窗口','Windows')}, {id: 'status', name: label('采集状态','Capture status')}, {id: 'device', name: label('设备事件','Device events')}]" item-title="name" item-value="id" density="compact" hide-details variant="outlined" :aria-label="label('筛选事件类型','Filter event types')" /><v-select v-model="filter" :items="[{ id: 'all', name: label('全部来源', 'All sources') }, ...sources]" item-title="name" item-value="id" density="compact" hide-details variant="outlined" :aria-label="label('筛选来源', 'Filter sources')" /><v-btn icon="mdi-refresh" variant="text" :aria-label="label('刷新记录', 'Refresh records')" @click="load(0, true)" /></div>
+    <div class="event-heading"><h3>{{ label('事件', 'Events') }} <span class="muted">{{ listEvents.length }}</span></h3><span v-if="loadingMore || (fetching && !listEvents.length)" role="status" class="muted">{{ label('正在加载…', 'Loading…') }}</span><v-select v-model="eventType" :items="[{id: 'all', name: label('全部类型','All types')}, {id: 'asr', name: label('ASR 事件','ASR events')}, {id: 'image', name: label('画面','Images')}, {id: 'window', name: label('窗口','Windows')}, {id: 'status', name: label('采集状态','Capture status')}, {id: 'device', name: label('设备事件','Device events')}]" item-title="name" item-value="id" density="compact" hide-details variant="outlined" :aria-label="label('筛选事件类型','Filter event types')" /><v-select v-model="filter" :items="[{ id: 'all', name: label('全部来源', 'All sources') }, ...sources]" item-title="name" item-value="id" density="compact" hide-details variant="outlined" :aria-label="label('筛选来源', 'Filter sources')" /><v-btn icon="mdi-refresh" variant="text" :aria-label="label('刷新记录', 'Refresh records')" @click="refreshRecords" /></div>
       <div class="toolbar-buttons">
         <v-chip :color="state?.running ? 'success' : undefined" size="small" variant="tonal">{{ !state ? stateError ? label('读取失败', 'Unavailable') : label('正在加载', 'Loading') : state.activeRoleId && state.activeRoleId !== roleId ? label('其他人格记录中', 'Another persona is recording') : state.running ? state.error ? label('部分来源不可用', 'Some sources unavailable') : label('正在记录', 'Recording') : state.enabled ? label('等待启动', 'Waiting to start') : label('已关闭', 'Off') }}</v-chip>
         <v-switch :model-value="state?.enabled ?? state?.running ?? false" :disabled="busy || !state || !!(state.activeRoleId && state.activeRoleId !== roleId)" :loading="busy" color="secondary" hide-details inset :label="label('开启记录', 'Enable recording')" @update:model-value="action($event ? 'start' : 'stop')" />
@@ -519,7 +584,7 @@ onBeforeUnmount(() => { disposed = true; navigationController?.abort(); clearIma
     </div>
     <v-alert v-if="error || stateError || state?.error" type="error" variant="tonal">{{ error || stateError || state?.error }}</v-alert>
     <v-alert v-if="state?.activeRoleId && state.activeRoleId !== roleId" type="info" variant="tonal">{{ label('这台电脑正在为另一个人格记录：', 'This computer is recording for another persona: ') }}{{ state.activeRoleId }}</v-alert>
-    <div class="recording-status-line"><span v-if="cachedPreview" class="muted" role="status">{{ fetching ? label('已显示上次记录，正在更新…', 'Showing cached records. Updating…') : label('已显示上次记录', 'Showing cached records') }}</span></div>
+    <div class="recording-status-line"><span v-if="historyMessage" class="muted" role="status">{{ historyMessage }}</span><span v-else-if="cachedPreview" class="muted" role="status">{{ fetching ? label('已显示上次记录，正在更新…', 'Showing cached records. Updating…') : label('已显示上次记录', 'Showing cached records') }}</span></div>
     <div class="recording-workspace">
     <div class="review-column">
     <v-card class="app-card glass-card review-card">

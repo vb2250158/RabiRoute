@@ -36,6 +36,12 @@ export type AllDaySnapshot = {
   lastSampleAt: number | null;
   error: string;
 };
+/** Derived history metadata can be displayed while interrupted indexes recover. */
+export type AllDayCatalog = {
+  events: AllDayEvent[];
+  days: string[];
+  incompleteDays: string[];
+};
 /** Raw audio stays durable; only recognized speech belongs in the review event stream. */
 export function isReviewEvent(event: AllDayEvent): boolean {
   return event.kind !== "audio" || ((event.transcriptionState === undefined || event.transcriptionState === "ready") && !!event.text?.trim());

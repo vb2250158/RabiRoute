@@ -487,6 +487,7 @@ import {
   type GatewayDiagnosticsWorkerResult
 } from "./gatewayDiagnosticsSnapshot.js";
 import { buildIsolatedGatewayDiagnosticsSnapshot } from "./gatewayDiagnosticsSnapshotWorker.js";
+import { GatewayStatusSnapshotService, readGatewayStatusInWorker } from "./gatewayStatusSnapshot.js";
 import { handlePersonaMessagingApi } from "./personaMessagingRoutes.js";
 import { loadPersonaMessageAuthority, type PersonaMessageAuthority } from "./personaMessageAuthority.js";
 import { handleRoleContextProjectionRequest } from "./roleContextProjection.js";
@@ -3457,31 +3458,21 @@ async function napcatScanHealthPayload(): Promise<{
 
 
 
+let gatewayStatusSnapshotService: GatewayStatusSnapshotService | undefined;
+
+function activeGatewayStatusSnapshotService(): GatewayStatusSnapshotService {
+  gatewayStatusSnapshotService ??= new GatewayStatusSnapshotService({
+    load: (statusPath, signal) => managerReadWorkerPool.run<Record<string, unknown>>({
+      type: "gateway_status_snapshot", statusPath
+    }, { signal, timeoutMs: 12_000 })
+  });
+  return gatewayStatusSnapshotService;
+}
+
 function readGatewayStatus(definition: GatewayDefinition): Record<string, unknown> {
   const statusPath = path.join(dataDirFor(definition), "gateway-status.json");
-  if (!fs.existsSync(statusPath)) {
-    return {
-      statusPath,
-      napcat: {
-        connected: false
-      }
-    };
-  }
-
-  try {
-    return {
-      ...JSON.parse(fs.readFileSync(statusPath, "utf8")) as Record<string, unknown>,
-      statusPath
-    };
-  } catch (error) {
-    return {
-      statusPath,
-      napcat: {
-        connected: false,
-        error: error instanceof Error ? error.message : String(error)
-      }
-    };
-  }
+  if (process.env.RABIROUTE_MANAGER_READ_PROCESS === "1") return readGatewayStatusInWorker(statusPath);
+  return activeGatewayStatusSnapshotService().read(definition.id, statusPath);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -9192,6 +9183,11 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     throw error;
   };
   managerRuntimeOwner.register("operational_log_flush", () => managerOperationalLog.flush());
+  const activeGatewayStatuses = activeGatewayStatusSnapshotService();
+  managerRuntimeOwner.register("gateway_status_snapshots", () => {
+    activeGatewayStatuses.stop();
+    if (gatewayStatusSnapshotService === activeGatewayStatuses) gatewayStatusSnapshotService = undefined;
+  });
   managerRuntimeOwner.register("data_mutation_audit_sink", () => uninstallDataMutationAuditSink());
   knowledgeSearchService = new KnowledgeSearchService({
     readDelta: (roleDir, previous, signal) => managerCatalogWorkerPool.run({

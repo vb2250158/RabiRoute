@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
-import { ALL_DAY_CAPTURE_SOURCES, ALL_DAY_SOURCES, DEFAULT_ALL_DAY_SETTINGS, isReviewEvent, matchesReviewType, normalizeAllDaySettings, type AllDayEvent, type AllDaySettings, type AllDaySnapshot } from "../shared/allDayRecording.js";
+import { ALL_DAY_CAPTURE_SOURCES, ALL_DAY_SOURCES, DEFAULT_ALL_DAY_SETTINGS, isReviewEvent, matchesReviewType, normalizeAllDaySettings, type AllDayCatalog, type AllDayEvent, type AllDaySettings, type AllDaySnapshot } from "../shared/allDayRecording.js";
 import type { HomeAssistantActivityPort, HomeAssistantActivityRecord, HomeAssistantActivityRequest } from "../shared/homeAssistantActivity.js";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -188,6 +188,51 @@ export class AllDayRecordingStore {
     const mobile = settings.mobileDeviceIds.length
       ? (await recentRows(path.join(this.mobileRoot, "events"))).filter(row => settings.mobileDeviceIds.includes(row.deviceId)) : [];
     return [...computer, ...mobile].filter(isReviewEvent).sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id));
+  }
+  async catalog(roleId: string, day?: string): Promise<AllDayCatalog> {
+    if (day !== undefined && (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !Number.isFinite(Date.parse(day)))) throw new Error("Invalid recording day");
+    const settings = await this.settings(roleId);
+    const directories = [path.join(this.directory(roleId), "events"), ...(settings.mobileDeviceIds.length ? [path.join(this.mobileRoot, "events")] : [])];
+    const days = new Set<string>(), incompleteDays = new Set<string>();
+    const rows: AllDayEvent[] = [];
+    if (day !== undefined) {
+      days.add(day);
+      await Promise.all(directories.map(async directory => {
+        let index: DayIndex | null = null;
+        let damaged = false;
+        const dirty = await fs.access(dayDirtyPath(directory, day)).then(() => true, error => { if (error.code === "ENOENT") return false; throw error; });
+        try { index = await jsonOr<DayIndex | null>(dayIndexPath(directory, day), null); }
+        catch (error) { if (!(error instanceof SyntaxError)) throw error; damaged = true; }
+        if (!index || index.schemaVersion !== 2 || !Array.isArray(index.events) || !index.events.every(row => row && typeof row.id === "string" && Number.isFinite(row.startedAt) && Number.isFinite(row.endedAt))) {
+          // An absent mobile shard with no originals is an empty contribution.
+          if (index || damaged || dirty) incompleteDays.add(day);
+          try { await fs.access(path.join(directory, day)); incompleteDays.add(day); }
+          catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+          return;
+        }
+        if (dirty) incompleteDays.add(day);
+        for (const row of index.events) if (isReviewEvent(row) && (row.source !== "mobile" || settings.mobileDeviceIds.includes(row.deviceId))) rows.push(row);
+      }));
+    } else {
+      const names = async (directory: string): Promise<string[]> => {
+        try { return await fs.readdir(directory); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
+      };
+      for (const directory of directories) {
+        const [originals, indexes] = await Promise.all([names(directory), names(path.join(path.dirname(directory), "events-index"))]);
+        const indexNames = new Set(indexes);
+        const dates = new Set([...originals.filter(name => /^\d{4}-\d{2}-\d{2}$/.test(name)), ...indexes.filter(name => /^\d{4}-\d{2}-\d{2}\.json$/.test(name)).map(name => name.slice(0, 10))]);
+        for (const date of dates) {
+          days.add(date);
+          if (!indexNames.has(`${date}.json`) || indexNames.has(`${date}.dirty.json`)) incompleteDays.add(date);
+        }
+      }
+    }
+    // Opening the catalog never scans originals or takes the capture write lock.
+    // Day responses stay independent so large history can render progressively.
+    const recent = day === undefined ? await this.recent(roleId) : [];
+    const events = [...new Map([...rows, ...recent].map(row => [row.id, row])).values()].sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id));
+    return { events, days: [...days].sort(), incompleteDays: [...incompleteDays].sort() };
   }
   async page(roleId: string, direction: "older" | "newer", cursor: { time: number; id: string }, source = "all", limit = 100, eventType = "all") {
     if (!["all", "asr", "image", "window", "status", "device"].includes(eventType)) throw new Error("Invalid event type");
