@@ -17,7 +17,7 @@
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="许可证：MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 20 或更高版本" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="当前版本：0.3.23" src="https://img.shields.io/badge/version-0.3.23-3178c6">
+  <img alt="当前版本：0.3.24" src="https://img.shields.io/badge/version-0.3.24-3178c6">
   <img alt="状态：积极开发中" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
@@ -73,7 +73,7 @@ npm run status:linux -- --json
 
 ## 当前能力
 
-仓库当前版本为 `0.3.23`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
+仓库当前版本为 `0.3.24`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
 
 | 范围 | 当前状态 | 用户可以完成什么 |
 | --- | --- | --- |
@@ -94,6 +94,10 @@ npm run status:linux -- --json
 完整状态、限制和事实源见[当前能力与成熟度](docs/current-capabilities.md)。
 
 ## 近期变化
+
+### 0.3.24：复制提示词接入电脑
+
+在公网 RabiLink 控制台选中应用，复制接入提示词给目标电脑的私密 Agent 任务。三十分钟有效的一次性接入码绑定当前应用，Agent 自动核对下载内容、保留独立身份、保存私有配置，并通过原 Host 连接。电脑长期凭据由本机生成和保管。安装、恢复与验证见[电脑接入提示词](docs/rabilink-pc-pairing.md)。
 
 ### 0.3.23：一次连接，默认使用服务
 

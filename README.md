@@ -17,7 +17,7 @@ English | <a href="./README_zh.md">简体中文</a>
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 20 or newer" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="Current version: 0.3.23" src="https://img.shields.io/badge/version-0.3.23-3178c6">
+  <img alt="Current version: 0.3.24" src="https://img.shields.io/badge/version-0.3.24-3178c6">
   <img alt="Status: active development" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
@@ -73,7 +73,7 @@ The manual trigger performs a real delivery. See [Complete the first Route](docs
 
 ## Current capabilities
 
-The repository version is `0.3.23`. The table lists behavior backed by current code, configuration surfaces, and tests. Features that require accounts, external services, or physical devices still need acceptance in their target environment.
+The repository version is `0.3.24`. The table lists behavior backed by current code, configuration surfaces, and tests. Features that require accounts, external services, or physical devices still need acceptance in their target environment.
 
 | Area | Status | What it provides |
 | --- | --- | --- |
@@ -94,6 +94,10 @@ The repository version is `0.3.23`. The table lists behavior backed by current c
 See [Current capabilities and maturity](docs/current-capabilities_en.md) for complete status, limits, and sources of truth.
 
 ## Recent changes
+
+### 0.3.24: connect a PC with one prompt
+
+In the public RabiLink console, select an application and copy its onboarding prompt to a private Agent task on the target computer. An application-bound, single-use code valid for thirty minutes lets the Agent verify the download, preserve its independent identity, save private settings and connect through its original Host. The computer keeps its own long-term credential. See [PC onboarding](docs/rabilink-pc-pairing_en.md) for setup, recovery and verification.
 
 ### 0.3.23: one connection, default service access
 

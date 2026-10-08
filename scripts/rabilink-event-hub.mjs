@@ -67,6 +67,7 @@ export class RabiLinkEventHub {
       this.subscribers.delete(subscriber);
       if (!response.writableEnded) response.end();
     };
+    subscriber.close = close;
     return { emit, close };
   }
 
@@ -134,6 +135,11 @@ export class RabiLinkEventHub {
       if (waiter.type !== clean(type) || !matches(waiter, event)) continue;
       waiter.finish(true);
     }
+  }
+
+  disconnect(identity) {
+    for (const subscriber of [...this.subscribers]) if (matches(subscriber, identity)) subscriber.close();
+    for (const waiter of [...this.waiters]) if (matches(waiter, identity)) waiter.finish(false);
   }
 
   close() {

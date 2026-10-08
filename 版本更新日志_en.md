@@ -6,6 +6,15 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.24 - 2026-10-08
+
+### RabiPC one-time onboarding prompt
+
+- Unify public-console onboarding behind Copy onboarding prompt. Issue an application-bound code valid for thirty minutes. The target Agent downloads and verifies pinned client hashes, redeems the code, preserves its independent identity, saves private connection settings, and starts through its original Host before verifying presence.
+- Relay stores only hashes of enrollment codes, recovery proofs and long-term PC credentials. One durable commit consumes the code and grants access, with original-request recovery, expiry/replay rejection, account isolation, device identity checks, and immediate event/tunnel closure on disconnection.
+- Back up configuration, detect concurrent edits and fully read back writes. Supply codes through stdin and clear them from the private request record after success. Collapse ordinary settings and logs; isolate legacy token and glasses-SN operations in a developer compatibility page while retaining released client contracts.
+- Add RuntimeOnly and PrepareOnly deployment modes to prepare and publish Relay runtime files while preserving remote WebGUI, OpenAPI, Caddy, accounts, applications and queues. Synchronize bilingual onboarding, recovery, access and deployment guidance.
+
 ## 0.3.23 - 2026-10-08
 
 ### QQ read APIs and synchronization of local changes

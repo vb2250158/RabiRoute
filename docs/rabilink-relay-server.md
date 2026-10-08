@@ -53,7 +53,11 @@ node scripts/rabilink-relay-server.mjs
 https://你的域名/manage
 ```
 
-首次进入时注册一个服务器账号，然后创建 RabiLink 应用。每个应用会生成独立 `rbl_...` token；控制台卡片默认显示 token 预览，但登录后可以随时复制完整 token。Rokid/灵珠插件和电脑端 RabiLink worker 都使用同一个应用 token，Relay 会按应用隔离 task 和下行消息队列。
+首次进入时注册服务器账号并创建 RabiLink 应用。新电脑只通过控制台的“复制接入提示词”接入：把完整提示词交给目标电脑的私密 Agent，它使用三十分钟有效的一次性接入码完成私有配置与连接。无需手填应用主 token；详见[电脑接入提示词](rabilink-pc-pairing.md)。
+
+### 已发布客户端与开发接入兼容
+
+旧应用 token、手机与 AIUI 接入合同继续兼容；这类操作移到独立的 `/manage?integration=1`。正常控制台不再并列展示 token、配对码和眼镜 SN 接入方式。以下手填 token 和 SN 操作仅用于已发布客户端兼容，待对应客户端完成迁移后移除。
 
 电脑端在 RibiWebGUI“RabiLink → 配置”中填写 Relay 地址、应用 token 和唯一的本机 PC 标识，然后打开全局“连接服务器”开关。该开关由 `data/Config.json` 的 `rabiLinkRelay.enabled` 持久化；开启后 Manager 会立即登记 PC 并常驻代理远程 WebGUI，不需要先启动某条眼镜路由。路由中的“眼镜端（经 RabiLink）”（内部兼容键 `rabilink`）决定 AIUI observation 写入哪个角色账本、由哪个固定 Agent 线程审阅；旧兼容消息仍按该路由直接转发。关闭全局开关会让整台 PC 停止连接 Relay，但不会删除 token 或路由配置。
 
@@ -65,7 +69,7 @@ https://你的域名/manage
 
 AIUI 不再要求用户先把应用主 token 填进灵珠变量。没有可用 token 时，眼镜进入 `RabiLink Setup`，通过 `navigator.getDeviceSerialNumber()` 显示本机完整 SN 和 Relay `/manage` 地址：
 
-1. 用户登录 `/manage`，在目标应用卡片的“眼镜 SN”输入框填写眼镜显示的完整 SN。
+1. 用户登录 `/manage?integration=1`，在目标应用卡片的“眼镜 SN”输入框填写眼镜显示的完整 SN。
 2. 点击“绑定 / 重置”。服务器只保存 SN 的 SHA-256、脱敏预览和十分钟领取窗口，不保存完整 SN。
 3. AIUI 每五秒调用 `POST /api/rabilink/devices/token`，请求体为 `{ "serialNumber": "..." }`。
 4. 服务器仅在当前账号已有同 SN 的待领取绑定时首次返回一个 `rbd_...` 设备 token，并只保存该 token 的 SHA-256。
@@ -107,6 +111,8 @@ Manager 的本地监听与 Relay 连接相互独立：Manager 先在操作系统
 远程 WebGUI 使用 `/manage` 登录 Cookie；PC worker 使用独立的 RabiLink 应用 token。Relay 不会把应用 token、管理 Cookie 或局域网 `webgui_token` 转发给本机 Manager，也不会把三种认证边界合并。
 
 ## 登录后的应用管理
+
+电脑或云端实例无法打开本地配置页时，可使用[电脑接入提示词](rabilink-pc-pairing.md)：在控制台复制含一次性接入码的完整提示词，目标 Agent 自动兑换、保存配置并验证连接。该入口需要部署新版 Relay，不能以源码实现代替公网验收。
 
 登录 `/manage` 后，左侧列出当前账号的应用。点击应用，右侧显示该应用的详情、token 操作、通讯 PC、眼镜 SN 绑定，以及所属 PC 和日志。刷新保留当前选择；创建后选中新应用，删除当前应用后切到剩余的第一个应用。没有应用时，右侧显示创建表单；也可点击左侧“新建应用”进入表单。窄屏按应用列表、应用详情的顺序上下排列。
 

@@ -5,7 +5,9 @@ param(
     [string]$Domain = "",
     [string]$RemoteRoot = "C:\opt\rabilink-relay",
     [string]$CaddyVersion = "2.8.4",
-    [int]$PublicHttpPort = 0
+    [int]$PublicHttpPort = 0,
+    [switch]$RuntimeOnly,
+    [switch]$PrepareOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -96,29 +98,29 @@ if (-not (Test-Path -LiteralPath $deviceLogStoreScript)) {
 if (-not (Test-Path -LiteralPath $proxyRequestQueueScript)) {
     throw "Relay proxy request queue script was not found: $proxyRequestQueueScript"
 }
-if (-not (Test-Path -LiteralPath (Join-Path $webguiDist "index.html"))) {
+if (-not $RuntimeOnly -and -not (Test-Path -LiteralPath (Join-Path $webguiDist "index.html"))) {
     throw "RabiRoute WebGUI build was not found: $webguiDist. Run the WebGUI build before deploying."
 }
-if (-not (Test-Path -LiteralPath $webguiAssets)) {
+if (-not $RuntimeOnly -and -not (Test-Path -LiteralPath $webguiAssets)) {
     throw "RabiRoute WebGUI asset directory was not found: $webguiAssets"
 }
-if (-not (Test-Path -LiteralPath $openApiFile)) {
+if (-not $RuntimeOnly -and -not (Test-Path -LiteralPath $openApiFile)) {
     throw "RabiLink OpenAPI document was not found: $openApiFile"
 }
-if (-not (Test-Path -LiteralPath $manualAuthOpenApiFile)) {
+if (-not $RuntimeOnly -and -not (Test-Path -LiteralPath $manualAuthOpenApiFile)) {
     throw "RabiLink manual auth OpenAPI document was not found: $manualAuthOpenApiFile"
 }
-if (-not (Test-Path -LiteralPath $agentTokenOpenApiFile)) {
+if (-not $RuntimeOnly -and -not (Test-Path -LiteralPath $agentTokenOpenApiFile)) {
     throw "RabiLink agent token OpenAPI document was not found: $agentTokenOpenApiFile"
 }
-if (-not (Test-Path -LiteralPath $speechOpenApiFile)) {
+if (-not $RuntimeOnly -and -not (Test-Path -LiteralPath $speechOpenApiFile)) {
     throw "RabiSpeech OpenAPI document was not found: $speechOpenApiFile"
 }
-if (-not (Test-Path -LiteralPath $KeyPath)) {
+if (-not $PrepareOnly -and -not (Test-Path -LiteralPath $KeyPath)) {
     throw "SSH key was not found: $KeyPath"
 }
 
-$bundleRoot = Join-Path $env:TEMP ("rabilink-relay-deploy-" + [DateTime]::Now.ToString("yyyyMMdd-HHmmss"))
+$bundleRoot = Join-Path $env:TEMP ("rabilink-relay-deploy-" + [DateTime]::Now.ToString("yyyyMMdd-HHmmss") + "-" + [Guid]::NewGuid().ToString('N'))
 $bundleZip = "$bundleRoot.zip"
 New-Item -ItemType Directory -Path $bundleRoot -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $bundleRoot "logs") -Force | Out-Null
@@ -141,6 +143,7 @@ foreach ($relative in $relayRuntimeFiles) {
 }
 New-Item -ItemType Directory -Force -Path (Join-Path $bundleRoot "node_modules") | Out-Null
 Copy-Item -LiteralPath (Join-Path $repoRoot "node_modules/ws") -Destination (Join-Path $bundleRoot "node_modules/ws") -Recurse -Force
+if (-not $RuntimeOnly) {
 New-Item -ItemType Directory -Path (Join-Path $bundleRoot "ribiwebgui") -Force | Out-Null
 Copy-Item -LiteralPath $webguiDist -Destination (Join-Path $bundleRoot "ribiwebgui\dist") -Recurse -Force
 Copy-Item -LiteralPath $webguiAssets -Destination (Join-Path $bundleRoot "assets") -Recurse -Force
@@ -148,13 +151,16 @@ Copy-Item -LiteralPath $openApiFile -Destination (Join-Path $bundleDataRoot "rok
 Copy-Item -LiteralPath $manualAuthOpenApiFile -Destination (Join-Path $bundleDataRoot "rokid-rabilink-plugin.MANUAL_AUTH.openapi.json") -Force
 Copy-Item -LiteralPath $agentTokenOpenApiFile -Destination (Join-Path $bundleDataRoot "rokid-rabilink-plugin.AGENT_TOKEN.openapi.json") -Force
 Copy-Item -LiteralPath $speechOpenApiFile -Destination (Join-Path $bundleDataRoot "rabilink-speech-api.openapi.json") -Force
+}
 
 $wsVersion = (Get-Content -Raw -LiteralPath (Join-Path $repoRoot "node_modules/ws/package.json") | ConvertFrom-Json).version
+$sourcePackageVersion = (Get-Content -Raw -LiteralPath (Join-Path $repoRoot "package.json") | ConvertFrom-Json).version
+if ($sourcePackageVersion -notmatch '^\d+\.\d+\.\d+$') { throw "Invalid source package version." }
 New-AsciiFile -Path (Join-Path $bundleRoot "package.json") -Content @"
 {
   "name": "rabilink-relay",
   "dependencies": { "ws": "$wsVersion" },
-  "version": "0.1.0",
+  "version": "$sourcePackageVersion",
   "private": true,
   "type": "module",
   "scripts": {
@@ -345,10 +351,19 @@ if (`$localHealth.ok -ne `$true) { throw "local health did not return ok=true" }
 if (`$domainHealth.ok -ne `$true) { throw "domain health did not return ok=true" }
 "@
 
+if ($RuntimeOnly) {
+    foreach ($file in @('Caddyfile', 'start-caddy.ps1')) {
+        Remove-Item -LiteralPath (Join-Path $bundleRoot $file) -Force
+    }
+}
 if (Test-Path -LiteralPath $bundleZip) {
     Remove-Item -LiteralPath $bundleZip -Force
 }
 Compress-Archive -Path (Join-Path $bundleRoot "*") -DestinationPath $bundleZip -Force
+if ($PrepareOnly) {
+    [pscustomobject]@{ Prepared = $true; RuntimeOnly = [bool]$RuntimeOnly; BundleRoot = $bundleRoot; BundleZip = $bundleZip }
+    return
+}
 
 $remotePublicHttpFirewall = ""
 $remotePublicHttpNetstat = ""
@@ -435,7 +450,9 @@ function Remove-LegacyRelayRuntimeLayout {
 }
 '@
 $relayRuntimeLiteral = ($relayRuntimeFiles | ForEach-Object { "'$_'" }) -join ", "
+$runtimeOnlyLiteral = if ($RuntimeOnly) { '$true' } else { '$false' }
 $remoteSetup = @"
+`$runtimeOnly = $runtimeOnlyLiteral
 `$ErrorActionPreference = "Stop"
 $relayLayoutFunctions
 `$remoteRoot = "$RemoteRoot"
@@ -447,7 +464,7 @@ New-Item -ItemType Directory -Force -Path `$backupRoot | Out-Null
 `$runtimeFiles = @($relayRuntimeLiteral)
 `$legacyRuntimeFiles = @(Get-LegacyRelayRuntimeFiles -Root `$remoteRoot -RuntimeFiles `$runtimeFiles)
 Backup-RelayRuntimeLayout -Root `$remoteRoot -BackupRoot `$backupRoot -Files (`$runtimeFiles + `$legacyRuntimeFiles + @("rabilink-relay-runtime-files.json", "scripts/rabilink-relay-runtime-files.json", "scripts/rabilink-knowledge-grant.mjs", "scripts/rabilink-knowledge-grant-ui.mjs", "start-rabilink-relay.ps1", "Caddyfile", "package.json"))
-if (Test-Path -LiteralPath (Join-Path `$remoteRoot "ribiwebgui")) {
+if (-not `$runtimeOnly -and (Test-Path -LiteralPath (Join-Path `$remoteRoot "ribiwebgui"))) {
     Copy-Item -LiteralPath (Join-Path `$remoteRoot "ribiwebgui") -Destination (Join-Path `$backupRoot "ribiwebgui") -Recurse -Force
 }
 try {
@@ -469,6 +486,7 @@ try {
 }
 New-Item -ItemType Directory -Force -Path "`$remoteRoot\logs" | Out-Null
 
+if (-not `$runtimeOnly) {
 if (Get-Service W3SVC -ErrorAction SilentlyContinue) {
     Stop-Service W3SVC -Force -ErrorAction SilentlyContinue
     Set-Service W3SVC -StartupType Disabled
@@ -485,6 +503,7 @@ if (-not (Test-Path -LiteralPath `$caddyExe)) {
     `$caddyZip = "C:\Windows\Temp\caddy.zip"
     Invoke-WebRequest -Uri "https://github.com/caddyserver/caddy/releases/download/v$CaddyVersion/caddy_${CaddyVersion}_windows_amd64.zip" -OutFile `$caddyZip
     Expand-Archive -Path `$caddyZip -DestinationPath `$caddyDir -Force
+}
 }
 
 `$taskName = "RabiLinkRelay"
@@ -560,6 +579,7 @@ if (-not `$stableRelayProcess) {
 }
 `$localHealth = Invoke-RestMethod -Uri "http://127.0.0.1:8788/health" -TimeoutSec 5
 
+if (-not `$runtimeOnly) {
 & `$caddyExe validate --config "`$remoteRoot\Caddyfile"
 Get-Process caddy -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 `$caddyTaskName = "RabiLinkCaddy"
@@ -572,6 +592,7 @@ Unregister-ScheduledTask -TaskName `$caddyTaskName -Confirm:`$false -ErrorAction
 Register-ScheduledTask -TaskName `$caddyTaskName -Action `$caddyAction -Trigger `$caddyTrigger -Settings `$serviceTaskSettings -User "SYSTEM" -RunLevel Highest -Description "RabiLink Caddy reverse proxy" -Force | Out-Null
 Start-ScheduledTask -TaskName `$caddyTaskName
 Start-Sleep -Seconds 5
+}
 
 Write-Host "localHealthOk=`$(`$localHealth.ok)"
 schtasks /Query /TN `$taskName

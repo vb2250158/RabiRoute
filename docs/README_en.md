@@ -24,6 +24,8 @@ This directory contains current guides, experimental integrations, designs, rese
 
 ## Local installation, configuration, and recovery
 
+- [PC onboarding prompt](rabilink-pc-pairing_en.md) — Copy the complete prompt so the target Agent uses a one-time code to install, configure and verify a connection; available after server deployment, with access and persistence verified separately in each cloud environment.
+
 - [DSH Web session bridge authentication](dsh-browser-auth_en.md) — **Round-trip delivery accepted**. Connect through the current owner's launch authentication without disabling security or replaying writes.
 - [Configuration](configuration_en.md) — **Current guide**. Configure message inputs, handlers, local directories, and optional plugin permissions.
 - [Resident performance recording and inspection](performance-monitoring_en.md) — **Current guide** for optional continuous Manager, Gateway, and WebGUI metrics, trends, slow operations, and independent JSONL files.
