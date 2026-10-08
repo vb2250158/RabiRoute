@@ -1,5 +1,11 @@
 import type { AllDayEvent } from "../../src/shared/allDayRecording";
 
+/** Live preview and viewport reads have separate ownership; neither erases the other. */
+export function mergeReviewEvents(range: readonly AllDayEvent[], recent: readonly AllDayEvent[]): AllDayEvent[] {
+  return [...new Map([...range, ...recent].map(row => [row.id, row])).values()]
+    .sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id));
+}
+
 /** A local step is safe only inside an untrimmed, fully loaded time range. */
 export function adjacentLoadedEvent(events: readonly AllDayEvent[], cursor: { time: number; id: string }, direction: "older" | "newer", range: { start: number; end: number }, complete: boolean) {
   if (!complete || cursor.time < range.start || cursor.time >= range.end) return;

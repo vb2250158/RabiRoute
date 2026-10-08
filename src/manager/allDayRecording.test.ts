@@ -117,6 +117,17 @@ test("concurrent timeline reads share a day scan and append invalidates its cach
   assert.equal(eventReads,1,"append updates the compact index without rescanning event files");
 });
 
+test("indexed history reads do not rewrite the recent preview or require writable storage", async t => {
+  const store = await fixture(t), time = Date.now();
+  await store.append("one", event("first", time));
+  await store.timeline("one", time - 1, time + 2000);
+  t.mock.method(Date, "now", () => time + 60000);
+  t.mock.method(fs, "open", async () => { throw new Error("History reads must not write files"); });
+  assert.deepEqual((await store.timeline("one", time - 1, time + 2000)).map(row => row.id), ["first"]);
+  assert.deepEqual((await store.page("one", "older", { time: time + 2000, id: "" })).events.map(row => row.id), ["first"]);
+  assert.deepEqual((await store.recent("one")).map(row => row.id), ["first"]);
+});
+
 test("a damaged day index rebuilds from originals and concurrent writes retain every event", async t => {
   const store = await fixture(t), time = Date.now();
   await store.append("one",event("first",time));

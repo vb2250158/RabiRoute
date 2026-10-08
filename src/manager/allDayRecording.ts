@@ -96,7 +96,7 @@ async function readDay(directory: string, day: string): Promise<AllDayEvent[]> {
   if (cached && cached.expires > Date.now()) return cached.rows;
   const entry = { expires: Infinity, rows: withDay(key,async () => {
     const index = await validDayIndex(directory,day);
-    if(index) { await updateRecent(directory, index.events); return index.events; }
+    if(index) return index.events;
     const rows = await scanDay(directory,day);
     await atomicRecordingJson(dayIndexPath(directory,day),{schemaVersion:2,events:rows});
     await updateRecent(directory, rows);
@@ -171,13 +171,14 @@ export class AllDayRecordingStore {
   async timeline(roleId: string, since: number, until: number): Promise<AllDayEvent[]> {
     if (!Number.isFinite(since) || !Number.isFinite(until) || until <= since || until - since > 26 * 3600_000) throw new Error("Select at most one local day");
     const settings = await this.settings(roleId);
-    const result: AllDayEvent[] = [];
+    const reads: Promise<AllDayEvent[]>[] = [];
     for (let time = Date.parse(recordingDay(since)); time <= until; time += 86400_000) {
-      result.push(...await readDay(path.join(this.directory(roleId), "events"), recordingDay(time)));
+      reads.push(readDay(path.join(this.directory(roleId), "events"), recordingDay(time)));
       if (settings.mobileDeviceIds.length) {
-        result.push(...(await readDay(path.join(this.mobileRoot, "events"), recordingDay(time))).filter(event => settings.mobileDeviceIds.includes(event.deviceId)));
+        reads.push(readDay(path.join(this.mobileRoot, "events"), recordingDay(time)).then(rows => rows.filter(event => settings.mobileDeviceIds.includes(event.deviceId))));
       }
     }
+    const result = (await Promise.all(reads)).flat();
     return result.filter(event => isReviewEvent(event) && event.startedAt < until && event.endedAt >= since).sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id));
   }
   async recent(roleId: string): Promise<AllDayEvent[]> {

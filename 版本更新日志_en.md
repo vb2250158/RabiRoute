@@ -6,6 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.26 - 2026-10-09
+
+- Read valid all-day indexes without rewriting the recent preview, and load date shards concurrently. Damaged indexes still recover from original records.
+- Merge recent records with the live viewport so an empty range response cannot clear saved frames. Reserve the preview-status area to reduce layout shifts during refresh.
+- Bound record and image reads to 12 seconds with retry feedback. Persona changes cancel previous requests; capture mutations are never automatically retried.
+- Add regression coverage for read-only indexes, refresh merging, image deadlines and cancellation. Full builds, installation and visible acceptance remain separate evidence.
+
 ## 0.3.25 - 2026-10-08
 
 ### Local feature integration and upstream updates
