@@ -632,7 +632,13 @@ class RabiRouteSdk @JvmOverloads constructor(
     }
 
     fun getMobileRoutes(relayBaseUrl: String, token: String, targetDeviceId: String = ""): List<RabiRouteInfo> =
-        getMobileRouteCatalog(relayBaseUrl, token, targetDeviceId).routes
+        getMobileRouteCatalog(relayBaseUrl, token, targetDeviceId).routes.filter { route ->
+            !route.rawJson.optBoolean("isPersonaOnly") && route.enabled &&
+                route.messageAdapters.any { it.equals("rabilink", ignoreCase = true) } &&
+                !(route.rawJson.optJSONArray("messageAdaptersDisabled")?.let { disabled ->
+                    (0 until disabled.length()).any { disabled.optString(it).equals("rabilink", ignoreCase = true) }
+                } ?: false)
+        }
 
     fun getMobileRouteCatalog(
         relayBaseUrl: String,

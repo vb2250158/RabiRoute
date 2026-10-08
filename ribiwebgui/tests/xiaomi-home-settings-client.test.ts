@@ -7,10 +7,11 @@ import { homeAssistantDeploymentClient } from "../src/homeAssistantDeploymentCli
 
 const settings: XiaomiHomeRuntimeSettings = {
   baseUrl: "http://127.0.0.1:8123",
-  tokenEnv: "RABIROUTE_XIAOMI_HOME_HA_TOKEN",
   requestTimeoutMs: 5000,
   writeEnabled: false,
+  speechBindings: [],
   allowPublicBaseUrl: false,
+  allowInsecurePrivateHttp: false,
   agentRoleId: "YeYu",
   eventMonitorEnabled: true,
   eventDeliveryMode: "significant",

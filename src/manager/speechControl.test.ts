@@ -20,6 +20,38 @@ const onlineStatus: SpeechRuntimeStatus = {
   providers: { tts: [], asr: [] }
 };
 
+test("Manager preserves recognition observations in history, records and the manual ASR response", async () => {
+  const observations = { text: "你好", emotion: "NEUTRAL", emotion_labels: ["NEUTRAL"], audio_events: ["Speech"],
+    raw_tags: ["<|zh|>", "<|NEUTRAL|>"], confidence: 0.97,
+    segments: [{ id: 0, start: 0.1, end: 0.8, text: "你好", words: [{ word: "你", start: 0.1, end: 0.4 }, { word: "好", start: 0.4, end: 0.8 }] }] };
+  const control = new ManagerSpeechControl({
+    serviceUrl: () => "http://127.0.0.1:8781", personas: () => [], route: () => undefined, routes: () => [],
+    deliverTranscript: async () => ({ status: "delivered" }), appendRouteLog: () => {},
+    localSpeech: {
+      inspect: async () => onlineStatus,
+      requestBinary: async () => ({ status: 200, contentType: "application/json", headers: {}, body: Buffer.from(JSON.stringify(observations)) }),
+      requestJson: async (_url, pathname) => ({ status: 200, data: pathname === "/v1/microphone/status"
+        ? { history: [{ time: 1, provider: "fixture", model: "fixture", duration: 1, ...observations }] }
+        : { data: [{ id: "fixture", kind: "asr", ...observations }] } })
+    }
+  });
+  const history = (await control.microphoneStatus()).history[0]!;
+  const record = (await control.records({}))[0]!;
+  for (const result of [history, record]) {
+    assert.equal(result.text, "你好");
+    assert.equal(result.emotion, "NEUTRAL");
+    assert.deepEqual(result.emotionLabels, ["NEUTRAL"]);
+    assert.deepEqual(result.audioEvents, ["Speech"]);
+    assert.deepEqual(result.rawTags, ["<|zh|>", "<|NEUTRAL|>"]);
+    assert.equal(result.confidence, 0.97);
+    assert.equal(result.segments[0]?.words?.[0]?.word, "你");
+    assert.equal(result.segments[0]?.words?.[0]?.probability, undefined);
+    assert.equal(JSON.stringify(result).includes("raw_tags"), false);
+  }
+  const response = await control.transcribe("multipart/form-data; boundary=fixture", Buffer.from("fixture"));
+  assert.deepEqual(JSON.parse(response.body.toString()), observations);
+});
+
 test("speech personas consume immutable route catalog voice and avatar metadata", () => {
   const control = new ManagerSpeechControl({
     serviceUrl: () => "http://127.0.0.1:8781",
@@ -914,7 +946,7 @@ test("Manager speech control normalizes persistent speech records and redacts un
               provider: "fake",
               model: "fake",
               text: "绝对路径",
-              audio_file: "C:\\Users\\Administrator\\private.wav",
+              audio_file: "C:\\Users\\ExampleUser\\private.wav",
               segments: []
             },
             {

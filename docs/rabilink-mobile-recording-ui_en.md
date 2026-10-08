@@ -1,8 +1,10 @@
 # Rabi mobile: all-day recording, messages and devices
 
-The event list supports bidirectional cursor pagination, appending 100 events across empty dates until the actual boundary. Memory retains at most 1000 events; evicted pages can be loaded again. Time plus event ID ordering preserves equal-timestamp records. Audio remains independently visible and linked to its video. Read failures preserve the list and player. Pagination still enumerates metadata and does not imply a persistent index.
+The event list supports bidirectional cursor pagination, appending 100 events across empty dates until the actual boundary. Memory retains at most 1000 events; evicted pages can be loaded again. Time plus event ID ordering preserves equal-timestamp records. Audio remains independently visible and linked to its video. Read failures preserve the list and player. Current source caches metadata after the first read and updates incrementally on file changes, without recurring full-directory reads or loading/update messages. This process-local cache does not establish a persistent index.
 
 English | [简体中文](rabilink-mobile-recording-ui.md)
+
+ADB verified the phone's installed version as 0.3.49-dev on 2026-10-07: its 8 GiB application quota stopped capture despite roughly 45 GiB of physical free space. Candidate 0.3.50-dev source removes this quota, enables capture when entering the app, and shows actual starting, recovery, paused or failure states when audio is absent. An in-place upgrade with the original signing key and device acceptance remain pending. Device evidence in the version notes below belongs to those historical versions.
 
 > Status: 0.3.30-dev is installed. Two-page recording navigation, the top switch, unified review, phone recording and waveforms have current physical-device evidence. Glasses audio, PC transcription end-to-end and all-day soak remain pending. Historical evidence and current acceptance scope are separated below. See the [design, migration and acceptance contract](rabilink-all-day-recording_en.md).
 

@@ -10,7 +10,7 @@ test("Agent send template identifies the Codex primary persona sender type", () 
   });
   const sender = request?.sender as { agentType?: unknown } | undefined;
   assert.match(String(sender?.agentType || ""), /primary_persona/);
-  assert.match(String(sender?.agentType || ""), /仅在开启 Codex 主人格发送限制时/);
+  assert.match(String(sender?.agentType || ""), /其它 Agent 填实际角色/);
 });
 
 test("NapCat send template steers the Agent toward image-with-caption by default", () => {

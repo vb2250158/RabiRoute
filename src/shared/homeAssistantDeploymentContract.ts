@@ -1,3 +1,11 @@
+/** Percentage describes the current measurable phase, never estimated total time. */
+export type HomeAssistantInstallProgress = Readonly<{
+  phase: string;
+  percent?: number;
+  completedBytes?: number;
+  totalBytes?: number;
+}>;
+
 export type HomeAssistantDeploymentConfig = Readonly<{
   mode: "external" | "docker" | "haos";
   containerName: string;
@@ -20,4 +28,5 @@ export type HomeAssistantDeploymentSnapshot = Readonly<{
   canStart: boolean;
   canInstall?: boolean;
   haosInstallPath?: string;
+  progress?: HomeAssistantInstallProgress;
 }>;

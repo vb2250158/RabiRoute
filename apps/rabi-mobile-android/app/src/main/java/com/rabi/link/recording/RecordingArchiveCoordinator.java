@@ -44,7 +44,7 @@ public final class RecordingArchiveCoordinator {
         void persistVerifiedReceipt(Target target, JSONObject manifest, JSONObject receipt) throws Exception;
         /** Must revalidate receipt and pins on writer; false means retained/eviction_pending, not deleted. */
         boolean requestEviction(Target target, JSONObject manifest, JSONObject receipt) throws Exception;
-        default boolean remoteHistoryAndPlaybackReady(Target target) { return false; }
+        boolean remoteHistoryAndPlaybackReady(Target target, JSONObject manifest) throws Exception;
         void state(String recordId, String archiveState, String reason) throws Exception;
     }
     public static class Result {
@@ -66,7 +66,7 @@ public final class RecordingArchiveCoordinator {
             if(result instanceof CommittedResult) {
                 CommittedResult committed=(CommittedResult)result;
                 try {
-                    boolean evicted=persistence.remoteHistoryAndPlaybackReady(committed.target)
+                    boolean evicted=persistence.remoteHistoryAndPlaybackReady(committed.target,committed.manifest)
                             && persistence.requestEviction(committed.target,committed.manifest,committed.receipt);
                     return new Result("committed",evicted ? "evicted" : "local_retained",evicted);
                 } catch(Exception failed) { return new Result("committed","eviction_pending",false); }

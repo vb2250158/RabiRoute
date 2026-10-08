@@ -1,4 +1,3 @@
-import { timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import type http from "node:http";
 import { XiaomiHomeManagerApiError } from "./managerApi.js";
@@ -31,37 +30,20 @@ export function parseSingleByteRange(header: string | undefined, size: number): 
   return { start, end: Math.min(end, size - 1) };
 }
 
-function bearerToken(request: http.IncomingMessage): string {
-  const header = String(request.headers.authorization || "");
-  return header.startsWith("Bearer ") ? header.slice(7).trim() : "";
-}
-
 function safeHeader(value: string | string[] | undefined, fallback: string, maximum: number): string {
   const text = Array.isArray(value) ? value[0] : value;
   return String(text || fallback).replace(/[\r\n]/g, " ").trim().slice(0, maximum) || fallback;
 }
 
 export class XiaomiHomeArtifactAccess {
-  private readonly tokenEnv: string;
-
   constructor(
-    config: XiaomiHomeArtifactAccessConfig,
+    _config: XiaomiHomeArtifactAccessConfig,
     private readonly artifacts: XiaomiHomeArtifactStore,
-    private readonly env: NodeJS.ProcessEnv = process.env
-  ) {
-    this.tokenEnv = String(config.artifactReadTokenEnv || "RABIROUTE_XIAOMI_HOME_ARTIFACT_TOKEN").trim();
-    if (!/^[A-Z][A-Z0-9_]{2,127}$/.test(this.tokenEnv)) throw new Error("artifactReadTokenEnv is invalid.");
-  }
+    _env: NodeJS.ProcessEnv = process.env
+  ) {}
 
   stream(request: http.IncomingMessage, response: http.ServerResponse, artifactId: string): void {
-    const configured = String(this.env[this.tokenEnv] || "").trim();
-    if (!configured) throw new XiaomiHomeManagerApiError(503, "xiaomi_home_artifact_authorization_required", `Set ${this.tokenEnv} in the local RabiRoute runtime environment.`);
-    const presented = bearerToken(request);
-    const expectedBytes = Buffer.from(configured);
-    const presentedBytes = Buffer.from(presented);
-    if (expectedBytes.length !== presentedBytes.length || !timingSafeEqual(expectedBytes, presentedBytes)) {
-      throw new XiaomiHomeManagerApiError(401, "xiaomi_home_artifact_unauthorized", "Artifact read authorization failed.");
-    }
+    // Manager authenticates the connection before dispatch; no second media token.
     const descriptor = this.artifacts.contentDescriptor(artifactId);
     if (!descriptor) throw new XiaomiHomeManagerApiError(404, "xiaomi_home_artifact_not_found", "Artifact content was not found.");
     const stat = fs.statSync(descriptor.localPath);

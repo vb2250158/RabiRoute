@@ -2,13 +2,13 @@
 
 # NapCat / OneBot 详细参考
 
-发送前先读取 [Rabi 消息投递工作流](../../rabiroute-message-delivery/SKILL.md)。直连仅用于不受 Rabi 管理的独立安装，或已确认 Rabi 不可用、原消息未生效且身份和授权均已核对的故障旁路。Rabi 可用时统一走受管接口。不能以认证失败为理由绕过权限；结果未知须先核对原回执，不能重发试探。
+发送前先读取 [Rabi 消息投递工作流](../../rabiroute-message-delivery/SKILL.md)。直连仅用于不受 Rabi 管理的独立安装，或已确认 Rabi 不可用、原消息未生效且身份和授权均已核对的故障旁路。Rabi 可用时统一走Rabi 接口。不能以认证失败为理由绕过权限；结果未知须先核对原回执，不能重发试探。
 
 ## 位置与当前连接
 
 安装目录和入口由本机安装版本决定。`<DownloadsRoot>/NapCat.Shell.Windows.OneKey.zip`、`<NapCatRoot>`、`NapCatInstaller.exe`、`NapCat.<version>.Shell/napcat.bat` 仅是布局线索，使用前核对存在及版本。账号配置位于该版本实际配置根，不从残留目录选择账号。
 
-从当前配置或受管状态取得 WebUI、反向 WebSocket 和 OneBot HTTP 的完整地址及认证方式；不套用旧端口、不扫描端口猜测服务。示例使用显式注入的 `ONEBOT_BASE_URL`，它不是自动发现或新的配置合同。Rabi Manager 地址遵循 [消息查询说明](message-query.md) 的 Host/READY 与 `/meta` 身份核验。
+从当前配置或状态取得 WebUI、反向 WebSocket 和 OneBot HTTP 的完整地址及认证方式；不套用旧端口、不扫描端口猜测服务。示例使用显式注入的 `ONEBOT_BASE_URL`，它不是自动发现或新的配置合同。Rabi Manager 地址遵循 [消息查询说明](message-query.md) 的 Host/READY 与 `/meta` 身份核验。
 
 ## 网络与认证
 
@@ -53,9 +53,9 @@ const response = await fetch(new URL('/send_private_msg', process.env.ONEBOT_BAS
 
 ## 排障顺序
 
-1. 从当前受管状态核对运行版本、监听地址及账号。WebUI 不可达不直接重启 Rabi 或 NapCat。
+1. 从当前状态核对运行版本、监听地址及账号。WebUI 不可达不直接重启 Rabi 或 NapCat。
 2. 认证失败时检查受保护凭据的配置状态；不把 token 搜索结果回显到聊天，不关闭认证。
-3. 有事件但网关无记录时，核对当前反向 WebSocket 地址、格式、订阅范围和受管诊断。
+3. 有事件但网关无记录时，核对当前反向 WebSocket 地址、格式、订阅范围和诊断。
 4. 能收不能发时，只读检查 HTTP 服务与认证合同；只读 `get_status` 不是测试发送。
 5. 中文乱码时检查 UTF-8 请求体、响应和平台记录，先确定原消息结果再决定是否需要经授权更正。
 6. 群过滤使用当前网关实际支持的配置，不猜环境变量，不默认所有群都在任务范围。

@@ -66,7 +66,7 @@ A representative shape:
 }
 ```
 
-Each rule combines one trigger (`message` or `schedule`) and one action (`deliver_agent` or `run_script`). Rules stay inside the active Route profile and cannot select an arbitrary persona. Script actions require Route-local permission and remain inside the bound persona's `scripts/` directory.
+Each rule combines one trigger (`message` or `schedule`) and one action (`deliver_agent` or `run_script`). Rules stay inside the active Route profile and cannot select an arbitrary persona. Script actions reuse connection authentication and remain inside the bound persona's `scripts/` directory.
 
 ## Route kinds
 
@@ -96,7 +96,7 @@ Use the narrowest kind that represents the source event. `group_message` is norm
 ## Ordinary delivery, scheduled tasks, and endpoint-specific exceptions
 
 - Once an ordinary endpoint message matches a rule, it is delivered directly: `steer` the active Desktop turn or `start` an idle task.
-- Scheduled triggers never inject message history and do not enter conversational settling. Agent actions use the heartbeat compatibility event: with Codex Message Agent mode enabled they go immediately to an independent Message Agent, otherwise `heartbeatSkipWhenAgentBusy` may skip them while the fixed task is active. Script actions bypass Agent delivery and require `personaAutomationScriptsEnabled=true` on the local Route.
+- Scheduled triggers never inject message history and do not enter conversational settling. Agent actions use the heartbeat compatibility event: with Codex Message Agent mode enabled they go immediately to an independent Message Agent, otherwise `heartbeatSkipWhenAgentBusy` may skip them while the fixed task is active. Script actions bypass Agent delivery and execute configured scripts from the owning persona’s scripts directory.
 - `plan_feedback` is a Manager system event emitted only after the plan and Route are explicitly bound. It uses a dedicated built-in rule, neither reads nor writes chat history, and always exposes empty recent-message template values.
 - Speech owns Route `speechPushMode`: `hot` delivers every completed ASR segment, while `keyword` records all segments and delivers only after a persona `speechTriggerKeywords` match. An empty list never falls back to hot.
 - `weixin_message` is the experimental personal-Weixin OpenClaw/iLink source. Text exposes `weixinSessionId`, `weixinUserId`, and `weixinMessageType`; media is record-only, and replies require the source session's context token.

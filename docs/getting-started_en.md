@@ -100,7 +100,7 @@ xcopy examples\data data /E /I
 cp -R examples/data/. data/
 ```
 
-For a QQ-free smoke test, enable Scheduled Tasks. Script actions also require the separate local Route permission.
+For a QQ-free smoke test, enable Scheduled Tasks. Configured script actions run files in the owning persona's scripts directory.
 
 ## Codex setup
 

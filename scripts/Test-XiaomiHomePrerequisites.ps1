@@ -110,7 +110,7 @@ $xiaomiResult = [ordered]@{
     } elseif (-not $xiaomiManagerReachable) {
         "Start the locally installed RabiRoute Manager and verify the Xiaomi Home health endpoint."
     } else {
-        "Prerequisites are ready; enumerate resources and keep writeEnabled=false for read-only acceptance."
+        "Prerequisites are ready; authenticate the connection and enumerate supported resources. Use dryRun for rehearsal."
     }
 }
 

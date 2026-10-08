@@ -840,7 +840,6 @@ function automationDiagnostics(rule: PersonaAutomationRuleDefinition): string[] 
   }
   if (rule.action.type === "run_script") {
     if (!rule.action.scriptPath?.trim()) issues.push("还没有选择人格 scripts 目录中的脚本。");
-    if (!gateway.value?.personaAutomationScriptsEnabled) issues.push("当前 Route 尚未允许运行人格脚本。");
   }
   return issues;
 }
@@ -959,11 +958,6 @@ function enableTimerInput(): void {
   store.updateAdapters([...gatewayAdapterTypes(gateway.value), "heartbeat"]);
 }
 
-function setScriptExecutionEnabled(value: boolean): void {
-  if (!gateway.value) return;
-  gateway.value.personaAutomationScriptsEnabled = value;
-  store.touch();
-}
 
 function scriptArgumentsText(rule: PersonaAutomationRuleDefinition): string {
   return rule.action.type === "run_script" ? (rule.action.arguments || []).join("\n") : "";
@@ -1071,7 +1065,7 @@ function setCodexHookSetting(key: Exclude<keyof CodexHookSettings, "completionDe
     reasoningContextEnabled: gateway.value.codexHooks?.reasoningContextEnabled !== false,
     planTaskCompletionEnabled: gateway.value.codexHooks?.planTaskCompletionEnabled !== false,
     agentCommunicationEnforcementEnabled: gateway.value.codexHooks?.agentCommunicationEnforcementEnabled !== false,
-    onlyPrimaryPersonaCanSendMessages: gateway.value.codexHooks?.onlyPrimaryPersonaCanSendMessages === true,
+    onlyPrimaryPersonaCanSendMessages: false,
     [key]: enabled === true
   };
   for (const other of store.gateways) {
@@ -2258,17 +2252,6 @@ onBeforeUnmount(() => {
                         />
                         <div class="section-note">开启后，本 Route 的主人格、计划 Agent、计划秘书和消息处理 Agent 不能绕过 Rabi 直接操作其它持久 Agent 会话。通过 Rabi 投递时，发送方必须明确是否要求回复；要求回复后，目标 Agent 每轮结束仍未正式回复，Manager 会在五分钟后提醒。Hook：<code>PreToolUse</code> / <code>Stop</code>；默认开启。</div>
                       </div>
-                      <div class="full-span">
-                        <v-switch
-                          :model-value="gateway.codexHooks?.onlyPrimaryPersonaCanSendMessages === true"
-                          color="warning"
-                          density="compact"
-                          hide-details
-                          label="仅允许主人格发送消息"
-                          @update:model-value="value => setCodexHookSetting('onlyPrimaryPersonaCanSendMessages', value)"
-                        />
-                        <div class="section-note">默认关闭。开启后只有当前绑定的 主人格会话可发送；计划 Agent、计划秘书和消息处理 Agent 会被拒绝。</div>
-                      </div>
                     </div>
                   </div>
             <PlanFollowupSettings :model-value="gateway.codexHooks?.planFollowup" :role-id="gateway.agentRoleId || ''"
@@ -2813,19 +2796,6 @@ onBeforeUnmount(() => {
                     label="脚本参数（每行一个）"
                     rows="3"
                     @update:model-value="setScriptArguments"
-                  />
-                </div>
-                <div class="script-permission-row">
-                  <div>
-                    <strong>允许当前 Route 运行人格脚本</strong>
-                    <span>这是本机 Route 的权限，只在这台电脑生效。</span>
-                  </div>
-                  <v-switch
-                    :model-value="gateway.personaAutomationScriptsEnabled === true"
-                    color="warning"
-                    inset
-                    hide-details
-                    @update:model-value="value => setScriptExecutionEnabled(Boolean(value))"
                   />
                 </div>
               </template>

@@ -27,6 +27,7 @@ import {
   type WebhookPayload
 } from "./webhookAdapter.js";
 import { identityEndpointsForForward } from "../routing/identityContext.js";
+import { claimMobileVoiceInput } from "../shared/mobileVoiceCall.js";
 
 type RelayTask = Record<string, unknown>;
 export type RabiLinkRelayTaskDisposition = "review_request" | "record_only" | "direct";
@@ -268,7 +269,9 @@ export function rabiLinkRelayPayloadFromTask(task: Record<string, unknown>, task
   return {
     type: "rabilink",
     id: taskId,
-    messageId: taskId,
+    // Live inputs keep their stable source id through AgentPacket and the formal
+    // send API, including when a Relay acceptance response was lost.
+    messageId: String(task.clientMessageId || "").startsWith("rabi-call-v1.") ? String(task.clientMessageId) : taskId,
     sender,
     source: sender,
     context: stringPayloadField(task.context),
@@ -550,6 +553,19 @@ async function handleRelayTask(profile: WebhookAdapterProfile, webhookPath: stri
     throw new Error("Relay task has no id.");
   }
   if (!acceptedRelayTasks.has(taskId)) {
+    // Validate before any forwarding. Older Relay servers preserve clientMessageId
+    // but do not understand live-call deadlines; the PC is the final authority.
+    if (String(task.clientMessageId || "").startsWith("rabi-call-v1.")) {
+      try {
+        claimMobileVoiceInput(path.join(config.memoryDataDir, "rabilink-live-inputs"), task, config.rabiLinkRelayDeviceId);
+      } catch (error) {
+        // Non-replayable live input: a crash after claiming is uncertain, never
+        // grounds for a second Agent turn. The retained audio remains recoverable.
+        await finishRelayTask(taskId, { ok: false, status: "done", accepted: false, error: error instanceof Error ? error.message : "Live input rejected" }, signal);
+        rememberAcceptedRelayTask(taskId);
+        return;
+      }
+    }
     if (handleWearableHealthRelayTask(task, taskId)) {
       rememberAcceptedRelayTask(taskId);
       await finishRelayTask(taskId, {

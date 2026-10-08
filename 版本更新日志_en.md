@@ -6,6 +6,110 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.24 - 2026-10-08
+
+### Local feature integration and upstream updates
+
+- Integrate local work on upstream 0.3.23 while preserving Linux Host, direct-local QQ message/attachment reads, send receipt recovery and sharded plan history. Authenticated model-directory settings and local-only QQ reads retain separate boundaries.
+- Mobile Agent calls reuse recording, transcription, records and playback. Freeze the actual computer and Route, enforce the 90-second input lifetime and reply correlation, list deliverable computer/Route targets, and prevent late replies from playing after hangup. Physical mobile and listening acceptance remain separate from source tests.
+- Recording archives use file-change notifications, durable chunks and final-transcription ordering. Speech records include recognized language, emotion and event metadata; installation scripts support lightweight local speech and offline environments.
+- Fix high-DPI Windows screenshot previews. Home Assistant all-day recording consumes real events with filtering and deduplication; preserve separate installation, physical action, video and speech acceptance limits.
+
+### Source validation and limits
+
+- Backend regression: 2992 tests, with 2982 passing and 10 skipped. All 473 WebGUI tests pass. Speech and screenshot Python regression passes 126 tests and four subtests; configuration and skill checks pass, and `npm run build` completes.
+- Release and operations scripts: 217 tests, with 181 passing, 36 retained as TODO markers and no failures. Windows installation transactions, rollback and uninstall run against isolated fixtures.
+- Durable mobile voice claims now emit mutation audit events with digest identifiers only. Audit, privacy and duplicate-dispatch regressions pass. Nine Host tests that require the Linux kernel are skipped on Windows; platform-independent checks still run.
+- Android compilation is blocked by a missing SDK. This update publishes source changes without upgrading the installed application or creating a GitHub Release. These checks do not replace physical mobile, speech listening or home-device action acceptance.
+
+### 2026-10-07 — work log
+
+- Developer candidates validate the complete plugin profile, enabled packages and runtime entries before construction and sealing. Incomplete builds with missing plugin directories cannot be published, avoiding missing-package failures after stopping the previous service.
+
+- Shared vacuum remote pulses repeat direction at the verified model's official200ms cadence for WebGUI and Agents. Serialized sends and one absolute deadline prevent slow replies from extending motion; stop cancels further repeats while retaining finally-release and the independent HA watchdog.
+
+- Stabilize video playback with a0.3-second startup margin and normal speed during brief jitter. Only sustained backlog starts gentle catch-up, while major lag permits spaced-out seeks, avoiding packet-driven speed changes and repeated decoder resets.
+
+- Use a low-latency vacuum preview player that follows the latest received frames, bounds retained media and displays playback-buffer seconds in the overlay. This value excludes camera and network delay; end-to-end latency still requires validation.
+
+- Add fixed read-only native vacuum telemetry for verified models: working status, faults, locating flag and LiDAR state. This distinguishes Home Assistant's generic state from the device's remote state without claiming movement or arrival.
+
+- Explicit video opening now queries the current session and reattaches a running preview for the same device and region, avoiding repeated busy errors after the page loses its state. It does not start another camera connection, revive stopped sessions, or take over another device.
+
+### 2026-10-06 — work log
+
+- Read vacuum position through a direct device RPC instead of preferring the cloud cache. Empty values and errors remain explicit; pose update time and coordinate navigation still require hardware validation.
+
+- Add a read-only position-property query for verified vacuum models with strict device, property and response checks. Empty values produce no coordinate; units and freshness remain unverified and point navigation stays unavailable.
+
+- Make vacuum map video a compact floating preview. Playback shows only the picture; pointer and keyboard interactions reveal or hide controls inside it without interrupting the connection. Narrow layouts shrink or align it below the map; password management returns only after confirmed exit.
+
+- Home Assistant installation progress subscribes only while installation is active and releases the connection afterward, leaving browser connections available for video and device control.
+- Remote initialization ignores focus loss caused by its loading button. Leaving the window still closes a late session, and focus loss after entry still releases movement keys.
+
+- CS2 video first attempts a LAN path with the cloud-owned device UID, falling back to Xiaomi relay within the same ephemeral media intent without repeating camera entry.
+
+- Remove the five-minute playback cap; video continues until explicit exit or owner lifetime termination. Relay registration rediscovers tokens within the same handshake deadline, with explicit reconnect on failure. Add shared WebGUI/Agent manual remote APIs: pause and confirm active cleaning, initialize remote mode, then W/A/D movement, S stop and release/focus-loss stopping. Stop retains mode; exit is separate. Coordinate navigation remains unavailable.
+
+- First-frame verification now retains a continuous video subscription, avoiding camera disconnect after a one-shot frame read. Subsequent data is read and discarded without recording; exit and IPC lifetime termination release the connection.
+
+- Fix CS2 relay allocation responses being discarded when they include trailing extension bytes. Decode the fixed six-byte prefix and verify port, token and subsequent registration using an independent eight-byte wire vector, while retaining frame-length and source validation.
+
+- Video preview now uses a responsive 16:9 panel, moving below the map in narrow windows. Saved PIN input is collapsed; connecting and playing hide credential controls. Confirmed exit restores replacement/deletion, while uncertain exits retain the session and its feedback.
+
+- Add experimental Xiaomi relay transport for CS2 when valid cloud parameters are available. Retain relay offers on the device subnet as well, avoiding a direct-connection timeout that prevents relay use. Handshake and queues remain bounded; playback continues until exit, with encrypted data passed to the pinned transport. Display connection mode and stage-specific failures without changing network settings. Real video still requires device acceptance; HA query and control APIs are unchanged.
+
+- Video timeouts show their specific reason and the device address with network guidance when the PC has no interface on that subnet. Read-only diagnosis permits routed connections and never changes network settings.
+
+- Correct pv11cn wall and room semantics against the official plugin and render additional hidden, unreachable and obstacle cells. Map clicks now preview obstacle-aware paths for the same file snapshot through a shared read-only API. Changed maps, insufficient clearance and unverified restrictions fail explicitly; no motion commands are sent.
+
+- Add masked input for the existing video PIN, cleared on submission, with optional local encrypted persistence after device verification, automatic reuse, replacement and deletion. Display verification progress and prevent duplicate submission. Verify the PIN and pair video-page entry/exit using the official contract; never set or reset the password. The start receipt exists before verification, so timeouts do not resubmit the PIN.
+
+- Video page entry/exit accepts omitted or empty output under the official no-output contract, while retaining strict device, service, action and success-code checks; PIN verification keeps its separate strict output contract.
+- GET `/video/network?deviceId=...&region=cn` returns the owned device localAddress, onLinkInterfacePresent and read time for local-only MISS diagnostics. The same provider resolves the address without returning credentials. A matching local subnet is not reachability or connection proof. This read verifies no PIN, requests no media keys and never enters the video page.
+- Trajectory parse failures include bounded diagnostic reasons without raw payloads or parser excerpts; navigation maturity is unchanged.
+
+- Device cards are ordered by open count on the next refresh, with recency breaking ties. History stays in the current browser; clicking does not immediately reorder the list, and unopened devices keep their original order.
+
+- Extend vacuum video preview with explicit start/stop, ephemeral MISS sessions, a pinned Windows transport and original-key receipt lookup. Playback starts only after a real MP4 first frame; audio, recording and movement remain disabled. Closing/hiding the panel stops the session, and an IPC supervisor stops native processes after Manager disconnects. Device compatibility and browser playback still require live acceptance; an enabled camera switch is not video proof.
+
+- Extend the Xiaomi Home plugin with read-only trajectory output and cursor queries for verified get-vacuum-route contracts, using the existing cloud session. Historical points do not establish live localization and no movement command is added. Official package diagnostics and trajectory queries are included in Agent discovery.
+
+### 2026-10-04 — work log
+
+- Add read-only official vacuum package metadata and file diagnostics, reusing cloud authentication, device ownership and HTTPS domain validation with a 64 MiB package limit. Agents receive neither cloud credentials nor download signatures. The map button is named Move robot to target and remains explicitly unavailable until the point-navigation contract is verified.
+
+- Fixed vacuum maps growing beyond the device dialog height. Maps now fit the viewport, offer zoom/reset controls, collapse raw details, and preserve native point coordinates after scaling.
+
+- Xiaomi Setup adds an experimental vacuum map QR connection. Manager owns the protected cloud session; DSH and Codex share read-only devices and raw map files. Downloads enforce size and Xiaomi HTTPS domain limits and carry no login cookies. Bounded version-2 decoding adds grid, rooms, dock and pose snapshots, map display, coordinate selection and pausable5/10/30-second snapshot refresh; actual pv11cn files decrypted successfully. Pose freshness, coordinate navigation and robot audio remain unverified; downloading a file does not establish navigation.
+- Xiaomi adds Device list with HA registry-grouped cards, entity capabilities, parameter preview, action tests and original receipt queries. Vacuum details embed refreshed map snapshots; coordinate navigation awaits native protocol verification.
+
+### Unified home-device queries and control
+
+- Query all imported HA entities and discover live actions, parameter schemas and revisions through `resources?includeActions=1` or single-resource `entity-actions`.
+- Add `home.entity.action@1` for buttons, numbers, selects, text and positional Xiaomi actions, reusing connection authentication and durable receipts while validating service targets, features, parameters, state and action revisions.
+- Distinguish provider acceptance from physical completion and document upstream map, coordinate-navigation and media-stream limits. See the [device API](docs/home-device-agent-api_en.md).
+
+### 2026-10-03 — work log
+
+### Authenticate once and use APIs
+
+- Remove duplicate device control, local script, primary-only send, persona skill binding, media-token and second admin-auth restrictions; gamer, model directory, archive settings, node management and WebGUI key management also reuse connection authentication. API discovery does not grant permissions again; source identity and delivery contracts remain checked. See [connection access](docs/connection-access_en.md).
+
+
+### Connect directly when already signed in to DSH
+
+- **Connect DSH** reuses saved authorization or this browser's DSH login on the same hostname without entering a key. The login-link input is optional and opens when no valid login is available.
+- Only the target instance's browser cookie is verified with DSH and encrypted with its original expiry. Local same-origin checks, revision conflicts, and no replay remain enforced; removal or expiry never silently restores legacy log authentication. Connecting does not create or send tasks.
+
+### Home device and speaker Agent API
+
+- Add device argument discovery, explicit speech bindings, feature-gated media control and read-only receipt lookup by the original key. Settings can add and remove speaker bindings.
+- Separate acceptance, state readback, rehearsal, rejection and uncertainty; concurrent requests, restart and lost responses do not resend. Strict arguments and content-free receipts; intent binds HA origin. Legacy digests remain queryable and conflict on resubmission.
+- Synchronize bilingual API contracts, discovery and automated regressions; real audibility still requires local device acceptance.
+
+
+
 ## 0.3.23 - 2026-10-08
 
 ### QQ read APIs and synchronization of local changes

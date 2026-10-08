@@ -99,19 +99,18 @@ node rabi-agent.mjs --api GET "/api/lan-agent/resources/read?id=docs%2Frabi-agen
 - `capabilities` 返回当前受控操作目录，包含受控业务入口及别名，不是全部 Manager API，也不是全部远端可执行功能。以运行实例返回的目录与各项 `limitations` 为准；处理器的对象权限、Action Gate、来源身份、文件根、幂等与版本检查仍有效。
 - `resources` 只列公开技能和显式发布的文档；`resources/read?id=...` 只接受目录内文档、`SKILL.md` 及同一技能直接引用的受控文本。不支持任意 `file`、路径穿越、链接逃逸、私有数据或宿主文件读取。读取脚本不等于授权执行。
 - 资源目录只广告已发布且可实际读取的文件及 references，不把 Markdown 中任意链接自动授予读取权。公共文档为接口、计划与记忆、上下文注入、远端接入四份合同及对应英文版，共八份；仍以实际 `resources` 返回的 ID 为准。发现入口是 `/api/lan-agent/capabilities` 和 `/api/lan-agent/resources`，不是 `/api/agent/capabilities` 或 `/api/agent/resources`。
-- 人格技能另走 `GET /api/roles/:roleId/skills`（摘要列表）与 `GET /api/roles/:roleId/skills/:skillId`（详情）；`/roles/...` 别名遵守相同边界。已获 Manager API 授权且在该人格 Route 中配置的准确 `instanceId + agentId`，可以读取该人格有效技能目录，不需要逐技能重复授权。未配置该人格返回 `403 LAN_AGENT_PERSONA_NOT_CONFIGURED`，同名 Agent 或其他节点不能借用绑定；本机管理请求保留原认证。这里不合并宿主全局或私有技能目录，也不将私有技能、凭据和同步配置发布到公共 `resources`。
+- 已鉴权 Agent 可以通过 `GET /api/roles/:roleId/skills` 和 `/skills/:skillId` 读取人格技能，不再要求 Route 中逐人格绑定；`/roles/...` 别名相同。人格和技能存在性及安全路径由读取接口核对，不公开宿主的任意文件。
 - 人格技能列表和详情均使用有界交互读取池，不排在目录批量任务之后；断连取消读取，队列忙、任务超时或工作进程终止未确认返回 `503`，而不是合法空列表。已授权人格的技能不存在返回 `404`，正常无技能为 `200` 加空列表。上述人格权限与队列修复需以实际部署版本验收，源码测试不代表所有运行节点已更新。
 - 按需取 Manager 当前发布的最新技能和合同，随后读取目录中可用的 references；不要把整套技能长期复制为另一份权威来源。计划、记忆与消息处理状态仍由 Manager 持有，不复制到远端维护第二套业务状态。
-- 不再以远端专属业务子集直接拒绝目录外请求；原始路径、编码和查询凭据检查仍有效。目录外路径、方法或未收录查询参数继续进入既有管理 Token 校验，节点凭据不能代替管理 Token（即使请求来自 loopback）。因此目录外业务仍可能返回 `401 WEBGUI_TOKEN_REQUIRED`，不能宣称全部 API 已与本机能力对齐。管理员设置、授权修改、任意文件和宿主控制不会因启用 Agent 自动开放；已有 loopback-only 处理器仍拒绝远端调用，不通过本机代理绕过限制。
+- 目录描述接口，不是权限许可；已有目录外接口复用节点鉴权，无需第二个 WebGUI 密钥。路径、来源身份和投递合同仍需正确；本机进程操作在所属电脑执行，不把远端请求伪装成本机请求。
 - JSON 请求体沿用本机 `readJsonBody` 默认值及各接口显式限额，不再叠加远端专属 1 MiB 上限，也没有新增共同限额。来源身份校验、上传限额及各业务处理器原有检查保持不变。
-- 向消息渠道正式发送沿用 Manager 的消息合同，必须取得 Manager 与渠道回执；任务最终文本不代表已发送。远端调用仍遵守 Route 发送权限：`onlyPrimary` 要求可信 `provider`、Route 的 `instanceId`/`nodeId` 与 `agentId`、已批准的会话及 `primary_persona` 身份全部匹配；仅裸会话 ID 同名不会继承本机权限。
-- 跨 Agent 投递时，远端主会话来源按实例命名空间记录。目前只支持 `responsePolicy: "none"` 的单向投递；因缺少可信回传路由，`responsePolicy: "required"`、`inReplyToRequestId` 正式回复及远端到远端投递均明确拒绝，不能视为完整支持正式回复。远端上下文只走自身专用 `context` 入口，不开放通用 `codex-hook` 接口。
+- 向消息渠道正式发送沿用 Manager 的消息合同，必须取得 Manager 与渠道回执；任务最终文本不代表已发送。远端调用仍遵守 Route 发送权限：发送者身份仍按投递合同核对。- 跨 Agent 投递时，远端主会话来源按实例命名空间记录。目前只支持 `responsePolicy: "none"` 的单向投递；因缺少可信回传路由，`responsePolicy: "required"`、`inReplyToRequestId` 正式回复及远端到远端投递均明确拒绝，不能视为完整支持正式回复。远端上下文只走自身专用 `context` 入口，不开放通用 `codex-hook` 接口。
 
 Windows 发布流程将公共 `skills/` 按受控的 Git tracked 文件复制进版本包，不复制工作区中的私有或未跟踪内容。该打包链尚未运行 ZIP 验收；不能据此宣称安装包已经包含可用的完整技能目录。
 
 ### 下载一个技能及其配套文件
 
-读到技能正文但缺少 `scripts/` 或 `references/` 时，下载选中技能的完整目录，不要复制整个人格或让远端猜主机路径。已配置该人格的 Agent 沿用同一节点凭据与人格权限；接口不会执行脚本。
+读到技能正文但缺少 `scripts/` 或 `references/` 时，下载选中技能的完整目录，不要复制整个人格或让远端猜主机路径。已鉴权 Agent 沿用同一节点凭据；接口不会执行脚本。
 
 安装 launcher 会以当前不可变 release 目录作为工作目录，`./` 不指向用户 shell 或项目目录。请明确选择本机 Rabi Agent 安装目录外、已存在的父目录，并为 `--output` 提供绝对文件路径；最终文件必须不存在。以下 Bash 示例仅在你已选择并确认 `$HOME/Downloads` 存在且位于安装目录外时使用；否则替换为你选择的已有目录，不自动创建目录。`$HOME` 由 shell 展开为绝对路径。
 
@@ -139,15 +138,13 @@ node rabi-agent.mjs --api POST /api/agent/send --agent <agentId> --body-stdin
 
 大包上传使用流式二进制传输、流式落盘及增量 SHA-256 校验，期限 30 分钟，不把整包装进 JSON 或内存。可在「RabiLink → 配置」保存 `agentUploads.maxFileMiB`（整数 `1..2048`，默认 `2048`），持久化到 `data/Config.json`，重启 Manager 后生效；本机管理员也可使用原权限保护的 `PATCH /api/rabi/identity`，远端 Agent 无权增大配置。
 
-已用 734 MiB（769654784 字节）的受控文件完成真实客户端到 loopback Manager、受管磁盘及模拟 NapCat 的 size/SHA-256 集成验收；生成和接收均按 64 KiB 小块，大于 8 MiB 的 Buffer 分配/拼接被测试防线拒绝。大测试由 `RABI_TEST_LARGE_UPLOAD=1` 显式启用，临时文件自动清理。**尚未验证真实 QQ 平台接收这一大小的文件**，仍须核对 NapCat/QQ 限制及群权限。旧连接器需要新版 bootstrap（保留已有节点凭据），旧 Hook 缓存需要重载宿主；仅更新 Manager 不会让旧客户端支持大包。
+已用 734 MiB（769654784 字节）的受控文件完成真实客户端到 loopback Manager、磁盘及模拟 NapCat 的 size/SHA-256 集成验收；生成和接收均按 64 KiB 小块，大于 8 MiB 的 Buffer 分配/拼接被测试防线拒绝。大测试由 `RABI_TEST_LARGE_UPLOAD=1` 显式启用，临时文件自动清理。**尚未验证真实 QQ 平台接收这一大小的文件**，仍须核对 NapCat/QQ 限制及群权限。旧连接器需要新版 bootstrap（保留已有节点凭据），旧 Hook 缓存需要重载宿主；仅更新 Manager 不会让旧客户端支持大包。
 
 发送仍用原 `/api/agent/send`，保留稳定 `deliveryId`、`sender`、准确 `routeId`、`channel=napcat`，以及 `params.target=group/groupId/instanceId/replyToMessageId`；引用 ID 必须是具体消息 ID 或空字符串。标准输入 JSON 的文件部分为 `payload:{type:'file',fileId:<upload-data.id>,fileSha256:<upload-data.sha256>,text?}`。`fileId` 与 `path`、`url`、`fileName` 互斥，显示名从上传元数据取得，只用于群文件，不用于图片、语音或其它 channel。原引用核对和 tracking 合同仍生效。
 
 `fileSha256` 为使用 `fileId` 时的必填项，必须取上传 `data.sha256`（64 位小写十六进制），防止 24 小时过期后 UUID 复用使旧引用换成其它内容。发送 callback 在 lease 内核对实际 hash，不匹配拒发。
 
-归属按 `nodeId + agentId`，同 Agent 多 session 共享但每次仍要求可信批准 source。Manager 内部可信 resolver 按请求核对授权、归属、完整性与 TTL；活跃 inflight lease 期间不清理文件。不扩大 `allowedFileRoots`，原本地 path 发送照旧。渠道必须允许发送和 `file`，`onlyPrimary` 继续核对精确 Route 的远端绑定和获批会话。
-
-只有 Manager 与渠道回执才能证明群发送。群文件已被 NapCat 接受但 caption 失败时保留 `sent`，只补文本，不重发文件。当前 NapCat 读取 Manager 路径，异机 NapCat 需要共享可读目录；这不解决任意跨机 NapCat 文件可读性。原 `responsePolicy: "none"` 限制不变。完整合同见 [Agent 接口](./rabi-agent-interfaces.md#远端-agent-上传后发送群文件实验合同)。
+归属按 `nodeId + agentId`，同 Agent 多 session 共享但每次仍要求可信批准 source。Manager 内部可信 resolver 按请求核对授权、归属、完整性与 TTL；活跃 inflight lease 期间不清理文件。不扩大 `allowedFileRoots`，原本地 path 发送照旧。渠道必须允许发送和 `file`，发送者身份仍按投递合同核对。只有 Manager 与渠道回执才能证明群发送。群文件已被 NapCat 接受但 caption 失败时保留 `sent`，只补文本，不重发文件。当前 NapCat 读取 Manager 路径，异机 NapCat 需要共享可读目录；这不解决任意跨机 NapCat 文件可读性。原 `responsePolicy: "none"` 限制不变。完整合同见 [Agent 接口](./rabi-agent-interfaces.md#远端-agent-上传后发送群文件实验合同)。
 
 ## API
 
@@ -174,9 +171,9 @@ node rabi-agent.mjs --api POST /api/agent/send --agent <agentId> --body-stdin
 
 路由的 `agentAdapters` 保存本机处理端类型；`remoteAgentTargets` 保存 `{ id, provider, instanceId, agentId }`。`id` 为 `remote:<URI 编码的 instanceId>:<URI 编码的 agentId>`，本机目标键为 `local:<provider>`。`primaryAgentTarget` 选择完整目标键，空字符串表示尚未选择；`primaryAgentAdapter` 只是派生的处理端类型，不能区分本机和远端。远端目录、会话和模型仍由所属实例提供。
 
-现有受管路由保存接口保存上述字段；`/api/rabi/instances/:guid/routes/:routeId/agent-binding` 的 PATCH/POST 同样接受 `remoteAgentTargets` 和 `primaryAgentTarget`，沿用原有管理授权、配置版本与幂等合同。旧 `agentAdapter` 参数明确选择本机目标，不删除其它已添加目标。
+现有路由保存接口保存上述字段；`/api/rabi/instances/:guid/routes/:routeId/agent-binding` 的 PATCH/POST 同样接受 `remoteAgentTargets` 和 `primaryAgentTarget`，沿用原有管理授权、配置版本与幂等合同。旧 `agentAdapter` 参数明确选择本机目标，不删除其它已添加目标。
 
-`POST /gateways/:id/agent-delivery-test` 是**真实消息投递**，不是预览。正文可以指定 `agentTargetId`；同时提供 `agentAdapterType` 时必须与目标一致。只提供旧 `agentAdapterType` 时选择本机；两者均省略时使用已保存的主控。成功返回 `data.agentTargetId` 及原有投递结果。目标不存在、类型不符或离线时失败，不更换目标；结果不确定时先核对原任务，不自动重发。管理鉴权和 Route 启用要求不变。
+`POST /gateways/:id/agent-delivery-test` 是**真实消息投递**，不是预览。正文可以指定 `agentTargetId`；同时提供 `agentAdapterType` 时必须与目标一致。只提供旧 `agentAdapterType` 时选择本机；两者均省略时使用已保存的主控。成功返回 `data.agentTargetId` 及原有投递结果。目标不存在、类型不符或离线时失败，不更换目标；结果不确定时先核对原任务，不自动重发。复用连接鉴权，并检查 Route 启用状态及投递合同。
 
 本机会话操作 `POST /api/agent/threads` 可明确携带 `agentTargetId: "local:<agentAdapter>"`，必须与 `agentAdapter` 一致且不得同时提供远端 `instanceBinding`。此标记禁止按同名会话 ID 推断远端 owner；远端操作仍使用明确的实例绑定或实例路径。未提供标记的旧调用保持原有解析合同，鉴权和任务权限检查不变。
 

@@ -1,10 +1,15 @@
 param(
-  [string]$Python = "py -3.10"
+  [string]$Python = "py -3.10",
+  [string]$DependencyRoot = ""
 )
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$deps = Join-Path $root ".deps"
+$deps = if ([string]::IsNullOrWhiteSpace($DependencyRoot)) {
+  Join-Path $root ".deps"
+} else {
+  [IO.Path]::GetFullPath($DependencyRoot)
+}
 New-Item -ItemType Directory -Force -Path $deps | Out-Null
 
 $pythonArgs = $Python -split "\s+"
@@ -38,8 +43,14 @@ if ((Test-Path -LiteralPath $openJTalkPackage) -and -not (Test-Path -LiteralPath
 }
 
 if ($env:OS -eq "Windows_NT") {
-  & (Join-Path $PSScriptRoot "build-windows-host.ps1") -Python $Python
-  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  $previousDependenciesRoot = $env:RABISPEECH_DEPS_ROOT
+  try {
+    $env:RABISPEECH_DEPS_ROOT = $deps
+    & (Join-Path $PSScriptRoot "build-windows-host.ps1") -Python $Python
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  } finally {
+    $env:RABISPEECH_DEPS_ROOT = $previousDependenciesRoot
+  }
 }
 
 Write-Host "RabiSpeech dependencies installed: $deps"

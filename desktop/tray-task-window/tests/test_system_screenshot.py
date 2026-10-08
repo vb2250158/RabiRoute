@@ -135,6 +135,37 @@ class SystemScreenshotTest(unittest.TestCase):
         self.assertIsNone(parse_hotkey("Ctrl+Shift"))
         self.assertIsNone(parse_hotkey("Ctrl+Shift+S+T"))
 
+    def test_overlay_preview_preserves_native_pixels_at_fractional_display_scale(self) -> None:
+        for ratio in (1.0, 1.25, 1.5, 2.0):
+            with self.subTest(ratio=ratio):
+                size = QSize(round(200 * ratio), round(120 * ratio))
+                image = QImage(size, QImage.Format.Format_ARGB32)
+                for y in range(size.height()):
+                    for x in range(size.width()):
+                        image.setPixelColor(x, y, QColor(255 if x % 2 else 0, 255 if y % 2 else 0, 73))
+                overlay = ScreenshotCaptureOverlay(ScreenshotHistory(()), QRect(0, 0, 200, 120))
+                overlay.set_capture_image(image)
+                overlay.set_capture_layout(ScreenCaptureLayout(overlay.geometry(), size, (), QRect(QPoint(), size)))
+                rendered = QImage(size, QImage.Format.Format_ARGB32)
+                rendered.setDevicePixelRatio(ratio)
+                rendered.fill(Qt.GlobalColor.transparent)
+                for mode in ("full", "selection", "hover"):
+                    overlay._selection = QRect(60, 55, 70, 45) if mode == "selection" else QRect()
+                    overlay._hover_window_candidate = (
+                        ScreenshotWindowCandidate(QRect(round(60 * ratio), round(55 * ratio), round(70 * ratio), round(45 * ratio)))
+                        if mode == "hover" else None
+                    )
+                    with patch.object(overlay, "devicePixelRatioF", return_value=ratio):
+                        overlay.render(rendered)
+                    # Sample away from tooltips, handles and labels: every pixel
+                    # edge/color must survive both normal and dimmed paint paths.
+                    for y in range(round(70 * ratio), round(90 * ratio)):
+                        for x in range(round(70 * ratio), round(110 * ratio)):
+                            self.assertEqual(rendered.pixelColor(x, y), image.pixelColor(x, y), (ratio, mode, x, y))
+                    if mode != "full":
+                        self.assertLess(rendered.pixelColor(round(181 * ratio), round(109 * ratio)).green(), 200)
+                overlay.close()
+
     def test_history_moves_from_current_screen_to_previous_screen(self) -> None:
         current = Path("C:/tmp/current-screen.png")
         previous = Path("C:/tmp/previous-screen.png")

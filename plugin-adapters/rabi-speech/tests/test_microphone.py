@@ -37,7 +37,9 @@ def test_resident_microphone_segments_transcribes_and_submits(tmp_path: Path) ->
             assert path.read_bytes()[:4] == b"RIFF"
             assert config.asr_model == "fake-asr/local"
             transcribed.set()
-            return TranscriptionResult(text="常驻转录成功", language="zh", duration=0.3, provider="fake-asr", model="local")
+            return TranscriptionResult(text="常驻转录成功", language="zh", duration=0.3, provider="fake-asr", model="local",
+                                       emotion="NEUTRAL", emotion_labels=["NEUTRAL"], audio_events=["Speech"],
+                                       raw_tags=["<|zh|>", "<|NEUTRAL|>"], confidence=0.97)
 
         async def submit(result: TranscriptionResult, session_id: str, utterance, input_source) -> dict[str, object]:
             assert lifecycle == ["processing", "persisted"]
@@ -94,6 +96,11 @@ def test_resident_microphone_segments_transcribes_and_submits(tmp_path: Path) ->
         assert snapshot["level_history"][0] > 0
         assert snapshot["level_history"][-1] < snapshot["level_history"][0]
         assert snapshot["history"][0]["text"] == "常驻转录成功"
+        assert snapshot["history"][0]["emotion"] == "NEUTRAL"
+        assert snapshot["history"][0]["emotion_labels"] == ["NEUTRAL"]
+        assert snapshot["history"][0]["audio_events"] == ["Speech"]
+        assert snapshot["history"][0]["raw_tags"] == ["<|zh|>", "<|NEUTRAL|>"]
+        assert snapshot["history"][0]["confidence"] == 0.97
         assert snapshot["history"][0]["submitted"] is True
         assert snapshot["history"][0]["delivery_status"] == "delivered"
         assert snapshot["history"][0]["message_id"] == "speech-one"

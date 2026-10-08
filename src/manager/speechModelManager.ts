@@ -42,6 +42,14 @@ type InstallManifest = {
   }>;
 };
 
+// Match the runtime startup gate: pip's target directory alone is not evidence
+// that the core API and microphone dependencies have been installed.
+const coreDependencyFiles = [
+  "fastapi/__init__.py", "uvicorn/__init__.py", "httpx/__init__.py",
+  "python_multipart/__init__.py", "numpy/__init__.py", "scipy/__init__.py",
+  "soundfile.py", "sounddevice.py"
+];
+
 function defaultModelRoot(rootDir: string): string {
   const localAppData = String(process.env.LOCALAPPDATA || "").trim();
   return localAppData
@@ -100,20 +108,27 @@ export class SpeechModelManager {
     return this.directorySettings();
   }
 
-  private runtimeRoot(): string {
-    const statePlugin = path.join(this.options.rootDir, "plugin-adapters", "rabi-speech");
-    return fs.existsSync(path.join(statePlugin, ".deps")) ? statePlugin : this.pluginRoot;
+  private stableDependenciesRoot(): string {
+    return path.join(this.options.rootDir, "plugin-adapters", "rabi-speech", ".deps");
+  }
+
+  private dependenciesPresent(root: string): boolean {
+    return coreDependencyFiles.every(relative => fs.existsSync(path.join(root, relative)));
+  }
+
+  private dependenciesRoot(): string {
+    const stable = this.stableDependenciesRoot();
+    return this.dependenciesPresent(stable) ? stable : path.join(this.pluginRoot, ".deps");
   }
 
   snapshot(): SpeechModelManagementSnapshot {
-    const runtimeRoot = this.runtimeRoot();
-    const configPath = speechConfigPath(runtimeRoot);
+    const configPath = speechConfigPath(this.pluginRoot);
     const manifest = this.readManifest();
     const manifestRows = new Map((manifest.models ?? []).map(item => [String(item.alias || ""), item]));
     return {
       platformSupported: this.platform === "win32",
-      dependenciesInstalled: fs.existsSync(path.join(runtimeRoot, ".deps")),
-      windowsHostInstalled: fs.existsSync(path.join(runtimeRoot, "runtime", "RabiSpeech.exe")),
+      dependenciesInstalled: this.dependenciesPresent(this.dependenciesRoot()),
+      windowsHostInstalled: fs.existsSync(path.join(this.pluginRoot, "runtime", "RabiSpeech.exe")),
       catalogVersion: this.catalog.schema_version,
       models: this.catalog.models.map(model => {
         const manifestRow = manifestRows.get(model.alias);
@@ -153,10 +168,12 @@ export class SpeechModelManager {
 
   installRuntime(): SpeechModelManagementSnapshot {
     this.assertWindows();
+    const dependenciesRoot = this.stableDependenciesRoot();
     return this.startJob({
       kind: "runtime",
-      command: path.join(this.runtimeRoot(), "scripts", "install.ps1"),
-      args: [],
+      command: path.join(this.pluginRoot, "scripts", "install.ps1"),
+      args: ["-DependencyRoot", dependenciesRoot],
+      dependenciesRoot,
       message: "正在安装 RabiSpeech 语音运行环境。"
     });
   }
@@ -168,14 +185,15 @@ export class SpeechModelManager {
       throw new SpeechModelManagerError("未知的语音模型，未启动下载。", 404);
     }
     this.settingsStore.assertConfiguredRootSafe();
-    const runtimeRoot = this.runtimeRoot();
-    if (!fs.existsSync(path.join(runtimeRoot, ".deps"))) {
+    const dependenciesRoot = this.dependenciesRoot();
+    if (!this.dependenciesPresent(dependenciesRoot)) {
       throw new SpeechModelManagerError("请先在模型管理页安装语音运行环境，再下载模型。", 409);
     }
     return this.startJob({
       kind: "model",
       modelAlias: normalized,
-      command: path.join(runtimeRoot, "scripts", "install_models.ps1"),
+      command: path.join(this.pluginRoot, "scripts", "install_models.ps1"),
+      dependenciesRoot,
       args: [
         "-Model", normalized,
         "-ModelRoot", this.modelRoot,
@@ -206,6 +224,7 @@ export class SpeechModelManager {
     modelAlias?: string;
     command: string;
     args: string[];
+    dependenciesRoot: string;
     message: string;
   }): SpeechModelManagementSnapshot {
     if (this.activeJob) {
@@ -232,7 +251,8 @@ export class SpeechModelManager {
         {
           cwd: path.dirname(path.dirname(input.command)),
           windowsHide: true,
-          stdio: ["ignore", "pipe", "pipe"]
+          stdio: ["ignore", "pipe", "pipe"],
+          env: { ...process.env, RABISPEECH_DEPS_ROOT: input.dependenciesRoot }
         }
       );
     } catch (error) {

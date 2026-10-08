@@ -298,7 +298,7 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
   return [
     ...intro,
     "使用[回传参数]中的请求；来源上下文只用于核对。",
-    "仅当当前 Route 在 Codex 的 Hook 管理中开启“仅允许主人格发送消息”时，Codex 主人格发送必须填 sender.agentType=primary_persona，sender.sessionId 必须是绑定的主人格任务 ID；其它场景按模板中的实际发送方填写。",
+    "sender.agentType 填实际 Agent 角色，sender.sessionId 填当前完整会话 ID；所有 Agent 使用同一投递合同。",
     "NapCat 图片引用按原图填写 params.replyImageDescriptions。",
     ...processingOutcomeLines,
     isPlanFeedback
@@ -1345,7 +1345,7 @@ function buildAgentMessage(
       `记忆：GET ${remoteRoleApiBase}/memory；具体记忆：GET ${remoteRoleApiBase}/memory/recent/{memoryId} 或 /memory/consolidated/{memoryId}`,
       `技能：GET ${remoteRoleApiBase}/skills；具体技能：GET ${remoteRoleApiBase}/skills/{skillId}`,
       `操作前读取当前接口合同：GET ${remotePersona.knowledgeApiBaseUrl}/api/agent/help。`,
-      "此远端人格入口只读，不提供远端数据修改、消息外发或跨任务投递；这些操作须在来源 PC 使用受管接口及其授权合同。离线、未授权或身份变化时停止，不改用本机数据。"
+      "此远端人格入口只读，不提供远端数据修改、消息外发或跨任务投递；这些操作须在来源 PC 使用Rabi 接口及其授权合同。离线、未授权或身份变化时停止，不改用本机数据。"
     ]) : hasPersona ? section("记忆与计划", [
       optionalLine("更新记忆与计划的说明文档", knowledgeAgentInterfaceDocPath ?? values.agentInterfaceDocPath),
       ...(knowledgeView?.apiHintLines ?? []),

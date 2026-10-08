@@ -1,7 +1,23 @@
 import test from 'node:test'; import assert from 'node:assert/strict'; import {readFileSync} from 'node:fs';
 const s=readFileSync(new URL('../app/src/main/java/com/rabi/link/RabiConversationService.java',import.meta.url),'utf8');
-test('all effectful glasses callbacks are guarded',()=>{ for(const x of ['onCxrConnectionChanged','onGlassBtConnectionChanged','onGlassDeviceInfo','onAudioPcm','onPhoto','onNativeVoiceProtocol','onGlassReviewRequested','onNativeStatus','onNativeVoiceError','onGlassAppResult','onGlassVideoState']) assert.match(s,new RegExp(x+'[^\\{]*\\{[\\s\\S]{0,100}acceptsGlassCallback\\(callbackGeneration\\)'),x); assert.ok(s.includes('glassesGeneration = -1')); assert.ok(!s.includes('glassController.startGlassAsrApp()')); });
+test('all effectful glasses callbacks are guarded',()=>{
+  for(const x of ['onCxrConnectionChanged','onGlassDeviceInfo','onAudioPcm','onPhoto','onNativeVoiceProtocol','onGlassReviewRequested','onNativeStatus','onNativeVoiceError','onGlassAppResult','onGlassVideoState']) {
+    const start=s.indexOf(x+'('); assert.ok(start>=0,x);
+    const next=s.indexOf('@Override',start+1);
+    assert.match(s.slice(start,next<0?s.length:next),/acceptsGlassCallback\(callbackGeneration\)/,x);
+  }
+  assert.match(s,/onGlassBtConnectionChanged\(boolean connected\) \{\s*notificationHandler.post\(\(\) -> glassConnectionChanged\(connected, callbackGeneration\)\)/);
+  assert.match(s,/private void glassConnectionChanged\(boolean connected, long generation\) \{\s*if \(!acceptsGlassCallback\(generation\)\) return/);
+  assert.ok(s.includes('glassesGeneration = -1')); assert.ok(!s.includes('glassController.startGlassAsrApp()'));
+});
 test('save failure blocks restart and unexpected video stop revokes running intent',()=>{assert.ok(s.includes('captureSaveFailed = !videoController.getSaveSucceeded()')); assert.match(s,/CaptureCompletionPolicy.mayRestart\(after != null,[\s\S]{0,120}captureSaveFailed/); assert.ok(s.includes('videoController != ownedVideo[0]')); assert.match(s,/if \(!captureTransition\) \{\s+AllDayRecordingSettings.load\(this\).withRunning\(false/);});
-test('foreground type uses actual frozen source and source freezes after prior stop',()=>{assert.ok(s.includes('"glasses".equals(activeCaptureSource)')); assert.equal((s.match(/private String activeCaptureSource/g)||[]).length,1); assert.ok(s.indexOf('pauseRecordingInternal(this::applyRecording)') < s.indexOf('activeCaptureSource = s.source'));});
+test('foreground type uses actual frozen source and source freezes after prior stop',()=>{
+  assert.ok(s.includes('"glasses".equals(activeCaptureSource)'));
+  assert.equal((s.match(/private String activeCaptureSource/g)||[]).length,1);
+  const apply=s.slice(s.indexOf('private void applyRecording()'),s.indexOf('private void startSelectedAudio('));
+  assert.ok(apply.indexOf('pauseRecordingInternal(this::applyRecording)')>=0);
+  assert.ok(apply.indexOf('pauseRecordingInternal(this::applyRecording)')<apply.indexOf('activeCaptureSource = "video".equals(s.mode)'));
+  assert.match(s,/activeCaptureSource = source;[\s\S]*backend.beginCapture/);
+});
 test('full stop waits for transition then destroys service',()=>{assert.match(s,/if \(stopAfterCapture\) \{[\s\S]{0,160}shutdown\(true\)/); assert.ok(s.includes('videoController.getActive()'));});
 test('logout clears backend endpoint credentials',()=>{assert.ok(s.includes('backend.configure("", "", RabiMobileDeviceIdentity.load(this))')); assert.ok(s.includes('backend.setTargetWorkerId("")'));});

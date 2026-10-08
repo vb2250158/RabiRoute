@@ -101,7 +101,7 @@ test("out-of-tree message source, Agent adapter, and route policy complete the p
   await fs.rm(path.join(root, "packages", "io.test.route-policy"), { recursive: true, force: true });
 });
 
-test("out-of-tree plugins wait for missing dependencies and fail closed on missing permissions", async t => {
+test("out-of-tree plugins wait for dependencies and use declared APIs without extra Profile grants", async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabiroute-out-of-tree-fail-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await fs.cp(fixturePackageRoot, path.join(root, "packages"), { recursive: true });
@@ -122,9 +122,9 @@ test("out-of-tree plugins wait for missing dependencies and fail closed on missi
     hostServices: [{ capability: "host.test-events@1", value: [] }],
     grantedPermissions: loaded.grants
   });
-  const denied = await runtime.switch(loaded.candidates);
-  assert.equal(denied.generation.records[0]?.status, "failed");
-  assert.match(denied.generation.records[0]?.error?.message ?? "", /not granted/);
-  assert.equal(denied.generation.contributions.contributions.length, 0);
+  const active = await runtime.switch(loaded.candidates);
+  assert.equal(active.generation.records[0]?.status, "active");
+  assert.equal(active.generation.records[0]?.error, undefined);
+  assert.ok(active.generation.contributions.contributions.length > 0);
   await runtime.dispose();
 });

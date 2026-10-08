@@ -7,14 +7,14 @@ description: 通过 RabiRoute 正式工具发现 Agent 会话、核对绑定、�
 
 ## 先选正式入口
 
-通用接口由 Manager 持有：Agent 会话操作使用 `/api/agent/threads`，消息端发送使用 `/api/agent/send`，健康与业务状态使用当前 Manager 受管 GET。先读取 [接口合同](../../docs/rabi-agent-interfaces.md)。宿主提供正式工具时优先使用，工具名和参数映射由宿主适配技能说明；不要求所有 Agent 都安装 DSH 插件。
+通用接口由 Manager 持有：Agent 会话操作使用 `/api/agent/threads`，消息端发送使用 `/api/agent/send`，健康与业务状态使用当前 Manager  GET。先读取 [接口合同](../../docs/rabi-agent-interfaces.md)。宿主提供正式工具时优先使用，工具名和参数映射由宿主适配技能说明；不要求所有 Agent 都安装 DSH 插件。
 
-普通子 Agent 工具不能代替受管的跨宿主会话投递。缺少工具时使用该宿主已支持的正式 Manager 传输；没有合法入口则报告具体缺失，不猜测工具名、不绕过权限、不换宿主或另建任务。
+普通子 Agent 工具不能代替的跨宿主会话投递。缺少工具时使用该宿主已支持的正式 Manager 传输；没有合法入口则报告具体缺失，不猜测工具名、不绕过权限、不换宿主或另建任务。
 
 ## 排障顺序
 
 1. 先区分用户要“检查为什么失败”还是“发送这段消息”。排障授权不等于发送测试消息、修改绑定、创建会话或重启宿主的授权。
-2. 通过当前 Host 动态发现 Manager，并使用受管入口的 `GET /meta` 核对。不得抄用技能、旧对话或日志里的历史端口；不得用近期记忆读取充当健康探针。
+2. 通过当前 Host 动态发现 Manager，并使用入口的 `GET /meta` 核对。不得抄用技能、旧对话或日志里的历史端口；不得用近期记忆读取充当健康探针。
 3. 先读当前工具说明与 Manager 接口合同；调用 `/api/agent/help` 后检查 `contractLevel` 与 `coverage.missing`，发送还要读取 `/api/agent/send/capabilities`。`baseline` 不是精确 schema，缺失字段必须读取专用 contractResource；再通过 `/api/agent/threads` 的只读操作查询目标宿主、会话、绑定和可投递状态。工具参数以当前合同为准，不编造操作名或 JSON 字段。
 4. 使用完整目标会话 ID 定位；标题、工作目录和时间只能辅助核对。明确区分“直接投递给指定 Agent 会话”和“外部消息按 Route 绑定转发”，不能仅凭 Route 未绑定就断定所有投递方式都失败。
 5. 根据正式返回区分：Manager 不可达、适配器不支持、目标不存在、绑定缺失、会话不可投递、鉴权失败、投递被拒、结果未知。只读查询成功不能证明消息已经送达。

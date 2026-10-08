@@ -24,7 +24,7 @@
 | 依赖 | 插件声明注入关系，配置树驱动重建 | Manifest 声明 `provides/requires/optional`，能力图决定激活顺序和受影响范围 |
 | 生命周期 | `ctx.effect` 管理可撤销资源 | effect scope 管理路由、监听器、定时器、连接和注册项 |
 | 热更新 | Cordis 重建插件树并恢复 effect | SHA-256 revision 创建候选 generation，准备成功后原子发布，失败时保留上一 revision |
-| 配置 | Bundle/Patch 合并形成配置真源 | Profile 只选择实例、配置和权限，不承载业务规则或迁移逻辑 |
+| 配置 | Bundle/Patch 合并形成配置真源 | Profile 只选择实例、配置和运行策略，不承载业务规则或迁移逻辑 |
 | 宿主边界 | 面向 Agent harness 的单一插件树 | Manager、Gateway、WebGUI、Desktop 共用合同，但分别加载自己的 entry |
 | 外部副作用 | 可撤销资源适合 effect | 消息外发、审批和远端写入由 Outbox、幂等命令或补偿处理，不伪装成可撤销 effect |
 
@@ -327,7 +327,7 @@ entry 通过公开 API、事件或持久事实协作，不共享可变内存。W
 | `isolated` | 树外代码或高风险依赖 | 独立 Runtime Host、受限 RPC、资源 policy 与 process lease |
 | `declarative` | Desktop/Web 清单和表现数据 | 不执行插件代码 |
 
-安装记录来源、版本、哈希、权限和启用 Profile。新增权限需要重新授权。已安装不等于可以访问全部宿主能力。
+安装记录来源、版本、哈希、权限和启用 Profile。Manifest 的宿主接口声明变化时重新校验依赖合同，无额外权限授权。已安装不等于可以访问全部宿主能力。
 
 ## Generation 原子切换
 

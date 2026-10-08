@@ -48,7 +48,7 @@ To enable the integration, change only this instance's `enabled` field to `true`
 
 ## Local RabiRoute facade
 
-RabiRoute Manager registers only these paths for loopback callers:
+RabiRoute Manager provides these paths to local and authenticated remote connections, reusing connection credentials without a loopback-only caller restriction. The client still connects to YeYu Gamer on this PC:
 
 ```http
 GET /api/agent/yeyu-gamer/health

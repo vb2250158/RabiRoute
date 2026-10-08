@@ -36,6 +36,7 @@ import {
   type SpeechTranscriptSegment
 } from "../shared/speechControlContract.js";
 import { normalizeSpeechTranscriptSegment } from "../shared/speechTranscript.js";
+import { normalizeSpeechRecognitionMetadata } from "../shared/speechRecognitionMetadata.js";
 import { sanitizeRoleId } from "../shared/routeIdentity.js";
 import {
   normalizeSpeechIngressRecord,
@@ -366,6 +367,7 @@ function normalizeAudioStreamStatus(value: Record<string, unknown>): SpeechAudio
 
 function normalizeHistoryItem(value: Record<string, unknown>): SpeechHistoryItem {
   return {
+    ...normalizeSpeechRecognitionMetadata(value),
     time: numberValue(value.time),
     text: stringValue(value.text),
     provider: stringValue(value.provider),
@@ -486,6 +488,7 @@ function normalizeSpeakerIdentityResult(value: Record<string, unknown>): SpeechS
 
 function normalizeSpeechRecord(value: Record<string, unknown>): SpeechRecord {
   return {
+    ...normalizeSpeechRecognitionMetadata(value),
     processingPolicy: value.processing_policy === "transcribe" ? "transcribe" : "agent",
     routeProfileId: optionalString(value.route_profile_id),
     id: stringValue(value.id),

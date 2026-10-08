@@ -64,7 +64,7 @@ Content-Type: application/json; charset=utf-8
 }
 ```
 
-Use the injected `sendRequestJson` as the starting point. This example is for the Codex Primary Persona: when the Codex **Only Primary Persona Can Send Messages** Hook is enabled, use `sender.agentType=primary_persona` and the bound Primary Persona task ID as `sender.sessionId`. Keep the exact `routeId`, `channel=speech`, and `params.sessionId`; replace the placeholder delivery ID and payload text. The source `replyContext` is audit context and must not be submitted as a destination. Do not invent another target or call a worker directly. Submit once. A `sent` result with autoplay means the audio entered the host FIFO; it does not prove speaker playback has finished.
+Use the injected `sendRequestJson` as the starting point. This example is for the Codex Primary Persona: use the actual sender role and complete current session ID under the common delivery contract. Keep the exact `routeId`, `channel=speech`, and `params.sessionId`; replace the placeholder delivery ID and payload text. The source `replyContext` is audit context and must not be submitted as a destination. Do not invent another target or call a worker directly. Submit once. A `sent` result with autoplay means the audio entered the host FIFO; it does not prove speaker playback has finished.
 
 Interpret other results explicitly:
 

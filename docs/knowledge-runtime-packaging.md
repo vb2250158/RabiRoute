@@ -24,4 +24,4 @@ Windows release 的通用 `Copy-TrackedTree` 只复制已跟踪文件；知识�
 
 设备 profile HTTP、知识操作回执、旧手机知识页面迁移三组中英合同是必需文档。链接目标不递归复制，完整索引见源码。
 
-运行 `node --test scripts/runtime-package-closure.test.mjs scripts/developer-channel.test.mjs scripts/windows-release-optional-speech.test.mjs` 检查静态导入闭包、候选实际包装导入、基包保护、缺失源拒绝与发布路径限制。访问 Manager 的脚本另运行 `node --test scripts/dynamic-manager-active-truth.test.mjs`。新增或动态运行依赖必须同步清单和检查。完整发布包启动、安装目录实际导入、受管 Host 健康和双设备业务验收各自需要证据。
+运行 `node --test scripts/runtime-package-closure.test.mjs scripts/developer-channel.test.mjs scripts/windows-release-optional-speech.test.mjs` 检查静态导入闭包、候选实际包装导入、基包保护、缺失源拒绝与发布路径限制。访问 Manager 的脚本另运行 `node --test scripts/dynamic-manager-active-truth.test.mjs`。新增或动态运行依赖必须同步清单和检查。完整发布包启动、安装目录实际导入、Host 健康和双设备业务验收各自需要证据。

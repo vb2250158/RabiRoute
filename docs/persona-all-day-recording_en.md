@@ -1,16 +1,20 @@
+English | [简体中文](persona-all-day-recording.md)
+
 # Persona all-day recording
 
-Event lists use the `(startedAt,id)` cursor through `GET /page?direction=older|newer&time=milliseconds&id=eventId&source=source&type=all|asr|image|window|status`. Pages contain at most 100 events and a directional `hasMore` flag. Traversal crosses empty dates until the actual boundary. The PC retains at most 2000 events in memory and reloads evicted pages without deleting originals. Day indexes are still read per day; initial reconstruction and sparse filters are not constant-time operations.
+Event lists use the `(startedAt,id)` cursor through `GET /page?direction=older|newer&time=milliseconds&id=eventId&source=source&type=all|asr|image|window|status|device`. Pages contain at most 100 events and a directional `hasMore` flag. Traversal crosses empty dates until the actual boundary. The PC retains at most 2000 events in memory and reloads evicted pages without deleting originals. Day indexes are still read per day; initial reconstruction and sparse filters are not constant-time operations.
 
 Audio is saved under a stable event ID before transcription completes; subsequent states update that event. Mobile and PC use `pending/processing/ready/empty/error`, independently of media persistence. Local-only mobile recordings remain local. New data never forces historical browsing back to live.
-
-English | [简体中文](persona-all-day-recording.md)
 
 Status: newly implemented; build, installation and physical-device acceptance must be checked separately.
 
 Open **Persona → All-day recording** to review a continuous timeline and events, matching the mobile fixed cursor, drag, inertial scrolling and cross-date navigation. The default window is 30 minutes, with an edge-to-edge zoom span from 3 seconds to 24 hours. Dates provide jumps; Live follows the current clock. Microphone recording reuses RabiSpeech segmentation and ASR. Screen and camera save periodic JPEG frames; foreground-window events record title changes observed at those samples. This is not continuous screen video and does not infer user activity from an open window. Empty periods remain empty and capture failures are explicit.
 
-All four sources default off; first enabling requires at least one selected source. Host-local enable intent survives application shutdown and restores the owning persona on startup; explicitly disabling clears it. One host has one recording persona, with other personas showing the conflict. Save device changes while running; they apply after the bounded in-flight sample completes. Disconnected microphone streams retry at the sampling interval. Screen and camera sampling are isolated so one failure does not discard the other results. Cameras still use their configured index; OS index reordering requires reconfirmation and does not preserve physical device identity.
+Computer capture and Home Assistant sources default off; first enabling requires at least one selected source. Host-local enable intent survives application shutdown and restores the owning persona on startup; explicitly disabling clears it. One host has one recording persona, with other personas showing the conflict. Save device changes while running; they apply after the bounded in-flight sample completes. Disconnected microphone streams retry at the sampling interval. Screen and camera sampling are isolated so one failure does not discard the other results. Cameras still use their configured index; OS index reordering requires reconfirmation and does not preserve physical device identity.
+
+Recording settings include a **Home Assistant** switch that can be enabled alone. It subscribes directly to the `logbook/event_stream` used by Home Assistant Activity, including vacuum progress, ordinary states and custom entries, preserving source timestamps, entities, state text and stable deduplication IDs. Connect Home Assistant in Xiaomi Home settings; Agent event monitoring, its significant/all policy and persona binding do not control recording. Save settings and enable recording to import existing activity from the current local day and continue receiving live events. Pausing or disabling this source disconnects its subscription. Reconnecting or re-enabling backfills and deduplicates the current local day, capped at the last 24 hours, without importing earlier dates. Events appear in the timeline, source filter and **Device events** filter. Missing connections, rejected authorization and failed Activity subscriptions surface source errors without blocking other capture sources. Home Assistant alone does not call speech or frame capture services. Agent notifications and camera event clips remain independent.
+
+Device records retain activity entities, display names, state text and source timestamps. IDs derive from activity time, entity, state or message, and context, so retries do not duplicate an activity. Older settings without `homeAssistant` load with it off and are upgraded through the normal save path; remove that compatibility conversion only after existing settings have migrated. Events use the same computer storage, indexes and SSE updates. This source does not download clips, execute device actions or automatically notify an Agent.
 
 An existing local microphone session is shared, collecting only computer recordings since enrollment. Disabling or lease expiry leaves that listener running. If no listener exists, a temporary session is started and restored on release. Remote input is rejected; source or session changes are explicit errors. Existing ASR thresholds and message routing still apply. Sound that never meets recording/transcription thresholds is not a saved event.
 
@@ -40,7 +44,7 @@ Base: `/api/roles/:roleId/all-day-recording`. JSON success: `{code:0,data:...}`;
 | Method/path | Contract |
 | --- | --- |
 | `GET /` | Settings, actual session state, last sample, errors and discovered mobile sources |
-| `PUT /settings` | Boolean `sources:{microphone,screen,window,camera}`; `intervalSeconds` 10–3600; `cameraIndex` 0–16; `mobileDeviceIds` from discovered source hashes. Changes can be saved while recording |
+| `PUT /settings` | Boolean `sources:{microphone,screen,window,camera,homeAssistant}`; `intervalSeconds` 10–3600; `cameraIndex` 0–16; `mobileDeviceIds` from discovered source hashes. Changes can be saved while recording |
 | `POST /start` | Start saved sources; retry for the same active persona returns status; another owner fails |
 | `POST /stop` | Drain the bounded in-flight sample and stop this session; repeated stop is a no-op |
 | `GET /events?since=...&until=...` | Millisecond range, at most 26 hours; events ordered by source time |

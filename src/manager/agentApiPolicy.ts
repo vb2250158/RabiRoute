@@ -42,10 +42,9 @@ export type AgentApiAuthorization =
 
 type Definition = readonly [AgentApiMethod, string, string, string?, string?];
 const contractResourceId = "docs/rabi-agent-interfaces.md";
-const handlerBoundary = "仅授予业务入口；不替代处理器的对象权限、Action Gate、来源身份、文件根、幂等键及版本校验。";
-const loopbackBoundary = "现有处理器仅允许 loopback；目录收录不代表已支持远端调用，不得代理为本机绕过。";
+const handlerBoundary = "鉴权后的连接可使用已提供的接口；请求仍需符合来源身份、文件路径、幂等键及版本合同。";
 
-// This is trusted, reviewed policy, not mutable plugin configuration. New plugin routes do not grant authority.
+// This catalog describes reviewed contracts; connection authentication is enforced separately.
 function operations(group: string, prefix: string, definitions: readonly Definition[], limitations: readonly string[] = []): AgentApiOperation[] {
   return definitions.map(([method, suffix, description, query = "", repeatable = ""]) => {
     const pathTemplate = `${prefix}${suffix}`;
@@ -90,15 +89,15 @@ function operations(group: string, prefix: string, definitions: readonly Definit
             requestBody: method === "PUT" ? "application/octet-stream；必须使用 UUID uploadId、同值 Idempotency-Key、x-rabiroute-content-sha256 和 URI 编码文件名；禁止 content-encoding。" : "GET 无请求体。",
             response: "PUT 成功返回 code=0、data { id, fileName, size, sha256, expiresAt }；GET 返回当前上传回执/资源。",
             auth: "必须由当前已认证 Agent trusted source 访问，并在开始、提交和读取阶段复核 owner 与权限。",
-            effects: method === "PUT" ? "只保存受管文件，不自动外发；后续发送必须显式引用 fileId/fileSha256。" : "只读取受管上传状态。",
+            effects: method === "PUT" ? "只保存上传文件，不自动外发；后续发送必须显式引用 fileId/fileSha256。" : "只读取上传状态。",
               retry: "uploadId 与 Idempotency-Key 必须稳定且相同；不确定时先 GET 同一 uploadId，不改 ID、不自动重传。", mutating: method === "PUT", idempotencyRequired: method === "PUT"
           }
         : pathTemplate === "/api/agent/xiaomi-home/action-requests" && method === "POST"
           ? {
               requestBody: "JSON：requestId?、resourceId、capability、arguments?、expectedStateVersion、reason?、dryRun?；必须携带稳定 Idempotency-Key，并携带当前 application-generation/manager-instance fence。",
-              response: "202 返回 code=0 与 action receipt；planned/succeeded/failed/uncertain 是不同状态，不能把接受当作设备完成。",
-              auth: "仅受 loopback/control-plane 门禁及生命周期 fence 允许；设备资源权限和 Action Gate 仍由 Xiaomi Home 执行层核验。",
-              effects: "可能调用家庭设备服务并执行状态变更；dryRun 或 writeEnabled=false 只产生 planned。",
+              response: "202 返回 code=0 与 action receipt；planned/accepted/succeeded/failed/uncertain 是不同状态。accepted 仅证明服务受理，succeeded 仅证明状态读回；不证明已听到声音。简化能力从 capabilities 获取，home.entity.action@1 的 argumentsSchema 与 revision 从 entity-actions 或 resources?includeActions=1 获取；回执通过 GET action-requests?idempotencyKey 查询。",
+              auth: "复用 Manager 连接鉴权；执行层校验设备能力、参数、状态版本、幂等键及当前 Manager 身份。",
+              effects: "可能调用家庭设备服务并执行状态变更；dryRun 只产生 planned。",
               retry: "相同 key 只读恢复既有 receipt；状态版本变化、in_progress 或 uncertain 时先读回，禁止自动重发。", mutating: true, idempotencyRequired: true
             }
           : undefined;
@@ -122,7 +121,7 @@ function operations(group: string, prefix: string, definitions: readonly Definit
       response: auditedSummary?.response ?? "以 HTTP 状态码和 JSON code/data 或 error 为准；不要把网络可达当作业务成功。",
       errors: Object.freeze(["400：参数或业务合同错误；按 error/help/repair 修正。", "401/403：身份、权限或 Agent 启停被拒绝。", "404：资源或接口不存在，重新读取当前能力目录。", "412/5xx/超时：先读回资源或回执，不自动重放写入。"]),
       nextStep: method === "GET" ? "根据返回的 data/coverage 判断结果；空结果不等于系统没有数据。" : "保存原请求体和幂等键；不确定时先查询回执或资源状态。",
-      auth: Object.freeze({ required: auditedSummary ? true : null, source: auditedSummary?.auth ?? "当前目录仅说明 Agent 入口；实际身份、对象权限和 Action Gate 以处理器及当前请求来源为准。", scopes: Object.freeze(["agent-api-entry"]) }),
+      auth: Object.freeze({ required: auditedSummary ? true : null, source: auditedSummary?.auth ?? "复用 Manager 连接鉴权；处理器校验请求身份、对象和参数合同。", scopes: Object.freeze(["agent-api-entry"]) }),
       effects: Object.freeze({ mode: auditedSummary?.mutating ? "mutating" : auditedSummary ? "readOnly" : "unknown", sideEffects: auditedSummary?.effects ?? "未从统一目录核验；不得依据 HTTP 方法推断无副作用或必然写入。" }),
       idempotency: Object.freeze({ required: auditedSummary?.idempotencyRequired ?? (auditedSummary ? false : null), retryRule: auditedSummary?.retry ?? "幂等要求尚未逐接口核验；发生超时、5xx、412 或切代时保留原请求和原键，先读回回执/资源，不自动重放。" }),
       contractResourceId,
@@ -140,7 +139,7 @@ const roleKnowledge: readonly Definition[] = [
   ["GET", "/counts", "读取人格知识数量"],
   ["GET", "/plans", "查询计划目录与分页", "limit cursor detail view sort query status tag facets", "status tag"],
   ["GET", "/plans/:planId", "读取计划及强 ETag", "detail"],
-  ["POST", "/plans", "新增计划（含受管附件与任务绑定）"],
+  ["POST", "/plans", "新增计划（含附件与任务绑定）"],
   ["PATCH", "/plans/:planId", "更新计划（保留版本及幂等合同）"],
   ["GET", "/plans/:planId/history", "读取计划历史"],
   ["GET", "/plans/:planId/feedback", "读取计划反馈及版本"],
@@ -198,7 +197,7 @@ const catalog: readonly AgentApiOperation[] = Object.freeze([
     ["GET", "/persona-document", "读取固定 persona.md；不开放 file 参数"],
     ["GET", "/persona-reference", "只读获取人格正文与消息配置；数据仍归所属 PC", "file"],
     ["POST", "/persona-reference/language-style", "由人格所属 PC 根据当前 revision 和自身风格配置检查正文；不接受调用者指定文件地址", ""],
-    ["GET", "/plans/:planId/attachments/:attachmentId", "读取受管计划附件"],
+    ["GET", "/plans/:planId/attachments/:attachmentId", "读取计划附件"],
     ["GET", "/plan-agents/status", "读取计划绑定 Agent 的状态", "planId", "planId"]
   ]),
   ...operations("agent", "", [
@@ -209,7 +208,7 @@ const catalog: readonly AgentApiOperation[] = Object.freeze([
     ["GET", "/api/personas/messages/receipts/:deliveryId", "读取跨人格投递回执"],
     ["GET", "/api/agent/threads", "列出 Agent 会话", "query limit offset"],
     ["POST", "/api/agent/threads", "发现、读取、创建、命名与单向投递会话；远端来源仅支持 responsePolicy:none，不支持正式回复或跨远端投递"],
-    ["PUT", "/api/agent/uploads/:uploadId", "上传当前远端 Agent 的受管文件，不自动外发"],
+    ["PUT", "/api/agent/uploads/:uploadId", "上传当前远端 Agent 的上传文件，不自动外发"],
     ["GET", "/api/agent/uploads/:uploadId", "核对当前远端 Agent 的文件上传回执"],
     ["GET", "/api/agent/help", "按 operationId、方法或路径查询当前接口帮助", "operationId path method"],
     ["GET", "/api/agent/qq/diagnostics", "查询唯一已启用 QQ 实例的脱敏只读诊断", "routeId"],
@@ -218,7 +217,7 @@ const catalog: readonly AgentApiOperation[] = Object.freeze([
     ["GET", "/api/agent/qq/messages/:messageId", "本机读取原消息及附件下载入口；仅本机管理权限", "routeId kind target"],
     ["GET", "/api/agent/qq/messages/:messageId/attachments/:attachmentIndex", "本机下载原消息附件二进制；最多 64 MiB，仅本机管理权限", "routeId kind target"],
     ["GET", "/api/agent/send/capabilities", "列出发送渠道、参数示例与不重试规则"],
-    ["POST", "/api/agent/send", "通过渠道策略发送消息或受管附件"],
+    ["POST", "/api/agent/send", "通过渠道策略发送消息或附件"],
     ["GET", "/api/agent/send/traces", "按平台消息追踪发送", "channel sentMessageId routeId"],
     ["GET", "/api/agent/send/receipts/:deliveryId", "读取渠道发送回执"],
     ["POST", "/api/agent/send/receipts/:deliveryId/verify", "只读核验原投递的可信证据；无需计划绑定，不外发或重试"],
@@ -259,7 +258,7 @@ const catalog: readonly AgentApiOperation[] = Object.freeze([
     ["PUT", "/playback/volume", "调整语音播放音量"],
     ["POST", "/playback/stop", "停止语音播放"],
     ["GET", "/records", "检索语音记录", "limit kind sessionId routeId since until sourceDeviceId before"],
-    ["GET", "/records/:recordId/audio", "读取受管语音记录音频"],
+    ["GET", "/records/:recordId/audio", "读取语音记录音频"],
     ["POST", "/tts", "执行语音合成"],
     ["POST", "/asr", "转写上传的音频"],
     ["GET", "/messages", "查询语音消息及投递回执", "recordId limit sourceDeviceId messageAdapterType before"],
@@ -293,20 +292,50 @@ const catalog: readonly AgentApiOperation[] = Object.freeze([
     ["GET", "/snapshot", "读取受支持游戏集成快照"],
     ["GET", "/capabilities", "读取受支持游戏集成能力"],
     ["POST", "/work-items", "创建 plan-only 游戏工作项"]
-  ], [loopbackBoundary]),
+  ]),
   ...operations("home", "/api/agent/xiaomi-home", [
-    ["GET", "/resources", "列出已授权家庭设备资源"],
+    ["GET", "/health", "读取家庭设备连接与事件监听健康状态"],
+    ["GET", "/vacuum-cloud/status", "读取扫地机云地图连接状态"],
+    ["POST", "/vacuum-cloud/video/start", "启动持续至退出的扫地机视频会话，不收音或移动"],
+    ["GET", "/vacuum-remote/capabilities", "读取共享扫地机遥控能力与协议版本", "resourceId"],
+    ["GET", "/vacuum-remote/status", "查询遥控会话或原动作回执", "sessionId idempotencyKey"],
+    ["POST", "/vacuum-remote/start", "进入共享遥控模式"],
+    ["POST", "/vacuum-remote/pulse", "执行自动松键的短时方向控制"],
+    ["POST", "/vacuum-remote/stop", "松开方向键，保留遥控模式"],
+    ["POST", "/vacuum-remote/exit", "松键并退出遥控模式，设备可能自动回仓"],
+    ["GET", "/vacuum-cloud/video/network", "读取已归属扫地机的局域网地址及本机同网段判断，不启动视频", "deviceId region"],
+    ["GET", "/vacuum-cloud/video/password", "查询本机视频密码保存状态或原删除回执，不返回密码", "deviceId region idempotencyKey"],
+    ["POST", "/vacuum-cloud/video/password/forget", "删除当前云账号设备的本机视频密码"],
+    ["POST", "/vacuum-cloud/video/stop", "停止指定视频会话"],
+    ["GET", "/vacuum-cloud/video/status", "读取视频会话和首帧证据，或查询原动作回执", "sessionId idempotencyKey"],
+    ["GET", "/vacuum-cloud/video/stream", "读取已启动会话的视频流", "sessionId"],
+    ["GET", "/vacuum-cloud/video/frame", "读取已启动会话的单个 MP4 视频帧", "sessionId"],
+    ["GET", "/vacuum-cloud/connect", "打开米家扫码地图连接页", "deviceId view"],
+    ["POST", "/vacuum-cloud/login", "开始米家扫码登录，凭据由连接组件保存"],
+    ["POST", "/vacuum-cloud/login/poll", "有界等待当前扫码结果"],
+    ["GET", "/vacuum-cloud/devices", "查询米家云扫地机，不返回凭据", "region"],
+    ["GET", "/vacuum-cloud/plugin-information", "读取官方扫地机插件元数据，不返回下载签名", "deviceId region sdkVersion"],
+    ["GET", "/vacuum-cloud/plugin-package", "读取官方插件文件，仅供静态协议诊断", "deviceId region sdkVersion"],
+    ["GET", "/vacuum-cloud/position", "读取设备位置属性，空值保持不可用，单位与时效未验证", "deviceId region"],
+    ["GET", "/vacuum-cloud/trajectory", "读取官方轨迹查询返回值，不移动设备或证明定位即时性", "deviceId region poseId"],
+    ["GET", "/vacuum-cloud/path", "在同一云地图快照上预览避障路径，不移动设备", "deviceId region slot mapHash targetX targetY clearanceMm"],
+    ["GET", "/vacuum-cloud/map", "读取实验性云地图原始文件，不移动设备", "deviceId region slot"],
+    ["GET", "/capabilities", "读取家庭媒体动作参数、绑定与结果确认合同"],
+    ["GET", "/resources", "列出全部已接入家庭设备实体，可同时发现动作", "includeActions"],
+    ["GET", "/devices", "按 Home Assistant 设备登记归组已接入实体；无归属实体单独返回"],
+    ["GET", "/entity-actions", "读取一个实体实时支持的动作及参数合同", "resourceId"],
     ["GET", "/resources/:resourceId", "读取已授权家庭设备资源"],
-    ["POST", "/action-requests", "向已授权设备提交受控动作"],
+    ["POST", "/action-requests", "向已连接设备提交动作"],
+    ["GET", "/action-requests", "只读查询同一幂等键的设备动作回执", "idempotencyKey"],
     ["POST", "/events", "提交家庭设备业务事件"],
-    ["GET", "/artifacts", "查询受管家庭媒体记录", "resourceId eventKind"],
+    ["GET", "/artifacts", "查询家庭媒体记录", "resourceId eventKind"],
     ["GET", "/artifacts/lifecycle", "读取家庭媒体生命周期合同"],
     ["GET", "/artifacts/:artifactId", "读取家庭媒体记录"],
-    ["GET", "/artifacts/:artifactId/content", "读取受管家庭媒体内容"]
-  ], [loopbackBoundary])
+    ["GET", "/artifacts/:artifactId/content", "读取家庭媒体内容"]
+  ], ["复用已有 Manager 连接鉴权；本机、已鉴权 WebGUI 和已登记远端 Agent 使用相同业务合同。"])
 ]);
 
-/** The same immutable catalog drives both discovery and enforcement; availability is still owned by plugins. */
+/** The catalog describes operation contracts; connection authentication is separate. */
 export function listAgentApiOperations(): readonly AgentApiOperation[] { return catalog; }
 
 const credentialKey = /(?:token|authorization|credential|password|secret|cookie|apikey|accesskey|capability|signature)/i;
@@ -317,12 +346,12 @@ const parameterPatterns: Readonly<Record<string, RegExp>> = Object.freeze({
   mediaId: /^[0-9a-f-]{36}$/
 });
 
-function safeSegment(raw: string): string | undefined {
+function safeSegment(raw: string, allowHomeResource = false): string | undefined {
   try {
     const decoded = decodeURIComponent(raw);
     // One decoding only. Reject separators, ADS, residual escapes, dot aliases and Windows device names.
     if (!decoded || decoded.length > 512 || decoded.trim() !== decoded || decoded.startsWith(".") || decoded.endsWith(".")
-      || /[\s]$/.test(decoded) || !/^[\p{L}\p{N}_ .@-]+$/u.test(decoded)
+      || /[\s]$/.test(decoded) || (!/^[\p{L}\p{N}_ .@-]+$/u.test(decoded) && !(allowHomeResource && /^home:ha:[a-z0-9_]+\.[a-z0-9_]+$/.test(decoded)))
       || /^(?:con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(?:\.|$)/i.test(decoded)) return undefined;
     return decoded;
   } catch { return undefined; }
@@ -344,7 +373,8 @@ export function validateAgentApiRequestTarget(method: string, requestTarget: str
   const separator = requestTarget.indexOf("?");
   const pathname = separator < 0 ? requestTarget : requestTarget.slice(0, separator);
   const rawSegments = pathname.slice(1).split("/");
-  const decodedSegments = rawSegments.map(safeSegment);
+  const homeResourcePath = rawSegments.length === 5 && rawSegments.slice(0, 4).join("/") === "api/agent/xiaomi-home/resources";
+  const decodedSegments = rawSegments.map((segment, index) => safeSegment(segment, homeResourcePath && index === 4));
   if (decodedSegments.some(segment => segment === undefined)) return { allowed: false, reason: "invalid_path" };
 
   const query: string[] = [];

@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { PassThrough } from "node:stream";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import type { SpeechRuntimeStatus } from "../shared/speechControlContract.js";
 import {
   SpeechRuntimeControl,
@@ -19,6 +22,125 @@ function status(state: SpeechRuntimeStatus["state"]): SpeechRuntimeStatus {
 }
 
 const installed = () => true;
+
+function fixtureFile(root: string, relative: string): void {
+  const filename = path.join(root, relative);
+  fs.mkdirSync(path.dirname(filename), { recursive: true });
+  fs.writeFileSync(filename, "fixture");
+}
+
+function dependencyFixture(root: string): void {
+  for (const relative of [
+    "fastapi/__init__.py", "uvicorn/__init__.py", "httpx/__init__.py",
+    "python_multipart/__init__.py", "numpy/__init__.py", "scipy/__init__.py",
+    "soundfile.py", "sounddevice.py"
+  ]) fixtureFile(root, relative);
+}
+
+function runtimeFixture(t: TestContext) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "speech-runtime-control-")));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const stateRoot = path.join(root, "state");
+  const packageRoot = path.join(root, "versions", "first");
+  const serviceRoot = path.join(packageRoot, "plugin-adapters", "rabi-speech");
+  for (const relative of ["runtime/RabiSpeech.exe", "scripts/start.ps1", "scripts/windows_host.py"]) {
+    fixtureFile(serviceRoot, relative);
+  }
+  return {
+    stateRoot, packageRoot, serviceRoot,
+    stableDependencies: path.join(stateRoot, "plugin-adapters", "rabi-speech", ".deps"),
+    bundledDependencies: path.join(serviceRoot, ".deps")
+  };
+}
+
+async function launchFixture(stateRoot: string, packageRoot: string): Promise<NodeJS.ProcessEnv> {
+  let launched = false;
+  let launchEnv: NodeJS.ProcessEnv | undefined;
+  const control = new SpeechRuntimeControl({
+    rootDir: stateRoot,
+    packageRoot,
+    serviceUrl: () => "http://127.0.0.1:8781",
+    platform: "win32",
+    inspect: async () => status(launched ? "online" : "offline"),
+    spawnRuntime: (_command, _args, options) => {
+      launched = true;
+      launchEnv = options?.env;
+      assert.equal(options?.cwd, path.join(packageRoot, "plugin-adapters", "rabi-speech"));
+      return { pid: 123, exitCode: null, unref() {} };
+    }
+  });
+  assert.equal((await control.start()).action, "started");
+  assert.ok(launchEnv);
+  return launchEnv;
+}
+
+test("packaged speech runtime uses the dependencies written by the current package installer", async t => {
+  const fixture = runtimeFixture(t);
+  dependencyFixture(fixture.bundledDependencies);
+  const env = await launchFixture(fixture.stateRoot, fixture.packageRoot);
+  assert.equal(env.RABISPEECH_DEPS_ROOT, fixture.bundledDependencies);
+  const executable = path.join(fixture.stateRoot, "runtime", "speech", "RabiSpeech.exe");
+  assert.equal(env.RABISPEECH_HOST_EXECUTABLE, executable);
+  assert.equal(fs.readFileSync(executable, "utf8"), "fixture");
+  assert.equal(fs.existsSync(fixture.stableDependencies), false);
+});
+
+test("stable speech dependencies take precedence and survive a package release change", async t => {
+  const fixture = runtimeFixture(t);
+  dependencyFixture(fixture.stableDependencies);
+  dependencyFixture(fixture.bundledDependencies);
+  const first = await launchFixture(fixture.stateRoot, fixture.packageRoot);
+  const nextPackage = path.join(path.dirname(fixture.packageRoot), "second");
+  const nextService = path.join(nextPackage, "plugin-adapters", "rabi-speech");
+  for (const relative of ["runtime/RabiSpeech.exe", "scripts/start.ps1", "scripts/windows_host.py"]) {
+    fixtureFile(nextService, relative);
+  }
+  const second = await launchFixture(fixture.stateRoot, nextPackage);
+  assert.equal(first.RABISPEECH_DEPS_ROOT, fixture.stableDependencies);
+  assert.equal(second.RABISPEECH_DEPS_ROOT, fixture.stableDependencies);
+  assert.equal(first.RABISPEECH_HOST_EXECUTABLE, second.RABISPEECH_HOST_EXECUTABLE);
+  assert.equal(fs.existsSync(path.join(nextService, ".deps")), false);
+});
+
+test("an empty stable dependency target does not shadow the complete package dependencies", async t => {
+  const fixture = runtimeFixture(t);
+  fs.mkdirSync(fixture.stableDependencies, { recursive: true });
+  dependencyFixture(fixture.bundledDependencies);
+  const env = await launchFixture(fixture.stateRoot, fixture.packageRoot);
+  assert.equal(env.RABISPEECH_DEPS_ROOT, fixture.bundledDependencies);
+});
+
+for (const partial of [false, true]) {
+  test(`speech runtime rejects ${partial ? "partially populated" : "empty"} pip targets before spawning`, async t => {
+    const fixture = runtimeFixture(t);
+    fs.mkdirSync(fixture.stableDependencies, { recursive: true });
+    fs.mkdirSync(fixture.bundledDependencies, { recursive: true });
+    if (partial) {
+      dependencyFixture(fixture.bundledDependencies);
+      fs.rmSync(path.join(fixture.bundledDependencies, "sounddevice.py"));
+    }
+    let launches = 0;
+    const control = new SpeechRuntimeControl({
+      rootDir: fixture.stateRoot,
+      packageRoot: fixture.packageRoot,
+      serviceUrl: () => "http://127.0.0.1:8781",
+      platform: "win32",
+      inspect: async () => status("offline"),
+      spawnRuntime: () => {
+        launches += 1;
+        throw new Error("must not spawn an incomplete installation");
+      }
+    });
+    await assert.rejects(() => control.start(), (error: unknown) => {
+      assert.ok(error instanceof SpeechRuntimeControlError);
+      assert.equal(error.status, 409);
+      assert.match(error.message, /尚未安装依赖/);
+      return true;
+    });
+    assert.equal(launches, 0);
+    assert.equal(fs.existsSync(path.join(fixture.stateRoot, "runtime", "speech")), false);
+  });
+}
 
 test("speech runtime start launches once and waits for real health", async () => {
   const states = [status("offline"), status("offline"), status("online")];

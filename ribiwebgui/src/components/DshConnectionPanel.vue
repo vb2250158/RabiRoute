@@ -6,6 +6,7 @@ const emit = defineEmits<{ "update:baseUrl": [value: string] }>();
 const client = createDshConnectionClient();
 const localSetup = isLocalDshSetupPage(window.location);
 const launchUrl = ref("");
+const showLoginLink = ref(false);
 const endpoints = ref<DshConnection[]>([]);
 const connection = ref<DshConnection>();
 const busy = ref(false);
@@ -31,19 +32,21 @@ function selectOrigin(value: string | null) {
   connection.value = endpoints.value.find(row => row.baseUrl === value);
   notice.value = "已选择地址。请点击刷新连接状态，或使用页面原有的扫描按钮获取会话。";
 }
-async function connect(existing = false) {
+async function connect() {
   if (busy.value || !localSetup) return;
   busy.value = true; error.value = ""; notice.value = "";
   try {
-    const result = await client.connect(existing ? { baseUrl: props.baseUrl } : { launchUrl: launchUrl.value.trim() });
+    const result = await client.connect(showLoginLink.value && launchUrl.value.trim()
+      ? { launchUrl: launchUrl.value.trim() } : { baseUrl: props.baseUrl });
     if (!alive) return;
     connection.value = result;
     endpoints.value = [...endpoints.value.filter(row => row.baseUrl !== result.baseUrl), result];
     emit("update:baseUrl", result.baseUrl);
+    showLoginLink.value = false;
     notice.value = result.state === "connected"
       ? "连接验证通过，授权已保存。请点击页面原有的扫描按钮获取会话；已有会话绑定未更改。"
       : "连接尚未就绪。请确认 DSH 已启动，并使用当前登录链接重新连接。";
-  } catch (cause) { if (alive) error.value = cause instanceof Error ? cause.message : "连接失败，请刷新状态。"; }
+  } catch (cause) { if (alive) { showLoginLink.value = true; error.value = cause instanceof Error ? cause.message : "连接失败，请刷新状态。"; } }
   finally { launchUrl.value = ""; if (alive) busy.value = false; }
 }
 async function disconnect() {
@@ -75,10 +78,14 @@ onMounted(refresh);
       </v-alert>
       <v-select v-if="endpoints.length" :model-value="baseUrl" :items="endpoints" item-title="baseUrl" item-value="baseUrl" label="已保存的 DSH 地址" :disabled="busy" @update:model-value="selectOrigin" />
       <template v-if="localSetup">
-        <p class="mb-2">启动 DSH，复制它提供的登录链接，粘贴到下方后点击连接。链接包含访问凭据，请勿分享；提交后此输入会清空。</p>
-        <v-text-field v-model="launchUrl" type="password" label="DSH 登录链接" autocomplete="off" :spellcheck="false" :disabled="busy" @keydown.enter.prevent="launchUrl.trim() && connect()" />
-        <v-btn color="primary" :disabled="busy || !launchUrl.trim()" :loading="busy" @click="connect()">连接 DSH</v-btn>
-        <v-btn v-if="baseUrl" variant="text" :disabled="busy" @click="connect(true)">验证并保存现有连接</v-btn>
+        <p class="mb-2">已登录 DSH 时直接连接，无需粘贴密钥或登录链接。优先复用已保存的授权，也支持当前浏览器在同一 hostname 下的 DSH 登录状态。</p>
+        <template v-if="showLoginLink">
+          <p class="mb-2">没有有效登录时，粘贴 DSH 提供的当前登录链接。链接包含访问凭据，请勿分享；提交后此输入会清空。</p>
+          <v-text-field v-model="launchUrl" type="password" label="DSH 登录链接" autocomplete="off" :spellcheck="false" :disabled="busy" @keydown.enter.prevent="(launchUrl.trim() || baseUrl) && connect()" />
+        </template>
+        <v-btn color="primary" prepend-icon="mdi-connection" :disabled="busy || !(baseUrl || (showLoginLink && launchUrl.trim()))" :loading="busy" @click="connect()">连接 DSH</v-btn>
+        <v-btn variant="text" :disabled="busy" @click="showLoginLink = !showLoginLink; launchUrl = ''">{{ showLoginLink ? '收起登录链接' : '使用登录链接连接' }}</v-btn>
+        <p v-if="!baseUrl" class="mt-2">请先在下方填写 DSH 地址，或使用登录链接连接。</p>
       </template>
       <v-btn variant="text" prepend-icon="mdi-refresh" :disabled="busy" @click="refresh">刷新连接状态</v-btn>
       <p v-if="connection?.expiresAt && connection.baseUrl === baseUrl" class="mt-2">授权有效期至 {{ new Date(connection.expiresAt).toLocaleString() }}。过期后请重新连接。</p>

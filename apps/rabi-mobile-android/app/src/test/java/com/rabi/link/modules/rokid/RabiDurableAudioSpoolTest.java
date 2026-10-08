@@ -26,6 +26,19 @@ import static org.junit.Assert.assertTrue;
 public final class RabiDurableAudioSpoolTest {
     @Rule public final TemporaryFolder temporary = new TemporaryFolder();
 
+    @Test public void endpointIdentityPublicationDoesNotWaitForHistoryIo() throws Exception {
+        RabiDurableAudioSpool spool = new RabiDurableAudioSpool(temporary.newFolder(), policy(8), () -> 1000L, file -> Long.MAX_VALUE);
+        ExecutorService worker = Executors.newSingleThreadExecutor();
+        try {
+            synchronized (spool) {
+                worker.submit(() -> {
+                    spool.setEndpointIdentity("endpoint");
+                    spool.setAsrEndpointIdentity("asr");
+                }).get(2, java.util.concurrent.TimeUnit.SECONDS);
+            }
+        } finally { worker.shutdownNow(); spool.close(); }
+    }
+
     @Test public void streamingArchiveMatchesWholePcmObjectsAcrossShardsAndRejectsMutation() throws Exception {
         File root=temporary.newFolder();AtomicLong buffers=new AtomicLong();
         RabiDurableAudioSpool spool=new RabiDurableAudioSpool(root,
@@ -89,6 +102,25 @@ public final class RabiDurableAudioSpoolTest {
         assertEquals("blocked",row.getString("archiveState"));assertFalse(row.getBoolean("uploadable"));
         assertEquals(64000L,row.getLong("totalBytes"));
         assertFalse(spool.evictArchived(files[0]));spool.close();
+    }
+
+    @Test public void callUsesExistingAsrBeforeArchiveAndRetainsAcknowledgedAudio() throws Exception {
+        RabiDurableAudioSpool spool = new RabiDurableAudioSpool(temporary.newFolder(), policy(8), () -> 1000L, file -> Long.MAX_VALUE);
+        String capture = "call_11111111-1111-1111-1111-111111111111";
+        spool.setAsrEndpointIdentity("asr:account"); spool.bindCaptureEndpoint(capture, "asr:account");
+        com.rabi.link.recording.RecordingArchiveCoordinator.Target target = new com.rabi.link.recording.RecordingArchiveCoordinator.Target("worker","11111111-1111-1111-1111-111111111111","device",1,true);
+        spool.authorizeArchive(capture, target);
+        assertTrue(spool.appendCompleteEvent(new byte[8],"phone","route-a",capture,"transcribe",1000,"received","call-event").accepted);
+        assertTrue(spool.nextArchiveCandidates(target, 32).isEmpty());
+        RabiDurableAudioSpool.Segment head = spool.nextTranscriptionUpload();
+        assertNotNull("Archive ownership must not prevent call ASR", head);
+        spool.saveEventReceipt("call-event", new JSONObject().put("text", "hello").put("captureId", capture));
+        head = spool.assignServerSequence(head, head.sequence);
+        assertTrue(spool.acknowledge(head.id, head.serverSequence, head.bytes, head.sha256));
+        assertNull(spool.nextTranscriptionUpload());
+        assertEquals(java.util.Collections.singletonList("call-event"), spool.nextArchiveCandidates(target, 32));
+        assertEquals(8, spool.readPcm(head).length);
+        spool.close();
     }
 
     @Test public void archiveAuthorizedHeadDoesNotStarveLegacyOrAcknowledgeBytes() throws Exception {

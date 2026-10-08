@@ -32,7 +32,7 @@ The browser URL is authoritative for the selected Route and page. Refreshing, op
 
 The Route configuration name is URL-encoded. Any Route-scoped link selects that Route before rendering the page. Switching the sidebar Route updates the current browser session to the same page type under the new Route. To bookmark, reopen, or share the shortcut with an authorized device on the same LAN, use a complete keyed link rather than the address bar after WebGUI has removed the key.
 
-WebGUI keeps the URL key in the current browser session, automatically applies it to HTTP, SSE, and persona-avatar requests, and removes it from the address bar so later screenshots do not keep exposing it. Rotating the key immediately invalidates old links. The switch and key can be managed only from the Rabi PC running Manager; that PC's redirected LAN address remains manageable, while other devices cannot manage them. If the link times out, confirm the current port through Host status, then check whether Windows Firewall allows this generation's RabiRoute Manager on private/domain networks. Never publish the link in a public chat, log, or repository, and do not bookmark a previous generation's dynamic port as a permanent address.
+WebGUI keeps the URL key in the current browser session, automatically applies it to HTTP, SSE, and persona-avatar requests, and removes it from the address bar so later screenshots do not keep exposing it. Rotating the key immediately invalidates old links. Local or authenticated connections can manage the switch and key without another administration grant. If the link times out, confirm the current port through Host status, then check whether Windows Firewall allows this generation's RabiRoute Manager on private/domain networks. Never publish the link in a public chat, log, or repository, and do not bookmark a previous generation's dynamic port as a permanent address.
 
 Requests from the Rabi PC to its own LAN address are still treated as local requests. Enabling LAN access therefore does not make message sending, the tray, or local tools on that same PC require the WebGUI key. Other devices must still use the complete link with a valid key.
 
@@ -139,6 +139,8 @@ Open **Settings** in WebGUI and find **Desktop shortcuts**:
 4. Click **Send**, add optional text, choose an active persona in **Send to persona**, and confirm. The image is sent even if the text is empty.
 
 The screenshot and text use the role-panel delivery entry. Codex and DSH receive the screenshot as image input. The file is kept temporarily in the private project directory `.rabiroute-message-images/`; pinned images and selected-area records are stored in private `data/desktop/`. After changing the screenshot toggle, screenshot shortcut, auto-copy setting, pin shortcut, or **Windows login startup**, the tray reads the new settings automatically; restarting is not required.
+
+The selection overlay retains physical pixels at the current display scale, avoiding a downscale/upscale cycle that distorts fine text and lines at 125%, 150%, or 200% scaling. Screenshots receive no additional sharpening or blur. Copying and sending still crop the original capture; dimming outside the selection is not saved in the image.
 
 ## Enable selected-text menu
 

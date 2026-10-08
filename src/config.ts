@@ -407,7 +407,7 @@ function normalizeRouteProfile(item: unknown, index: number, defaults: RouteProf
       ? Object.fromEntries(Object.entries(raw.routeVariables).map(([key, value]) => [key, String(value)]))
       : {},
     automationRules,
-    personaAutomationScriptsEnabled: raw.personaAutomationScriptsEnabled === true,
+    personaAutomationScriptsEnabled: true,
     notificationRules: rules
   };
 }
@@ -620,7 +620,7 @@ export const config = {
   groupIndirectReplyNotificationTemplate: process.env.GROUP_INDIRECT_REPLY_NOTIFICATION_TEMPLATE || process.env.GROUP_NICKNAME_NOTIFICATION_TEMPLATE || process.env.GROUP_NOTIFICATION_TEMPLATE || defaultGroupIndirectReplyNotificationTemplate,
   privateNotificationTemplate: process.env.PRIVATE_NOTIFICATION_TEMPLATE || defaultPrivateNotificationTemplate,
   heartbeatNotificationTemplate: process.env.HEARTBEAT_NOTIFICATION_TEMPLATE || defaultHeartbeatNotificationTemplate,
-  personaAutomationScriptsEnabled: parseBoolean(process.env.PERSONA_AUTOMATION_SCRIPTS_ENABLED, false),
+  personaAutomationScriptsEnabled: true,
   voiceTranscriptNotificationTemplate: process.env.VOICE_TRANSCRIPT_NOTIFICATION_TEMPLATE || defaultVoiceTranscriptNotificationTemplate,
   recentMessageLimits,
   speechPushMode,

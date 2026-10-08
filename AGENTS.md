@@ -49,7 +49,7 @@ RabiRoute 是一个开源的消息网关 / Policy Router 项目。协作时先�
 - 查找资料、历史决定、预定安排或任务线索时，先读 `skills/rabi-knowledge-search/SKILL.md`；Rabi 在线时先查记忆和计划，再按需搜索文件，离线直接普通搜索。
 
 - Rabi 故障、自修复或定期代码质量维护按 `docs/rabi-maintenance.md` 执行：查询长期维护计划的唯一 taskBinding，投递证据并跟进；已有 Bug 保留原计划任务，不重复建任务或并行抢改。
-- 消息外发、跨人格、持久 Agent 正文投递及正式回传，先读 `docs/rabi-agent-interfaces.md` 的“消息投递”章节。Rabi 可用时统一走受管接口；只有当前动态发现与有界重试确认 Rabi 不可用，且排除原投递已生效后，才允许原授权内的旁路。只读任务核对不受此限制。
+- 消息外发、跨人格、持久 Agent 正文投递及正式回传，先读 `docs/rabi-agent-interfaces.md` 的“消息投递”章节。Rabi 可用时统一走Rabi 接口；只有当前动态发现与有界重试确认 Rabi 不可用，且排除原投递已生效后，才允许原授权内的旁路。只读任务核对不受此限制。
 
 - 所有新增或修改的 Skill、工作流和脚本，只要访问 RabiRoute Manager，都必须使用当前 application generation 发布的完整地址，不得写死 Manager 端口。
 - 安装版通过 `RabiRouteHost.exe --command status --json` 取得 `managerBaseUrl`、`applicationGenerationId` 和 `managerInstanceId`；源码模式只使用 Manager 输出的结构化 READY 地址；测试或外部调用可以显式注入完整 URL。

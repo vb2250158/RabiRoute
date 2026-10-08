@@ -30,7 +30,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 $pluginRoot = Split-Path -Parent $PSScriptRoot
-$deps = Join-Path $pluginRoot ".deps"
+$deps = if ($env:RABISPEECH_DEPS_ROOT) {
+  [IO.Path]::GetFullPath($env:RABISPEECH_DEPS_ROOT)
+} else {
+  Join-Path $pluginRoot ".deps"
+}
 $downloader = Join-Path $PSScriptRoot "install_models.py"
 
 if (-not (Test-Path -LiteralPath $downloader)) {

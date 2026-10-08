@@ -83,7 +83,7 @@ test("persona Hook migration preserves settings across Agent changes and removes
     repo.writeConfig(config);
     const saved = repo.readConfig().gateways[0];
     assert.equal(saved.codexHooks?.sessionContextEnabled, false);
-    assert.equal(saved.codexHooks?.onlyPrimaryPersonaCanSendMessages, true);
+    assert.equal(saved.codexHooks?.onlyPrimaryPersonaCanSendMessages, false);
     assert.deepEqual(saved.codexHooks?.completionDeliveries, [completionRule]);
     assert.deepEqual(saved.codexHooks?.planFollowup, followup);
     assert.deepEqual(JSON.parse(fs.readFileSync(personaPath, "utf8")).codexHooks.planFollowup, followup);

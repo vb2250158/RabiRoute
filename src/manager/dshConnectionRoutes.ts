@@ -58,7 +58,10 @@ export async function handleDshConnectionRequest(request: http.IncomingMessage, 
       || ("launchUrl" in body) === ("baseUrl" in body)) throw new DshConnectionError("Provide one DSH login link or existing connection address.");
     if (!Number.isSafeInteger(body.expectedRevision)) throw new DshConnectionError("Refresh DSH connection settings before saving.");
     const connection = typeof body.baseUrl === "string"
-      ? await migrateDshOwner(body.baseUrl, Number(body.expectedRevision), store, signal)
+      ? await migrateDshOwner(body.baseUrl, Number(body.expectedRevision), store, signal, {
+        hostname: new URL(`http://${request.headers.host}`).hostname,
+        cookieHeader: request.headers.cookie
+      })
       : await connectDshOwner(body.launchUrl, Number(body.expectedRevision), store, signal);
     return { ok: true, revision: connection.revision, connection };
   }

@@ -32,9 +32,6 @@ object RabiConversationRules {
     fun unreadCount(incomingCreatedAt: List<Long>, readAt: Long): Int =
         incomingCreatedAt.count { it > readAt }
 
-    /** Visibility is intentionally independent of enabled/chat-capable state. */
-    fun isVisibleInConversationList(routeId: String?): Boolean = routeId.orEmpty().trim().isNotBlank()
-
     fun shouldRefreshAvatar(changedRoleId: String?, targetRoleId: String?): Boolean {
         val changed = changedRoleId.orEmpty().trim()
         return changed.isNotBlank() && changed == targetRoleId.orEmpty().trim()

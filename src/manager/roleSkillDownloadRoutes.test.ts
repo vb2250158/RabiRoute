@@ -47,7 +47,7 @@ async function cleaned(directory: string) {
   assert.deepEqual(await fs.readdir(directory), [], "private request artifact was not cleaned");
 }
 
-test("real worker HTTP ZIP requires persona binding before any read, preserves both aliases and 404", { timeout: 15000 }, async t => {
+test("authenticated worker HTTP ZIP needs no persona binding, preserves aliases and 404", { timeout: 15000 }, async t => {
   const f = await fixture(t);
   const pool = new ManagerReadWorkerPool({ maxConcurrency: 1, maxQueue: 1, timeoutMs: 5000 });
   t.after(() => pool.stop());
@@ -74,9 +74,10 @@ test("real worker HTTP ZIP requires persona binding before any read, preserves b
   });
   for (const prefix of ["/api/roles", "/roles"]) {
     const denied = await fetch(`${base}${prefix}/other/skills/selected/download`);
-    assert.equal(denied.status, 403); await denied.arrayBuffer();
+    assert.equal(denied.status, 200); await denied.arrayBuffer();
   }
-  assert.equal(reads, 0);
+  await cleaned(f.temporaryRoot);
+  assert.equal(reads, 2);
   assert.deepEqual(await fs.readdir(f.temporaryRoot), []);
   for (const prefix of ["/api/roles", "/roles"]) {
     const response = await fetch(`${base}${prefix}/example/skills/selected/download`);
@@ -161,7 +162,7 @@ test("download policy denies encoded paths, queries, other methods; persona guar
     }
     assert.equal(authorizeAgentApiOperation("POST", `${prefix}/example/skills/selected/download`).allowed, false);
     assert.equal(authorizeAgentApiOperation("GET", `${prefix}/example/skills/selected/download?file=x`).allowed, false);
-    assert.equal(authorizeLanAgentRoleSkillRequest({ ...principal, nodeId: "other-node" }, "GET", `${prefix}/example/skills/selected/download`, definitions, item => item.persona).allowed, false);
+    assert.equal(authorizeLanAgentRoleSkillRequest({ ...principal, nodeId: "other-node" }, "GET", `${prefix}/example/skills/selected/download`, definitions, item => item.persona).allowed, true);
   }
 });
 

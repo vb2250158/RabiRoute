@@ -201,6 +201,7 @@ onMounted(() => void load());
         @update:model-value="baseUrlError = ''"
       />
       <div class="credential-help-actions">
+        <v-btn href="/api/agent/xiaomi-home/vacuum-cloud/connect" target="_blank" rel="noopener noreferrer" variant="tonal" size="small" prepend-icon="mdi-qrcode-scan">连接扫地机地图（实验）</v-btn>
         <v-btn variant="tonal" :disabled="busy || baseUrl === settings.settings.baseUrl" @click="saveAddress">保存服务地址</v-btn>
         <v-btn
           :href="loginUrl || undefined"

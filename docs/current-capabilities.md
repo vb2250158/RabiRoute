@@ -50,9 +50,9 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 | 入口 | 状态 | 实际边界 |
 | --- | --- | --- |
 | NapCat / OneBot | 已验证 | 每个 Route 绑定一个 NapCat；多个 QQ 使用多个 Route。Gateway 子进程通过 WebSocket 接收 QQ 群聊和私聊；Manager 可扫描、绑定、隐藏启动、重启、移除和修复各 Route 的 NapCat。Route 卡片通过 Manager 代理快速登录、密码登录、扫码登录、腾讯验证码与新设备确认，不再要求打开 NapCat WebUI。OneBot HTTP 用于状态查询和外发；合并转发消息会展开为文本/媒体证据。收到的 QQ 图片会立即保存为本机附件；下载失败会保留明确的不可用状态，不让处理端把图片当成已经看过。 |
-| 人格自动化 | 本机实现与自动化测试已验证；长期运行待继续观察 | 人格规则统一支持消息或定时触发，并可通知 Agent 或运行受限本机脚本。旧消息模板规则兼容迁移；脚本默认关闭，只能来自人格 `scripts/` 目录，Agent 与脚本结果分开记录。 |
+| 人格自动化 | 本机实现与自动化测试已验证；长期运行待继续观察 | 人格规则统一支持消息或定时触发，并可通知 Agent 或运行受限本机脚本。旧消息模板规则兼容迁移；配置好的脚本可以直接运行，只能来自人格 `scripts/` 目录，Agent 与脚本结果分开记录。 |
 | 外发语言风格风控 | 本机实现与自动化测试已验证 | 人格可绑定语言风格 Skill。`/api/agent/send` 默认校验；失败时在 Outbox 前返回原因，同一 `deliveryId` 可用 `styleValidation=0` 二次确认。通用校验 API 与 Codex Hook 复用同一规则；Hook 只提示。 |
-| 定时任务运行入口 | 已验证 | Gateway 子进程承载定时人格自动化；支持间隔、时间窗口、每天指定时间和单次指定时间。通知 Agent 时可选在固定 Codex 线程忙碌时跳过；脚本动作使用独立本机权限。 |
+| 定时任务运行入口 | 已验证 | Gateway 子进程承载定时人格自动化；支持间隔、时间窗口、每天指定时间和单次指定时间。通知 Agent 时可选在固定 Codex 线程忙碌时跳过；脚本动作运行所属人格目录内已配置的脚本。 |
 | 角色面板 | 已验证 | RabiRoute Desktop 与 WebGUI 共用的内置本地入口，不是独立网络 listener；使用固定 `role_panel_message` 规则，记录写入角色目录的 timeline。 |
 | 系统截图与人格投递 | 代码与自动化测试已验证；Windows 实机验收待完成 | WebGUI“设置”页可保存 RabiRoute Desktop 的系统截图开关、全局快捷键和 Windows 登录启动。截图预览支持附加文字并选择已激活人格，图片和文字复用角色面板入口；Codex/DSH 通过图片路径接收真实图片输入。 |
 | 界面主题 | 代码与自动化合同已验证；WebGUI / Desktop 安装包实机验收待完成 | 主题保存在主机级 `data/desktop/settings.json`。`theme`、`webTheme` 与 `customThemes` 分别保存 Desktop 选择、WebGUI 选择和共享自定义声明；浏览器旧主题键仅做一次迁移。自定义编辑器校验色值与文字对比度，两端从同一受限声明生成 Web token 与 Qt 样式。 |
@@ -66,7 +66,7 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 | RabiSpeech 语音消息端 | 实验支持 | RabiSpeech 只维护一份 ASR/VAD、声纹处理和 FIFO。Android 手机/眼镜与独立语音客户端一样只持续传 PCM，不切句、不跑模型；PC 对手机流完成处理后只投 `rabilink` Route，本机/普通远程声卡只投 `speech` Route。每段转写先写一次主机级语音消息库，各绑定人格再分别写自己的原始记录和会话上下文。主机只保存不透明声纹/聚类证据，不判断声纹是谁或谁是“用户”；手机回复默认回原设备。正式自动声纹只接受显式确认的真人私有数据集及完整哈希门禁报告，合成 TTS/旧报告始终只作预检。标准安装不含语音环境或模型；模型管理页可列出允许清单并逐个下载权重，但“已下载”不代表独立运行环境或真实推理已经验收。 |
 | FenneNote | 已退役兼容 | 不再出现在新增消息端或新规则 UI；只读取旧 Route，并保留历史 webhook/Outbox 兼容以便迁移。 |
 | 小米音箱 / 小爱 | 已退役 | 新增菜单、快速配置、规则分类、运行注册和检测入口已移除。旧配置字段和消息来源标识仅用于兼容读取；旧 Route 应移除该适配器，按需使用米家。 |
-| 米家 / Xiaomi Home | 实验支持；自动化合同已验证，真实 Home Assistant 待验收 | 它是独立的 `xiaomiHome` 消息端。当前 Route 的米家消息适配器页分为 Setup 和设置两个标签：Setup 管理部署、登录与连接，设置管理事件、设备控制和录像；切换标签保留未保存的输入；令牌只进入一次带 lifecycle fence 和 `Idempotency-Key` 的请求，随后由 DPAPI/AES-256-GCM 保护，Route、设置、日志和 API 不保存或回显它。候选地址和令牌一起验证，非回环默认 HTTPS，设备目录、控制动作和录像内容接口保持本机回环限定。当前实现仅支持一组本机 Home Assistant 账号。 |
+| 米家 / Xiaomi Home | 实验支持；自动化合同已验证，真实设备按环境验收 | 它是独立的 `xiaomiHome` 消息端。当前 Route 的米家消息适配器页分为 Setup 和设置两个标签：Setup 管理部署、登录与连接，设置管理事件、设备控制和录像；切换标签保留未保存的输入；令牌只进入一次带 lifecycle fence 和 `Idempotency-Key` 的请求，随后由 DPAPI/AES-256-GCM 保护，Route、设置、日志和 API 不保存或回显它。候选地址和令牌一起验证，非回环默认 HTTPS，设备目录、全部实体动作和录像内容复用连接鉴权，安装操作在本机执行。当前实现仅支持一组本机 Home Assistant 账号。 |
 | RabiLink | 实验支持 | 同时存在本地兼容入口、全局 Relay Runtime 和 Route worker；Android 手机/眼镜通过 Relay SSE 收到队列事件后按 cursor 单次补漏，音频只传 PCM，PC 完成 ASR 后进入主机通用语音库和选定 RabiLink Route；主动消息与回复走独立 Relay 下行队列。明确目标下行在 `delivered` 前不按 TTL 删除，手机持久补传 `delivered/played/playback_failed`，而 `played` 只能由手机/眼镜各自 AudioTrack marker 产生。Rokid AIUI AIX 的宿主只提供整包 HTTP、没有 SSE/WS/分块回调，为保证前台主动消息功能保留 25 秒长等待这一受控例外。代码回执闭环已完成，手机/眼镜实际扬声器和穿戴设备仍需真机验收。 |
 | 智能手表 / 手环健康消息端 | 实验支持 | `wearable.health` 结构化观测进入按角色分日的健康时间线；Manager 可查询当前状态、历史和摘要，阈值/冷却命中后以 `wearable_health_alert` 投递 Agent。Android 可选 Health Connect 或 PC ADB Companion；Companion 由唯一 Host 下的 Manager Plugin Kernel 与 generation-scoped process lease 持有，动态 READY URL 经 `/meta` 和双身份 header 围栏，不再拥有登录计划任务或固定 Manager 端口。小米真机已闭环心率、睡眠会话、阶段、睡/醒状态、去重和查询；无需 ADB 的 MiWear SPP 直连仍未作为默认采集器。 |
 | 通用 Webhook | 实验支持 | 接收没有专用适配器的外部 POST；已有命名平台应使用自己的适配器，以保留日志和回传语义。 |
@@ -98,7 +98,7 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 | --- | --- | --- |
 | Codex | 已验证 | 真实消息只通过 Desktop IPC 投给 Codex/ChatGPT Desktop 任务 owner。有效任务 ID 定位既有任务，每次投递单独指定执行目录；任务保存的默认 cwd、Desktop 改名、索引标题滞后或 goal 完成都不会触发重复创建。任务未加载时用 deeplink 唤醒并重试，失败时不启动备用 Runtime。app-server 只用于空任务元数据 bootstrap。 |
 | 局域网 Rabi Agent | 实验支持 | `apps/rabi-agent/` 连接其他电脑的 Codex/DSH 既有任务，分别使用 Desktop IPC 与 DSH 本机会话接口。一次性票据换取独立节点凭据；Manager 单独授权各 Agent 使用受限 API、技能与上传。更新校验固定发布公钥指纹、Ed25519 清单签名与文件哈希。真实双机、群文件发送及旧节点迁移仍需验收；见[接入步骤与边界](lan-rabi-agent-bootstrap.md)。 |
-| DSH（DeepSeek Harness） | 实验支持 | 已实现 apiproxy Endpoint、工作目录和会话扫描，支持按完整 ID 续投、按名称 + 工作目录解析、唯一最新同名会话选择、零匹配幂等创建、改名、保存绑定和自动初始化。DSH 可作为主人格、消息处理 Agent、计划秘书、独立记忆整理 Agent 或业务 Agent；`RabiRoute Agent` 插件提供线程桥、外发、计划、记忆、消息处理和 Agent 间通信工具，Hook 约束与“仅允许主人格发送消息”也适用于 DSH 主 Agent。代码、WebGUI 和插件测试已覆盖；匿名测试 profile 已通过连续投递、Manager/DSH 重启读回、计划秘书、消息处理、独立记忆整理、正式回复和无效 Endpoint 失败关闭。独立扫描可读取 `RabiRoute Agent` 的运行状态、版本、Manager 地址、通信约束和三个模型工具，并诊断插件缺失、未激活和版本不匹配。发布包与全新环境回归待完成。 |
+| DSH（DeepSeek Harness） | 实验支持 | 已实现 apiproxy Endpoint、工作目录和会话扫描，支持按完整 ID 续投、按名称 + 工作目录解析、唯一最新同名会话选择、零匹配幂等创建、改名、保存绑定和自动初始化。DSH 可作为主人格、消息处理 Agent、计划秘书、独立记忆整理 Agent 或业务 Agent；`RabiRoute Agent` 插件提供线程桥、外发、计划、记忆、消息处理和 Agent 间通信工具，DSH 也使用统一来源身份和消息投递合同。代码、WebGUI 和插件测试已覆盖；匿名测试 profile 已通过连续投递、Manager/DSH 重启读回、计划秘书、消息处理、独立记忆整理、正式回复和无效 Endpoint 失败关闭。独立扫描可读取 `RabiRoute Agent` 的运行状态、版本、Manager 地址、通信约束和三个模型工具，并诊断插件缺失、未激活和版本不匹配。发布包与全新环境回归待完成。 |
 | Copilot CLI | 实验支持 | 调用本机 Copilot CLI，使用独立 session name 和 cwd，记录输出和状态；扫描接口明确提示尚未完成连续同会话端到端烟测。 |
 | AstrBot | 实验支持 | 支持 Dashboard 登录验证、项目/会话扫描、RabiRoute 插件部署和 ChatUI 会话投递；扫描接口明确提示仍需真实连续发送验收。 |
 | WorkBuddy（腾讯 AI 办公工作台） | 实验支持 | **已可投递**，凭据需手工一步。投递走绑定任务会话进程的本地网关（`POST /api/v1/runs`），把 `source.conversation.id` 固定为完整会话 ID：消息以正式用户回合进入该任务对话区，由该任务以其自带的模型、工具与审批执行；同 ID 复投不新建任务（已实测）。任务发现与解析读取会话进程描述文件（进程存活 + 心跳 + 是否发布本地网关）与 `workbuddy.db` 任务库，按完整会话 ID 或“保存名称 + 规范化工作目录”解析唯一最新任务，cwd 冲突、归档 ID、owner 缺席全部失败关闭。网关密码由桌面注入会话进程，RabiRoute 作为独立进程读不到，需在 `data/workbuddy-auth.json` 一次性录入；未配置时投递失败关闭且不发未鉴权请求。仍为实验性：桌面配对入口尚未提供，冷启动未验证。详见 [WorkBuddy 接入方案](workbuddy-agent-adapter-plan.md)。 |
@@ -193,3 +193,9 @@ Manager 的 31 个内置插件与树外插件统一使用 schema/profile v2。�
 - Codex Desktop owner：`src/codexDesktopBridge.ts`、`src/codexRuntime.ts`；空任务元数据：`src/codexAppServerClient.ts`
 - WebGUI：`ribiwebgui/src/pages/*`
 - 自动化契约：`src/**/*.test.ts`
+
+### 实验性扫地机云地图文件
+
+米家 Setup 可打开扫码连接页，Manager 提供账号内扫地机目录和有大小限制的原始文件读取，凭据不返回 Agent。自动合同测试通过；具体设备的扫码、下载、解码和物理导航各自验收。真实 pv11cn version-2 文件已完成下载、解密和绘制；支持的文件返回 decoded=true 和地图栅格、房间与位置快照，poseFreshness=unverified、coordinateNavigation=false，不提供机器人音频，见[云地图说明](vacuum-cloud-map.md)。
+
+米家“设备列表”支持登记设备卡片、当前状态／能力查询、参数预演和真实动作测试，复用原接口和回执。扫地机详情可显示自动刷新的云地图；导航与机器人音频未接通。实体目录不等于物理设备目录，详见[使用说明](user-guide/home-devices.md)。

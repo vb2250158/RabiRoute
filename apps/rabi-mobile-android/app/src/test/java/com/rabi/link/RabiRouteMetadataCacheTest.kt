@@ -9,6 +9,7 @@ import org.junit.Test
 class RabiRouteMetadataCacheTest {
     @Test fun cachedRouteMetadataKeepsPersonaPresentationWithoutMessagesOrTokens() {
         val raw = JSONObject()
+            .put("ownerWorkerId", "pc-a").put("ownerComputerName", "Computer A").put("voiceCallProtocol", 1)
             .put("chatAvailable", false)
             .put("messageAdaptersDisabled", JSONArray().put("rabilink"))
             .put("adapterStates", JSONArray().put(JSONObject()
@@ -31,5 +32,9 @@ class RabiRouteMetadataCacheTest {
         assertEquals(true, encoded.contains("\"chatAvailable\":false"))
         assertEquals(true, encoded.contains("\"summary\":\"未登录\""))
         assertEquals("伊莉娅", RabiRouteMetadataCache.decode(encoded).single().personaDisplayName)
+        val restored = RabiRouteMetadataCache.decode(encoded).single().rawJson
+        assertEquals("pc-a", restored.getString("ownerWorkerId"))
+        assertEquals("Computer A", restored.getString("ownerComputerName"))
+        assertEquals(1, restored.getInt("voiceCallProtocol"))
     }
 }

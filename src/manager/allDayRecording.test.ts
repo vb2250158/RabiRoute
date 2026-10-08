@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { AllDayRecordingStore, AllDayRecordingService } from "./allDayRecording.js";
-import { DEFAULT_ALL_DAY_SETTINGS, type AllDayEvent } from "../shared/allDayRecording.js";
+import { DEFAULT_ALL_DAY_SETTINGS, normalizeAllDaySettings, type AllDayEvent } from "../shared/allDayRecording.js";
+import type { HomeAssistantActivityRecord } from "../shared/homeAssistantActivity.js";
 
 async function fixture(t: import("node:test").TestContext) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-all-day-"));
@@ -13,6 +14,61 @@ async function fixture(t: import("node:test").TestContext) {
   return new AllDayRecordingStore(role => path.join(root, role), "computer-a", path.join(root, "mobile"));
 }
 const event = (id: string, time: number): AllDayEvent => ({ id, startedAt: time, endedAt: time + 1000, source: "window", deviceId: "computer-a", kind: "window", state: "saved", text: "Editor" });
+
+test("old recording settings migrate with Home Assistant off and reject invalid source values", () => {
+  const legacy = { ...DEFAULT_ALL_DAY_SETTINGS, sources: { microphone: false, screen: true, window: false, camera: false } };
+  assert.equal(normalizeAllDaySettings(legacy).sources.homeAssistant, false);
+  assert.equal(normalizeAllDaySettings(legacy).sources.screen, true);
+  assert.throws(() => normalizeAllDaySettings({ ...legacy, sources: { ...legacy.sources, homeAssistant: "true" } }), /Invalid Home Assistant/);
+});
+
+test("Home Assistant records only enrolled persona events, deduplicates, filters and stops without capture", async t => {
+  const store = await fixture(t);
+  let captures = 0, changed = 0;
+  const service = new AllDayRecordingService(store, {
+    changed: () => { changed++; }, capture: async () => { captures++; throw new Error("Speech offline"); },
+    startMicrophone: async () => { throw new Error("Unexpected microphone start"); }, stopMicrophone: async () => {},
+    audio: async () => [], audioFile: async () => Buffer.alloc(0)
+  });
+  t.after(() => service.dispose());
+  const settings = { ...DEFAULT_ALL_DAY_SETTINGS, sources: { ...DEFAULT_ALL_DAY_SETTINGS.sources, homeAssistant: true } };
+  const homeEvent = (id: string, occurredAt = Date.now()): HomeAssistantActivityRecord => ({
+    id, occurredAt, entityId: "switch.light", name: "Light", domain: "switch", state: "on", text: "Light → on"
+  });
+  await service.configure("one", settings);
+  assert.equal(await service.receiveHomeAssistant("one", homeEvent("before-start")), false);
+  await service.start("one");
+  const requestStates: (import("../shared/homeAssistantActivity.js").HomeAssistantActivityRequest | null)[] = [];
+  const unsubscribe = service.homeAssistantActivity.subscribe(request => requestStates.push(request));
+  t.after(unsubscribe);
+  assert.equal(requestStates[0]?.startedAt, new Date().setHours(0,0,0,0));
+  const input = homeEvent("first", requestStates[0]!.startedAt + 1);
+  assert.equal(await service.receiveHomeAssistant("two", input), false);
+  assert.equal(await service.receiveHomeAssistant("one", homeEvent("old", Date.parse("2020-01-01T00:00:00Z"))), false);
+  assert.equal(await service.receiveHomeAssistant("one", input), true);
+  const count = changed;
+  assert.equal(await service.receiveHomeAssistant("one", input), false);
+  assert.equal(changed, count);
+  const rows = (await store.recent("one")).filter(row => row.source === "homeAssistant");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].startedAt, input.occurredAt);
+  assert.equal(rows[0].deviceId, input.entityId);
+  assert.equal(rows[0].homeAssistant?.state, "on");
+  const page = await store.page("one", "older", { time: Date.now() + 1000, id: "" }, "homeAssistant", 100, "device");
+  assert.deepEqual(page.events.map(row => row.id), ["homeAssistant:first"]);
+  await service.configure("one", DEFAULT_ALL_DAY_SETTINGS);
+  assert.equal(await service.receiveHomeAssistant("one", homeEvent("source-off")), false);
+  await service.configure("one", settings);
+  assert.equal(await service.receiveHomeAssistant("one", { ...homeEvent("bad"), occurredAt: NaN }), false);
+  assert.match((await service.snapshot("one")).sourceErrors?.homeAssistant ?? "", /Invalid Home Assistant/);
+  assert.equal(await service.receiveHomeAssistant("one", homeEvent("recovered")), true);
+  assert.equal((await service.snapshot("one")).sourceErrors?.homeAssistant, undefined);
+  await service.stop("one");
+  assert.equal(await service.receiveHomeAssistant("one", homeEvent("paused")), false);
+  assert.equal(requestStates.at(-1), null);
+  assert.equal(captures, 0);
+  assert.equal((await service.snapshot("one")).enabled, false);
+});
 
 test("event pages cross empty months and equal timestamps in both directions without losing records", async t => {
   const store = await fixture(t);

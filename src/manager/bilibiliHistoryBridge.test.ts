@@ -5,8 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { BilibiliHistoryBridge } from "./bilibiliHistoryBridge.js";
+import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 
-async function fixture(initialState?: unknown, options: { readOnly?: boolean } = {}) {
+async function fixture(initialState?: unknown, options: { readOnly?: boolean; verifiedRemote?: boolean } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-bili-"));
   const rolesRoot = path.join(dir, "data", "roles");
   fs.mkdirSync(path.join(rolesRoot, "YeYu"), { recursive: true });
@@ -14,6 +15,10 @@ async function fixture(initialState?: unknown, options: { readOnly?: boolean } =
   if (initialState) fs.writeFileSync(statePath, `${JSON.stringify(initialState, null, 2)}\n`, "utf8");
   const bridge = new BilibiliHistoryBridge(statePath, rolesRoot, options);
   const server = http.createServer((request, response) => {
+    if (options.verifiedRemote) {
+      Object.defineProperty(request.socket, "remoteAddress", { configurable: true, value: "192.0.2.10" });
+      markAuthenticatedConnectionRequest(request);
+    }
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     if (!bridge.handle(request, url, response)) response.end();
   });
@@ -38,6 +43,12 @@ async function fixture(initialState?: unknown, options: { readOnly?: boolean } =
     close: () => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
   };
 }
+
+test("authenticated remote Manager connection reads browser history status without a local-only gate", async () => {
+  const app = await fixture(undefined, { verifiedRemote: true });
+  try { assert.equal((await fetch(`${app.baseUrl}/api/bilibili-history/status`)).status, 200); }
+  finally { await app.close(); fs.rmSync(app.dir, { recursive: true, force: true }); }
+});
 
 test("pairs once, persists private daily records, and keeps titles out of global state", async () => {
   const app = await fixture();

@@ -7,7 +7,7 @@ import test from "node:test";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
 
-test("Agent credentials cannot downgrade to local admin or survive disabled grants", () => {
+test("authenticated Agent uses APIs without a second secret; malformed and revoked credentials fail", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-access-"));
   const authority = new LanAgentAuthority({ statePath: path.join(root, "auth.json") });
   const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "node-fixture");
@@ -18,13 +18,13 @@ test("Agent credentials cannot downgrade to local admin or survive disabled gran
     assert.equal(evaluateLanAgentRequest(make("/meta"), authority, true).kind, "agent");
     for (const target of ["/api/webgui-access", "/api/unknown-business", "/api/roles/persona-a/skills?view=extra"]) {
       assert.deepEqual(evaluateLanAgentRequest(make(target), authority, true), {
-        kind: "agent", nodeId: "node-fixture", agentId: "worker", requiresManagementAuth: true
+        kind: "agent", nodeId: "node-fixture", agentId: "worker"
       });
     }
     const post = make("/api/roles/persona-a/skills");
     post.method = "POST";
     assert.deepEqual(evaluateLanAgentRequest(post, authority, true), {
-      kind: "agent", nodeId: "node-fixture", agentId: "worker", requiresManagementAuth: true
+      kind: "agent", nodeId: "node-fixture", agentId: "worker"
     });
     for (const target of ["/api/roles/persona-b/skills", "/roles/persona-b/skills/example"]) {
       assert.deepEqual(evaluateLanAgentRequest(make(target), authority, true), {

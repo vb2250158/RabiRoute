@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import math
 import wave
 from urllib.parse import urlparse
 
@@ -77,13 +78,26 @@ class LocalHttpAsrProvider:
             for index, item in enumerate(data.get("segments") or [])
             if isinstance(item, dict)
         ]
+        duration = float(data.get("duration") or _wav_duration(request.audio_path))
+        if not segments and isinstance(data.get("word_timestamps"), list):
+            words = _timestamp_words(data["word_timestamps"], duration)
+            if words:
+                segments = [TranscriptSegment(
+                    id=0, start=float(words[0]["start"]), end=float(words[-1]["end"]),
+                    text=str(data.get("text") or "").strip(), words=words,
+                )]
         return TranscriptionResult(
             text=str(data.get("text") or "").strip(),
             language=str(data.get("language") or request.language or ""),
-            duration=float(data.get("duration") or _wav_duration(request.audio_path)),
+            duration=duration,
             provider=self.provider_id,
             model=model.id,
             segments=segments,
+            emotion=_label(data.get("emotion")),
+            emotion_labels=_labels(data.get("emotion_labels")),
+            audio_events=_labels(data.get("audio_events")),
+            raw_tags=_labels(data.get("raw_tags")),
+            confidence=_probability(data.get("confidence")),
         )
 
     def _resolve_model(self, requested: str) -> HttpAsrModelSettings:
@@ -103,3 +117,41 @@ def _wav_duration(path) -> float:
             return source.getnframes() / max(1, source.getframerate())
     except (wave.Error, OSError):
         return 0.0
+
+
+def _label(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    return value.strip()[:256] or None
+
+
+def _labels(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [label for item in value[:4096] if (label := _label(item)) is not None]
+
+
+def _probability(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) and 0 <= value <= 1 else None
+
+
+def _timestamp_words(value: list[object], duration: float) -> list[dict[str, object]]:
+    words: list[dict[str, object]] = []
+    for item in value[:5000]:
+        if not isinstance(item, dict):
+            continue
+        word = _label(item.get("word") or item.get("text"))
+        start, end = item.get("start"), item.get("end")
+        if not word or any(isinstance(point, bool) or not isinstance(point, (int, float)) or not math.isfinite(point) for point in (start, end)):
+            continue
+        if not 0 <= start <= end <= duration or (words and start < words[-1]["end"]):
+            continue
+        entry: dict[str, object] = {"word": word, "start": float(start), "end": float(end)}
+        for name in ("probability", "confidence"):
+            probability = _probability(item.get(name))
+            if probability is not None:
+                entry[name] = probability
+        words.append(entry)
+    return words

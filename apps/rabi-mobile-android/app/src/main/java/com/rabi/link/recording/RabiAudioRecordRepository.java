@@ -11,7 +11,36 @@ import java.util.*;
 /** Read-only projection of sealed durable PCM. Never constructs a backend or recovers/mutates its queue. */
 public final class RabiAudioRecordRepository {
     private RabiAudioRecordRepository() { }
-    private static String cachedRoot = "";
+    private static volatile String cachedRoot = "";
+    private static boolean metadataLoaded;
+    private static volatile RecordingFileChanges changes = new RecordingFileChanges();
+    private static android.os.FileObserver metadataObserver, receiptObserver;
+    private static void changed(String path, boolean metadata) {
+        changes.mark(path,metadata);
+    }
+    public static long revision(Context context) {
+        String root = segments(context).getAbsolutePath();
+        if (root.equals(cachedRoot)) return changes.revision();
+        synchronized (RabiAudioRecordRepository.class) {
+            if (!root.equals(cachedRoot)) {
+                if (metadataObserver != null) metadataObserver.stopWatching();
+                if (receiptObserver != null) receiptObserver.stopWatching();
+                segments(context).mkdirs();
+                cachedMetadata.clear(); transcriptCache.clear(); metadataLoaded = false;
+                changes = new RecordingFileChanges();
+                int events = android.os.FileObserver.CLOSE_WRITE | android.os.FileObserver.MOVED_TO | android.os.FileObserver.DELETE | android.os.FileObserver.MOVED_FROM;
+                metadataObserver = new android.os.FileObserver(root, events) {
+                    public void onEvent(int event, String path) { changed(path, true); }
+                };
+                receiptObserver = new android.os.FileObserver(segments(context).getParent(), events) {
+                    public void onEvent(int event, String path) { changed(path, false); }
+                };
+                metadataObserver.startWatching(); receiptObserver.startWatching();
+                cachedRoot = root;
+            }
+        }
+        return changes.revision();
+    }
     private static final Map<String, CachedMetadata> cachedMetadata = new HashMap<>();
     private static final Map<String, CachedMetadata> transcriptCache = new LinkedHashMap<String, CachedMetadata>(128,0.75f,true) {
         protected boolean removeEldestEntry(Map.Entry<String,CachedMetadata> entry) { return size() > 2048; }
@@ -38,35 +67,34 @@ public final class RabiAudioRecordRepository {
         return new File(context.getFilesDir(), "rabi-conversation/audio-spool/segments");
     }
     private static synchronized List<JSONObject> metadata(Context context) {
-        String root = segments(context).getAbsolutePath();
-        if (!root.equals(cachedRoot)) { cachedMetadata.clear(); cachedRoot = root; }
-        File[] files = segments(context).listFiles((dir, name) -> name.endsWith(".json"));
+        revision(context);
+        Set<String> changed = changes.takeMetadata();
+        File[] files = metadataLoaded ? changed.stream().map(name -> new File(segments(context), name)).toArray(File[]::new)
+            : segments(context).listFiles((dir, name) -> name.endsWith(".json"));
         List<JSONObject> rows = new ArrayList<>();
         if (files == null) return rows;
-        Set<String> retained = new HashSet<>();
         for (File file : files) {
-            retained.add(file.getName());
+            if (!file.isFile()) { cachedMetadata.remove(file.getName()); continue; }
             CachedMetadata cached = cachedMetadata.get(file.getName());
             if (cached != null && cached.matches(file)) {
-                if (cached.row != null) rows.add(cached.row);
                 continue;
             }
-            if (file.length() > 65536) continue;
+            if (file.length() > 65536) { cachedMetadata.remove(file.getName()); continue; }
             try {
                 JSONObject row = new JSONObject(new String(java.nio.file.Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
                 boolean valid = !row.optString("captureId").isEmpty() && !row.optString("sha256").isEmpty();
                 cachedMetadata.put(file.getName(), new CachedMetadata(file, valid ? row : null));
-                if (valid) rows.add(row);
             } catch (Exception ignored) { /* A concurrently replaced or invalid row is not a playable record. */ }
         }
-        cachedMetadata.keySet().retainAll(retained);
+        metadataLoaded = true;
+        for (CachedMetadata cached : cachedMetadata.values()) if (cached.row != null) rows.add(cached.row);
         rows.sort(Comparator.comparingLong(row -> row.optLong("sequence")));
         return rows;
     }
     public static JSONArray listCaptureRecords(Context context, int limit) {
         return listCaptureRecords(context, Math.max(0, Math.min(limit, 500)), 0, Long.MAX_VALUE);
     }
-    /** Window queries retain complete captures/offsets and are not truncated by the latest-record cap. */
+    /** Window queries retain complete events/offsets and are not truncated by the latest-record cap. */
     public static JSONArray listCaptureRecords(Context context, long from, long to) {
         return listCaptureRecords(context, Integer.MAX_VALUE, from, to);
     }
@@ -98,14 +126,16 @@ public final class RabiAudioRecordRepository {
         Set<String> selected = new HashSet<>();
         for (JSONObject row : segments) {
             long start = row.optLong("startedAt"), duration = row.optLong("bytes") * 1000L / 32000L;
-            if (start <= to && duration > 0 && start + duration > from) selected.add(row.optString("captureId"));
+            String id = row.optString("eventId", "");
+            if (id.isEmpty()) id = row.optString("captureId");
+            if (start <= to && duration > 0 && start + duration > from) selected.add(id);
         }
         Map<String, JSONObject> records = new LinkedHashMap<>();
         for (JSONObject segment : segments) {
-            if (!selected.contains(segment.optString("captureId"))) continue;
             String captureId = segment.optString("captureId");
             String id = segment.optString("eventId", "");
             if (id.isEmpty()) id = captureId;
+            if (!selected.contains(id)) continue;
             if (eventIds != null && !eventIds.contains(id)) continue;
             try {
                 JSONObject record = records.get(id);

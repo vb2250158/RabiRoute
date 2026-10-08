@@ -2437,7 +2437,7 @@ async function launchNapcatInstanceUnlocked(ctx: NapcatManagerContext, request: 
           `检测到现有 NapCat 相关进程或 HTTP/WebUI 端口持有者：${existingPids.join(", ")}。`,
           observed.ok === true
             ? `已回读确认现有实例可达：${observed.url || observed.kind || "health"}。`
-            : String(observed.message || "等待现有进程恢复超时；可执行明确的重启来结束受管进程后再启动。")
+            : String(observed.message || "等待现有进程恢复超时；可执行明确的重启来结束进程后再启动。")
         ],
         health: observed,
         instance: {

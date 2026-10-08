@@ -241,10 +241,17 @@ class RabiRecordingHubActivity : Activity() {
         updatingToggle = true
         recordingToggle?.isChecked = value.autoResume || value.running
         val recentAudio = System.currentTimeMillis()-data.getLong("captureLastReceivedAt",0) < 5000
-        recordingToggle?.text = if(value.running) { if(value.mode == "audio" && !recentAudio) "等待声音" else "记录中" } else if(value.autoResume) "等待恢复" else "开始记录"
+        val actualStatus = data.getString("allDayStatus", "").orEmpty()
+        recordingToggle?.text = when {
+            actualStatus.contains("storage_low") -> "空间不足"
+            actualStatus.contains("失败") || actualStatus.contains("未启动") -> "采集异常"
+            value.running && value.mode == "audio" && !recentAudio -> "正在启动"
+            value.running -> "记录中"
+            value.autoResume -> "正在恢复"
+            else -> "开始记录"
+        }
         recordingToggle?.isEnabled = !transitionPending()
         updatingToggle = false
-        val actualStatus = data.getString("allDayStatus", "").orEmpty()
         status?.text = if((actualStatus.contains("失败") || actualStatus.contains("中断"))) actualStatus else if(value.running) actualStatus.ifBlank { "正在开始记录…" } else "记录已暂停"
     }
     private fun showStreamGuide() {

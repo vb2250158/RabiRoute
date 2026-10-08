@@ -134,6 +134,8 @@ Install the fixed Host Core through Setup or the local Developer Channel, preser
 
 ## Dynamic Manager endpoint
 
+Developer Channel stages Qt dependencies at the short local `%TEMP%/rabi-qt-<unique-id>` path to avoid Windows PowerShell path limits during dependency pruning. The complete tray is still rebuilt and included in the candidate; installation and business data locations stay unchanged.
+
 On its first launch, Manager passes port `0` to the operating system and receives an available loopback port. Host then records the port only after the complete generation passes health admission. The next generation tries that port first. If it is occupied, blocked by browser Fetch, or the cache is invalid, Manager automatically asks the operating system for another safe port and Host replaces the cache after the new generation passes health admission. Normal restarts therefore retain the WebGUI address while port conflicts still self-recover.
 
 The cache stores only a port, never a URL, `applicationGenerationId`, or `managerInstanceId`. Endpoint identity still consists of:
@@ -170,6 +172,8 @@ The Developer Channel runs the incremental build locally, derives a manifest-ide
 Candidates fully replace `docs/`, `plugins/`, `skills/`, and `source-patches/` from the current source tree, removing retired files in those candidate layers. This prevents stale interface contracts, missing module development guides, and old plugin entrypoints or catalogs. Missing input directories fail candidate construction without changing the previous version. Business data, patch operation receipts, and dynamic registration records are not release directories and are not cleaned by the build.
 
 Both root README language versions and changelogs must also come from the current build source. A missing file fails construction instead of retaining the base release's old instructions.
+
+Before construction and before sealing, validate the built `dist/plugins/profiles/desktop.json`, every enabled plugin's manifest, identity and runtime entries, and Web Bundles with their assets. Missing plugin directories or profiles fail construction so an incomplete build cannot be sealed and used to stop the previous service. Do not independently clean or rebuild the same source tree during a build or candidate copy; the installation mutex protects activation, not exclusive access to build output.
 
 ```powershell
 & "$env:LOCALAPPDATA\Programs\RabiRoute\RabiRouteHost.exe"

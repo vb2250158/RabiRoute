@@ -81,13 +81,18 @@ class RecordingArchiveSession(context: Context, private val backend: RabiGlassPc
                 val cfg = load(app)
                 if (cfg != null && cfg.target.uploadAllowed) {
                     val ids = backend.archiveCandidates(cfg.target, 16)
+                    val transport = cfg.createTransport(app)
                     val coordinator = RecordingArchiveCoordinator(
-                        { id -> backend.archiveSnapshot(id, cfg.target) }, cfg.createTransport(app),
+                        { id -> backend.archiveSnapshot(id, cfg.target) }, transport,
                         object : RecordingArchiveCoordinator.Persistence {
                             override fun persistVerifiedReceipt(t: RecordingArchiveCoordinator.Target, m: JSONObject, r: JSONObject) { check(!closed) { "Archive session stopped; receipt will be recovered" }; backend.archivePersist(t, m, r) }
                             override fun requestEviction(t: RecordingArchiveCoordinator.Target, m: JSONObject, r: JSONObject) = backend.archiveEvict(t, m, r)
-                            override fun remoteHistoryAndPlaybackReady(t: RecordingArchiveCoordinator.Target) = false
-                            override fun state(id: String, state: String, reason: String) { prefs(app).edit().putString("status", state).putString("reason", reason).apply() }
+                            override fun remoteHistoryAndPlaybackReady(t: RecordingArchiveCoordinator.Target, m: JSONObject) = transport.verifyArchivedPlayback(t,m)
+                            override fun state(id: String, state: String, reason: String) {
+                                val edit = prefs(app).edit().putString("status", state).putString("reason", reason)
+                                if(state == "committed") edit.putLong("catalogUpdatedAt",System.currentTimeMillis())
+                                edit.apply()
+                            }
                         })
                     for (id in ids) {
                         if (closed) break
@@ -95,7 +100,7 @@ class RecordingArchiveSession(context: Context, private val backend: RabiGlassPc
                         if (result.archiveState != "committed") { failed = true; break }
                     }
                     more = ids.size == 16 && !failed
-                    if (!closed) refreshCleanupPending(cfg.target)
+                    if (!closed) more = refreshCleanupPending(cfg) || more
                 }
             } catch (_: Exception) { failed = true }
             finally {
@@ -105,18 +110,29 @@ class RecordingArchiveSession(context: Context, private val backend: RabiGlassPc
             }
         }, delaySeconds, TimeUnit.SECONDS) } catch (_: java.util.concurrent.RejectedExecutionException) { scheduled.set(false) }
     }
-    /** Bounded observation only. Cleanup has its own queue and is not an upload retry reason. */
-    private fun refreshCleanupPending(target: RecordingArchiveCoordinator.Target) {
+    /** Resume receipt-backed cleanup on the same network actor and spool writer. */
+    private fun refreshCleanupPending(cfg: FrozenConfig): Boolean {
         try {
+            val target = cfg.target
             val pending = backend.archiveEvictionCandidates(target, 32)
+            val transport = cfg.createTransport(app)
+            var retained = 0
+            for(id in pending) {
+                if(closed) return false
+                val saved = backend.archiveEvictionReceipt(target,id)
+                val manifest = saved.getJSONObject("manifest")
+                if(!transport.verifyArchivedPlayback(target,manifest) || !backend.archiveEvict(target,manifest,saved.getJSONObject("receipt"))) retained++
+            }
             prefs(app).edit().putInt("cleanupPendingObserved", pending.size)
                 .putBoolean("cleanupPendingMayHaveMore", pending.size == 32)
                 .putBoolean("cleanupPendingKnown", true)
-                .putString("cleanupState", "disabled_pending_playback_verification").apply()
+                .putString("cleanupState", if(retained == 0) "verified" else "waiting_for_playback_release").apply()
+            return pending.size == 32 && retained == 0
         } catch (_: Exception) {
             // Do not overwrite a previously observed count with a false zero or schedule a cleanup loop.
             prefs(app).edit().putBoolean("cleanupPendingKnown", false)
                 .putString("cleanupState", "unavailable").apply()
+            return false
         }
     }
     override fun close() {

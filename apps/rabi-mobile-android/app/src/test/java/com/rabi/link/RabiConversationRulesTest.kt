@@ -42,11 +42,6 @@ class RabiConversationRulesTest {
         assertEquals("伊莉娅", RabiConversationRules.personaDisplayName("", "Ilias", "伊莉娅", "", "role:Ilias"))
     }
 
-    @Test fun disabledAndNonChatPersonasRemainVisible() {
-        assertTrue(RabiConversationRules.isVisibleInConversationList("role:Ilias"))
-        assertFalse(RabiConversationRules.isChatCapable(false, emptyList()))
-    }
-
     @Test fun avatarEventsOnlyMatchTheirOwnPersona() {
         assertTrue(RabiConversationRules.shouldRefreshAvatar("Ilias", "Ilias"))
         assertFalse(RabiConversationRules.shouldRefreshAvatar("Ilias", "YeYu"))

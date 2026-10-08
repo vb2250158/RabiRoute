@@ -37,6 +37,8 @@ export const activate = definePlugin({
       }
     });
     context.effects.add(() => {
+      // Device inspection shares this integration's settings ownership; actions
+      // use its existing typed action-request API rather than a second writer.
       let activationStage = "request tracker";
       try {
         const tracker = new runtime.ManagerPluginRequestTracker();
@@ -46,7 +48,8 @@ export const activate = definePlugin({
         const settingsStore = new runtime.XiaomiHomeSettingsStore(artifacts.runtimeDir, context.config);
         activationStage = "runtime controller";
         const xiaomiHomeRuntime = new runtime.XiaomiHomeRuntimeController(settingsStore, artifacts, {
-          deliverEvent: runtime.deliverXiaomiHomeEvent
+          deliverEvent: runtime.deliverXiaomiHomeEvent,
+          activity: runtime.homeAssistantActivity
         });
         activationStage = "route handler";
         const handler = runtime.createXiaomiHomeManagerRouteHandler({
@@ -66,15 +69,21 @@ export const activate = definePlugin({
           [tracker.wrap(handler)],
           [
             { routeId: "health", kind: "exact", path: "/api/agent/xiaomi-home/health", methods: ["GET"] },
+            { routeId: "vacuum-cloud", kind: "prefix", pathPrefix: "/api/agent/xiaomi-home/vacuum-cloud/", methods: ["GET", "POST"] },
+            { routeId: "vacuum-remote", kind: "prefix", pathPrefix: "/api/agent/xiaomi-home/vacuum-remote/", methods: ["GET", "POST"] },
             { routeId: "deployment", kind: "exact", path: "/api/agent/xiaomi-home/deployment", methods: ["GET", "PUT"] },
+            { routeId: "deployment-events", kind: "exact", path: "/api/agent/xiaomi-home/deployment/events", methods: ["GET"] },
             { routeId: "deployment-start", kind: "exact", path: "/api/agent/xiaomi-home/deployment/start", methods: ["POST"] },
             { routeId: "deployment-install", kind: "exact", path: "/api/agent/xiaomi-home/deployment/install", methods: ["POST"] },
             { routeId: "auth", kind: "exact", path: "/api/agent/xiaomi-home/auth", methods: ["GET", "POST", "DELETE"] },
             { routeId: "auth-refresh", kind: "exact", path: "/api/agent/xiaomi-home/auth/refresh", methods: ["POST"] },
             { routeId: "settings", kind: "exact", path: "/api/agent/xiaomi-home/settings", methods: ["GET", "PUT"] },
             { routeId: "resources", kind: "exact", path: "/api/agent/xiaomi-home/resources", methods: ["GET"] },
+            { routeId: "devices", kind: "exact", path: "/api/agent/xiaomi-home/devices", methods: ["GET"] },
+            { routeId: "entity-actions", kind: "exact", path: "/api/agent/xiaomi-home/entity-actions", methods: ["GET"] },
             { routeId: "resource", kind: "prefix", pathPrefix: "/api/agent/xiaomi-home/resources/", methods: ["GET"] },
-            { routeId: "action-requests", kind: "exact", path: "/api/agent/xiaomi-home/action-requests", methods: ["POST"] },
+            { routeId: "capabilities", kind: "exact", path: "/api/agent/xiaomi-home/capabilities", methods: ["GET"] },
+            { routeId: "action-requests", kind: "exact", path: "/api/agent/xiaomi-home/action-requests", methods: ["GET", "POST"] },
             { routeId: "events", kind: "exact", path: "/api/agent/xiaomi-home/events", methods: ["POST"] },
             { routeId: "artifacts", kind: "exact", path: "/api/agent/xiaomi-home/artifacts", methods: ["GET", "POST"] },
             { routeId: "artifact", kind: "prefix", pathPrefix: "/api/agent/xiaomi-home/artifacts/", methods: ["GET"] }
@@ -92,5 +101,12 @@ export const activate = definePlugin({
         throw new Error(`Xiaomi Home activation failed during ${activationStage}: ${message}`, { cause: error });
       }
     }, "Xiaomi Home Manager routes");
+    context.contributions.register({
+      kind: "message-endpoint-settings", id: "xiaomi-home-devices",
+      value: { surface: "route.adapters", label: { fallback: "设备列表" },
+        rendererId: "builtin.xiaomi-home-devices.v1", schemaId: "xiaomi-home.settings.v1",
+        readCommandId: "manager.xiaomi-home-settings.read", writeCommandId: "manager.xiaomi-home-settings.write",
+        icon: "mdi-devices", slot: "xiaomiHome", hosts: ["web"], order: 52 }
+    });
   }
 }).activate;

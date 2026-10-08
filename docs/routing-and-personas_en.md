@@ -23,7 +23,7 @@ A local Route can also [reference a remote PC's persona](remote-persona-referenc
 - pipeline selection;
 - the `agentRoleId` binding;
 - route-local runtime data and logs.
-- Route-local permission to run persona automation scripts.
+- Persona automation script paths and execution on the owning PC.
 
 ## Role-owned data
 
@@ -38,7 +38,7 @@ A local Route can also [reference a remote PC's persona](remote-persona-referenc
 - role-panel timeline data.
 - `conversation/current.jsonl` plus time-based archives for bidirectional endpoint evidence.
 
-One role can serve several routes. Those Routes reuse the same role-owned automation rules, speech keywords, voice profile, and per-endpoint context budgets instead of copying role facts into Route configuration. Local script permission remains Route-owned and is not synchronized with the persona.
+One role can serve several routes. Those Routes reuse the same role-owned automation rules, speech keywords, voice profile, and per-endpoint context budgets instead of copying role facts into Route configuration. Script execution stays on the owning PC and validates the persona scripts directory.
 
 ## Voice and context ownership
 

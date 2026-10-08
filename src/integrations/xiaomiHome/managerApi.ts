@@ -4,16 +4,22 @@ import os from "node:os";
 import path from "node:path";
 import {
   executeDurableDelivery,
+  readDurableDeliveryReceipt,
   type DurableDeliveryOutcome
 } from "../../manager/durableDeliveryIdempotency.js";
+import { HOME_DEVICE_ARGUMENT_SCHEMAS, HOME_MEDIA_ACTIONS, HOME_SPEECH_CAPABILITY, HOME_SPEECH_ARGUMENT_SCHEMA, mediaCapability, normalizeHomeSpeechBindings, validateHomeMediaArguments, type HomeSpeechBinding } from "../../shared/homeMediaContract.js";
+import { discoverHomeEntityActions, HOME_ENTITY_ACTION_CAPABILITY, mapHomeEntityAction, validateHomeActionValue, type HomeEntityAction, type HomeServiceDomain } from "./entityActions.js";
+import { deviceDirectory, HOME_DEVICE_DIRECTORY_TEMPLATE } from "./deviceDirectory.js";
 
 export type XiaomiHomeManagerConfigInput = {
   baseUrl?: string;
   requestTimeoutMs?: number;
+  /** @deprecated Ignored since 0.3.22; remove legacy input in 0.4.0. Use dryRun for rehearsal. */
   writeEnabled?: boolean;
   allowPublicBaseUrl?: boolean;
   allowInsecurePrivateHttp?: boolean;
   runtimeDir?: string;
+  speechBindings?: readonly HomeSpeechBinding[];
 };
 
 export type XiaomiHomeResource = {
@@ -27,6 +33,8 @@ export type XiaomiHomeResource = {
   state: string;
   attributes: Record<string, unknown>;
   capabilities: string[];
+  actionDiscovery?: string;
+  actions?: HomeEntityAction[];
 };
 
 export type XiaomiHomeActionRequest = {
@@ -44,7 +52,8 @@ export type XiaomiHomeActionReceipt = {
   idempotencyKey: string;
   resourceId: string;
   capability: string;
-  status: "planned" | "succeeded" | "failed" | "uncertain";
+  status: "planned" | "accepted" | "succeeded" | "failed" | "uncertain";
+  confirmation?: "none" | "provider_acceptance" | "state_readback";
   requestedAt: string;
   completedAt: string;
   beforeStateVersion: string;
@@ -163,7 +172,8 @@ export function resolveXiaomiHomeManagerConfig(input: XiaomiHomeManagerConfigInp
   if (!Number.isInteger(requestTimeoutMs) || requestTimeoutMs < 250 || requestTimeoutMs > 30000) {
     throw new XiaomiHomeManagerApiError(500, "xiaomi_home_config_invalid", "requestTimeoutMs must be between 250 and 30000.");
   }
-  return { baseUrl: parsed.origin, requestTimeoutMs, writeEnabled: input.writeEnabled === true };
+  // Older saved profiles still contain this field. Authentication now grants device use.
+  return { baseUrl: parsed.origin, requestTimeoutMs, writeEnabled: true };
 }
 
 function stateVersion(state: HomeAssistantState): string {
@@ -182,13 +192,13 @@ export function xiaomiHomeResourceId(entityId: string): string {
 export function xiaomiHomeEntityId(resourceId: string): string {
   const prefix = "home:ha:";
   const normalized = resourceId.trim();
-  if (!normalized.startsWith(prefix) || !normalized.slice(prefix.length).includes(".")) {
+  if (!normalized.startsWith(prefix) || !/^[a-z0-9_]+\.[a-z0-9_]+$/.test(normalized.slice(prefix.length))) {
     throw new XiaomiHomeManagerApiError(400, "xiaomi_home_resource_invalid", "resourceId is invalid.");
   }
   return normalized.slice(prefix.length);
 }
 
-function capabilitiesFor(entityId: string): string[] {
+function capabilitiesFor(entityId: string, attributes: Record<string, unknown>): string[] {
   const domain = entityId.split(".", 1)[0];
   const table: Record<string, string[]> = {
     light: ["home.light.turn_on@1", "home.light.turn_off@1", "home.light.set_brightness@1"],
@@ -199,7 +209,10 @@ function capabilitiesFor(entityId: string): string[] {
     vacuum: ["home.vacuum.start@1", "home.vacuum.return_home@1"],
     event: ["home.event.read@1"]
   };
-  return ["home.resource.read@1", ...(table[domain] ?? [])];
+  const features = Number(attributes.supported_features || 0);
+  const media = domain === "media_player" && Number.isSafeInteger(features) && features >= 0
+    ? HOME_MEDIA_ACTIONS.filter(action => (features & action.feature) === action.feature).map(action => mediaCapability(action.name)) : [];
+  return ["home.resource.read@1", ...(table[domain] ?? []), ...media];
 }
 
 export function normalizeHomeAssistantState(state: HomeAssistantState): XiaomiHomeResource {
@@ -215,7 +228,7 @@ export function normalizeHomeAssistantState(state: HomeAssistantState): XiaomiHo
     observedAt: state.last_updated || state.last_changed || new Date().toISOString(),
     state: state.state,
     attributes,
-    capabilities: capabilitiesFor(state.entity_id)
+    capabilities: capabilitiesFor(state.entity_id, attributes)
   };
 }
 
@@ -228,6 +241,7 @@ function finiteNumber(value: unknown, field: string, minimum: number, maximum: n
 }
 
 function approximatelyEqual(left: unknown, right: number, tolerance = 1): boolean {
+  if (typeof left !== "number" || !Number.isFinite(right)) return false;
   const value = Number(left);
   return Number.isFinite(value) && Math.abs(value - right) <= tolerance;
 }
@@ -260,12 +274,23 @@ export function xiaomiHomeActionSatisfied(request: XiaomiHomeActionRequest, reso
   if (request.capability === "home.climate.set_temperature@1") {
     return approximatelyEqual(resource.attributes.temperature, Number(args.temperature), 0.2);
   }
+  if (request.capability === "home.media.play@1") return resource.state === "playing";
+  if (request.capability === "home.media.pause@1") return resource.state === "paused";
+  if (request.capability === "home.media.stop@1") return ["idle", "off"].includes(resource.state);
+  if (request.capability === "home.media.set_volume@1") return approximatelyEqual(resource.attributes.volume_level, Number(args.volume), 0.02);
+  if (request.capability === "home.media.mute@1") return resource.attributes.is_volume_muted === args.muted;
+  if (request.capability === "home.media.select_source@1") return resource.attributes.source === args.source;
+  if (request.capability === "home.media.select_sound_mode@1") return resource.attributes.sound_mode === args.soundMode;
   return false;
 }
 
-export function mapXiaomiHomeAction(request: XiaomiHomeActionRequest): ActionMapping {
+export function mapXiaomiHomeAction(request: XiaomiHomeActionRequest, speechBindings: readonly HomeSpeechBinding[] = []): ActionMapping {
   const entityId = xiaomiHomeEntityId(request.resourceId);
   const args = request.arguments ?? {};
+  if (request.capability === HOME_ENTITY_ACTION_CAPABILITY) {
+    try { return mapHomeEntityAction(entityId, args); }
+    catch (error) { throw new XiaomiHomeManagerApiError(400, "xiaomi_home_action_invalid", (error as Error).message); }
+  }
   const fixed: Record<string, { domain: string; service: string }> = {
     "home.light.turn_on@1": { domain: "light", service: "turn_on" },
     "home.light.turn_off@1": { domain: "light", service: "turn_off" },
@@ -282,6 +307,27 @@ export function mapXiaomiHomeAction(request: XiaomiHomeActionRequest): ActionMap
   };
   let mapping = fixed[request.capability];
   let data: Record<string, unknown> = { entity_id: entityId };
+  const media = HOME_MEDIA_ACTIONS.find(action => mediaCapability(action.name) === request.capability);
+  if (media || request.capability === HOME_SPEECH_CAPABILITY) {
+    if (!entityId.startsWith("media_player.")) throw new XiaomiHomeManagerApiError(403, "xiaomi_home_capability_rejected", "Media actions require a media_player resource.");
+    let validated: Record<string, unknown>;
+    try { validated = validateHomeMediaArguments(request.arguments, media?.schema ?? HOME_SPEECH_ARGUMENT_SCHEMA); }
+    catch (error) { throw new XiaomiHomeManagerApiError(400, "xiaomi_home_action_invalid", (error as Error).message); }
+    if (!media) {
+      const binding = speechBindings.find(item => item.mediaPlayerEntityId === entityId);
+      if (!binding) throw new XiaomiHomeManagerApiError(403, "xiaomi_home_speech_not_bound", "Configure an explicit speech binding before speaking.");
+      return { domain: "notify", service: "send_message", data: { entity_id: binding.notifyEntityId, message: binding.encoding === "json-array" ? JSON.stringify([validated.text]) : validated.text } };
+    }
+    const names: Record<string, string> = { volume: "volume_level", muted: "is_volume_muted", positionSeconds: "seek_position", soundMode: "sound_mode", url: "media_content_id", mediaType: "media_content_type" };
+    if (media.name === "play_media") {
+      let url: URL;
+      try { url = new URL(String(validated.url)); } catch { throw new XiaomiHomeManagerApiError(400, "xiaomi_home_action_invalid", "Media URL must be an HTTP(S) origin URL without credentials or query."); }
+      if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash
+        || !/^(audio\/[a-z0-9.+-]+|music|url)$/.test(String(validated.mediaType))) throw new XiaomiHomeManagerApiError(400, "xiaomi_home_action_invalid", "Media requires an HTTP(S) URL without credentials, query or fragment and an audio media type.");
+    }
+    for (const [key, value] of Object.entries(validated)) data[names[key] ?? key] = value;
+    return { domain: "media_player", service: media.service, data };
+  }
   if (request.capability === "home.light.set_brightness@1") {
     mapping = { domain: "light", service: "turn_on" };
     data.brightness_pct = finiteNumber(args.brightnessPercent, "brightnessPercent", 0, 100);
@@ -295,12 +341,15 @@ export function mapXiaomiHomeAction(request: XiaomiHomeActionRequest): ActionMap
   if (!mapping || mapping.domain !== entityId.split(".", 1)[0]) {
     throw new XiaomiHomeManagerApiError(403, "xiaomi_home_capability_rejected", "The requested capability is not allowed for this resource.");
   }
+  try { validateHomeMediaArguments(request.arguments, HOME_DEVICE_ARGUMENT_SCHEMAS[request.capability]!); }
+  catch (error) { throw new XiaomiHomeManagerApiError(400, "xiaomi_home_action_invalid", (error as Error).message); }
   return { ...mapping, data };
 }
 
 export class XiaomiHomeManagerApiClient {
   private readonly config: ResolvedXiaomiHomeManagerConfig;
   private readonly actionReceiptRoot: string;
+  private readonly speechBindings: readonly HomeSpeechBinding[];
 
   constructor(
     input: XiaomiHomeManagerConfigInput = {},
@@ -309,6 +358,8 @@ export class XiaomiHomeManagerApiClient {
   ) {
     this.config = resolveXiaomiHomeManagerConfig(input);
     this.actionReceiptRoot = resolveActionReceiptRoot(input.runtimeDir);
+    try { this.speechBindings = normalizeHomeSpeechBindings(input.speechBindings); }
+    catch { throw new XiaomiHomeManagerApiError(500, "xiaomi_home_config_invalid", "Invalid speech bindings."); }
   }
 
   private token(): string {
@@ -337,11 +388,10 @@ export class XiaomiHomeManagerApiClient {
         throw new XiaomiHomeManagerApiError(502, "xiaomi_home_redirect_rejected", "Home Assistant redirects are not allowed.");
       }
       const text = await response.text();
-      const body = text ? JSON.parse(text) as T : undefined as T;
       if (!response.ok) {
         throw new XiaomiHomeManagerApiError(response.status, "xiaomi_home_provider_error", `Home Assistant request failed with HTTP ${response.status}.`);
       }
-      return body;
+      return text ? JSON.parse(text) as T : undefined as T;
     } catch (error) {
       if (error instanceof XiaomiHomeManagerApiError) throw error;
       const code = error instanceof Error && error.name === "AbortError" ? "xiaomi_home_provider_timeout" : "xiaomi_home_provider_unreachable";
@@ -402,24 +452,101 @@ export class XiaomiHomeManagerApiClient {
     });
   }
 
-  async listResources(): Promise<XiaomiHomeResource[]> {
+  async listResources(includeActions = false): Promise<XiaomiHomeResource[]> {
     const states = await this.request<HomeAssistantState[]>("/api/states");
     if (!Array.isArray(states)) throw new XiaomiHomeManagerApiError(502, "xiaomi_home_provider_invalid", "Home Assistant returned an invalid state list.");
-    return states.map(normalizeHomeAssistantState).sort((left, right) => left.resourceId.localeCompare(right.resourceId));
+    const services = includeActions ? await this.entityServices() : undefined;
+    return states.map(state => this.resource(state, services)).sort((left, right) => left.resourceId.localeCompare(right.resourceId));
   }
 
   async getResource(resourceId: string): Promise<XiaomiHomeResource> {
     const entityId = xiaomiHomeEntityId(resourceId);
     const state = await this.request<HomeAssistantState>(`/api/states/${encodeURIComponent(entityId)}`);
-    return normalizeHomeAssistantState(state);
+    if (!state || state.entity_id !== entityId) throw new XiaomiHomeManagerApiError(502, "xiaomi_home_provider_invalid", "Home Assistant returned an unexpected resource.");
+    return this.resource(state);
+  }
+
+  async listDevices() {
+    const [resources, registry] = await Promise.all([
+      this.listResources(),
+      this.request<unknown>("/api/template", { method: "POST", body: JSON.stringify({ template: HOME_DEVICE_DIRECTORY_TEMPLATE }) })
+    ]);
+    try { return deviceDirectory(resources, registry); }
+    catch { throw new XiaomiHomeManagerApiError(502, "xiaomi_home_device_registry_invalid", "Home Assistant returned an invalid device directory."); }
+  }
+
+  private async entityServices(): Promise<HomeServiceDomain[]> {
+    const services = await this.request<HomeServiceDomain[]>("/api/services");
+    if (!Array.isArray(services) || services.some(item => !item || typeof item.domain !== "string"
+      || !item.services || typeof item.services !== "object" || Array.isArray(item.services))) {
+      throw new XiaomiHomeManagerApiError(502, "xiaomi_home_provider_invalid", "Home Assistant returned an invalid service catalog.");
+    }
+    return services;
+  }
+
+  async getResourceActions(resourceId: string): Promise<XiaomiHomeResource> {
+    const [resource, services] = await Promise.all([this.getResource(resourceId), this.entityServices()]);
+    return this.attachActions(resource, services);
+  }
+
+  private attachActions(resource: XiaomiHomeResource, services: HomeServiceDomain[]): XiaomiHomeResource {
+    try { resource.actions = discoverHomeEntityActions(resource, services); }
+    catch (error) { throw new XiaomiHomeManagerApiError(502, "xiaomi_home_action_schema_invalid", (error as Error).message); }
+    if (resource.actions.length) resource.capabilities.push(HOME_ENTITY_ACTION_CAPABILITY);
+    return resource;
+  }
+
+  private resource(state: HomeAssistantState, services?: HomeServiceDomain[]): XiaomiHomeResource {
+    const resource = normalizeHomeAssistantState(state);
+    const binding = this.speechBindings.find(item => item.mediaPlayerEntityId === state.entity_id);
+    if (binding) {
+      resource.capabilities.push(HOME_SPEECH_CAPABILITY);
+      resource.stateVersion = `ha:${createHash("sha256").update(JSON.stringify([resource.stateVersion, binding])).digest("hex").slice(0, 24)}`;
+    }
+    resource.actionDiscovery = `/api/agent/xiaomi-home/entity-actions?resourceId=${encodeURIComponent(resource.resourceId)}`;
+    return services ? this.attachActions(resource, services) : resource;
+  }
+
+  getCapabilities(): Record<string, unknown> {
+    return { schemaVersion: 1, provider: "home_assistant", writeEnabled: this.config.writeEnabled,
+      resourceDiscovery: "/api/agent/xiaomi-home/resources", actionEndpoint: "/api/agent/xiaomi-home/action-requests",
+      deviceDiscovery: "/api/agent/xiaomi-home/devices",
+      receiptEndpoint: "/api/agent/xiaomi-home/action-requests?idempotencyKey={key}",
+      entityActionDiscovery: "/api/agent/xiaomi-home/entity-actions?resourceId={resourceId}",
+      allEntityActionDiscovery: "/api/agent/xiaomi-home/resources?includeActions=1",
+      lifecycleFenceRequired: true, expectedStateVersionRequired: true, idempotencyRequired: true,
+      actions: [...Object.entries(HOME_DEVICE_ARGUMENT_SCHEMAS).map(([capability, argumentsSchema]) => ({capability, argumentsSchema, confirmation: "state_readback"})),
+        ...HOME_MEDIA_ACTIONS.map(action => ({ capability: mediaCapability(action.name), argumentsSchema: action.schema, requiredFeature: action.feature, confirmation: action.confirmation === "state" ? "state_readback" : "provider_acceptance" })),
+        { capability: HOME_SPEECH_CAPABILITY, argumentsSchema: HOME_SPEECH_ARGUMENT_SCHEMA, requiresExplicitBinding: true, confirmation: "provider_acceptance" },
+        { capability: HOME_ENTITY_ACTION_CAPABILITY, argumentsSchemaSource: "entityActionDiscovery", confirmation: "provider_acceptance" }],
+      speechBindings: this.speechBindings,
+      limitations: ["Only actions advertised by the current entity and service catalog can be invoked.", "Provider acceptance does not confirm physical completion or audible playback.", "Uncertain actions must never be automatically resent.", "Entity actions pin one resource target; global services are not entity actions.", "Missing map, audio or video streams cannot be inferred from device control switches."] };
+  }
+
+  getActionReceipt(key: string): Record<string, unknown> {
+    if (!key || key.length > 160 || !/^[A-Za-z0-9._:-]+$/.test(key)) throw new XiaomiHomeManagerApiError(400, "xiaomi_home_idempotency_required", "A valid idempotencyKey is required.");
+    const receipt = readDurableDeliveryReceipt<XiaomiHomeActionReceipt>(this.actionReceiptRoot, actionReceiptNamespace, key);
+    if (!receipt) throw new XiaomiHomeManagerApiError(404, "xiaomi_home_receipt_not_found", "No action receipt exists for this key.");
+    const active = receipt.state === "sending" && Date.parse(receipt.leaseExpiresAt || "") > Date.now();
+    return { idempotencyKey: key, state: receipt.state === "completed" ? "completed" : active || receipt.state === "reserved" ? "in_progress" : "uncertain",
+      createdAt: receipt.createdAt, updatedAt: receipt.updatedAt, ...(receipt.result ? { receipt: receipt.result } : {}), retryAllowed: false };
   }
 
   async executeAction(request: XiaomiHomeActionRequest, idempotencyKey: string): Promise<XiaomiHomeActionReceipt> {
+    if (!request || typeof request !== "object" || Array.isArray(request)
+      || Object.keys(request).some(field => !["requestId", "resourceId", "capability", "arguments", "expectedStateVersion", "reason", "dryRun"].includes(field))
+      || typeof request.resourceId !== "string" || typeof request.capability !== "string"
+      || typeof request.expectedStateVersion !== "string"
+      || request.dryRun !== undefined && typeof request.dryRun !== "boolean"
+      || request.reason !== undefined && (typeof request.reason !== "string" || request.reason.length > 500 || /[\u0000-\u001f\u007f]/.test(request.reason))
+      || request.requestId !== undefined && (typeof request.requestId !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/.test(request.requestId))) {
+      throw new XiaomiHomeManagerApiError(400, "xiaomi_home_action_invalid", "Invalid action request fields.");
+    }
     const key = idempotencyKey.trim();
     if (!key || key.length > 160 || !/^[A-Za-z0-9._:-]+$/.test(key)) {
       throw new XiaomiHomeManagerApiError(400, "xiaomi_home_idempotency_required", "A valid Idempotency-Key is required.");
     }
-    const mapping = mapXiaomiHomeAction(request);
+    const mapping = mapXiaomiHomeAction(request, this.speechBindings);
     const resourceId = xiaomiHomeResourceId(xiaomiHomeEntityId(request.resourceId));
     const expectedStateVersion = String(request.expectedStateVersion || "").trim();
     if (!expectedStateVersion) {
@@ -428,8 +555,9 @@ export class XiaomiHomeManagerApiClient {
     const payload = Object.freeze({
       // requestId is transport correlation; every effect-bearing action field is
       // bound below so changing intent cannot reuse a completed receipt.
-      schemaVersion: 1,
+      schemaVersion: 2,
       provider: "home_assistant",
+      providerOrigin: this.config.baseUrl,
       resourceId,
       capability: request.capability,
       arguments: request.arguments ?? {},
@@ -455,6 +583,7 @@ export class XiaomiHomeManagerApiClient {
       resourceId,
       capability: request.capability,
       status,
+      confirmation: status === "succeeded" ? "state_readback" : status === "accepted" ? "provider_acceptance" : "none",
       requestedAt,
       completedAt: new Date().toISOString(),
       beforeStateVersion,
@@ -473,17 +602,52 @@ export class XiaomiHomeManagerApiClient {
         audit: Object.freeze({ provider: "home_assistant", resourceId, capability: request.capability }),
         recoverExistingUncertain: true,
         deliver: async () => {
-          const before = await this.getResource(resourceId);
+          const entityAction = request.capability === HOME_ENTITY_ACTION_CAPABILITY;
+          const before = entityAction ? await this.getResourceActions(resourceId) : await this.getResource(resourceId);
           if (before.stateVersion !== expectedStateVersion) {
             return actionReceipt("failed", before.stateVersion, undefined, stateVersionChangedReceiptError);
           }
-          if (request.dryRun === true || !this.config.writeEnabled) {
+          try {
+            if (!before.capabilities.includes(request.capability)) throw new XiaomiHomeManagerApiError(403, "xiaomi_home_capability_rejected", "The resource does not advertise this capability.");
+            // HA distinguishes unavailable from an unknown reading or a never-invoked action.
+            // Advertised generic actions can initialize those states; provider acceptance remains explicit.
+            if (before.state === "unavailable" || !before.available && !entityAction && !["button", "notify"].includes(before.kind)) throw new XiaomiHomeManagerApiError(409, "xiaomi_home_resource_unavailable", "The resource is unavailable.");
+            if (entityAction) {
+              const action = before.actions?.find(item => item.action === request.arguments?.action);
+              if (!action) throw new XiaomiHomeManagerApiError(403, "xiaomi_home_capability_rejected", "The resource no longer advertises this action.");
+              try { validateHomeActionValue(request.arguments, action.argumentsSchema); }
+              catch (error) { throw new XiaomiHomeManagerApiError(400, "xiaomi_home_action_invalid", (error as Error).message); }
+            }
+            if (request.capability === "home.media.select_source@1" || request.capability === "home.media.select_sound_mode@1") {
+              const options = before.attributes[request.capability.includes("select_source") ? "source_list" : "sound_mode_list"];
+              const selected = request.arguments?.[request.capability.includes("select_source") ? "source" : "soundMode"];
+              if (!Array.isArray(options) || !options.includes(selected)) throw new XiaomiHomeManagerApiError(400, "xiaomi_home_action_invalid", "Select a currently advertised source or sound mode.");
+            }
+            if (mapping.domain === "notify" && !entityAction) {
+              const target = await this.getResource(xiaomiHomeResourceId(String(mapping.data.entity_id)));
+              if (target.state === "unavailable") throw new XiaomiHomeManagerApiError(409, "xiaomi_home_resource_unavailable", "Speech target is unavailable.");
+              const binding = this.speechBindings.find(item => item.mediaPlayerEntityId === before.entityId)!;
+              if (binding.encoding === "text" && "action params" in target.attributes) throw new XiaomiHomeManagerApiError(409, "xiaomi_home_speech_schema_changed", "Structured action targets require json-array encoding.");
+              if (binding.encoding === "json-array" && !/^\[[^,\[\]]+\(str\)\]$/.test(String(target.attributes["action params"] || ""))) throw new XiaomiHomeManagerApiError(409, "xiaomi_home_speech_schema_changed", "The speech target must advertise exactly one string parameter.");
+            }
+          } catch (error) {
+            if (error instanceof XiaomiHomeManagerApiError && [400, 403, 409].includes(error.status)) return actionReceipt("failed", before.stateVersion, undefined, error.code);
+            throw error;
+          }
+          if (request.dryRun === true) {
             return actionReceipt("planned", before.stateVersion);
           }
-          await this.request(`/api/services/${mapping.domain}/${mapping.service}`, {
-            method: "POST",
-            body: JSON.stringify(mapping.data)
-          });
+          try {
+            await this.request(`/api/services/${mapping.domain}/${mapping.service}`, {
+              method: "POST",
+              body: JSON.stringify(mapping.data)
+            });
+          } catch (error) {
+            if (error instanceof XiaomiHomeManagerApiError && error.code === "xiaomi_home_provider_error" && error.status >= 400 && error.status < 500) return actionReceipt("failed", before.stateVersion, undefined, error.code);
+            throw error;
+          }
+          const media = HOME_MEDIA_ACTIONS.find(action => mediaCapability(action.name) === request.capability);
+          if (entityAction || mapping.domain === "notify" || media?.confirmation === "acceptance") return actionReceipt("accepted", before.stateVersion);
           let after = await this.getResource(resourceId);
           for (let attempt = 0; attempt < 3 && !xiaomiHomeActionSatisfied(request, after); attempt += 1) {
             await new Promise(resolve => setTimeout(resolve, 250));

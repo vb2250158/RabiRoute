@@ -19,6 +19,20 @@ def test_pending_record_updates_in_place_after_transcription(tmp_path):
     assert rows[0]["transcription_state"] == "ready"
 
 
+def test_recognition_observations_reload_without_changing_text(tmp_path):
+    result = TranscriptionResult(text="你好", language="zh", duration=1, provider="fixture", model="fixture",
+                                 emotion_labels=["HAPPY", "SAD"], audio_events=["Speech", "FutureEvent"],
+                                 raw_tags=["<|zh|>", "<|HAPPY|>", "<|zh|>"], confidence=0.0)
+    SpeechRecordStore(tmp_path / "records").append_asr(result, source="microphone")
+    row = SpeechRecordStore(tmp_path / "records").list()[0]
+    assert row["text"] == "你好"
+    assert "emotion" not in row
+    assert row["emotion_labels"] == ["HAPPY", "SAD"]
+    assert row["audio_events"] == ["Speech", "FutureEvent"]
+    assert row["raw_tags"] == ["<|zh|>", "<|HAPPY|>", "<|zh|>"]
+    assert row["confidence"] == 0.0
+
+
 def test_speech_records_persist_and_filter_speakers(tmp_path) -> None:
     store = SpeechRecordStore(tmp_path / "records")
     asr = store.append_asr(

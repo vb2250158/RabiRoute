@@ -13,9 +13,9 @@ The Rabi mobile device message endpoint is a new endpoint, separate from the Rok
 ## Initialized experience
 
 - Before initialization, the app shows global RabiLink login, default Rabi PC, speech-model, and glasses authorization settings.
-- Daily startup opens the unified recording home; Messages opens the QQ-style conversation list. Each row shows an avatar, contact name, latest message, time, and per-conversation unread count. Tapping a contact opens chat; Back returns to the same list so another persona can be selected.
-- Contacts come only from Routes that expose the `rabilink` message adapter. Wearable-health and other non-chat Routes are never treated as personas. A disabled RabiLink Route explains why it cannot chat and links to configuration.
-- The detail header contains only Back, the current identity, and a trustworthy connection state. Messages are grouped by date, keep sender/time outside bubbles, use explicit speech/configuration/file labels, and open local attachments.
+- Daily startup opens the unified recording home. Messages lists an avatar at left, persona name and computer name · route name on the first line, and latest-message excerpt and date or time on the second. Separate routes for the same persona remain separate; Back preserves the list position.
+- Only actual enabled routes with an enabled `rabilink` message adapter are selectable. Health routes, disabled routes, and persona-only setup rows are excluded. Settings and details retain diagnostics and repair entries.
+- The detail header contains Back, the current identity, a trustworthy connection state, and Phone at the upper right. Calls reuse recording and PC transcription; see [mobile voice calls](mobile-voice-call_en.md) for mute, hangup, and late replies. Messages are grouped by date, keep sender/time outside bubbles, use explicit speech/configuration/file labels, and open local attachments.
 - Attachment, composer, and Send controls use one 52dp component height. Multiline input, keyboard Send, and per-conversation draft restoration are supported.
 - Each conversation owns its read position, so opening A never clears B. Legacy messages without a Route are migrated once to one deterministic conversation instead of appearing under every persona.
 - Text, microphone ASR messages, Agent TTS, images, video, standalone audio files, and arbitrary files share one private phone chat ledger. Attachments work in both directions and can be opened on the phone.

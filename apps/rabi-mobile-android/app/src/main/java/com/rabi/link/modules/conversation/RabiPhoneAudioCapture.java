@@ -193,7 +193,10 @@ public final class RabiPhoneAudioCapture {
                 }
                 byte[] chunk = new byte[read];
                 System.arraycopy(buffer, 0, chunk, 0, read);
-                listener.onPcm(chunk);
+                synchronized (recorderLock) {
+                    // A read may finish after pause; it cannot enter a later capture.
+                    if (requested && recorder == source) listener.onPcm(chunk);
+                }
             }
         } catch (Throwable error) {
             exitReason = "audio_read_" + error.getClass().getSimpleName();

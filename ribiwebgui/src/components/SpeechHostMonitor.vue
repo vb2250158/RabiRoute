@@ -10,6 +10,7 @@ import {
 import { speechHistoryDeliveryPresentation } from "../speech/speechDeliveryPresentation";
 import { useSpeechStore } from "../stores/speechStore";
 import SpeechLevelWaveform from "./SpeechLevelWaveform.vue";
+import SpeechRecognitionDetails from "./SpeechRecognitionDetails.vue";
 
 const props = defineProps<{ subscriberCount: number }>();
 const speech = useSpeechStore();
@@ -196,6 +197,7 @@ async function refresh(): Promise<void> {
           <div v-for="item in history.slice(0, 8)" :key="`${item.time}-${item.text}`">
             <div><time>{{ formatTime(item.time) }}</time><v-chip size="x-small" :color="historyDeliveryColor(item)" :variant="historyDeliveryColor(item) === 'grey' ? 'outlined' : 'tonal'">{{ historyDeliveryLabel(item) }}</v-chip></div>
             <p>{{ item.text }}</p>
+            <SpeechRecognitionDetails :result="item" />
             <span>{{ item.provider }}/{{ item.model }} · {{ Number(item.duration || 0).toFixed(2) }} 秒<span v-if="historySpeakerSummary(item)"> · 说话人：{{ historySpeakerSummary(item) }}</span></span>
           </div>
         </div>

@@ -137,7 +137,7 @@ Manager 会扫描 `data/roles/*/personaConfig.json`。当前格式以文件根�
 ## 普通投递、定时任务与语音的例外
 
 - 普通消息端事件一旦命中规则，默认直接投递：当前 Desktop turn 活跃时 `steer`，空闲时 `start`。
-- 定时触发固定不注入历史消息，也不进入聊天消息的等待合并。通知 Agent 时仍使用 heartbeat 兼容事件；启用 Codex 消息处理 Agent 后会立即交给独立消息处理任务，未启用时才使用 `heartbeatSkipWhenAgentBusy`。运行脚本时不进入 Agent 投递链，且需要 Route 本机的 `personaAutomationScriptsEnabled=true`。
+- 定时触发固定不注入历史消息，也不进入聊天消息的等待合并。通知 Agent 时仍使用 heartbeat 兼容事件；启用 Codex 消息处理 Agent 后会立即交给独立消息处理任务，未启用时才使用 `heartbeatSkipWhenAgentBusy`。运行脚本时不进入 Agent 投递链，使用所属人格 scripts 目录的配置。
 - `plan_feedback` 是 Manager 已明确绑定计划和 Route 后产生的系统事件，固定投递专用内置规则；它不读取或写入聊天历史，最近消息模板变量始终为空。
 - 语音有 Route 级 `speechPushMode`：`hot` 每段 ASR 完成即投递；`keyword` 仍记录所有 ASR，仅命中人格 `speechTriggerKeywords` 时投递。空关键词不回退 `hot`。
 - `recentMessageLimits` 也归人格，普通消息端分别设置 `0–200`，默认 `12`；只控制自动注入，不控制记录。Heartbeat 与 `plan_feedback` 不提供可调额度，始终不注入历史。

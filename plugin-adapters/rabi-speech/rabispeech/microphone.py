@@ -739,6 +739,7 @@ class MicrophoneService:
                     "provider": result.provider,
                     "model": result.model,
                     "segments": [asdict(segment) for segment in result.segments],
+                    **result.recognition_metadata(),
                     "source": input_source.source,
                     "transport": input_source.transport,
                     "channel_type": input_source.channel_type,

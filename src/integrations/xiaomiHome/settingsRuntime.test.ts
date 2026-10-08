@@ -29,7 +29,7 @@ test("Xiaomi Home settings switch atomically from Profile defaults to one runtim
     });
     const profile = store.read();
     assert.equal(profile.source, "profile");
-    assert.equal(profile.settings.writeEnabled, false);
+    assert.equal(profile.settings.writeEnabled, true);
     assert.equal(fs.existsSync(store.settingsPath), false);
 
     const saved = store.write({ ...profile.settings, eventMonitorEnabled: false }, profile.revision);
@@ -125,7 +125,8 @@ test("Xiaomi Home hot reload keeps the same durable action receipt runtime", asy
     const request = {
       resourceId: expected.resourceId,
       capability: "home.switch.turn_on@1",
-      expectedStateVersion: expected.stateVersion
+      expectedStateVersion: expected.stateVersion,
+      dryRun: true
     };
     const planned = await controller.client.executeAction(request, "hot-reload-key");
     assert.equal(planned.status, "planned");

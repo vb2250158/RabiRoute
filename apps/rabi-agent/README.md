@@ -93,7 +93,7 @@ node rabi-agent.mjs --api POST /api/agent/send --agent <agentId> --body-stdin
 
 大文件上传使用有背压的流式传输和增量 SHA-256，期限 30 分钟。Manager 的「RabiLink → 配置」可保存 `agentUploads.maxFileMiB`（整数 `1..2048`，默认 `2048`），写入 `data/Config.json`，重启 Manager 后生效；该设置也受原本机管理员 `PATCH /api/rabi/identity` 权限保护，远端 Agent 不能提高限额。客户端硬上限为 2 GiB，服务器配置更小时会拒绝超限文件。
 
-734 MiB（769654784 字节）文件已通过真实客户端 → loopback Manager → 受管存储 → 模拟 NapCat 的 size/SHA-256 集成测试，使用小块生成与读取并禁止大于 8 MiB 的 Buffer 分配/拼接。用 `RABI_TEST_LARGE_UPLOAD=1` 显式运行大文件用例；默认跳过且测试结束清理临时文件。真实 QQ 平台的大小/群权限限制尚未验收。已有旧连接器必须先按上文新版 bootstrap 迁移，缓存旧 Hook 的宿主重载后再试；服务端改限额不等于远端代码已升级。
+734 MiB（769654784 字节）文件已通过真实客户端 → loopback Manager → 文件存储 → 模拟 NapCat 的 size/SHA-256 集成测试，使用小块生成与读取并禁止大于 8 MiB 的 Buffer 分配/拼接。用 `RABI_TEST_LARGE_UPLOAD=1` 显式运行大文件用例；默认跳过且测试结束清理临时文件。真实 QQ 平台的大小/群权限限制尚未验收。已有旧连接器必须先按上文新版 bootstrap 迁移，缓存旧 Hook 的宿主重载后再试；服务端改限额不等于远端代码已升级。
 
 使用 `fileId` 必须同时填写 `fileSha256=上传 data.sha256`（64 位小写十六进制），避免 24 小时到期后 UUID 复用使旧引用换成其它内容；发送 callback 在 lease 内核对实际 hash，不匹配拒发。
 

@@ -26,9 +26,8 @@ public final class RabiConversationSettingsTest {
         RabiConversationSettings value = new RabiConversationSettings(
                 RabiConversationSettings.InputMode.PHONE,
                 RabiConversationSettings.ProactivityPreference.BALANCED,
-                true, true, "model", "voice", -1, 100, 99999);
+                true, true, "model", "voice", -1, 99999);
         assertEquals(0, value.audioRetentionHours);
-        assertEquals(1024, value.audioMaxStorageMb);
         assertEquals(16384, value.audioReserveFreeMb);
     }
 }

@@ -297,10 +297,10 @@ test("AgentPacket keeps an explicit NapCat send target when a QQ route defaults 
 
   const sendRequest = JSON.parse(String(packet.templateValues.sendRequestJson));
   assert.deepEqual(sendRequest.sender, {
-    agentType: "<当前 Agent 类型；仅在开启 Codex 主人格发送限制时，主人格填 primary_persona>",
+    agentType: "<当前 Agent 类型；主人格填 primary_persona，其它 Agent 填实际角色>",
     sessionId: "<当前 Agent 的完整会话 ID>"
   });
-  assert.match(packet.message, /仅当当前 Route 在 Codex 的 Hook 管理中开启/);
+  assert.match(packet.message, /所有 Agent 使用同一投递合同/);
   assert.equal(sendRequest.routeId, "route-tts-default");
   assert.equal(sendRequest.channel, "napcat");
   assert.deepEqual(sendRequest.params, { target: "group", groupId: 9001, replyToMessageId: "", replyImageDescriptions: [] });

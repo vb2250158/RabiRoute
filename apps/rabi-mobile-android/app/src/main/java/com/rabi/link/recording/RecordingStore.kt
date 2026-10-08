@@ -8,6 +8,7 @@ import java.util.UUID
 
 /** One durable manifest per explicit recording session. Media remains in its original directory. */
 class RecordingStore(private val context: Context) {
+    companion object { private val changes = java.util.concurrent.atomic.AtomicLong(); fun revision() = changes.get() }
     data class Entry(val id: String, val kind: String, val source: String, val started: Long,
         val ended: Long, val state: String, val directory: File, val files: List<File>, val title: String)
     private val root = File(context.filesDir, "rabi-records").apply { mkdirs() }
@@ -45,7 +46,7 @@ class RecordingStore(private val context: Context) {
     private fun write(id: String, data: JSONObject) {
         val path = File(root, "$id/session.json"); path.parentFile!!.mkdirs()
         val atomic = AtomicFile(path); val output = atomic.startWrite()
-        try { output.write(data.toString().toByteArray()); atomic.finishWrite(output) }
+        try { output.write(data.toString().toByteArray()); atomic.finishWrite(output); changes.incrementAndGet() }
         catch (error: Exception) { atomic.failWrite(output); throw error }
     }
     private fun read(path: File, from: Long = 0, to: Long = Long.MAX_VALUE): Entry? = runCatching {

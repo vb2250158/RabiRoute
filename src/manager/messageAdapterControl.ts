@@ -332,7 +332,7 @@ export function scanXiaomiHomeEndpoint(healthInput: Record<string, unknown>): Me
     requirements: [
       { id: "authorization", label: "Home Assistant 授权", required: true, ok: ready, detail: authorizationDetail },
       { id: "event-monitor", label: "米家事件监听", required: true, ok: monitorReady, detail: monitorLabels[monitorState] || `事件监听状态：${monitorState}` },
-      { id: "write-control", label: "设备控制", required: false, ok: health.writeEnabled === true, detail: health.writeEnabled === true ? "控制已显式开启；所有动作仍经过能力与幂等校验。" : "默认关闭；当前消息端只读取状态和事件。" },
+      { id: "write-control", label: "设备控制", required: false, ok: ready, detail: "连接成功后即可使用设备支持的动作。" },
       { id: "camera-capture", label: "摄像头事件录像", required: false, ok: cameraReady, detail: cameraReady ? `已就绪；当前 ${Number(camera.inFlight || 0)} 个抓取任务。` : camera.enabled === true ? "已开启，但尚未配置允许的媒体主机。" : "未开启；普通米家状态事件不受影响。" }
     ],
     warnings: [

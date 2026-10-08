@@ -171,7 +171,7 @@ test("health stays explicit while Home Assistant authorization is missing", asyn
     baseUrl: "http://127.0.0.1:8123",
     credentialSource: "none",
     tokenConfigured: false,
-    writeEnabled: false
+    writeEnabled: true
   });
   await assert.rejects(() => client.listResources(), (error: unknown) =>
     error instanceof XiaomiHomeManagerApiError && error.code === "xiaomi_home_authorization_required");
@@ -187,7 +187,7 @@ test("health reports configured-but-unreachable authorization without exposing t
   assert.equal(JSON.stringify(health).includes("private-value"), false);
 });
 
-test("write-disabled action returns a stable planned receipt without calling a service", async () => {
+test("dryRun returns a stable planned receipt without calling a service", async () => {
   const runtimeDir = temporaryRuntimeDir();
   const calls: string[] = [];
   const fakeFetch: typeof fetch = async (input) => {
@@ -206,7 +206,8 @@ test("write-disabled action returns a stable planned receipt without calling a s
     const request = {
       resourceId: before.resourceId,
       capability: "home.switch.turn_on@1",
-      expectedStateVersion: before.stateVersion
+      expectedStateVersion: before.stateVersion,
+      dryRun: true
     };
     const first = await client.executeAction(request, "same-key");
     const second = await client.executeAction(request, "same-key");
@@ -312,7 +313,8 @@ test("same Idempotency-Key conflicts when any canonical action intent field chan
       capability: "home.light.set_brightness@1",
       arguments: { brightnessPercent: 10 },
       expectedStateVersion: expected.stateVersion,
-      reason: "first intent"
+      reason: "first intent",
+      dryRun: true
     };
     const planned = await client.executeAction(first, "payload-key");
     assert.equal(planned.status, "planned");
@@ -321,8 +323,8 @@ test("same Idempotency-Key conflicts when any canonical action intent field chan
       { ...first, arguments: { brightnessPercent: 20 } },
       { ...first, expectedStateVersion: "ha:different" },
       { ...first, reason: "different reason" },
-      { ...first, dryRun: true },
-      { ...first, capability: "home.light.turn_off@1" }
+      { ...first, dryRun: false },
+      { ...first, capability: "home.light.turn_off@1", arguments: {} }
     ]) {
       await assert.rejects(
         () => client.executeAction(conflicting, "payload-key"),

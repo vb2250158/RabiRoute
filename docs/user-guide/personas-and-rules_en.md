@@ -165,7 +165,7 @@ A scheduled task requires the Route's Scheduled Tasks input. Agent actions carry
 
 ## Script restrictions
 
-Scripts are disabled by default. The current Route must explicitly enable **Allow this Route to run persona scripts**. This permission stays on the local PC and is not granted to another PC by remote access.
+Configured local scripts run without another Route permission switch and remain in their owning persona's scripts directory. Remote persona scripts execute on their owning PC.
 
 - A script must remain physically inside the current persona's `scripts/` directory; links and `..` cannot escape it.
 - Only `.cmd`, `.bat`, and `.py` are accepted. Arbitrary command text is not.

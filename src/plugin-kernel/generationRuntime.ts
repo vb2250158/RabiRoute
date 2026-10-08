@@ -60,6 +60,7 @@ export type PluginRuntimeFailureEvent = Readonly<{
 export type GenerationRuntimeOptions = Readonly<{
   host: PluginHost;
   hostServices?: readonly HostService[];
+  /** @deprecated Installed plugin declarations define available host APIs; ignored since 0.3.22, remove in 0.4.0. */
   grantedPermissions?: (identity: PluginIdentity) => readonly string[];
   applicationIdentity?: Readonly<{
     applicationGenerationId: string;
@@ -271,7 +272,6 @@ function buildGenerationSnapshots(
 export class GenerationRuntime {
   readonly #host: PluginHost;
   readonly #hostServices: readonly HostService[];
-  readonly #grantedPermissions: (identity: PluginIdentity) => readonly string[];
   readonly #applicationGenerationId: string;
   readonly #managerInstanceId: string;
   readonly #defaultReadyRequires: readonly string[];
@@ -287,7 +287,6 @@ export class GenerationRuntime {
   constructor(options: GenerationRuntimeOptions) {
     this.#host = options.host;
     this.#hostServices = Object.freeze([...(options.hostServices ?? [])]);
-    this.#grantedPermissions = options.grantedPermissions ?? (() => []);
     this.#applicationGenerationId = options.applicationIdentity?.applicationGenerationId.trim() || randomUUID();
     this.#managerInstanceId = options.applicationIdentity?.managerInstanceId.trim() || randomUUID();
     this.#defaultReadyRequires = Object.freeze([...(options.readyRequires ?? [])].sort());
@@ -345,7 +344,7 @@ export class GenerationRuntime {
         this.#applicationGenerationId,
         this.#managerInstanceId
       );
-      const permissions = Object.freeze([...this.#grantedPermissions(identity)].sort());
+      const permissions = Object.freeze([...candidate.manifest.permissions].sort());
       identities.set(instanceId, identity);
       granted.set(instanceId, permissions);
       signatures.set(instanceId, candidateSignature(candidate, permissions));

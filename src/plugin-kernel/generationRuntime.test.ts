@@ -139,16 +139,21 @@ test("GenerationRuntime isolates a failed plugin from independent active plugins
   assert.match(result.generation.records.find(record => record.identity.instanceId === "broken")?.error?.message ?? "", /broken/);
 });
 
-test("GenerationRuntime fails closed when permissions were not granted", async () => {
+test("installed plugin uses declared host APIs without a second Profile grant", async () => {
   const runtime = createRuntime({ grantedPermissions: () => [] });
+  let used = false;
   const result = await runtime.switch([
     candidate({
       instanceId: "desktop", manifest: manifest("io.test.desktop", { permissions: ["desktop.ipc.codex"] }),
-      module: { activate() {} }
+      module: { activate(context) {
+        context.permissions.require("desktop.ipc.codex");
+        assert.throws(() => context.permissions.require("undeclared.host.api"), /required/);
+        used = true;
+      } }
     })
   ]);
-  assert.equal(result.generation.records[0]?.status, "failed");
-  assert.match(result.generation.records[0]?.error?.message ?? "", /not granted/);
+  assert.equal(result.generation.records[0]?.status, "active");
+  assert.equal(used, true);
 });
 
 test("GenerationRuntime keeps the previous component when effect publication fails", async () => {

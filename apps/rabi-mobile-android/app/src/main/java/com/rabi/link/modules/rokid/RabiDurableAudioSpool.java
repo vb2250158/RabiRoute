@@ -241,11 +241,6 @@ final class RabiDurableAudioSpool {
         ensureDirectory(ackJournalDirectory);
         ensureDirectory(cleanupTombstoneDirectory);
         recover();
-        // Recovered events have no live writer. Seal their ASR boundary after recovering partial PCM.
-        for (long sequence : new ArrayList<>(pendingSequences)) {
-            Segment item = readSegment(metadataForSequence(sequence));
-            if (item != null && "transcribe".equals(item.processingPolicy) && !item.eventId.isEmpty()) completeEvent(item.eventId);
-        }
     }
 
     synchronized AppendResult append(byte[] pcm, String source, String routeProfileId) {
@@ -579,10 +574,11 @@ final class RabiDurableAudioSpool {
                 p.getBoolean("adaptiveThreshold"), p.getDouble("adaptiveMultiplier"), p.getDouble("adaptiveMargin"), p.getDouble("inputGain"));
     }
 
-    private String currentEndpointIdentity = "";
-    private String currentAsrIdentity = "";
-    synchronized void setAsrEndpointIdentity(String identity) { currentAsrIdentity = identity == null ? "" : identity; }
-    synchronized void setEndpointIdentity(String identity) { currentEndpointIdentity = identity == null ? "" : identity; }
+    private volatile String currentEndpointIdentity = "";
+    private volatile String currentAsrIdentity = "";
+    // Configuration publishes identities only; it must not wait for historical disk reads.
+    void setAsrEndpointIdentity(String identity) { currentAsrIdentity = identity == null ? "" : identity; }
+    void setEndpointIdentity(String identity) { currentEndpointIdentity = identity == null ? "" : identity; }
     synchronized void bindCaptureEndpoint(String captureId, String identity) throws Exception {
         if (captureId == null || !captureId.matches("[A-Za-z0-9_-]{1,100}")) throw new IllegalArgumentException("invalid capture id");
         File file = new File(root, "capture-" + captureId + ".json");
@@ -665,34 +661,41 @@ final class RabiDurableAudioSpool {
         for (long sequence : new ArrayList<>(unscopedSequences)) removePending(sequence);
     }
 
-    synchronized Segment nextUpload() { return nextUpload(pendingSequences); }
-    synchronized Segment nextTranscriptionUpload() { return nextUpload(transcriptionSequences); }
+    Segment nextUpload() { return nextUpload(pendingSequences); }
+    Segment nextTranscriptionUpload() { return nextUpload(transcriptionSequences); }
     private Segment nextUpload(TreeSet<Long> candidates) {
-        for (long sequence : new ArrayList<>(candidates)) {
-            File metadata = metadataForSequence(sequence);
-            try {
-                Segment segment = readSegment(metadata);
-                // Local-only and unbound recordings are retained, never guessed into a destination.
-                if (segment != null && !"acked".equals(segment.uploadState)) {
-                    // Archive-authorized transcription has its own coordinator. Leave bytes pending, but do not block legacy ASR.
-                    if ("transcribe".equals(segment.processingPolicy) && isArchiveAuthorizedCapture(segment.captureId)) continue;
-                    if (!eventCommitted(segment.eventId) || !importComplete(segment.captureId) || !endpointMatches(segment.captureId)) continue;
-                    if ("local_only".equals(segment.processingPolicy)
-                            || (!segment.captureId.isEmpty() && segment.routeProfileId.isEmpty() && !("transcribe".equals(segment.processingPolicy) && !segment.eventId.isEmpty()))) continue;
-                    if (!"agent".equals(segment.processingPolicy) && !"transcribe".equals(segment.processingPolicy)) continue;
-                    return segment;
+        List<Long> snapshot;
+        synchronized (this) { snapshot = new ArrayList<>(candidates); }
+        for (long sequence : snapshot) {
+            // Yield the writer between historical candidates. Never hold its lock over a full scan.
+            synchronized (this) {
+                if (!candidates.contains(sequence)) continue;
+                File metadata = metadataForSequence(sequence);
+                try {
+                    Segment segment = readSegment(metadata);
+                    // Local-only and unbound recordings are retained, never guessed into a destination.
+                    if (segment != null && !"acked".equals(segment.uploadState)) {
+                        // Calls use the same ASR actor first; archive eligibility waits for its receipt.
+                        if ("transcribe".equals(segment.processingPolicy) && isArchiveAuthorizedCapture(segment.captureId)
+                                && !segment.captureId.startsWith("call_")) continue;
+                        if (!eventCommitted(segment.eventId) || !importComplete(segment.captureId) || !endpointMatches(segment.captureId)) continue;
+                        if ("local_only".equals(segment.processingPolicy)
+                                || (!segment.captureId.isEmpty() && segment.routeProfileId.isEmpty() && !("transcribe".equals(segment.processingPolicy) && !segment.eventId.isEmpty()))) continue;
+                        if (!"agent".equals(segment.processingPolicy) && !"transcribe".equals(segment.processingPolicy)) continue;
+                        return segment;
+                    }
+                    removePending(sequence);
+                } catch (Throwable error) {
+                    boolean isolated = poisonSequence(sequence, metadata,
+                            "metadata_" + error.getClass().getSimpleName(), "unknown", "", 0L);
+                    if (!isolated) return null;
                 }
-                removePending(sequence);
-            } catch (Throwable error) {
-                boolean isolated = poisonSequence(sequence, metadata,
-                        "metadata_" + error.getClass().getSimpleName(), "unknown", "", 0L);
-                if (!isolated) return null;
             }
         }
         return null;
     }
 
-    synchronized Segment nextUpload(String source, String routeProfileId) {
+    Segment nextUpload(String source, String routeProfileId) {
         Segment segment = nextUpload();
         if (segment == null) return null;
         String normalizedSource = clean(source, "phone");
@@ -849,7 +852,13 @@ final class RabiDurableAudioSpool {
         java.util.List<String> result=new ArrayList<>();
         for(java.util.Map.Entry<String,String> item:archiveCandidates.entrySet()) {
             if(result.size()>=Math.max(0,Math.min(limit,32)))break;
-            try {requireArchiveTarget(item.getValue(),target);result.add(item.getKey());}catch(Exception unauthorized){}
+            try {
+                requireArchiveTarget(item.getValue(),target);
+                // Live call events use the same spool and ASR actor. Archive only
+                // after the final ASR receipt so eviction cannot race its PCM read.
+                if (item.getValue().startsWith("call_") && eventReceipt(item.getKey()) == null) continue;
+                result.add(item.getKey());
+            } catch(Exception unauthorized){}
         }
         return result;
     }
@@ -1294,6 +1303,7 @@ final class RabiDurableAudioSpool {
         pendingByteIndex.clear();
         indexedPendingBytes = 0L;
         acknowledgedSequences.clear();
+        Set<String> recoveredEvents = new HashSet<>();
         for (File metadata : metadataFiles()) {
             try {
                 JSONObject value = readJson(metadata);
@@ -1316,12 +1326,18 @@ final class RabiDurableAudioSpool {
                     } else {
                         accountAcknowledged(sequence, value.optLong("bytes", 0L));
                     }
-                } else addPending(sequence, value.optLong("bytes", 0L), value);
+                } else {
+                    addPending(sequence, value.optLong("bytes", 0L), value);
+                    if ("transcribe".equals(value.optString("processingPolicy")) && !value.optString("eventId").isEmpty())
+                        recoveredEvents.add(value.optString("eventId"));
+                }
             } catch (Throwable error) {
                 poisonSequence(sequenceFromName(metadata.getName()), metadata,
                         "metadata_" + error.getClass().getSimpleName(), "unknown", "", metadata.length());
             }
         }
+        // One seal per recovered event, in the existing metadata pass, without rereading every shard.
+        for (String eventId : recoveredEvents) completeEvent(eventId);
         inferAcknowledgedAccountingSequence = false;
         nextSequence = Math.max(persistedNext, maximumSequence + 1L);
         measureQuarantine();

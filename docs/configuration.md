@@ -84,13 +84,23 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 ```json
 {
   "enabled": true,
-  "messageAdapters": ["napcat", "heartbeat"],
+  "messageAdapters": [
+    "napcat",
+    "heartbeat"
+  ],
   "messageAdapterPolicies": {
     "napcat": {
       "inputEnabled": true,
       "outputEnabled": true,
-      "supportedOutputs": ["text", "image", "voice", "file"],
-      "allowedFileRoots": ["C:/Path/To/Your/Project/ReleasePkg"],
+      "supportedOutputs": [
+        "text",
+        "image",
+        "voice",
+        "file"
+      ],
+      "allowedFileRoots": [
+        "C:/Path/To/Your/Project/ReleasePkg"
+      ],
       "messageGrouping": {
         "settleSeconds": 6,
         "incompleteSettleSeconds": 12,
@@ -111,15 +121,16 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
     "sessionContextEnabled": true,
     "reasoningContextEnabled": true,
     "planTaskCompletionEnabled": true,
-    "agentCommunicationEnforcementEnabled": true,
-    "onlyPrimaryPersonaCanSendMessages": false
+    "agentCommunicationEnforcementEnabled": true
   },
   "agentModel": "gpt-5.6-terra",
   "agentReasoningEffort": "high",
   "dshModelProvider": "deepseek-official",
   "dshModel": "deepseek-v4-pro",
   "dshReasoningEffort": "max",
-  "agentAdapters": ["codex"],
+  "agentAdapters": [
+    "codex"
+  ],
   "primaryAgentAdapter": "codex",
   "messageProcessingAgents": {
     "codex": {
@@ -130,7 +141,6 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
     }
   },
   "heartbeatSkipWhenAgentBusy": true,
-  "personaAutomationScriptsEnabled": false,
   "dataDir": "./data/route/main",
   "rolesDir": "./data/roles",
   "configName": "main",
@@ -142,7 +152,7 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 ## 核心字段
 
 - `messageAdapters`：可配置消息入口列表。支持 `napcat`、`remoteAgent`、`heartbeat`、`speech`、`webhook`、`fennenote`、`xiaoai`、`rabilink`、`wearable`、`wecom`、`weixin`、`feishu`；旧配置中的 `rolePanel` 仍兼容，但 WebGUI 不再把它显示为可配置消息端，因为角色面板消息由 Manager 默认提供，Gateway 子进程不另开 listener。
-- `personaAutomationScriptsEnabled`：当前 Route 是否允许人格自动化运行本机脚本，默认关闭。它是本机权限，不写入人格目录，也不会因远端访问而授予其它电脑；收到消息和定时触发的脚本动作都受同一个开关约束。
+
 - `messageAdapterPolicies`：每个消息端的管道级权限。`inputEnabled` 控制是否接收，`outputEnabled` 控制是否允许出站。QQ、微信、飞书、企业微信、角色面板和 RabiLink 文字聊天默认使用消息组，不提供关闭开关；可用 `messageGrouping` 的三个秒数调整普通停顿、疑似半句话停顿和最长等待，默认 `6 / 12 / 20` 秒。ASR / 语音转写、heartbeat、命令、审批、健康告警和结构化事件照常直接投递，不进入这段等待。只有 Codex Agent 同时开启消息处理模式时，聊天消息才交给消息处理 Agent；否则保持原有逐条路由。
 - `supportedOutputs`：这个消息端允许发送的消息类型。NapCat/OneBot 当前支持 `text`、`image`、`voice`、`file`；旧的纯文本 `text/message/content` 请求仍兼容。QQ 群本地文件使用 `upload_group_file`，不是把大文件伪装成普通文本或普通消息段。
 - `allowedFileRoots`：本地文件出站白名单目录，仅在 `payloadType=file` 且使用本地路径时生效。文件必须真实存在、是普通文件，并且解析真实路径后仍位于其中一个目录内；未配置时本地群文件上传会被阻止。公开示例只能使用占位路径，运行期按角色实际构建产物目录配置。
@@ -180,7 +190,7 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 - `codexHooks.reasoningContextEnabled`：默认 `true`。控制 `PreToolUse` / `PostToolUse`；Codex 调用工具前后触发，只返回本轮新命中的计划、记忆或技能上下文。
 - `codexHooks.planTaskCompletionEnabled`：默认 `true`。控制 `Stop` 完成提醒；绑定计划的执行任务输出本轮最终回答后触发。启用计划秘书且存在有效秘书任务时，Manager 直接投递给计划 `secretaryBinding` 指向的负责秘书，不写入主人格角色面板，也不默认唤醒主人格；未启用或没有可用秘书时才回退到原主人格链路。关闭只让 Manager 忽略或拒绝对应 Hook，不卸载或改写 Codex 插件 Hook。
 - `codexHooks.agentCommunicationEnforcementEnabled`：WebGUI 显示为“强制使用 RabiAgent 消息投递接口”，默认 `true`，按 Route 保存。开启后，该 Route 的主人格、计划 Agent、计划秘书和消息处理 Agent 不能用 Codex 持久任务工具绕过 `/api/agent/threads`；`PreToolUse` 会在执行前拒绝并提示必须填写 `sourceThreadId`、`sourceAgentType` 和 `responsePolicy`。使用 `required` 时还要填写 `responseInstruction`；目标任务每轮结束仍未通过 Rabi 正式回复时，Manager 从该轮结束起五分钟后提醒。关闭只停止绕过检查，已经建立的待回复请求仍继续跟进。
-- `codexHooks.onlyPrimaryPersonaCanSendMessages`：字段名为兼容保留，默认 `false`，在 Codex 或 DSH 作为主 Agent 时生效。开启后，只有 `sender.agentType=primary_persona` 且 `sender.sessionId` 与当前主绑定的 `codexThreadId` 或 `dshSessionId` 完全一致时才能调用 `/api/agent/send`；计划 Agent、计划秘书和消息处理 Agent 会被拒绝。主 Agent 不支持托管 Hook 时不会保留该设置。
+
 - `copilotThreadName`：Copilot CLI 独立会话名。它不再复用 `codexThreadName`；旧的 Copilot-only 配置会在读取边界迁移一次并以新字段保存。
 - `copilotCwd`：Copilot CLI 独立工作目录，不与 `codexCwd` 共享真源。
 - `agentModel` / `agentReasoningEffort`：Manager 统一应用到当前 Route 主人格的 Codex Desktop 新轮次。模型留空时沿用目标 Desktop 任务当前设置；推理强度留空时也不覆盖 Desktop 设置。支持的推理强度为 `low`、`medium`、`high`、`xhigh`、`max`。这两个字段只控制主人格，不覆盖消息处理 Agent、计划秘书或独立计划执行 Agent 的设置。
@@ -291,7 +301,7 @@ data/route/fennenote-voice/adapterConfig.json -> agentRoleId: Rabi
 data/roles/Rabi/personaConfig.json
 ```
 
-多条 Route 绑定同一人格时，共用该人格根级 `personaConfig.json` 的自动化规则、语音关键词和上下文额度；Route 自己仍保留消息端、pipeline、热投递模式、处理端和本机脚本权限等运行配置。绑定人格但没有匹配外部消息规则时，外部消息只记录不投递；内置角色面板规则仍存在。显式无人格 route 会按已启用消息入口生成默认规则。
+多条 Route 绑定同一人格时，共用该人格根级 `personaConfig.json` 的自动化规则、语音关键词和上下文额度；Route 自己仍保留消息端、pipeline、热投递模式、处理端等运行配置。绑定人格但没有匹配外部消息规则时，外部消息只记录不投递；内置角色面板规则仍存在。显式无人格 route 会按已启用消息入口生成默认规则。
 
 人格可在 `personaConfig.json` 绑定外发语言风格：
 

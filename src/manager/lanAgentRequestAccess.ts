@@ -1,11 +1,11 @@
 import type { IncomingMessage } from "node:http";
 import { isLanAgentCredentialToken, type LanAgentAuthority } from "./lanAgentAuthority.js";
-import { authorizeAgentApiOperation, validateAgentApiRequestTarget } from "./agentApiPolicy.js";
+import { validateAgentApiRequestTarget } from "./agentApiPolicy.js";
 
 export type LanAgentRequestAccess =
   | { kind: "unrelated" }
   | { kind: "denied"; status: 401 | 403; error: string }
-  | { kind: "agent"; nodeId: string; agentId: string; requiresManagementAuth?: true };
+  | { kind: "agent"; nodeId: string; agentId: string };
 
 /** Node-only connection diagnostics, never a business authorization grant. */
 export function isLanNodeMetadataRequest(request: IncomingMessage, authority: LanAgentAuthority): boolean {
@@ -35,12 +35,6 @@ export function evaluateLanAgentRequest(request: IncomingMessage, authority: Lan
   }
   const identity = authority.authorize(bearer, agentHeader);
   if (!identity) return { kind: "denied", status: 403, error: "LAN_AGENT_DISABLED_OR_REVOKED" };
-  const ownContext = `/api/lan-agent/instances/${encodeURIComponent(identity.nodeId)}/agents/${encodeURIComponent(agentHeader)}/context`;
-  const resourceRead = target.startsWith("/api/lan-agent/resources/read?")
-    && [...url.searchParams.keys()].length === 1 && url.searchParams.has("id")
-    && !/[\\\\\u0000-\u001f]/.test(url.searchParams.get("id") ?? "");
-  const bootstrapRead = request.method === "GET" && (["/meta", "/api/lan-agent/capabilities", "/api/lan-agent/resources"].includes(target) || resourceRead);
-  const hook = request.method === "POST" && target === ownContext;
   if (!validateAgentApiRequestTarget(request.method ?? "GET", target).allowed) {
     return { kind: "denied", status: 403, error: "LAN_AGENT_INVALID_REQUEST_TARGET" };
   }
@@ -49,10 +43,7 @@ export function evaluateLanAgentRequest(request: IncomingMessage, authority: Lan
   if (url.pathname.startsWith("/api/codex-hook/")) {
     return { kind: "denied", status: 403, error: "LAN_AGENT_SOURCE_NOT_SUPPORTED" };
   }
-  // The catalog is not a remote business subset. Outside it, continue to the
-  // existing management authentication instead of granting admin with a node key.
-  const requiresManagementAuth = !bootstrapRead && !hook
-    && !authorizeAgentApiOperation(request.method ?? "GET", target).allowed;
-  return { kind: "agent", nodeId: identity.nodeId, agentId: agentHeader,
-    ...(requiresManagementAuth ? { requiresManagementAuth: true as const } : {}) };
+  // One authenticated connection uses the provided APIs; the catalog is discovery,
+  // not a second permission grant. Handlers still validate their request contracts.
+  return { kind: "agent", nodeId: identity.nodeId, agentId: agentHeader };
 }

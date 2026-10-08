@@ -13,6 +13,15 @@ import { prepareStableSpeechExecutable } from "./speechStableExecutable.js";
 
 const execFileAsync = promisify(execFile);
 
+// pip creates its --target directory before installing packages. Check the core
+// API and microphone modules before using that directory; startup health still
+// verifies the actual imports and runtime, including their transitive dependencies.
+const coreDependencyFiles = [
+  "fastapi/__init__.py", "uvicorn/__init__.py", "httpx/__init__.py",
+  "python_multipart/__init__.py", "numpy/__init__.py", "scipy/__init__.py",
+  "soundfile.py", "sounddevice.py"
+];
+
 type RuntimeChild = Pick<ChildProcess, "exitCode" | "pid" | "unref"> &
   Partial<Pick<ChildProcess, "stdout" | "stderr">>;
 
@@ -160,14 +169,21 @@ export class SpeechRuntimeControl {
 
   private runtimePaths(): {
     serviceRoot: string;
+    dependenciesRoot: string;
     runtimeExecutable: string;
     bundledExecutable: string;
     hostScript: string;
     startScript: string;
   } {
     const serviceRoot = path.join(this.options.packageRoot ?? this.options.rootDir, "plugin-adapters", "rabi-speech");
+    const stableDependencies = path.join(this.options.rootDir, "plugin-adapters", "rabi-speech", ".deps");
+    const bundledDependencies = path.join(serviceRoot, ".deps");
     return {
       serviceRoot,
+      // Existing packaged installers write beside their scripts. Retain that
+      // current-release result until installation writes the stable state root;
+      // a complete stable installation always takes precedence across releases.
+      dependenciesRoot: this.dependenciesPresent(stableDependencies) ? stableDependencies : bundledDependencies,
       bundledExecutable: path.join(serviceRoot, "runtime", "RabiSpeech.exe"),
       runtimeExecutable: this.options.packageRoot && path.resolve(this.options.packageRoot) !== path.resolve(this.options.rootDir)
         ? path.join(this.options.rootDir, "runtime", "speech", "RabiSpeech.exe")
@@ -175,6 +191,10 @@ export class SpeechRuntimeControl {
       hostScript: path.join(serviceRoot, "scripts", "windows_host.py"),
       startScript: path.join(serviceRoot, "scripts", "start.ps1")
     };
+  }
+
+  private dependenciesPresent(root: string): boolean {
+    return coreDependencyFiles.every(relative => this.existsSync(path.join(root, relative)));
   }
 
   /**
@@ -193,7 +213,7 @@ export class SpeechRuntimeControl {
     if (this.platform !== "win32") {
       throw new SpeechRuntimeControlError("WebGUI 启停 RabiSpeech 当前只支持 Windows 主机。", 409);
     }
-    if (!this.existsSync(path.join(this.options.rootDir, "plugin-adapters", "rabi-speech", ".deps"))) {
+    if (!this.dependenciesPresent(paths.dependenciesRoot)) {
       throw new SpeechRuntimeControlError("RabiSpeech 尚未安装依赖，请先运行 scripts\\install.ps1。", 409);
     }
     if (!this.existsSync(paths.bundledExecutable)) {
@@ -237,7 +257,7 @@ export class SpeechRuntimeControl {
               ...process.env,
               PYTHONUTF8: "1",
               PYTHONIOENCODING: "utf-8",
-              RABISPEECH_DEPS_ROOT: path.join(this.options.rootDir, "plugin-adapters", "rabi-speech", ".deps"),
+              RABISPEECH_DEPS_ROOT: paths.dependenciesRoot,
               RABISPEECH_HOST_EXECUTABLE: paths.runtimeExecutable,
               RABISPEECH_CONFIG: this.userSpeechConfigPath(paths)
             }

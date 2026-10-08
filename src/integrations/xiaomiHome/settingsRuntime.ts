@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { normalizeHomeSpeechBindings } from "../../shared/homeMediaContract.js";
 import fs from "node:fs";
 import path from "node:path";
 import type {
@@ -14,7 +15,11 @@ import { XiaomiHomeArtifactAccess } from "./artifactAccess.js";
 import { HomeAssistantDeployment } from "./homeAssistantDeployment.js";
 import { XiaomiHomeArtifactStore } from "./artifactStore.js";
 import { XiaomiHomeClipCaptureWorker } from "./clipCapture.js";
+import { HomeAssistantActivityMonitor } from "./activityMonitor.js";
+import type { HomeAssistantActivityPort } from "../../shared/homeAssistantActivity.js";
 import { XiaomiHomeEventMonitor } from "./eventMonitor.js";
+import { XiaomiVacuumCloud } from "./vacuumCloud.js";
+import { VacuumRemoteController } from "./vacuumRemote.js";
 import { XiaomiHomeCredentialStore, type XiaomiHomeCredentialResolution } from "./credentials.js";
 import {
   XiaomiHomeManagerApiClient,
@@ -32,13 +37,14 @@ type RuntimeFile = Readonly<{
 }>;
 
 type RuntimeDependencies = Readonly<{
+  activity?: HomeAssistantActivityPort;
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
   deliverEvent: (event: XiaomiHomeEvent, context: XiaomiHomeEventDeliveryContext) => Promise<unknown>;
 }>;
 
 const settingKeys = new Set<keyof XiaomiHomeRuntimeSettings>([
-  "baseUrl", "requestTimeoutMs", "writeEnabled", "allowPublicBaseUrl", "allowInsecurePrivateHttp",
+  "baseUrl", "requestTimeoutMs", "writeEnabled", "speechBindings", "allowPublicBaseUrl", "allowInsecurePrivateHttp",
   "agentRoleId", "eventMonitorEnabled", "eventDeliveryMode", "cameraMotionEntityIds",
   "cameraClipCaptureEnabled", "cameraClipAllowedHosts", "ffmpegPath", "ffprobePath",
   "artifactReadTokenEnv", "cameraClipRequestTimeoutMs", "cameraClipMaxSegments",
@@ -82,16 +88,18 @@ function assertKnownKeys(value: unknown): asserts value is Record<string, unknow
 export function normalizeXiaomiHomeRuntimeSettings(input: unknown): XiaomiHomeRuntimeSettings {
   assertKnownKeys(input);
   const manager = resolveXiaomiHomeManagerConfig(input);
+  let speechBindings;
+  try { speechBindings = normalizeHomeSpeechBindings(input.speechBindings); }
+  catch { throw new XiaomiHomeManagerApiError(400, "xiaomi_home_settings_invalid", "speechBindings requires unique media_player and notify entities and text/json-array encoding."); }
   const eventDeliveryMode = input.eventDeliveryMode ?? "significant";
   if (eventDeliveryMode !== "significant" && eventDeliveryMode !== "all") {
     throw new XiaomiHomeManagerApiError(400, "xiaomi_home_settings_invalid", "eventDeliveryMode is invalid.");
   }
-  const artifactReadTokenEnv = controlledText(input.artifactReadTokenEnv, "RABIROUTE_XIAOMI_HOME_ARTIFACT_TOKEN", "artifactReadTokenEnv", 128);
-  if (!/^[A-Z][A-Z0-9_]{2,127}$/.test(artifactReadTokenEnv)) {
-    throw new XiaomiHomeManagerApiError(400, "xiaomi_home_settings_invalid", "artifactReadTokenEnv must be an uppercase environment variable name.");
-  }
+  // Legacy input is accepted until 0.4.0. Media reads reuse connection authentication.
+  const artifactReadTokenEnv = "RABIROUTE_XIAOMI_HOME_ARTIFACT_TOKEN";
   return Object.freeze({
     ...manager,
+    speechBindings,
     allowPublicBaseUrl: input.allowPublicBaseUrl === true,
     allowInsecurePrivateHttp: input.allowInsecurePrivateHttp === true,
     agentRoleId: controlledText(input.agentRoleId, "YeYu", "agentRoleId", 80),
@@ -158,6 +166,8 @@ export class XiaomiHomeSettingsStore {
 }
 
 export class XiaomiHomeRuntimeController {
+  readonly vacuumCloud: XiaomiVacuumCloud;
+  readonly vacuumRemote: VacuumRemoteController;
   readonly deployment: HomeAssistantDeployment;
   readonly artifacts: XiaomiHomeArtifactStore;
   private snapshotValue: XiaomiHomeSettingsSnapshot;
@@ -165,6 +175,7 @@ export class XiaomiHomeRuntimeController {
   private accessValue: XiaomiHomeArtifactAccess;
   private captureValue: XiaomiHomeClipCaptureWorker;
   private monitorValue: XiaomiHomeEventMonitor;
+  private activityValue?: HomeAssistantActivityMonitor;
   private started = false;
   private readonly credentialStore: XiaomiHomeCredentialStore;
 
@@ -175,6 +186,7 @@ export class XiaomiHomeRuntimeController {
     credentialStore = new XiaomiHomeCredentialStore(artifacts.runtimeDir)
   ) {
     this.artifacts = artifacts;
+    this.vacuumCloud = new XiaomiVacuumCloud(artifacts.runtimeDir, dependencies.fetchImpl);
     this.credentialStore = credentialStore;
     this.snapshotValue = store.read();
     this.deployment = new HomeAssistantDeployment(artifacts.runtimeDir, () => this.snapshotValue.settings.baseUrl);
@@ -183,6 +195,8 @@ export class XiaomiHomeRuntimeController {
     this.accessValue = runtime.access;
     this.captureValue = runtime.capture;
     this.monitorValue = runtime.monitor;
+    this.activityValue = runtime.activity;
+    this.vacuumRemote = new VacuumRemoteController(artifacts.runtimeDir, () => this.clientValue);
   }
 
   get client(): XiaomiHomeManagerApiClient { return this.clientValue; }
@@ -192,11 +206,15 @@ export class XiaomiHomeRuntimeController {
     this.started = true;
     this.deployment.start();
     this.monitorValue.start();
+    this.activityValue?.start();
   }
 
   async stop(): Promise<void> {
     this.started = false;
+    await this.vacuumRemote.shutdown();
+    await this.vacuumCloud.video.shutdown();
     this.monitorValue.stop();
+    await this.activityValue?.stop();
     await this.deployment.stop();
   }
 
@@ -205,6 +223,7 @@ export class XiaomiHomeRuntimeController {
   }
 
   update(settings: unknown, expectedRevision: string): XiaomiHomeSettingsSnapshot {
+    this.vacuumRemote.assertInactive();
     const inFlight = Number(this.captureValue.status().inFlight || 0);
     if (inFlight > 0) {
       throw new XiaomiHomeManagerApiError(409, "xiaomi_home_capture_in_progress", "Wait for active camera capture to finish before changing settings.");
@@ -252,6 +271,7 @@ export class XiaomiHomeRuntimeController {
     }, fetchImpl, token);
     const verification = await candidate.verifyAuthorization();
     const preparedCredential = this.credentialStore.prepare(token, candidateSettings.baseUrl, verification);
+    this.vacuumRemote.assertInactive();
     const saved = this.commitAuthorizationLocally(candidateSettings, expectedRevision, preparedCredential);
     this.snapshotValue = saved;
     this.replaceRuntime(this.createRuntime(candidateSettings));
@@ -264,6 +284,7 @@ export class XiaomiHomeRuntimeController {
   }
 
   async disconnect(expectedAuthorizationRevision?: string): Promise<XiaomiHomeAuthorizationSnapshot> {
+    this.vacuumRemote.assertInactive();
     this.requireAuthorizationRevision(expectedAuthorizationRevision);
     const settings = this.snapshotValue.settings;
     this.credentialStore.clear();
@@ -281,6 +302,7 @@ export class XiaomiHomeRuntimeController {
         revision: this.snapshotValue.revision
       },
       eventMonitor: this.monitorValue.status(),
+      activityMonitor: this.activityValue?.status() ?? { state: "unavailable", recording: false },
       cameraCapture: this.captureValue.status()
     };
   }
@@ -322,7 +344,8 @@ export class XiaomiHomeRuntimeController {
       deliverEvent: this.dependencies.deliverEvent,
       captureMotionClip: capture.isEnabled() ? candidate => capture.capture(candidate) : undefined
     });
-    return { client, access, capture, monitor };
+    const activity = this.dependencies.activity ? new HomeAssistantActivityMonitor(settings.baseUrl, { port: this.dependencies.activity, credentialToken }) : undefined;
+    return { client, access, capture, monitor, activity };
   }
 
   private resolveCredential(): XiaomiHomeCredentialResolution {
@@ -331,11 +354,13 @@ export class XiaomiHomeRuntimeController {
 
   private replaceRuntime(runtime: ReturnType<XiaomiHomeRuntimeController["createRuntime"]>): void {
     this.monitorValue.stop();
+    void this.activityValue?.stop();
     this.clientValue = runtime.client;
     this.accessValue = runtime.access;
     this.captureValue = runtime.capture;
     this.monitorValue = runtime.monitor;
-    if (this.started) this.monitorValue.start();
+    this.activityValue = runtime.activity;
+    if (this.started) { this.monitorValue.start(); this.activityValue?.start(); }
   }
 
   private authorizationRevision(credential: XiaomiHomeCredentialResolution): string {

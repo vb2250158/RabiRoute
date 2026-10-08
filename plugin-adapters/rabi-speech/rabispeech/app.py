@@ -1490,6 +1490,7 @@ def _transcription_response(result: TranscriptionResult, response_format: str) -
             "provider": result.provider,
             "model": result.model,
             "segments": [asdict(segment) for segment in result.segments],
+            **result.recognition_metadata(),
         }
     )
 

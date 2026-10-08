@@ -1,5 +1,7 @@
 import type http from "node:http";
 import { localModelSettingsRequestAllowed } from "./speechModelSettingsAccess.js";
+import { hasAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
+import { validateLanAgentRequestBody } from "./lanAgentBodyAuthority.js";
 import { executeDurableDelivery } from "./durableDeliveryIdempotency.js";
 import { ArchiveAdminError, archiveAdminDigest, archiveSettingsEtag, validateArchiveAdminInput, type RecordingArchiveBindings, type ArchiveAdminResult } from "./recordingArchiveBindings.js";
 
@@ -12,7 +14,7 @@ export interface RecordingArchiveAdminOptions {
   changed?(): Promise<void> | void;
 }
 type Result = { status: 200; data: ArchiveAdminResult } | { status: number; code: string };
-/** Mount before the legacy /api/resource-cache handler. Never expose through resources tunnel. */
+/** Mount before the legacy /api/resource-cache handler; reuse connection authentication. */
 export function recordingArchiveAdminHandler(options: RecordingArchiveAdminOptions) {
   return (request: http.IncomingMessage, url: URL, response: http.ServerResponse): boolean => {
     if (url.pathname !== "/api/resource-cache/archive-settings") return false;
@@ -25,7 +27,7 @@ export function recordingArchiveAdminHandler(options: RecordingArchiveAdminOptio
       return values.length === 1 && typeof value === "string" ? value : "";
     };
     void (async () => {
-      if (!localModelSettingsRequestAllowed(request) || Object.keys(request.headers).some(key => key.startsWith("x-rabilink-"))) { json(403, { code: "local_admin_only" }); return; }
+      if (!localModelSettingsRequestAllowed(request) || (!hasAuthenticatedConnectionRequest(request) && Object.keys(request.headers).some(key => key.startsWith("x-rabilink-")))) { json(403, { code: "connection_auth_required" }); return; }
       if (request.method === "GET") {
         const data = await options.bindings.listBindings();
         json(200, { code: 0, data: { workerId: options.workerId(), ...data } }, { etag: archiveSettingsEtag(data) }); return;
@@ -42,7 +44,11 @@ export function recordingArchiveAdminHandler(options: RecordingArchiveAdminOptio
       const chunks: Buffer[] = []; let size = 0;
       for await (const chunk of request) { size += chunk.length; if (size > 8192) { json(413, { code: "body_too_large" }); return; } chunks.push(Buffer.from(chunk)); }
       let input;
-      try { input = validateArchiveAdminInput(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)))); }
+      try {
+        const body = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)));
+        validateLanAgentRequestBody(request, body);
+        input = validateArchiveAdminInput(body);
+      }
       catch { json(400, { code: "invalid_request" }); return; }
       const digest = archiveAdminDigest(input, etag);
       const outcome = await executeDurableDelivery<Result>({
@@ -51,6 +57,7 @@ export function recordingArchiveAdminHandler(options: RecordingArchiveAdminOptio
         deliver: async () => {
           // Recheck identity at the mutation boundary, not merely before reading the body.
           const now = options.identity();
+          validateLanAgentRequestBody(request, input);
           if (options.readOnly() || now.applicationGenerationId !== generation || now.managerInstanceId !== instance) return { status: 409, code: "generation_changed" };
           try { return { status: 200, data: await options.bindings.configureAdministrative(input, etag, key) }; }
           catch (error) { if (error instanceof ArchiveAdminError) return { status: error.status, code: error.code }; throw error; }

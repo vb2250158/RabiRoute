@@ -60,7 +60,7 @@ export function agentSendRequestTemplateForSource(context: Record<string, unknow
   return {
     deliveryId: "<为本次发送生成稳定 ID；重试时保持不变>",
     sender: {
-      agentType: "<当前 Agent 类型；仅在开启 Codex 主人格发送限制时，主人格填 primary_persona>",
+      agentType: "<当前 Agent 类型；主人格填 primary_persona，其它 Agent 填实际角色>",
       sessionId: "<当前 Agent 的完整会话 ID>"
     },
     routeId,
@@ -72,7 +72,7 @@ export function agentSendRequestTemplateForSource(context: Record<string, unknow
       text: "<填写正文及图片来源类型与关注点；type=markdown 时填 Markdown 源文；多段混排时删除 text/path，改填有序 segments：text、image 或 markdown 段>",
       // Only NapCat carries a local path; other channels resolve media by URL or their own id.
       ...(channel === "napcat"
-        ? { path: "<单图时填写授权目录内已实际查看过的图片路径；Markdown 或多段混排时删除此字段>" }
+        ? { path: "<单图时填写allowedFileRoots内已实际查看过的图片路径；Markdown 或多段混排时删除此字段>" }
         : {})
     },
     ...(context.messageProcessingRequirementId

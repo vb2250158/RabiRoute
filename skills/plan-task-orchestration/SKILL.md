@@ -239,7 +239,7 @@ At plan creation and after each material stage, inventory the files already avai
 - Prefer the smallest set that preserves the decision and acceptance record. When API count or size limits prevent attaching everything, keep the highest-value files and record the controlled location and omission reason in the plan.
 - Never attach secrets, tokens, cookies, private conversations, player-private data, unrelated windows, or files outside the task's authority.
 - Attachments supplement evidence. They do not replace source attribution, tests, revisions, package identity, delivery receipts, or QA results.
-- On PATCH, preserve existing managed attachment objects unless an attachment is intentionally removed. Do not accidentally clear the list while adding a new stage artifact.
+- On PATCH, preserve existing attachment objects unless an attachment is intentionally removed. Do not accidentally clear the list while adding a new stage artifact.
 
 An archived, missing, or workspace-mismatched bound task fails closed. Do not silently replace it. Use the recovery procedure below.
 

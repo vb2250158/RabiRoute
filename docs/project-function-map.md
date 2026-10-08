@@ -8,6 +8,10 @@
 
 Linux 启动、状态、重启和退出由 `scripts/linux-host.mjs` 统一拥有；动态 Manager 身份和 RibiWebGUI 继续复用现有合同。`src/linuxProcessLease.ts` 提供进程生命周期内核锁，Linux 原生托盘、截图和热键不在本次范围内，见 [Linux Host](linux-host.md)。
 
+扫地机地图页提供公共手动控制入口，W/A/D 方向、S 停止；不替代坐标导航。视频不设播放时长上限，失败可显式重新连接；见[设备界面](user-guide/home-devices.md)。
+
+完成连接鉴权后即可使用已提供的接口，不再增加逐功能或逐人格授权。发送仍须遵守来源身份、目标、消息格式和幂等回执合同。详见[连接与接口使用](connection-access.md)。
+
 0.3.22 连接合同：同一 RabiLink 应用已鉴权设备默认使用 PC 实际提供的全部服务。设备固定公钥与应用作用域继续复核；知识读写复用 Manager 接口，无额外 MCP 密钥或知识 grant。旧逐服务权限字段和知识表单已退役。实现与迁移见[通用连接](rabilink-peer-tunnel.md)及[知识运行合同](rabilink-knowledge-runtime.md)。
 
 远端 Agent 归 Agent 执行端，不再作为消息端添加；通过[远端接入](lan-rabi-agent-bootstrap.md)选择实例与 Agent。
@@ -102,6 +106,8 @@ Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，
 
 ## 功能索引
 
+家庭设备动作由米家 Manager 插件持有：查询全部实体，从实时 HA 服务、feature 与参数派生通用按钮／设置／设备动作，同时保留音箱播报、媒体简化动作和持久回执。简化合同在 `src/shared/homeMediaContract.ts`，通用动作目录与校验在 `src/integrations/xiaomiHome/entityActions.ts`；两者共用 `managerApi.ts` 执行。WebGUI 不调用 HA。详见[家庭设备 Agent 接口](home-device-agent-api.md)。
+
 源码热补丁支持清单中新模块的自动发现与注册，以及后续代码、资源更新；接入插件使用通用宿主服务，不修改热补丁核心。入口、状态迁移边界和验收范围见[源码热补丁](source-hot-patches.md)。
 
 | 功能 | 当前状态 | 真源 / 数据 | 消费点 | 生效时机 | 副作用 | 入口 | 关键代码 | 文档 |
@@ -142,7 +148,7 @@ Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，
 | RabiLink 统一会话账本与审阅器 | 已有 | `rabilink-conversation.jsonl`、审阅 cursor、route review variables | 固定 Codex 线程、空闲审阅、周期反思、触摸板 turn steer | 新 observation 稳定后、线程空闲时、周期到期或眼镜请求立即审阅时 | 原子推进 cursor；可把显式白名单内的常驻转写源归一为 observation；可能唤醒或 steer Codex；不在 ASR 请求内同步等待 | 角色目录运行数据；`examples/data/route/RabiLink/` 提供脱敏配置模板 | `src/rabilinkConversationLedger.ts`、`src/rabilinkObservationRecorder.ts`、`src/rabilinkConversationReviewer.ts` | `docs/rabilink-relay-server.md` |
 | 企业微信消息端 | 实验支持 | WeCom SDK frame、route config、`wecom-messages.jsonl` | forwarding、Outbox WeCom 回复 | WebSocket 收到消息时 | 写消息日志，可能投递 Agent | route 消息端 | `src/adapters/wecomAdapter.ts`、`src/wecom.ts`、`src/messageEndpoints/wecomManager.ts` | `docs/wecom-integration.md` |
 | 个人微信消息端 | 实验原型 | OpenClaw/iLink 二维码、长轮询、context token、`weixin-messages.jsonl` | forwarding、Outbox 来源会话文本回复 | 登录轮询或收到消息时 | token 写运行期 `data/`；文本可能投递 Agent，媒体只记录 | route 消息端 | `src/adapters/weixinAdapter.ts`、`src/weixinOpenClaw.ts` | `docs/current-capabilities.md` |
-| 定时任务运行入口 | 已验证 | `automationRules[].trigger.schedule`、`heartbeatSkipWhenAgentBusy`、`messageProcessingAgents.codex`、Route 本机脚本权限 | heartbeat adapter、AgentPacket、受限脚本执行器、Codex active 状态、消息处理 Agent 池 | 定时器触发时 | 通知 Agent 时写 heartbeat 与投递日志且不注入聊天历史；运行脚本时写独立自动化执行记录；同一规则不重叠运行 | Route 启用 heartbeat；脚本动作还要明确打开本机权限 | `src/adapters/heartbeatAdapter.ts`、`src/automation/personaAutomationRuntime.ts`、`src/scheduling/heartbeatSchedules.ts`、`src/forwarding.ts` | `docs/configuration.md` |
+| 定时任务运行入口 | 已验证 | `automationRules[].trigger.schedule`、`heartbeatSkipWhenAgentBusy`、`messageProcessingAgents.codex`、人格脚本路径合同 | heartbeat adapter、AgentPacket、受限脚本执行器、Codex active 状态、消息处理 Agent 池 | 定时器触发时 | 通知 Agent 时写 heartbeat 与投递日志且不注入聊天历史；运行脚本时写独立自动化执行记录；同一规则不重叠运行 | Route 启用 heartbeat；脚本动作按所属人格路径合同执行 | `src/adapters/heartbeatAdapter.ts`、`src/automation/personaAutomationRuntime.ts`、`src/scheduling/heartbeatSchedules.ts`、`src/forwarding.ts` | `docs/configuration.md` |
 | Manual trigger | 已验证，真实投递 | manager request、`manual-trigger-events.jsonl` | `triggerManualRule`、forwarding | 用户点击 / API 调用时 | 写手动触发日志、router 日志、replay ledger，可能投递 Agent | `POST /gateways/:id/manual-trigger` | `src/manualTrigger.ts`、`src/manager/controlPlaneRoutes.ts` | `docs/rabi-agent-interfaces.md` |
 | 米家 / Xiaomi Home | 实验支持；自动化合同已验证，真实 Home Assistant 待验收 | 插件 Profile 默认值、本机 `settings.json`、地址绑定的受保护单账号凭据 | REST/WebSocket 查询、显著事件投递、typed capability 动作 | 保存设置、Route 卡片连接/退出、事件到达或显式动作时 | 受保护凭据与设置写入；事件可能投递 Agent；设备动作使用持久 receipt。地址和候选令牌同次验证，非回环默认 HTTPS | Route 消息端卡片；`/api/agent/xiaomi-home/*` | `src/integrations/xiaomiHome/*`、`src/shared/xiaomiHome*`、`ribiwebgui/src/components/renderers/XiaomiHome*` | 插件双语 README、`docs/current-capabilities.md` |
 | Role panel message | 已验证，真实投递 | `data/roles/<RoleId>/role-panel/messages.jsonl` | role panel 子进程、forwarding | 用户在角色面板发送时 | 写 timeline，可能投递 Agent | `POST /api/role-panel/messages` | `src/rolePanelTimeline.ts`、`src/manager/controlPlaneRoutes.ts` | `docs/routing-and-personas.md` |
@@ -161,7 +167,7 @@ Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，
 | Outbox / Send | 已有 | 必填稳定 `deliveryId`、`sender.agentType + sender.sessionId`、精确 `routeId`、`channel`、渠道专用 `params` 和 `payload` 的明确发送请求 | QQ / WeCom / RabiLink / speech / role panel 等发送出口 | Agent、定时器或规划器调用 `/api/agent/send` 时 | 可能写 draft、阻止、外发、写发送日志；发送前持久化 reservation，同 ID 同请求只执行一次，超时/重启先查询 `/api/agent/send/receipts/:deliveryId`，也可按渠道和 `sentMessageId` 反查发送会话，uncertain 不自动重发；来源上下文不参与目标推断；NapCat 群聊必须显式提交 `replyToMessageId`，真实 ID 引用消息，空字符串表示明确不引用，省略则向 Agent 返回可行动错误；引用消息含图片时，发送前按来源图片数量和顺序校验 `replyImageDescriptions`，成功后在图片旁写同名 `.md` 并返回会话映射；本地群文件校验 `allowedFileRoots` 后走 `upload_group_file`；RabiLink 必须明确目标设备 | `POST /api/agent/send`、`GET /api/agent/send/receipts/:deliveryId`、`GET /api/agent/send/traces` | `src/agentSend.ts`、`src/replyImageDescriptions.ts`、`src/manager/agentSendIdempotency.ts`、`src/outbox.ts`、`src/napcat.ts` | `docs/rabi-agent-interfaces.md` |
 | Pipeline presets | 已有 | route `pipelinePreset` / `pipeline` | AgentPacket、Outbox | route 配置生效后 | 影响输出模式和自动回复策略 | route 配置页 | `src/pipelines.ts` | `docs/pipeline-presets.md` |
 | 计划 | 已有 | `data/roles/<RoleId>/plans`、追加式 `plans/history/*.jsonl`、私有 `attachments/<planId>/` 与 `personaConfig.json.planWorkflow` | roleKnowledgeSnapshot、Agent 接口、WebGUI 与托盘只读页 | AgentPacket 构造或 API 调用时 | `plan.status` 只保存当前人格状态目录中的 enabled key；默认模板提供分析、待补充信息、待审批、已审批、执行、打包、QA、讨论、暂停、完成和关闭十一个角色标记，但不是代码枚举。“待补充信息”只用于分析已完成但仍无法形成可审批具体方案的情况；等待目标包与 QA 分别使用对应角色状态。名称、说明、色板、顺序、视图、终态和归档资格都来自 `planWorkflow`，Manager 通过 `presentation` 返回，WebGUI 与 Qt 显示配置 label 且不从步骤或正文建立第二套状态。v1/v2/v3/v4 人格配置首次读取时升级为 v5，复用匹配的启用已审批定义或新增默认定义并绑定 `roles.approved`；匹配定义未启用则拒绝迁移。保留其它自定义状态、说明及相对顺序，v5 读取不自动恢复已移除状态。步骤不保存状态，当前步骤由 currentStepId 表示，完成时间由 completedAt 记录。`archiveStatus` 独立使用未归档/已归档；满足配置归档资格的计划超过 `archiveAfterHours` 后归档且不改变 status key。已归档计划不参加关键词召回，只能按明确 ID 或归档视图读取 | `/api/roles/:roleId/plans`、`GET /api/roles/:roleId/plans/:planId/history`、`GET /api/roles/:roleId/plans/:planId/attachments/:attachmentId` | `src/personaPlanWorkflow.ts`、`src/roleKnowledge.ts`、`src/planAttachments.ts`、`src/roleKnowledgePresentation.ts`、`src/roleKnowledgePagination.ts`、`src/manager/planAttachmentRoutes.ts`、`src/manager/controlPlaneRoutes.ts` | `docs/plan-and-memory-model.md` |
-| 计划反馈与 QA 判定 | 已有 | `data/roles/<RoleId>/plans/feedback/*.jsonl`、私有 `attachments/<feedbackId>/` 与当前计划受管附件 | 绑定业务任务、人格 Agent、WebGUI、Qt 托盘 | 用户从计划页提交文字/附件、在输入框用 `@` 引用计划附件，或 Agent 记录 QQ/其它入口的反馈时 | 普通引导不改状态；用户审批 durable 保存后将 `markerStatus` 设为配置 `roles.approved`，仅同一反馈及未变计划版本的 confirmed 成功投递才转 `roles.analysis`，不改变 `activationStatus`，也不代表全部选项获批或自动实施；可选投递仍复用原 `taskBinding`；只有当前结构化 `qa-* / verify-*` 步骤收到用户或外部入口的 `approval_suggestion` 明确 QA 结论时，Manager 才消费判定。失败或仍复现会回到同计划调查、索取最小必要证据并继续原业务任务，明确 QA 通过才完成；Agent 执行报告、引导/回复及裸 `passed / verified` 计数保持普通记录 | `GET/POST /api/roles/:roleId/plans/:planId/feedback` | `src/planFeedback.ts`、`src/manager/planQaFeedback.ts`、`src/manager/planApprovalFeedbackDelivery.ts`、`src/manager/controlPlaneRoutes.ts`、`src/routing/systemEventRules.ts` | `docs/plan-and-memory-model.md`、`docs/rabi-agent-interfaces.md` |
+| 计划反馈与 QA 判定 | 已有 | `data/roles/<RoleId>/plans/feedback/*.jsonl`、私有 `attachments/<feedbackId>/` 与当前计划附件 | 绑定业务任务、人格 Agent、WebGUI、Qt 托盘 | 用户从计划页提交文字/附件、在输入框用 `@` 引用计划附件，或 Agent 记录 QQ/其它入口的反馈时 | 普通引导不改状态；用户审批 durable 保存后将 `markerStatus` 设为配置 `roles.approved`，仅同一反馈及未变计划版本的 confirmed 成功投递才转 `roles.analysis`，不改变 `activationStatus`，也不代表全部选项获批或自动实施；可选投递仍复用原 `taskBinding`；只有当前结构化 `qa-* / verify-*` 步骤收到用户或外部入口的 `approval_suggestion` 明确 QA 结论时，Manager 才消费判定。失败或仍复现会回到同计划调查、索取最小必要证据并继续原业务任务，明确 QA 通过才完成；Agent 执行报告、引导/回复及裸 `passed / verified` 计数保持普通记录 | `GET/POST /api/roles/:roleId/plans/:planId/feedback` | `src/planFeedback.ts`、`src/manager/planQaFeedback.ts`、`src/manager/planApprovalFeedbackDelivery.ts`、`src/manager/controlPlaneRoutes.ts`、`src/routing/systemEventRules.ts` | `docs/plan-and-memory-model.md`、`docs/rabi-agent-interfaces.md` |
 | 近期记忆 | 已有 | `data/roles/<RoleId>/memory/recent/*.md`，兼容旧 JSON | roleKnowledgeSnapshot、Agent 接口、Markdown 阅读器 | AgentPacket 构造或 API 调用时 | 读取命中项刷新 viewedAt/recalledAt；更新刷新 updatedAt/viewedAt | `/api/roles/:roleId/memory/recent` | `src/roleKnowledge.ts` | `docs/plan-and-memory-model.md` |
 | 沉淀记忆 | 已有 | `data/roles/<RoleId>/memory/consolidated/*.md`，兼容旧 JSON | roleKnowledgeSnapshot、Agent 接口、Markdown 阅读器 | 整理结果、读取或召回时 | 命中必读项刷新 viewedAt/recalledAt；已有沉淀记录不再进入整理输入 | `/api/roles/:roleId/memory/consolidated` | `src/roleKnowledge.ts` | `docs/plan-and-memory-model.md` |
 | 记忆整理 | 已有 | `memory/consolidation-runs` | AgentPacket、Agent 回传 API、可选独立 Codex 记忆整理任务 | Manager 到达最早 72 小时截止时间、显式 `memory-consolidation` 手动触发或 Manager API request | 固定 72 小时触发时的 24 小时候选范围；自动到点创建并投递 run；提交 result 后标记来源并写沉淀记忆 | `/api/roles/:roleId/memory/consolidation-*` | `src/roleKnowledge.ts`、`src/memoryConsolidationAgent.ts`、`src/manager/memoryConsolidationScheduler.ts`、`src/manager/roleKnowledgeRoute.ts`、`src/manager/controlPlaneRoutes.ts` | `docs/plan-and-memory-model.md` |
@@ -188,7 +194,7 @@ Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，
 - 预览能力目前是拟新增设计，应走后端 dry-run，不能调用 `forwardMessageAndWait`。
 - 真实外发必须经过 Outbox / Action Gate。处理端不要绕过 RabiRoute 直接写 QQ、WeCom、RabiLink 或外部系统。
 - 持久计划秘书控制面按 `planId` 保持单 writer，不同计划可并行推进；共享账本在短锁内合并并原子替换。锁元数据完整写入后原子发布，stale/损坏锁失败关闭并只允许 quiescent 维护修复；同 key 的认领/澄清先记 reservation，结果不明确时不自动重发。audit 使用前后快照区分稳定 invalid 与并发 incomplete，一个 active cycle 不会成为 audit 或 reconcile 的全局屏障。
-- 腾讯表、direct/generic 用户请求和已有效引用认领的工作群问题，都通过受管 `register-external` 登记后进入秘书 `begin → finish`。工作群来源固定为配置的工作群 `<WORK_GROUP_ID>`，要求真实 `sourceMessageId` 以及同一问题键下 `status=sent` 且含 `sentMessageId` 的认领回执；登记同时校验计划/任务唯一性、至少两轮查重，以及输入 workspace、计划 workspace 与任务本轮执行 workspace 一致，生成 `governanceVersion=3` 映射。Codex 任务保存的默认 cwd 不参与这项判断。腾讯表稳定行键和用户请求规范签名语义保持不变；不允许手改 `issue-threads.json`。
+- 腾讯表、direct/generic 用户请求和已有效引用认领的工作群问题，都通过 `register-external` 登记后进入秘书 `begin → finish`。工作群来源固定为配置的工作群 `<WORK_GROUP_ID>`，要求真实 `sourceMessageId` 以及同一问题键下 `status=sent` 且含 `sentMessageId` 的认领回执；登记同时校验计划/任务唯一性、至少两轮查重，以及输入 workspace、计划 workspace 与任务本轮执行 workspace 一致，生成 `governanceVersion=3` 映射。Codex 任务保存的默认 cwd 不参与这项判断。腾讯表稳定行键和用户请求规范签名语义保持不变；不允许手改 `issue-threads.json`。
 - 旧版统一 Outbox 认领没有写入专用回执账本时，登记器只在本地会话出站记录与 NapCat 实时消息回读同时证明同群、同发送消息和同引用目标后恢复回执；单凭登记输入或单侧日志不能补账，恢复过程不重发群消息。
 - 工作群 `begin` 使用登记映射、计划绑定和 Desktop 回读的完整任务 ID 作为业务任务身份，并使用计划 workspace 作为本轮执行目录；任务标题约定由项目工作流决定，不作为路由身份。新登记拒绝非法 live 标题；既有映射的非法旧标题只在同一任务和本轮工作目录的 live 标题合法时，通过问题账本锁原子迁移。标题和任务保存的默认 cwd 都不能替代稳定身份、来源、认领回执、查重和唯一性校验。
 - Codex adapter id 保持 `codex`；Codex/ChatGPT Desktop 是实际任务 owner，Desktop IPC 是唯一真实消息 transport。
@@ -230,7 +236,7 @@ Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，
 | 新增消息入口 | `src/adapters/<name>Adapter.ts`、`src/adapters/messageAdapter.ts`、`src/index.ts`、`src/shared/gatewayConfigModel.ts` | 不要塞进 NapCat adapter；route kind 和配置 normalize 要补齐 |
 | 新增处理端 | `src/agentAdapters/types.ts`、`src/agentAdapters/agentAdapter.ts`、`src/agentAdapters/managerApi.ts` | Agent adapter 只投递 AgentPacket，不定义路由语义 |
 | 改 Codex 投递 | `src/codexRuntime.ts`、`src/codexDesktopBridge.ts`；空任务元数据才看 `src/codexAppServerClient.ts` | Desktop IPC 是唯一真实消息主链；有效 ID 优先，任务无法加载就失败，不加第二 Runtime、WebSocket 或 fallback；模型、工具和审批由目标 Desktop 任务拥有 |
-| 改自动化触发或动作 | `src/automation/personaAutomationRuntime.ts`、`src/adapters/heartbeatAdapter.ts`、`src/routing/routeDecision.ts`、`src/shared/gatewayConfigModel.ts` | 消息匹配不要在 adapter 或前端复制；脚本权限与路径限制不能交给人格模板决定 |
+| 改自动化触发或动作 | `src/automation/personaAutomationRuntime.ts`、`src/adapters/heartbeatAdapter.ts`、`src/routing/routeDecision.ts`、`src/shared/gatewayConfigModel.ts` | 消息匹配不要在 adapter 或前端复制；脚本路径校验由执行器负责，不交给人格模板决定 |
 | 改 Agent 收到的消息 | `src/routing/agentPacket.ts`、`docs/agent-context-injection.md` | 不要在消息端拼 prompt；具体业务闭环应由对应人格或处理端 Skill 定义，不要硬编码到所有 AgentPacket |
 | 改通用投递文案 | `src/shared/agentCommunicationPolicy.ts`、`src/agentThreads.ts`、`src/messageAgentPool.ts`、`src/shared/codexPlanAssistantSessions.ts` | 稳定规则只保留一次；接口字段保留，长解释移到文档或 Skill |
 | 改外发语言风格校验 | `src/languageStyleValidation.ts`、`src/agentSendLanguageStyle.ts`、`src/manager/languageStyleRoutes.ts` | `styleValidation=1` 默认校验，`0` 只跳过本次；失败停在 Outbox 前 |
@@ -271,3 +277,9 @@ Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，
 ### 本机与远端实例
 
 入口“RabiLink → 远端智能体”`#/rabilink?tab=agents`（旧 `#/lan-agents` 仅重定向）：复制接入提示词、实例 → Agent 两层管理、任务与模型、Hook 安装。路由使用 `instanceId + agentId`。共享契约：`src/shared/agentInstance.ts`；管理操作：`src/agentAdapters/instanceManagement.ts`；边界见[接入说明](lan-rabi-agent-bootstrap.md)。
+
+### 扫地机云地图文件
+
+Xiaomi Home 插件通过 `vacuumCloud.ts` 唯一持有独立受保护米家云会话，显式扫码和按需文件读取由 `/api/agent/xiaomi-home/vacuum-cloud/*` 提供；页面只展示结果，没有后台业务轮询或设备动作；页面自动刷新仅在明确开启且可见时按需读图。`vacuumMapDecoder.ts` 在组件内解码 version-2 文件，页面可显示地图、选择坐标并通过 `vacuumPath.ts` 预览同一快照的避障路径；位置快照时效未验证，坐标导航和机器人音频未接通，见[云地图合同](vacuum-cloud-map.md)。
+
+米家设备列表：按设备登记归组卡片、单项能力与参数预演／执行测试共用家庭接口；扫地机地图页嵌入同源云地图展示与可暂停快照刷新。导航按钮仍不可用，缺口为原生坐标正文合同。见[设备操作说明](user-guide/home-devices.md)。

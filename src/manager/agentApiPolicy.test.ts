@@ -14,6 +14,16 @@ function sample(template: string): string {
   });
 }
 
+test("vacuum diagnostics and trajectory are discoverable read operations without arbitrary RPC",()=>{
+  const root="/api/agent/xiaomi-home/vacuum-cloud";
+  for(const suffix of ["/plugin-information?deviceId=123&sdkVersion=10112","/plugin-package?deviceId=123","/trajectory?deviceId=123&poseId=1","/position?deviceId=123&region=cn"]){
+    assert.equal(authorize("GET",root+suffix).allowed,true);
+    assert.equal(authorize("POST",root+suffix).allowed,false);
+  }
+  assert.equal(authorize("GET",root+"/trajectory?deviceId=123&poseId=1&aiid=26").allowed,false);
+  assert.equal(authorize("GET",root+"/position?deviceId=123&piid=4").allowed,false);
+});
+
 test("discovery and enforcement share one immutable catalog with discoverable contracts", () => {
   const catalog = listAgentApiOperations();
   assert.ok(catalog.length > 150);
@@ -221,13 +231,16 @@ test("QQ group-file discovery only admits exact read route and bounded query nam
   assert.equal(authorize("GET", `${target}/another?routeId=a&groupId=1`).allowed, false);
 });
 
-test("constrained integrations retain exact ID shapes and existing loopback limitations", () => {
+test("integrations retain exact ID shapes while reusing connection authentication", () => {
   assert.equal(authorize("GET", "/api/bilibili-history/roles/example/days/not-a-date").allowed, false);
   assert.equal(authorize("GET", "/api/bilibili-history/jobs/not-hex").allowed, false);
   assert.equal(authorize("GET", "/api/video/jobs/not-a-media-id").allowed, false);
   for (const target of ["/api/agent/xiaomi-home/resources", "/api/agent/yeyu-gamer/snapshot"]) {
     const decision = authorize("GET", target);
     assert.equal(decision.allowed, true);
-    if (decision.allowed) assert.ok(decision.operation.limitations.some(value => value.includes("loopback")));
+    if (decision.allowed) {
+      assert.ok(decision.operation.limitations.some(value => value.includes("鉴权")));
+      assert.ok(!decision.operation.limitations.some(value => value.includes("loopback")));
+    }
   }
 });

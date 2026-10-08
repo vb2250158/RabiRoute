@@ -3,7 +3,7 @@ import { userFacingError } from "../../userFacingError";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { XiaomiHomeRuntimeSettings, XiaomiHomeSettingsSnapshot } from "@shared/xiaomiHomeSettingsContract";
 import { registerPageSaveAction } from "../../pageSaveAction";
-import { xiaomiHomeSettingsClient } from "../../xiaomiHomeSettingsClient";
+import { xiaomiHomeSettingsClient, type XiaomiHomeResource } from "../../xiaomiHomeSettingsClient";
 
 import type { MessageAdapterScanResult } from "../../types";
 
@@ -28,6 +28,15 @@ const saving = ref(false);
 const hydrating = ref(true);
 const dirty = ref(false);
 const error = ref("");
+const resources = ref<readonly XiaomiHomeResource[]>([]);
+const resourceError = ref("");
+const speechBindings = ref<Array<{ mediaPlayerEntityId: string; notifyEntityId: string; encoding: "text" | "json-array" }>>([]);
+const speakers = computed(() => resources.value.filter(item => item.kind === "media_player").map(item => ({ title: item.displayName, value: item.entityId })));
+const speechTargets = computed(() => resources.value.filter(item => item.kind === "notify").map(item => ({ title: item.displayName, value: item.entityId })));
+async function refreshResources(): Promise<void> {
+  try { resources.value = await xiaomiHomeSettingsClient.listResources(); resourceError.value = ""; }
+  catch (cause) { resourceError.value = userFacingError(cause); }
+}
 const ready = computed(() => !loading.value && !!snapshot.value && !!draft.value);
 let unregisterSaveAction: (() => void) | undefined;
 
@@ -57,6 +66,7 @@ function hydrate(value: XiaomiHomeSettingsSnapshot): void {
   hydrating.value = true;
   snapshot.value = value;
   draft.value = structuredClone(value.settings);
+  speechBindings.value = structuredClone(value.settings.speechBindings ?? []) as typeof speechBindings.value;
   cameraMotionEntities.value = lines(value.settings.cameraMotionEntityIds);
   cameraAllowedHosts.value = lines(value.settings.cameraClipAllowedHosts);
   void nextTick(() => {
@@ -69,6 +79,7 @@ async function load(): Promise<void> {
   loading.value = true;
   try {
     hydrate(await xiaomiHomeSettingsClient.read());
+    void refreshResources();
     error.value = "";
   } catch (cause) {
     error.value = userFacingError(cause);
@@ -83,6 +94,7 @@ async function save(): Promise<void> {
   try {
     const settings: XiaomiHomeRuntimeSettings = {
       ...draft.value,
+      speechBindings: speechBindings.value,
       cameraMotionEntityIds: parsedLines(cameraMotionEntities.value),
       cameraClipAllowedHosts: parsedLines(cameraAllowedHosts.value)
     };
@@ -97,7 +109,7 @@ async function save(): Promise<void> {
   }
 }
 
-watch([draft, cameraMotionEntities, cameraAllowedHosts], () => {
+watch([draft, cameraMotionEntities, cameraAllowedHosts, speechBindings], () => {
   if (!hydrating.value && ready.value) dirty.value = true;
 }, { deep: true });
 
@@ -133,19 +145,26 @@ onBeforeUnmount(() => unregisterSaveAction?.());
           <div v-else role="status" class="section-note">{{ monitorRequirement?.detail || '尚未检查' }}</div>
           <v-btn size="small" variant="text" :loading="context?.scanLoading" @click="context?.refreshScan?.()">检查事件监听</v-btn>
         </section>
-        <section aria-label="设备控制">
-          <v-switch v-model="draft.writeEnabled" label="允许控制设备" color="warning" inset hide-details />
-          <div class="section-note">{{ draft.writeEnabled !== snapshot?.settings.writeEnabled ? '尚未保存' : draft.writeEnabled ? '已开启' : '已关闭' }}</div>
-          <v-alert v-if="draft.writeEnabled" type="warning" variant="tonal" density="compact" class="my-3">
-            开启后 Agent 才能实际控制设备；动作仍要求幂等键、最新状态版本和当前 Manager 代际围栏。
-          </v-alert>
-        </section>
+        <section aria-label="设备控制"><div class="text-subtitle-2">设备控制</div><div class="section-note">连接成功后即可使用设备支持的动作。</div></section>
         <section aria-label="摄像头事件录像">
           <v-switch v-model="draft.cameraClipCaptureEnabled" label="保存移动事件录像" color="warning" inset hide-details />
           <div class="section-note">{{ draft.cameraClipCaptureEnabled !== snapshot?.settings.cameraClipCaptureEnabled ? '尚未保存' : draft.cameraClipCaptureEnabled ? '已开启' : '已关闭' }}</div>
         </section>
       </div>
 
+      <section aria-label="音箱播报" class="media-hosts-card mt-3 pa-4">
+        <div class="text-subtitle-2 font-weight-bold">音箱播报</div>
+        <div class="section-note">将音箱绑定到它的“播放文本”服务，保存后 Agent 可以播报文字。请核对设备归属，选择播报服务。</div>
+        <v-alert v-if="resourceError" type="info" density="compact" variant="tonal">{{ resourceError }}；设备选择仅支持在运行 Rabi 的电脑上访问。</v-alert>
+        <div v-for="(binding, index) in speechBindings" :key="index" class="xiaomi-form-grid mt-3">
+          <v-select v-model="binding.mediaPlayerEntityId" :items="speakers" label="音箱" />
+          <v-select v-model="binding.notifyEntityId" :items="speechTargets" label="文字播报服务" />
+          <v-select v-model="binding.encoding" :items="[{title: '小米文字播报', value: 'json-array'}, {title: '普通文本通知', value: 'text'}]" label="服务格式" />
+          <v-btn variant="text" @click="speechBindings.splice(index, 1)">移除绑定</v-btn>
+        </div>
+        <v-btn size="small" variant="tonal" class="mt-2" @click="speechBindings.push({mediaPlayerEntityId: '', notifyEntityId: '', encoding: 'json-array'})">添加音箱</v-btn>
+        <v-btn size="small" variant="text" class="mt-2" @click="refreshResources">刷新设备</v-btn>
+      </section>
       <div class="media-hosts-card mt-3 pa-4">
         <div class="d-flex align-center justify-space-between mb-1">
           <div>
@@ -183,7 +202,6 @@ onBeforeUnmount(() => unregisterSaveAction?.());
             <div class="xiaomi-form-grid">
               <v-select v-model="draft.eventDeliveryMode" label="事件投递范围" :items="[{ title: '重要事件', value: 'significant' }, { title: '全部状态变化', value: 'all' }]" />
               <v-text-field v-model="draft.agentRoleId" label="事件接收人格" />
-              <v-text-field v-model="draft.artifactReadTokenEnv" label="录像读取 token 环境变量" />
               <v-text-field v-model.number="draft.requestTimeoutMs" type="number" min="250" max="30000" label="Home Assistant 请求超时（毫秒）" />
               <v-text-field v-model="draft.ffmpegPath" label="ffmpeg 路径" />
               <v-text-field v-model="draft.ffprobePath" label="ffprobe 路径" />

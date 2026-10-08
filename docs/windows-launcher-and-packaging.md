@@ -119,7 +119,7 @@ Host 冷启动发现 `identity-reset-pending.json` 时，先在无 Manager 的�
 
 这套边界参考的是生命周期不变量，不照搬参考项目的进程布局或端口：
 
-- Sunshine 当前 `master` 的 [`src/system_tray.cpp`](https://github.com/LizardByte/Sunshine/blob/master/src/system_tray.cpp) 把托盘作为 Sunshine 进程内受管线程，托盘退出回调调用 [`lifetime::exit_sunshine`](https://github.com/LizardByte/Sunshine/blob/master/src/entry_handler.h)，因此托盘操作落回同一个应用退出边界，而不是成为独立常驻程序。
+- Sunshine 当前 `master` 的 [`src/system_tray.cpp`](https://github.com/LizardByte/Sunshine/blob/master/src/system_tray.cpp) 把托盘作为 Sunshine 进程内线程，托盘退出回调调用 [`lifetime::exit_sunshine`](https://github.com/LizardByte/Sunshine/blob/master/src/entry_handler.h)，因此托盘操作落回同一个应用退出边界，而不是成为独立常驻程序。
 - Sunshine 的 Windows [`tools/sunshinesvc.cpp`](https://github.com/LizardByte/Sunshine/blob/master/tools/sunshinesvc.cpp) 给子程序使用带 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 的 Job，监视子程序退出；正常停止先请求优雅终止并等待最多 20 秒，再用强制终止兜底。RabiRoute 保留单 owner、Job、统一 quit/restart 和“先优雅、后强制”的不变量。
 - RabiRoute 的 Manager 是 Node.js，托盘是 Python/Qt，插件还需要独立故障域，因此采用 Host 加两个同代 child，而不是把托盘做成 Manager 线程。这是语言运行时和插件隔离造成的有意差异，不改变 Host 的唯一生命周期所有权。
 - DSH 只提供插件 scope 与依赖感知卸载的设计参考：RabiRoute 据此用 generation、`readyRequires`、process lease 和依赖逆序释放管理插件。DSH 式进程内 isolate 不被当作安全沙箱；RabiRoute 的 `in_process` 是受信任扩展，`isolated` 是独立故障域，名称不能替代操作系统权限边界。
@@ -133,6 +133,8 @@ Sunshine 的固定 base-port 约定不属于这里采用的不变量。RabiRoute
 通过 Setup 或本机 Developer Channel 安装包含修复的 Host Core，保留既有数据与版本回滚点；只重试同一个旧 Host 不会修复此问题。恢复后从 Host `status` 动态取得 URL，核对 `/meta` 的 generation、实例和 PID，再检查 WebGUI 文档及其模块入口。不要扫描端口、单独启动 Manager 或原地替换活动版本 DLL。
 
 ## 动态 Manager 端点
+
+Developer Channel 将 Qt 依赖的临时构建放在本机 `%TEMP%/rabi-qt-<唯一标识>` 短路径中，避免依赖裁剪时触发 Windows PowerShell 长路径限制；完整托盘仍重建并进入候选版本，安装地址和业务数据位置不变。
 
 第一次启动时，Manager 把端口 `0` 交给操作系统，取得当前可用的回环端口。之后 Host 会把最近一次完成整代健康校验的端口保存到 Host 自己的状态目录；下一代会优先尝试该端口。该端口已被占用、已被浏览器禁止访问或缓存无效时，Manager 自动重新向操作系统申请安全端口，Host 在新一代完成健康校验后覆盖缓存。因此正常重启会保持 WebGUI 地址，端口冲突时仍能自行恢复。
 
@@ -170,6 +172,8 @@ Developer Channel 只在本机执行增量 build，以当前不可变版本为�
 候选版本同时完整替换本次源码中的 `docs/`、`plugins/`、`skills/` 和 `source-patches/`，删除候选内已退役的同层文件，避免新消息包指向旧接口合同、遗漏新模块开发指南或加载旧插件入口及清单；缺少任一目录时构造失败，旧版本保持不变。业务数据、补丁操作回执和动态注册记录不属于这些发行目录，不随构建清理。
 
 根目录中英文 README 与版本更新日志也必须来自本次构建源码；缺少任一文件时构造失败，不沿用基底中的旧说明。
+
+构造前和封存前都必须核对构建的 `dist/plugins/profiles/desktop.json`、全部已启用插件的清单、身份和运行入口，以及 Web Bundle 及其资源。插件目录或 profile 缺失时直接失败，不能将半成品构建封存后再停止旧服务。不要在构建或候选复制期间另行清理、重建同一源码目录；安装互斥锁只保护安装切换，不能替代构建产物的独占使用。
 
 ```powershell
 & "$env:LOCALAPPDATA\Programs\RabiRoute\RabiRouteHost.exe"

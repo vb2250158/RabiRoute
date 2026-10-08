@@ -15,6 +15,7 @@ import {
 } from "../speech/speechRecordPresentation";
 import { unknownVoiceprintGroupLabel, voiceprintPresentation } from "../speech/speechSpeakerPresentation";
 import { useSpeechStore } from "../stores/speechStore";
+import SpeechRecognitionDetails from "./SpeechRecognitionDetails.vue";
 
 const props = withDefaults(defineProps<{
   sessionId?: string;
@@ -517,6 +518,7 @@ onMounted(() => {
           </div>
         </div>
         <p v-else class="speech-record-text">{{ record.text }}</p>
+        <SpeechRecognitionDetails v-if="record.kind === 'asr'" :result="record" />
         <div v-if="record.kind === 'asr' && (record.audioFile || record.audioExpiresAt)" class="speech-record-source-audio">
           <audio
             v-if="sourceAudioAvailable(record)"

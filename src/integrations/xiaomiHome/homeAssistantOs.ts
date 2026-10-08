@@ -3,17 +3,20 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import type { HomeAssistantInstallProgress } from "../../shared/homeAssistantDeploymentContract.js";
 
 export type HomeAssistantOsStatus = Readonly<{
   state: "not_installed" | "installing" | "reboot_required" | "installed" | "error";
   message: string;
   version?: string;
   root?: string;
+  progress?: HomeAssistantInstallProgress;
 }>;
 
 export interface HomeAssistantOsDriver {
   readonly installationPath?: string;
   inspect(): Promise<HomeAssistantOsStatus>;
+  subscribe?(changed: () => void): () => void;
   run(operation: "Install" | "Start", autoStart: boolean): Promise<HomeAssistantOsStatus>;
 }
 
@@ -29,6 +32,15 @@ export class WindowsHomeAssistantOs implements HomeAssistantOsDriver {
   }
 
   get installationPath(): string { return this.root; }
+
+  subscribe(changed: () => void): () => void {
+    fs.mkdirSync(this.root, { recursive: true });
+    const watcher = fs.watch(this.root, (_event, filename) => {
+      if (filename?.toString() === "status.json") changed();
+    });
+    watcher.on("error", changed);
+    return () => watcher.close();
+  }
 
   async inspect(): Promise<HomeAssistantOsStatus> {
     if (process.platform !== "win32") return { state: "error", message: "自动安装 Home Assistant OS 需要 Windows 专业版与 Hyper-V。" };

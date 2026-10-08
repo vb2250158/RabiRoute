@@ -19,14 +19,14 @@ export function createDshConnectionClient(request: typeof fetch = fetch) {
   let revision: number | undefined;
   async function call(url: string, init?: RequestInit): Promise<any> {
     let response: Response;
-    try { response = await request(url, { ...init, redirect: "error" }); }
+    try { response = await request(url, { ...init, credentials: "same-origin", redirect: "error" }); }
     catch { throw new Error("无法确认操作结果。请刷新连接状态后再决定是否重试，不要重复提交。"); }
     // Never echo server errors: they can contain a submitted login URL.
     if (!response.ok) {
       const messages: Record<number, string> = {
         403: "请在运行 RabiRoute 的电脑上打开本机控制台完成授权。",
         409: "连接设置已被其他操作更新。请刷新状态后再决定是否重新提交。",
-        401: "DSH 授权已失效，请使用当前登录链接重新连接。",
+        401: "没有可复用的 DSH 登录。请在当前浏览器登录同一地址的 DSH，或粘贴当前登录链接连接。",
         413: "登录链接过长，请仅粘贴 DSH 提供的登录地址。"
       };
       throw new Error(messages[response.status] || "连接操作未完成。请确认 DSH 已启动，并使用当前登录链接；先刷新状态再重试。");

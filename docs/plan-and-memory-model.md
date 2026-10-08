@@ -289,9 +289,9 @@ Manager 只通过计划存储 Repository 新建、更新和归档此目录。旧
 
 `attachments` 是计划本体的可选附件列表。Agent 可在 POST/PATCH 中为新附件提供本机 `path`，或提供 `name`、可选 `mimeType` 与 `contentBase64`。Manager 校验后复制到该计划目录的 `plans/active/<planId>/attachments/`，计划 JSON 只保存 `id/kind/name/path/size/mimeType/sha256` 元数据，不保存 Base64。最多 8 个，单个不超过 10 MiB、总计不超过 25 MiB。PATCH 省略 `attachments` 时保留原附件；显式传 `attachments: []` 时清空计划记录中的附件列表。
 
-整体复制运行数据或更换安装目录后，旧 `plan.json` 可能仍保留原根目录的绝对路径。Manager 不读取该旧位置，而是在当前计划的受管附件目录中按原文件名定位副本，并要求文件大小和 SHA-256 与计划元数据一致；不匹配时返回附件不存在。
+整体复制运行数据或更换安装目录后，旧 `plan.json` 可能仍保留原根目录的绝对路径。Manager 不读取该旧位置，而是在当前计划的附件目录中按原文件名定位副本，并要求文件大小和 SHA-256 与计划元数据一致；不匹配时返回附件不存在。
 
-WebGUI 不直接读取元数据中的本机路径，而是通过 `GET /api/roles/:roleId/plans/:planId/attachments/:attachmentId` 获取受控文件。PNG、JPEG、WebP 和 GIF 图片，MP4/M4V、WebM、Ogg Video、MOV/QuickTime 视频，以及 Markdown 文件统一显示紧凑固定宽度的 16:9 预览卡片，仅在容器不足时等比缩小。Markdown 卡片流式读取最多 12 KiB 的正文开头，转成最多 180 字的纯文本摘要并截断显示，不执行 HTML、链接或图片；点击后才打开完整文档弹窗。点击图片打开页内大图，点击视频打开带播放控制的页内预览。视频响应支持字节范围读取，实际可播放编码仍取决于当前浏览器。Markdown 不超过 2 MiB 时可在页内预览 GFM 标题、列表、表格、引用与代码，原始 HTML、危险/相对链接和远程图片加载均被禁用，弹窗保留原文件下载入口。其它文件显示名称、类型与大小，并通过附件响应打开或下载。读取接口会再次确认真实路径仍在该计划的受管目录内，路径穿越或 symlink 越界均失败关闭。
+WebGUI 不直接读取元数据中的本机路径，而是通过 `GET /api/roles/:roleId/plans/:planId/attachments/:attachmentId` 获取受控文件。PNG、JPEG、WebP 和 GIF 图片，MP4/M4V、WebM、Ogg Video、MOV/QuickTime 视频，以及 Markdown 文件统一显示紧凑固定宽度的 16:9 预览卡片，仅在容器不足时等比缩小。Markdown 卡片流式读取最多 12 KiB 的正文开头，转成最多 180 字的纯文本摘要并截断显示，不执行 HTML、链接或图片；点击后才打开完整文档弹窗。点击图片打开页内大图，点击视频打开带播放控制的页内预览。视频响应支持字节范围读取，实际可播放编码仍取决于当前浏览器。Markdown 不超过 2 MiB 时可在页内预览 GFM 标题、列表、表格、引用与代码，原始 HTML、危险/相对链接和远程图片加载均被禁用，弹窗保留原文件下载入口。其它文件显示名称、类型与大小，并通过附件响应打开或下载。读取接口会再次确认真实路径仍在该计划的目录内，路径穿越或 symlink 越界均失败关闭。
 
 `steps` 是计划的有序执行路径，不保存独立状态。顶层 `currentStepId` 指向当前步骤，`completedAt` 记录已经完成的步骤；后续步骤不需要“未开始”字段。计划阶段只写入 `plan.status`，状态名称和说明统一从 `personaConfig.json.planWorkflow.statuses` 读取。`detail`、`waitingFor`、`blockedBy`、`approvalRequest` 和步骤 ID 只提供执行、等待与审批证据。Manager 维护步骤的 `startedAt` 与 `completedAt`。
 

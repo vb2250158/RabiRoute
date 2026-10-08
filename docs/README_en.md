@@ -6,10 +6,13 @@ English | <a href="./README.md">简体中文</a>
 
 # RabiRoute Documentation
 
+[Connections and API access](connection-access_en.md): authenticate once and use provided APIs.
+
 This directory contains current guides, experimental integrations, designs, research, and historical handoffs. The existence of a file does not mean its feature is complete; check its status before relying on it.
 
 ## Start here
 
+- [Inspect devices and test actions](user-guide/home-devices_en.md) — Inspect device cards, capabilities and states, then test advertised actions.
 - [Workspace plan query](workspace-plan-query_en.md) — Paginated search scoped to host sessions and workspace.
 
 - [Persona all-day recording](persona-all-day-recording_en.md) — **New implementation**. Review computer and selected phone events by date, with explicit capture sources, pause state and coverage gaps.
@@ -34,6 +37,9 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Unattended NapCat](napcat-unattended_en.md) — QQ login state, quick login, Manager recovery, and supervision boundaries.
 
 ## Developer: routing, personas, and Agent interfaces
+
+- [Home device and speaker Agent API](home-device-agent-api_en.md) — Query every imported entity, discover and invoke its buttons/settings/device actions, bind speech and query durable receipts.
+- [Vacuum cloud map connection](vacuum-cloud-map_en.md) — QR login, raw files and version-2 decoding; live localization and navigation require separate acceptance.
 
 - [Delivery templates and ownership](message-delivery-templates_en.md): renderer ownership, scenario differences and historical receipt retirement for developers.
 - [Plan and memory summary search](knowledge-search_en.md)
@@ -93,6 +99,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [RabiLink Cloudflare Worker](rabilink-relay-cloudflare-worker_en.md)
 - [RabiLink glasses three-route comparison](rabilink-glasses-route-comparison_en.md) — host, lifecycle, device capability, release cost, and current guidance for native Lingzhu agent, AIUI, and native app routes.
 - [Rabi mobile message endpoint](mobile-message-endpoint_en.md) — **Experimental integration** for standalone phone chat, optional glasses, reliable queues, notifications, attachments, configuration assistance, and device acceptance boundaries.
+- [Mobile voice calls](mobile-voice-call_en.md) — **Experimental implementation**. Start voice conversations from chat and understand mute, hangup, recording restoration, and late replies.
 - [RabiLink phone edge hub](rabilink-phone-edge-hub_en.md)
 - [Phone-to-PC direct video](rabilink-direct-video_en.md) — experimental signalling and direct transport; camera capture and cross-network acceptance remain pending.
 - [Mobile recording ownership](mobile-recording-event-boundary_en.md) — Developer reference for device configuration, recording events, and legacy retirement.

@@ -68,7 +68,7 @@ test("CLI rejects unsupported arguments and makes read-only imply no automatic i
   assert.equal(parseArguments(["--state-root", `${root}/../${path.basename(root)}/`]).stateRoot, root);
 });
 
-test("Host starts, verifies health, denies unauthorized control, fences restart, and stops cleanly", async t => {
+test("Host starts, verifies health, denies unauthorized control, fences restart, and stops cleanly", { skip: process.platform !== "linux" }, async t => {
   const f = await fixture(t);
   const file = path.join(f.dir, "control.json");
   const descriptor = readDescriptor(file);
@@ -92,14 +92,14 @@ test("Host starts, verifies health, denies unauthorized control, fences restart,
   assert.equal(fs.existsSync(file), false);
 });
 
-test("Host rejects mismatched READY and cleans up the owned Manager", async t => {
+test("Host rejects mismatched READY and cleans up the owned Manager", { skip: process.platform !== "linux" }, async t => {
   const f = await fixture(t, { env: { BAD_READY: "1" } });
   assert.equal(f.host.state, "faulted");
   assert.equal(f.host.child, null);
   assert.equal((await f.host.status()).ok, false);
 });
 
-test("Manager exit creates a fresh, verified generation within bounded recovery", async t => {
+test("Manager exit creates a fresh, verified generation within bounded recovery", { skip: process.platform !== "linux" }, async t => {
   const f = await fixture(t);
   const first = f.host.ready;
   process.kill(f.host.child.pid, "SIGTERM");
@@ -109,7 +109,7 @@ test("Manager exit creates a fresh, verified generation within bounded recovery"
   assert.notEqual(f.host.ready.applicationGenerationId, first.applicationGenerationId);
 });
 
-test("Private descriptor rejects permissive modes and symlinks", async t => {
+test("Private descriptor rejects permissive modes and symlinks", { skip: process.platform !== "linux" }, async t => {
   const f = await fixture(t);
   const file = path.join(f.dir, "control.json");
   fs.chmodSync(file, 0o644); assert.throws(() => readDescriptor(file), /private/); fs.chmodSync(file, 0o600);
@@ -117,7 +117,7 @@ test("Private descriptor rejects permissive modes and symlinks", async t => {
   assert.throws(() => readDescriptor(link), /private/);
 });
 
-test("Restart queued during first READY admission cannot fault or kill its replacement", async t => {
+test("Restart queued during first READY admission cannot fault or kill its replacement", { skip: process.platform !== "linux" }, async t => {
   const f = await fixture(t, { env: { READY_DELAY_MS: "180" }, duringStart: async (host, dir) => {
     await sleep(50);
     const file = path.join(dir, "control.json");
@@ -129,7 +129,7 @@ test("Restart queued during first READY admission cannot fault or kill its repla
   assert.equal(f.host.state, "healthy"); assert.ok(f.host.child);
 });
 
-test("Shutdown reclaims same-group descendants after the Manager leader exits", async t => {
+test("Shutdown reclaims same-group descendants after the Manager leader exits", { skip: process.platform !== "linux" }, async t => {
   const record = path.join(os.tmpdir(), `rabi-grandchild-${process.pid}-${Date.now()}.txt`);
   t.after(() => fs.rmSync(record, { force: true }));
   const f = await fixture(t, { env: { GRANDCHILD_FILE: record } });
@@ -142,7 +142,7 @@ test("Shutdown reclaims same-group descendants after the Manager leader exits", 
   assert.ok(state === undefined || state === "Z" || state === "X", `grandchild remained live: ${state}`);
 });
 
-test("Concurrent restarts cannot reuse the same generation fence", async t => {
+test("Concurrent restarts cannot reuse the same generation fence", { skip: process.platform !== "linux" }, async t => {
   const f = await fixture(t);
   const file = path.join(f.dir, "control.json"), generation = f.host.generation;
   const results = await Promise.allSettled([sendHostCommand(file, "restart", generation), sendHostCommand(file, "restart", generation)]);
@@ -151,14 +151,14 @@ test("Concurrent restarts cannot reuse the same generation fence", async t => {
   assert.equal(f.host.state, "healthy");
 });
 
-test("Failed restart reclaims its child and leaves an explicit faulted state", async t => {
+test("Failed restart reclaims its child and leaves an explicit faulted state", { skip: process.platform !== "linux" }, async t => {
   const f = await fixture(t);
   f.host.options.env = { BAD_READY: "1" };
   await assert.rejects(sendHostCommand(path.join(f.dir, "control.json"), "restart", f.host.generation), /READY identity/);
   assert.equal(f.host.state, "faulted"); assert.equal(f.host.child, null);
 });
 
-test("Failed fork faults cleanly without an unhandled child error or invalid PID signal", async t => {
+test("Failed fork faults cleanly without an unhandled child error or invalid PID signal", { skip: process.platform !== "linux" }, async t => {
   const f = await fixture(t, { packageRoot: path.join(os.tmpdir(), `rabi-absent-${process.pid}-${Date.now()}`) });
   assert.equal(f.host.state, "faulted"); assert.equal(f.host.child, null);
 });

@@ -554,6 +554,34 @@ def test_openai_style_asr_and_verbose_response(tmp_path: Path) -> None:
     assert asr.requests[0].language == "zh"
 
 
+def test_asr_observations_survive_verbose_response_and_persisted_records(tmp_path: Path) -> None:
+    client, _tts, asr = fixture(tmp_path)
+    original_transcribe = asr.transcribe
+    metadata = {
+        "emotion": "NEUTRAL", "emotion_labels": ["NEUTRAL"], "audio_events": ["Speech"],
+        "raw_tags": ["<|zh|>", "<|NEUTRAL|>"], "confidence": 0.97,
+    }
+
+    async def transcribe(request):
+        return replace(await original_transcribe(request), **metadata)
+
+    asr.transcribe = transcribe
+    response = client.post(
+        "/v1/audio/transcriptions", headers=auth(),
+        files={"file": ("sample.wav", wav_file(tmp_path / "sample.wav").read_bytes(), "audio/wav")},
+        data={"model": "fake-asr/test", "response_format": "verbose_json"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["text"] == "本地识别成功"
+    for key, value in metadata.items():
+        assert body[key] == value
+    record = client.get("/v1/records", headers=auth(), params={"kind": "asr"}).json()["data"][0]
+    assert record["text"] == body["text"]
+    for key, value in metadata.items():
+        assert record[key] == value
+
+
 def test_tts_and_asr_records_are_written_by_date_and_queryable(tmp_path: Path) -> None:
     client, _tts, _asr = fixture(tmp_path)
     speech = client.post(

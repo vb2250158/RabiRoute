@@ -73,7 +73,6 @@ class MainActivity : Activity() {
     private lateinit var ttsModel: EditText
     private lateinit var ttsVoice: EditText
     private lateinit var audioRetentionHours: EditText
-    private lateinit var audioMaxStorageMb: EditText
     private lateinit var audioReserveFreeMb: EditText
     private enum class Screen { SETUP, CONVERSATIONS, CHAT, SETTINGS, CONFIG_ASSISTANT }
     private data class ConversationRow(
@@ -105,6 +104,7 @@ class MainActivity : Activity() {
     private var chatScroll: ScrollView? = null
     private var composer: EditText? = null
     private var conversationListHost: LinearLayout? = null
+    private var callPanel: LinearLayout? = null
     private var conversationListScroll: ScrollView? = null
     private var availableRoutes: List<RabiRouteInfo> = emptyList()
     private var routesLoaded = false
@@ -121,6 +121,7 @@ class MainActivity : Activity() {
                 refreshCaptureBar()
                 refreshConversationRuntime()
                 refreshChatIfChanged()
+                renderCallPanel()
             }
         }
     }
@@ -262,7 +263,12 @@ class MainActivity : Activity() {
         conversationListHost = null; conversationListScroll = null
         val route = availableRoutes.firstOrNull { it.id == routeId }
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(RabiMobileUi.background) }
-        root.addView(appBar(routeTitle(routeId), routeStatus(route), "返回", avatarRoute = route) { showConversationList() })
+        val header = appBar(routeTitle(routeId), routeStatus(route), "返回", avatarRoute = route) { showConversationList() } as LinearLayout
+        header.addView(RabiMobileUi.compactAction(this, "电话") { beginCall(routeId) }, LinearLayout.LayoutParams(-2, dp(48)))
+        root.addView(header)
+        callPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(12), dp(16), dp(12)); setBackgroundColor(RabiMobileUi.surface) }
+        root.addView(callPanel)
+        renderCallPanel()
         chatMessages = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(8), dp(12), dp(18)) }
         chatScroll = ScrollView(this).apply { addView(chatMessages) }
         root.addView(chatScroll, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -346,6 +352,45 @@ class MainActivity : Activity() {
         setContentView(root)
     }
 
+    private fun beginCall(routeId: String) {
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 7451)
+            toast("授予麦克风权限后，再点电话开始通话")
+            return
+        }
+        val route = availableRoutes.firstOrNull { it.id == routeId }
+        if (route == null || !isRouteChatCapable(route) || !routesLoaded || routeLoadFailed) {
+            toast("请先刷新并确认当前路线可用"); loadRouteTargets(); return
+        }
+        val worker = route.rawJson.optString("ownerWorkerId")
+        if (worker.isBlank() || route.rawJson.optInt("voiceCallProtocol") != 1) {
+            toast("这台电脑尚未提供语音通话能力，请更新并检查会话详情"); return
+        }
+        RabiConversationService.startVoiceCall(this, worker, routeId)
+    }
+
+    private fun renderCallPanel() {
+        val panel = callPanel ?: return
+        panel.removeAllViews()
+        val runtime = getSharedPreferences("rabi_conversation_runtime", MODE_PRIVATE)
+        val state = runtime.getString("callState", "ended").orEmpty()
+        val route = runtime.getString("callRouteId", "").orEmpty()
+        val active = runtime.getBoolean("callActive", false)
+        panel.visibility = if (route == activeRouteId && (active || state == "error")) View.VISIBLE else View.GONE
+        if (panel.visibility != View.VISIBLE) return
+        panel.addView(TextView(this).apply {
+            text = runtime.getString("callStatus", "正在连接"); textSize = 15f; setTextColor(RabiMobileUi.text)
+        })
+        panel.addView(TextView(this).apply {
+            text = "声音照常保留为记录 · 播报时暂停收音 · 挂断不会取消已送达的 Agent 任务"
+            textSize = 12f; setTextColor(RabiMobileUi.muted); setPadding(0, dp(6), 0, dp(8))
+        })
+        if (active) panel.addView(row().apply {
+            addView(secondary(if (runtime.getBoolean("callMuted", false)) "取消静音" else "静音") { RabiConversationService.muteVoiceCall(this@MainActivity) }, LinearLayout.LayoutParams(0, dp(48), 1f))
+            addView(secondary("挂断") { RabiConversationService.endVoiceCall(this@MainActivity) }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { setMargins(dp(8), 0, 0, 0) })
+        })
+    }
+
     private fun appBar(title: String, subtitle: String, leading: String? = null, trailing: String? = null, avatarRoute: RabiRouteInfo? = null, action: () -> Unit): View =
         LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
@@ -370,9 +415,8 @@ class MainActivity : Activity() {
         routeLoadMessage = "正在读取 Rabi PC 上的聊天人格…"
         runAsync({ sdk.getMobileRoutes(relay.baseUrl, relay.token, "") }, { routes ->
             routesLoaded = true; routeLoadFailed = false
-            // The mobile endpoint includes every installed persona. Routes with a
-            // RabiLink adapter remain chat-capable; persona-only rows stay visible
-            // with the existing configuration guidance instead of disappearing.
+            // Only real selectable mobile Routes enter the list; catalog profiles
+            // remain available to the separate configuration surfaces.
             availableRoutes = routes
             RabiRouteMetadataCache.save(this@MainActivity, relay, routes)
             val enabled = availableRoutes.filter(::isRouteChatCapable)
@@ -403,16 +447,11 @@ class MainActivity : Activity() {
             return
         }
         val store = RabiChatStore(this)
-        val routeIds = availableRoutes.map { it.id }.toMutableSet()
-        val rows = availableRoutes.filter { RabiConversationRules.isVisibleInConversationList(it.id) }.map { route ->
+        val rows = availableRoutes.filter { isRouteChatCapable(it) && !it.rawJson.optBoolean("isPersonaOnly") && it.id.isNotBlank() }.map { route ->
             ConversationRow(route.id, personaTitle(route),
                 isRouteChatCapable(route), route.running,
                 store.latest(route.id), store.unreadCount(route.id), route)
         }.toMutableList()
-        store.conversationIds().filter { it !in routeIds }.forEach { id ->
-            rows.add(ConversationRow(id, if (id == RabiConversationRules.LEGACY_CONVERSATION_ID) "Rabi（旧会话）" else "已下线会话",
-                false, false, store.latest(id), store.unreadCount(id)))
-        }
         rows.sortWith(compareByDescending<ConversationRow> { it.latest?.createdAt ?: 0L }.thenBy { it.title })
         if (rows.isEmpty()) {
             host.addView(conversationEmpty(
@@ -421,14 +460,6 @@ class MainActivity : Activity() {
                 if (routeLoadFailed) "重新加载" else "打开设置",
             ) { if (routeLoadFailed) loadRouteTargets() else showSettings() })
             return
-        }
-        if (!routesLoaded || routeLoadFailed) {
-            host.addView(RabiMobileUi.guidance(this, RabiSetupGuidance(
-                if (routeLoadFailed) "状态暂未刷新" else "正在刷新入口状态",
-                if (routeLoadFailed) routeLoadMessage else "当前先显示上次安全缓存的人格列表。",
-                if (routeLoadFailed) "检查手机与 Rabi PC 的连接后点按重试。" else "刷新完成后会自动更新每个入口。",
-                if (routeLoadFailed) RabiGuidanceTone.WARNING else RabiGuidanceTone.INFO,
-            )).apply { setOnClickListener { loadRouteTargets() } })
         }
         rows.forEachIndexed { index, item ->
             host.addView(conversationRow(item))
@@ -441,48 +472,38 @@ class MainActivity : Activity() {
         orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(14), dp(12), dp(14), dp(12)); setBackgroundColor(RabiMobileUi.surface)
         isClickable = true; isFocusable = true; minimumHeight = dp(76)
-        val adapterStates = item.route?.let(::routeAdapterStates).orEmpty()
-        val currentEndpointSummary = item.route?.let {
-            RabiConversationRules.routeStatus(item.chatAvailable, item.running, adapterStates)
-        }.orEmpty()
-        val endpointSummary = when {
-            currentEndpointSummary.isBlank() -> ""
-            routeLoadFailed -> "上次状态 · 暂未刷新 · $currentEndpointSummary"
-            !routesLoaded -> "上次状态 · 正在刷新 · $currentEndpointSummary"
-            else -> currentEndpointSummary
-        }
-        contentDescription = "会话 ${item.title}${if (endpointSummary.isNotBlank()) "，$endpointSummary" else ""}${if (item.unread > 0) "，${item.unread} 条未读" else ""}"
+        val computer = item.route?.rawJson?.optString("ownerComputerName").orEmpty().ifBlank { "电脑名称待更新" }
+        val routeLabel = item.route?.routeName.orEmpty().ifBlank { item.route?.name.orEmpty() }
+        val destination = "$computer · $routeLabel"
+        contentDescription = "${item.title}，$destination，${preview(item.latest)}，${formatListTime(item.latest?.createdAt ?: 0)}"
         val avatar = RabiMobileUi.avatar(this@MainActivity, item.title)
-        val avatarStatus = TextView(this@MainActivity).apply {
-            textSize = 10f; setTextColor(RabiMobileUi.muted); gravity = Gravity.END
-        }
-        item.route?.let { bindPersonaAvatar(it, avatar, avatarStatus) }
+        item.route?.let { bindPersonaAvatar(it, avatar, null) }
         addView(avatar, LinearLayout.LayoutParams(dp(50), dp(50)).apply { setMargins(0, 0, dp(12), 0) })
         addView(LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.VERTICAL
-            addView(TextView(this@MainActivity).apply {
-                text = item.title; textSize = 16f; typeface = Typeface.DEFAULT_BOLD; setTextColor(RabiMobileUi.text); maxLines = 1
+            addView(row().apply {
+                gravity = Gravity.CENTER_VERTICAL
+                addView(TextView(this@MainActivity).apply {
+                    text = item.title; textSize = 16f; typeface = Typeface.DEFAULT_BOLD; setTextColor(RabiMobileUi.text)
+                    maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                }, LinearLayout.LayoutParams(0, -2, 1f))
+                addView(TextView(this@MainActivity).apply {
+                    text = destination; textSize = 11f; setTextColor(RabiMobileUi.muted); gravity = Gravity.END
+                    maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                }, LinearLayout.LayoutParams(0, -2, 1.4f).apply { setMargins(dp(8), 0, 0, 0) })
             })
-            addView(TextView(this@MainActivity).apply {
-                text = if (!item.chatAvailable) "尚未启用手机聊天 · 点按查看配置方法" else preview(item.latest)
-                textSize = 13f; setTextColor(if (item.chatAvailable) RabiMobileUi.muted else RabiMobileUi.warning); maxLines = 1
-                ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, dp(5), 0, 0)
-            })
-            if (item.route != null) addView(TextView(this@MainActivity).apply {
-                text = endpointSummary
-                textSize = 11f
-                setTextColor(if (RabiConversationRules.adapterStatusNeedsAttention(adapterStates)) RabiMobileUi.warning else RabiMobileUi.secondary)
-                maxLines = 2
-                ellipsize = android.text.TextUtils.TruncateAt.END
-                setPadding(0, dp(4), 0, 0)
+            addView(row().apply {
+                gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(7), 0, 0)
+                addView(TextView(this@MainActivity).apply {
+                    text = preview(item.latest); textSize = 13f; setTextColor(RabiMobileUi.muted)
+                    maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                }, LinearLayout.LayoutParams(0, -2, 1f))
+                addView(TextView(this@MainActivity).apply {
+                    text = formatListTime(item.latest?.createdAt ?: 0); textSize = 11f
+                    setTextColor(RabiMobileUi.muted); gravity = Gravity.END
+                }, LinearLayout.LayoutParams(-2, -2).apply { setMargins(dp(8), 0, 0, 0) })
             })
         }, LinearLayout.LayoutParams(0, -2, 1f))
-        addView(LinearLayout(this@MainActivity).apply {
-            orientation = LinearLayout.VERTICAL; gravity = Gravity.END
-            addView(TextView(this@MainActivity).apply { text = formatListTime(item.latest?.createdAt ?: 0); textSize = 11f; setTextColor(RabiMobileUi.muted); gravity = Gravity.END })
-            if (item.route != null) addView(avatarStatus, LinearLayout.LayoutParams(-2, -2).apply { setMargins(0, dp(3), 0, 0) })
-            if (item.unread > 0) addView(RabiMobileUi.unreadBadge(this@MainActivity, item.unread), LinearLayout.LayoutParams(-2, dp(24)).apply { setMargins(0, dp(7), 0, 0) })
-        }, LinearLayout.LayoutParams(-2, -2))
         setOnClickListener { showConversationDetail(item.id) }
     }
 
@@ -907,12 +928,10 @@ class MainActivity : Activity() {
         addView(label("Rabi PC TTS 模型")); addView(ttsModel, full(0, 0, 0, 6))
         addView(label("人格 / 声线")); addView(ttsVoice, full(0, 0, 0, 6))
         audioRetentionHours = input("6").apply { inputType = InputType.TYPE_CLASS_NUMBER }
-        audioMaxStorageMb = input("8192").apply { inputType = InputType.TYPE_CLASS_NUMBER }
         audioReserveFreeMb = input("1024").apply { inputType = InputType.TYPE_CLASS_NUMBER }
         addView(label("已确认录音保留（小时，0–168）")); addView(audioRetentionHours, full(0, 0, 0, 6))
-        addView(label("录音队列上限（MiB，至少 1024）")); addView(audioMaxStorageMb, full(0, 0, 0, 6))
         addView(label("设备剩余空间水位（MiB，至少 256）")); addView(audioReserveFreeMb, full(0, 0, 0, 6))
-        addView(note("未确认分片不会因保留期限被删除；只有 Rabi PC 明确确认完整字节、序号与校验和后，手机副本才进入可清理状态。达到存储水位会停止接受新的 PCM，并在本机留下可审计缺口。"))
+        addView(note("录音不设应用容量上限。只有电脑确认长期归档、手机核验历史可见且原音频可回读后，才自动清理手机原件；转写完成不作为删除依据。手机实际可用空间不足时暂停采集，并保留现有录音。"))
         addView(primary("保存设置（不启动采集）") { saveConversationSettings() }, full(0, 0, 0, 8))
         addView(note("常驻运行会使用麦克风前台服务、采集 WakeLock、卡死检测和自动恢复。手机先把连续 PCM 写入私有动态分片，断网或 PC 离线时继续落盘，恢复联网后按序补传。小米等厂商仍可能额外限制后台应用，请在真机上核对电池优化与自启动权限。"))
         val actions = row()
@@ -938,7 +957,6 @@ class MainActivity : Activity() {
         ttsModel.setText(value.ttsModel)
         ttsVoice.setText(value.ttsVoice)
         audioRetentionHours.setText(value.audioRetentionHours.toString())
-        audioMaxStorageMb.setText(value.audioMaxStorageMb.toString())
         audioReserveFreeMb.setText(value.audioReserveFreeMb.toString())
     }
 
@@ -957,7 +975,6 @@ class MainActivity : Activity() {
             ttsModel.text.toString(),
             ttsVoice.text.toString(),
             audioRetentionHours.text.toString().toIntOrNull() ?: 6,
-            audioMaxStorageMb.text.toString().toIntOrNull() ?: 8192,
             audioReserveFreeMb.text.toString().toIntOrNull() ?: 1024
         )
         next.save(this)

@@ -51,6 +51,12 @@ public final class RabiGlassPcBackend {
     public interface Listener {
         void onStatus(String status);
         void onTranscript(String text, String routeProfileId);
+        default void onFinalRecordingTranscript(String captureId, String eventId, String text, long endedAt) { }
+        default boolean acceptsLiveInput(String clientMessageId) { return false; }
+        default void onLiveInputAccepted(String clientMessageId, String taskId) { }
+        default String replyCallId(JSONObject item) { return ""; }
+        default boolean phoneCallReply(JSONObject item) { return false; }
+        default boolean synthesizeReply(JSONObject item) { return true; }
         void onDeliveryState(String clientMessageId, String routeProfileId, String state, String failure);
         ReplyDeliveryResult onReply(String messageId, String routeProfileId, String text, byte[] pcm, JSONArray attachments);
         void onPersonaAvatarChanged(String roleId, String avatarVersion, String avatarUrl);
@@ -128,7 +134,7 @@ public final class RabiGlassPcBackend {
         archiveOnWriter(() -> { audioSpool.persistArchiveReceipt(target,manifest,receipt); return null; });
     }
     public boolean archiveEvict(com.rabi.link.recording.RecordingArchiveCoordinator.Target target,org.json.JSONObject manifest,org.json.JSONObject receipt) throws Exception {
-        return archiveOnWriter(() -> audioSpool.evictArchive(target,manifest,receipt,false));
+        return archiveOnWriter(() -> audioSpool.evictArchive(target,manifest,receipt,true));
     }
     private final RabiBoundedAudioWriteQueue audioWriteQueue =
             new RabiBoundedAudioWriteQueue(AUDIO_CAPTURE_QUEUE_CAPACITY, AUDIO_CAPTURE_QUEUE_MAX_BYTES);
@@ -328,7 +334,12 @@ public final class RabiGlassPcBackend {
     }
 
     public RabiGlassPcBackend(android.content.Context context, Listener listener) {
-        eventAsr = new RabiEventAsrUploader(context);
+        eventAsr = new RabiEventAsrUploader(context, () -> {
+            synchronized (RabiGlassPcBackend.this) {
+                return new com.rabi.link.RabiLinkRelayConfig(baseUrl, token, true);
+            }
+        });
+        eventAsr.setTranscriptListener(listener::onFinalRecordingTranscript);
         this.context = context.getApplicationContext();
         this.eventSplitter = new com.rabi.link.recording.AudioEventSplitter(() -> com.rabi.link.recording.EventSplitSettings.load(this.context));
         this.preferences = this.context.getSharedPreferences("rabi_glass_phone_backend", android.content.Context.MODE_PRIVATE);
@@ -417,12 +428,12 @@ public final class RabiGlassPcBackend {
         audioSpool.updatePolicy(audioPolicy(settings));
     }
 
-    private static RabiDurableAudioSpool.Policy audioPolicy(RabiConversationSettings settings) {
+    static RabiDurableAudioSpool.Policy audioPolicy(RabiConversationSettings settings) {
         long mib = 1024L * 1024L;
         return new RabiDurableAudioSpool.Policy(
                 160L * 1024L,
                 5_000L,
-                settings.audioMaxStorageMb * mib,
+                Long.MAX_VALUE,
                 settings.audioReserveFreeMb * mib,
                 settings.audioRetentionHours * 60L * 60L * 1000L);
     }
@@ -712,7 +723,7 @@ public final class RabiGlassPcBackend {
                 }
                 String policy = head.processingPolicy;
                 String captureId = head.captureId;
-                if ("transcribe".equals(policy) && audioSpool.isArchiveAuthorizedCapture(captureId)) {
+                if ("transcribe".equals(policy) && audioSpool.isArchiveAuthorizedCapture(captureId) && !captureId.startsWith("call_")) {
                     com.rabi.link.recording.RecordingArchiveSession session = archiveSession;
                     if (session != null) session.kick();
                     return; // Archive owns this capture; never feed it through legacy ASR/ACK.
@@ -720,6 +731,7 @@ public final class RabiGlassPcBackend {
                 if ("transcribe".equals(policy) && !head.eventId.isEmpty()) {
                     final long processingGeneration = endpointGeneration;
                     if (!eventAsr.process(audioSpool, head, () -> processingEnabled && processingGeneration == endpointGeneration)) return;
+                    if (captureId.startsWith("call_") && archiveSession != null) archiveSession.kick();
                     audioStreamChunkFailures = 0;
                     continue;
                 }
@@ -1278,6 +1290,11 @@ public final class RabiGlassPcBackend {
                     .put("proactivityPreference", settings.proactivityPreference.wireValue)
                     .put("transport", "phone-chat-backend").put("clientMessageId", stableClientMessageId)
                     .put("sessionId", deviceId).put("routeProfileId", clean(routeProfileId)).put("capturedAt", now);
+            if (stableClientMessageId.startsWith("rabi-call-v1.")) {
+                String frozenWorker = clean(targetWorkerId);
+                if (frozenWorker.isEmpty()) throw new IllegalStateException("通话缺少固定电脑，未投递");
+                body.put("targetDeviceId", frozenWorker);
+            }
             ensureQueueCapacity(controlQueueDirectory, ".json", MAX_CONTROL_QUEUE_ITEMS, "文字与控制");
             File target = new File(controlQueueDirectory, String.format(java.util.Locale.US, "%013d-%s.json", now, UUID.randomUUID()));
             RabiReliableQueueFiles.writeAtomically(target, body.toString().getBytes(StandardCharsets.UTF_8));
@@ -1292,12 +1309,19 @@ public final class RabiGlassPcBackend {
         for (File item : pending) {
             JSONObject queued = readQueueJson(controlQueueDirectory, "文字与控制", item);
             if (queued == null) continue;
+            String liveId = queued.optString("clientMessageId");
+            if (liveId.startsWith("rabi-call-v1.") && !listener.acceptsLiveInput(liveId)) {
+                if (!item.delete()) { listener.onError("过期通话输入清理失败，未投递"); return; }
+                listener.onDeliveryState(liveId, queued.optString("routeProfileId"), "expired", "通话已结束或输入超过90秒；录音保留");
+                continue;
+            }
             try {
                 byte[] body = RabiReliableQueueFiles.read(item);
                 String clientMessageId = queued.optString("clientMessageId", "");
                 String routeProfileId = queued.optString("routeProfileId", "");
                 listener.onDeliveryState(clientMessageId, routeProfileId, "sending", "");
-                jsonRequest("POST", "/api/rabilink/devices/input", "application/json; charset=utf-8", body, 20000);
+                JSONObject receipt = jsonRequest("POST", "/api/rabilink/devices/input", "application/json; charset=utf-8", body, 20000);
+                if (liveId.startsWith("rabi-call-v1.")) listener.onLiveInputAccepted(liveId, receipt.optString("eventId"));
                 if (!item.delete()) throw new IllegalStateException("无法确认审阅提示队列项");
                 String type = queued.optString("type", "");
                 listener.onStatus("rabilink.review_request".equals(type)
@@ -1542,6 +1566,8 @@ public final class RabiGlassPcBackend {
         boolean wantsTts = !text.isEmpty() && (presentation == null || presentation.length() == 0);
         for (int index = 0; !text.isEmpty() && presentation != null && index < presentation.length(); index++) if ("tts".equals(presentation.optString(index))) wantsTts = true;
         if (RabiGlassTextOutput.enabled(context)) wantsTts = false;
+        if (listener.phoneCallReply(item)) wantsTts = !text.isEmpty();
+        if (!listener.synthesizeReply(item)) wantsTts = false;
         if (wantsTts) listener.onStatus("Rabi PC 正在合成移动端回复");
         byte[] pcm = wantsTts ? cachedReply(messageId) : new byte[0];
         if (wantsTts && pcm == null) {
@@ -1552,6 +1578,8 @@ public final class RabiGlassPcBackend {
             pcm = wavPcm(wav); persistReply(messageId, pcm);
         }
         JSONArray attachments = materializeIncomingAttachments(sourceAttachments, messageId);
+        if (!preferences.edit().putString("replyCall:" + messageId, listener.replyCallId(item)).commit())
+            throw new java.io.IOException("Cannot persist reply call association; reply retained for retry");
         ReplyDeliveryResult delivery = listener.onReply(messageId, routeProfileId, text, pcm, attachments);
         if (shouldRetryReplyDelivery(delivery)) throw new IllegalStateException("回复尚未被当前输出设备确认");
         // Text/attachments reaching the local ledger is the delivery terminal.

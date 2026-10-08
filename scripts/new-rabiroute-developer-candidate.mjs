@@ -47,8 +47,31 @@ function replaceDirectory(source, destination) {
 }
 
 function assertWebPluginEntries(root) {
+  const profile = JSON.parse(fs.readFileSync(requireFile(root, "dist/plugins/profiles/desktop.json"), "utf8"));
+  if (!Array.isArray(profile.instances) || !profile.instances.some(instance => instance.enabled !== false)) {
+    throw new Error("Developer candidate plugin profile has no enabled instances.");
+  }
+  for (const instance of profile.instances) {
+    if (instance.enabled === false) continue;
+    if (typeof instance.package !== "string" || !/^[a-zA-Z0-9._-]+$/.test(instance.package)
+      || typeof instance.version !== "string" || !/^[a-zA-Z0-9._+-]+$/.test(instance.version)) {
+      throw new Error("Developer candidate plugin profile has an invalid package identity.");
+    }
+    const relativeRoot = `dist/plugins/packages/${encodeURIComponent(instance.package)}/${instance.version}`;
+    const manifest = JSON.parse(fs.readFileSync(requireFile(root, `${relativeRoot}/rabi.plugin.json`), "utf8"));
+    if (manifest.id !== instance.package || manifest.version !== instance.version) {
+      throw new Error(`Developer candidate plugin identity mismatch: ${instance.package}`);
+    }
+    for (const entry of Object.values(manifest.entries ?? {})) {
+      const module = entry.module?.replace(/^\.\//, "");
+      if (typeof module !== "string" || module.includes("\\") || module.startsWith("/")
+        || /^[a-z]:/i.test(module) || module.split("/").some(part => !part || part === "." || part === "..")) {
+        throw new Error(`Developer candidate plugin entry is invalid: ${instance.package}`);
+      }
+      requireFile(root, `${relativeRoot}/${module}`);
+    }
+  }
   const packages = path.join(root, "dist/plugins/packages");
-  if (!fs.existsSync(packages)) return;
   for (const item of fs.readdirSync(packages, { recursive: true, withFileTypes: true })) {
     if (!item.isFile() || item.name !== "rabi.plugin.json") continue;
     const manifestPath = path.join(item.parentPath, item.name);
@@ -91,6 +114,7 @@ function createDeveloperCandidate(options) {
   requireFile(hostCoreRoot, "RabiRouteHost.Core.dll");
   for (const relative of knowledgeRuntimeFiles) requireFile(buildRoot, relative);
   const relayRuntimeFiles = readRelayRuntimeFiles(buildRoot);
+  assertWebPluginEntries(buildRoot);
 
   fs.mkdirSync(versionsRoot, { recursive: true });
   const stagingRoot = path.join(versionsRoot, `.developer-staging-${randomUUID()}`);

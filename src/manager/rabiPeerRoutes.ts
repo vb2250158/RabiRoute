@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { hasAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import { RabiPeerClient, type PeerCall, type RabiPeer } from "../rabiPeerClient.js";
 import { RabiPeerDirect } from "../rabiPeerDirect.js";
 import { peerDiscoveryPage } from "../rabiPeerDiscovery.js";
@@ -30,8 +31,8 @@ export function createRabiPeerRuntime(options: {
     const call = url.pathname === "/api/rabilink/peer/call" && request.method === "POST";
     if (!receive && !list && !call) { options.json(response, 404, { error: "Unknown peer endpoint." }); return true; }
     const address = request.socket.remoteAddress;
-    if (!receive && !["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(address ?? "")) {
-      options.json(response, 403, { error: "Peer control is loopback-only." }); return true;
+    if (!receive && !["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(address ?? "") && !hasAuthenticatedConnectionRequest(request)) {
+      options.json(response, 403, { error: "Peer control requires connection authentication." }); return true;
     }
     const run = (async () => {
       try {

@@ -6,7 +6,6 @@ import test from "node:test";
 import type { AgentRequestRecord, AgentRequestStore } from "../agentRequests/store.js";
 import { AGENT_SEND_REQUEST_CONTRACT, prepareAgentSendRequest, type AgentSendSender } from "../agentSend.js";
 import { registerLanAgentBodyGuard, setTrustedLanAgentSource, type TrustedLanAgentSource } from "./lanAgentBodyAuthority.js";
-import { assertAgentSendPermission } from "./agentSendPermission.js";
 import type { GatewayDefinition } from "../shared/gatewayConfigModel.js";
 import { remoteAgentTargetKey } from "../shared/routeAgentTargets.js";
 import {
@@ -69,7 +68,7 @@ function context(overrides: Partial<AgentCommunicationRoutesContext> = {}): Agen
   };
 }
 
-test("send forwards only request-owned remote authority to Route permission", async () => {
+test("authenticated send preserves request-owned source without a primary-only grant", async () => {
   const remote: TrustedLanAgentSource = {
     nodeId: "remote-node", agentId: "remote-agent", provider: "dsh",
     sessionId: "same-session", sessionName: "Remote primary"
@@ -93,7 +92,6 @@ test("send forwards only request-owned remote authority to Route permission", as
       } as T),
       send: async (body, options) => {
         assert.deepEqual(options?.remoteSource, remote);
-        assertAgentSendPermission(body.sender as AgentSendSender, definition, options?.remoteSource);
         delivered = true;
         return { statusCode: 202, body: { ok: true } };
       },
@@ -102,8 +100,8 @@ test("send forwards only request-owned remote authority to Route permission", as
     assert.equal(routes.handler(req, new URL("http://localhost/api/agent/send"), res), true);
     res.emit("close");
     await routes.stopAcceptingAndDrain();
-    assert.equal(delivered, bound);
-    assert.deepEqual(statuses, [bound ? 202 : 400]);
+    assert.equal(delivered, true);
+    assert.deepEqual(statuses, [202]);
   }
 });
 

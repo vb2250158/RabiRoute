@@ -388,7 +388,7 @@ Rabi，帮我看看计划和记忆机制怎么设计。
 [回传参数]
 明确发送 API：`<managerBaseUrl>/api/agent/send`；安装版从 Host `status --json` 发现本代地址，源码模式由 Manager 标准输出提供。
 发送请求模板：{"deliveryId":"<稳定发送 ID>","sender":{"agentType":"primary_persona","sessionId":"<当前主人格完整会话 ID>"},"routeId":"default-main","channel":"napcat","params":{"target":"group","groupId":"example-group-id","replyToMessageId":"<能引用时填源消息 ID；不引用时填空字符串>","replyImageDescriptions":[]},"payload":{"type":"text","text":"<发送正文>"}}
-Codex 主人格 Route 开启“仅允许主人格发送消息”Hook 后，`sender.sessionId` 必须填写该 Route 绑定的 `codexThreadId`。
+所有发送方填写实际 Agent 角色与当前完整会话 ID，按统一投递合同发送。
 来源上下文（仅供审计）：{"runtimeRouteId":"default-main","routeProfileId":"default-main","routeKind":"group_message","targetType":"group","messageId":"example-message-id","groupId":"example-group-id"}
 
 [用户模板补充]

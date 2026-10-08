@@ -14,6 +14,8 @@ type FakeChild = EventEmitter & {
   kill: () => boolean;
 };
 
+type InstallerCall = { command: string; args: string[]; options?: Parameters<typeof spawn>[2] };
+
 function makeFixture(): {
   root: string;
   pluginRoot: string;
@@ -52,17 +54,17 @@ function makeFixture(): {
   };
 }
 
-function fakeInstaller(calls: Array<{ command: string; args: string[] }>): {
+function fakeInstaller(calls: InstallerCall[]): {
   spawnInstaller: typeof spawn;
   children: FakeChild[];
 } {
   const children: FakeChild[] = [];
-  const spawnInstaller = ((command: string, args: readonly string[]) => {
+  const spawnInstaller = ((command: string, args: readonly string[], options?: Parameters<typeof spawn>[2]) => {
     const child = new EventEmitter() as FakeChild;
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
     child.kill = () => true;
-    calls.push({ command, args: [...args] });
+    calls.push({ command, args: [...args], options });
     children.push(child);
     return child;
   }) as unknown as typeof spawn;
@@ -72,6 +74,14 @@ function fakeInstaller(calls: Array<{ command: string; args: string[] }>): {
 function putFile(filename: string, content = "fixture model bytes"): void {
   fs.mkdirSync(path.dirname(filename), { recursive: true });
   fs.writeFileSync(filename, content);
+}
+
+function putDependencies(root: string): void {
+  for (const relative of [
+    "fastapi/__init__.py", "uvicorn/__init__.py", "httpx/__init__.py",
+    "python_multipart/__init__.py", "numpy/__init__.py", "scipy/__init__.py",
+    "soundfile.py", "sounddevice.py"
+  ]) putFile(path.join(root, relative));
 }
 
 test("model files without an installation manifest are recognized; empty and zero-byte targets are not", () => {
@@ -97,27 +107,90 @@ test("an installed manifest does not make an empty directory downloaded", () => 
   } finally { fixture.cleanup(); }
 });
 
-test("state-owned runtime dependencies are reported with separate immutable package assets", () => {
+test("stable dependencies use the current package host and installers rather than legacy state scripts", () => {
   const fixture = makeFixture();
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "speech-state-regression-"));
   try {
-    fs.mkdirSync(path.join(stateRoot, "plugin-adapters/rabi-speech/.deps"), { recursive: true });
+    const dependenciesRoot = path.join(stateRoot, "plugin-adapters/rabi-speech/.deps");
+    putDependencies(dependenciesRoot);
     putFile(path.join(stateRoot, "plugin-adapters/rabi-speech/runtime/RabiSpeech.exe"));
     putFile(path.join(stateRoot, "plugin-adapters/rabi-speech/scripts/install_models.ps1"));
     putFile(path.join(stateRoot, "plugin-adapters/rabi-speech/scripts/install.ps1"));
-    const calls: Array<{ command: string; args: string[] }> = [];
+    const calls: InstallerCall[] = [];
     const fake = fakeInstaller(calls);
     const manager = new SpeechModelManager({ rootDir: stateRoot, packageRoot: fixture.root, modelRoot: fixture.modelRoot, platform: "win32", spawnInstaller: fake.spawnInstaller });
+    // A legacy state-root executable must not mask the missing package host.
+    assert.equal(manager.snapshot().windowsHostInstalled, false);
+    putFile(path.join(fixture.pluginRoot, "runtime/RabiSpeech.exe"));
     const state = manager.snapshot();
     assert.equal(state.dependenciesInstalled, true);
     assert.equal(state.windowsHostInstalled, true);
     manager.installModel("asr-fixture");
-    assert.ok(calls[0]?.args.includes(path.join(stateRoot, "plugin-adapters/rabi-speech/scripts/install_models.ps1")));
+    assert.equal(calls[0]?.args[5], path.join(fixture.pluginRoot, "scripts/install_models.ps1"));
+    assert.equal(calls[0]?.options?.cwd, fixture.pluginRoot);
+    assert.equal(calls[0]?.options?.env?.RABISPEECH_DEPS_ROOT, dependenciesRoot);
     fake.children[0]?.emit("close", 0);
     manager.installRuntime();
-    assert.ok(calls[1]?.args.includes(path.join(stateRoot, "plugin-adapters/rabi-speech/scripts/install.ps1")));
+    assert.equal(calls[1]?.args[5], path.join(fixture.pluginRoot, "scripts/install.ps1"));
+    assert.deepEqual(calls[1]?.args.slice(6), ["-DependencyRoot", dependenciesRoot]);
+    assert.equal(calls[1]?.options?.cwd, fixture.pluginRoot);
+    assert.equal(calls[1]?.options?.env?.RABISPEECH_DEPS_ROOT, dependenciesRoot);
     fake.children[1]?.emit("close", 0);
   } finally { fixture.cleanup(); fs.rmSync(stateRoot, { recursive: true, force: true }); }
+});
+
+test("legacy package dependencies permit downloading with current scripts but new installs target stable state", () => {
+  const fixture = makeFixture();
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "speech-package-deps-regression-"));
+  try {
+    const bundledDependencies = path.join(fixture.pluginRoot, ".deps");
+    putDependencies(bundledDependencies);
+    const stableDependencies = path.join(stateRoot, "plugin-adapters/rabi-speech/.deps");
+    fs.mkdirSync(stableDependencies, { recursive: true });
+    const calls: InstallerCall[] = [];
+    const fake = fakeInstaller(calls);
+    const manager = new SpeechModelManager({ rootDir: stateRoot, packageRoot: fixture.root,
+      modelRoot: fixture.modelRoot, platform: "win32", spawnInstaller: fake.spawnInstaller });
+    assert.equal(manager.snapshot().dependenciesInstalled, true);
+    manager.installModel("asr-fixture");
+    assert.equal(calls[0]?.args[5], path.join(fixture.pluginRoot, "scripts/install_models.ps1"));
+    assert.equal(calls[0]?.options?.env?.RABISPEECH_DEPS_ROOT, bundledDependencies);
+    fake.children[0]?.emit("close", 0);
+    manager.installRuntime();
+    assert.equal(calls[1]?.args[5], path.join(fixture.pluginRoot, "scripts/install.ps1"));
+    assert.deepEqual(calls[1]?.args.slice(6), ["-DependencyRoot", stableDependencies]);
+    assert.equal(calls[1]?.options?.env?.RABISPEECH_DEPS_ROOT, stableDependencies);
+    fake.children[1]?.emit("close", 0);
+  } finally { fixture.cleanup(); fs.rmSync(stateRoot, { recursive: true, force: true }); }
+});
+
+test("empty and incomplete dependency targets are not installed and cannot launch model downloads", () => {
+  const fixture = makeFixture();
+  const calls: InstallerCall[] = [];
+  const fake = fakeInstaller(calls);
+  try {
+    const dependencies = path.join(fixture.pluginRoot, ".deps");
+    fs.mkdirSync(dependencies);
+    const manager = new SpeechModelManager({ rootDir: fixture.root, modelRoot: fixture.modelRoot,
+      platform: "win32", spawnInstaller: fake.spawnInstaller });
+    assert.equal(manager.snapshot().dependenciesInstalled, false);
+    assert.throws(() => manager.installModel("asr-fixture"),
+      (error: unknown) => error instanceof SpeechModelManagerError && error.status === 409);
+    putDependencies(dependencies);
+    for (const relative of [
+      "fastapi/__init__.py", "uvicorn/__init__.py", "httpx/__init__.py",
+      "python_multipart/__init__.py", "numpy/__init__.py", "scipy/__init__.py",
+      "soundfile.py", "sounddevice.py"
+    ]) {
+      fs.rmSync(path.join(dependencies, relative));
+      assert.equal(manager.snapshot().dependenciesInstalled, false, relative);
+      assert.throws(() => manager.installModel("asr-fixture"),
+        (error: unknown) => error instanceof SpeechModelManagerError && error.status === 409);
+      putFile(path.join(dependencies, relative));
+    }
+    assert.equal(manager.snapshot().dependenciesInstalled, true);
+    assert.equal(calls.length, 0);
+  } finally { fixture.cleanup(); }
 });
 
 async function nextTurn(): Promise<void> {
@@ -203,10 +276,10 @@ test("speech model manager requires the private speech environment and rejects u
 
 test("speech model manager launches one allowlisted download and reports installed manifest state", async () => {
   const fixture = makeFixture();
-  const calls: Array<{ command: string; args: string[] }> = [];
+  const calls: InstallerCall[] = [];
   const fake = fakeInstaller(calls);
   try {
-    fs.mkdirSync(path.join(fixture.pluginRoot, ".deps"));
+    putDependencies(path.join(fixture.pluginRoot, ".deps"));
     const manager = new SpeechModelManager({
       rootDir: fixture.root,
       modelRoot: fixture.modelRoot,
@@ -251,7 +324,7 @@ test("speech model manager launches one allowlisted download and reports install
 
 test("speech model manager redacts private paths from installer failures", async () => {
   const fixture = makeFixture();
-  const calls: Array<{ command: string; args: string[] }> = [];
+  const calls: InstallerCall[] = [];
   const fake = fakeInstaller(calls);
   try {
     const manager = new SpeechModelManager({

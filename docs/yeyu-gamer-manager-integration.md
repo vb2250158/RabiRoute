@@ -48,7 +48,7 @@ YeYu Gamer Manager 首次启动后生成 `secrets\actors\rabiroute.token`。Rabi
 
 ## RabiRoute 本机门面
 
-RabiRoute Manager 仅向 loopback 调用方登记这些路径：
+RabiRoute Manager 向本机及已鉴权远端连接提供这些路径；复用连接凭据，不再限制调用方必须来自本机。目标 YeYu Gamer 仍由本机客户端连接：
 
 ```http
 GET /api/agent/yeyu-gamer/health

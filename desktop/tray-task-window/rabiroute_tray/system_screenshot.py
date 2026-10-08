@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .desktop_capture import capture_desktop_pixels
-from PySide6.QtCore import QEvent, QFileSystemWatcher, QObject, QPoint, QRect, QSize, QTimer, Qt, Signal, Slot
+from PySide6.QtCore import QEvent, QFileSystemWatcher, QObject, QPoint, QRect, QRectF, QSize, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QContextMenuEvent, QCursor, QFont, QFontMetrics, QBrush, QIcon, QImage, QKeyEvent, QMouseEvent, QPainter, QPalette, QPen, QPixmap, QWheelEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -1794,10 +1794,15 @@ class ScreenshotCaptureOverlay(QWidget):
         if self._image.isNull() or self.size().isEmpty():
             self._invalidate_render_cache()
             return
-        if self._capture_pixmap.size() == self.size() and not self._dimmed_capture_pixmap.isNull():
+        ratio = self.devicePixelRatioF()
+        pixel_size = QSize(round(self.width() * ratio), round(self.height() * ratio))
+        if self._capture_pixmap.size() == pixel_size and self._capture_pixmap.devicePixelRatio() == ratio and not self._dimmed_capture_pixmap.isNull():
             return
+        # Cache physical pixels. A logical-size cache discards desktop detail
+        # before Qt scales it back up on displays above 100%.
         if self._capture_layout is not None:
-            scaled = QImage(self.size(), QImage.Format.Format_ARGB32)
+            scaled = QImage(pixel_size, QImage.Format.Format_ARGB32)
+            scaled.setDevicePixelRatio(ratio)
             scaled.fill(Qt.GlobalColor.transparent)
             painter = QPainter(scaled)
             try:
@@ -1806,18 +1811,26 @@ class ScreenshotCaptureOverlay(QWidget):
                 painter.end()
         else:
             scaled = self._image.scaled(
-                self.size(),
+                pixel_size,
                 Qt.AspectRatioMode.IgnoreAspectRatio,
                 Qt.TransformationMode.FastTransformation,
             )
+            scaled.setDevicePixelRatio(ratio)
         self._capture_pixmap = QPixmap.fromImage(scaled)
         dimmed = scaled.copy()
         painter = QPainter(dimmed)
         try:
-            painter.fillRect(dimmed.rect(), QColor(15, 23, 42, 132))
+            painter.fillRect(self.rect(), QColor(15, 23, 42, 132))
         finally:
             painter.end()
         self._dimmed_capture_pixmap = QPixmap.fromImage(dimmed)
+
+    def _draw_capture_pixmap(self, painter: QPainter, pixmap: QPixmap, target: QRect) -> None:
+        # QPainter's pixmap source rectangle is in physical pixel coordinates.
+        # Keep the fractional edges when a dirty region falls between pixels.
+        ratio = pixmap.devicePixelRatio()
+        source = QRectF(target.x() * ratio, target.y() * ratio, target.width() * ratio, target.height() * ratio)
+        painter.drawPixmap(QRectF(target), pixmap, source)
 
     def _image_selection(self) -> QImage:
         if self._selection.isEmpty() or self._image.isNull() or self.width() <= 0 or self.height() <= 0:
@@ -2144,14 +2157,14 @@ class ScreenshotCaptureOverlay(QWidget):
             self._ensure_render_cache()
             if not self._capture_pixmap.isNull():
                 background = self._dimmed_capture_pixmap if not self._selection.isEmpty() else self._capture_pixmap
-                painter.drawPixmap(dirty, background, dirty)
+                self._draw_capture_pixmap(painter, background, dirty)
             elif not self._image.isNull():
                 painter.drawImage(self.rect(), self._image)
             if not self._selection.isEmpty():
                 selection_rect = self._selection.intersected(dirty)
                 if not selection_rect.isEmpty():
                     if not self._capture_pixmap.isNull():
-                        painter.drawPixmap(selection_rect, self._capture_pixmap, selection_rect)
+                        self._draw_capture_pixmap(painter, self._capture_pixmap, selection_rect)
                     elif not self._image.isNull():
                         painter.drawImage(selection_rect, self._image, self._source_rect(selection_rect))
                 self._paint_annotations(painter)
@@ -2168,10 +2181,10 @@ class ScreenshotCaptureOverlay(QWidget):
                 candidate_rect = self._selection_from_window_candidate(self._hover_window_candidate)
                 if not candidate_rect.isEmpty():
                     if not self._capture_pixmap.isNull():
-                        painter.drawPixmap(dirty, self._dimmed_capture_pixmap, dirty)
+                        self._draw_capture_pixmap(painter, self._dimmed_capture_pixmap, dirty)
                         candidate_dirty = candidate_rect.intersected(dirty)
                         if not candidate_dirty.isEmpty():
-                            painter.drawPixmap(candidate_dirty, self._capture_pixmap, candidate_dirty)
+                            self._draw_capture_pixmap(painter, self._capture_pixmap, candidate_dirty)
                     elif not self._image.isNull():
                         painter.fillRect(self.rect(), QColor(15, 23, 42, 132))
                         self._draw_image(painter, candidate_rect)

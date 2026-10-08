@@ -54,7 +54,7 @@ function focusedApiHint(roleId: unknown, interfaceDocPath: string): string[] {
   return [
     `按需读取：${base}/plans、${base}/memory、${base}/skills；长历史不自动加载。`,
     `操作说明：${interfaceDocPath}。涉及计划、记忆写入、跨人格投递或远端任务前，必须读取对应章节；无法读取时停止该操作。`,
-    "写入必须遵守 Action Gate、动态 Manager 身份核验、Idempotency-Key、适用的强 ETag / If-Match 和写后回读合同；不得猜测状态 key、发送目标或重试参数。"
+    "写入必须遵守当前任务授权、动态 Manager 身份核验、Idempotency-Key、适用的强 ETag / If-Match 和写后回读合同；不得猜测状态 key、发送目标或重试参数。"
   ];
 }
 

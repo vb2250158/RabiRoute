@@ -6,6 +6,7 @@ import type { LanAgentAuthority } from "./lanAgentAuthority.js";
 import type { AgentResourceCatalog } from "./agentResourceCatalog.js";
 import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
 import { listAgentApiOperations } from "./agentApiPolicy.js";
+import { hasAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 
 export function summarizeAgentCapabilityCoverage(operations = listAgentApiOperations()) {
   const baseline = operations.filter(item => item.help.contractLevel === "baseline").length;
@@ -49,7 +50,7 @@ function agentUnauthorized(
     code: -1,
     error,
     message: error === "LAN_AGENT_MANAGEMENT_AUTH_REQUIRED"
-      ? "Rabi Agent management requires an explicit WebGUI access Token, including on loopback."
+      ? "Rabi Agent management requires a verified connection identity."
       : "Rabi Agent resource access requires the LAN connection Token."
   });
 }
@@ -84,7 +85,7 @@ export function handleLanAgentApi(
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/lan-agent/capabilities") {
-    if (nodeAccess.kind !== "agent" && !context.isManagementRequestAuthorized(request, requestUrl)) { agentUnauthorized(response, context); return true; }
+    if (nodeAccess.kind !== "agent" && !(hasAuthenticatedConnectionRequest(request) || context.isManagementRequestAuthorized(request, requestUrl))) { agentUnauthorized(response, context); return true; }
     context.jsonResponse(response, 200, {
       code: 0,
       schemaVersion: "1",
@@ -102,7 +103,7 @@ export function handleLanAgentApi(
     return true;
   }
   if (request.method === "GET" && ["/api/lan-agent/resources", "/api/lan-agent/resources/read"].includes(requestUrl.pathname)) {
-    if (nodeAccess.kind !== "agent" && !context.isManagementRequestAuthorized(request, requestUrl)) { agentUnauthorized(response, context); return true; }
+    if (nodeAccess.kind !== "agent" && !(hasAuthenticatedConnectionRequest(request) || context.isManagementRequestAuthorized(request, requestUrl))) { agentUnauthorized(response, context); return true; }
     if (!context.resources) { context.jsonResponse(response, 503, { code: -1, message: "Agent resources unavailable." }); return true; }
     const work = requestUrl.pathname.endsWith("/read") ? context.resources.read(requestUrl.searchParams.get("id") ?? "") : context.resources.list();
     void work.then(data => context.jsonResponse(response, 200, { code: 0, data }))
@@ -110,7 +111,7 @@ export function handleLanAgentApi(
     return true;
   }
   if (requestUrl.pathname === "/api/lan-agent/enrollments" && request.method === "POST" && context.authority) {
-    if (!context.isManagementRequestAuthorized(request, requestUrl)) { agentUnauthorized(response, context); return true; }
+    if (!(hasAuthenticatedConnectionRequest(request) || context.isManagementRequestAuthorized(request, requestUrl))) { agentUnauthorized(response, context); return true; }
     response.setHeader("cache-control", "no-store");
     context.jsonResponse(response, 201, { code: 0, data: context.authority.issueBootstrapTicket() });
     return true;
@@ -125,7 +126,7 @@ export function handleLanAgentApi(
     return true;
   }
   if (requestUrl.pathname === "/api/lan-agent/instances" && request.method === "GET") {
-    if (!context.isManagementRequestAuthorized(request, requestUrl)) { agentUnauthorized(response, context, "LAN_AGENT_MANAGEMENT_AUTH_REQUIRED"); return true; }
+    if (!(hasAuthenticatedConnectionRequest(request) || context.isManagementRequestAuthorized(request, requestUrl))) { agentUnauthorized(response, context, "LAN_AGENT_MANAGEMENT_AUTH_REQUIRED"); return true; }
     const authorization = context.authority?.getSnapshot();
     if (authorization) response.setHeader("etag", `"${authorization.revision}"`);
     context.jsonResponse(response, 200, { code: 0, instances: context.registry.listInstances(context.localAgents?.()), authorization });
@@ -133,7 +134,7 @@ export function handleLanAgentApi(
   }
   const grantMatch = requestUrl.pathname.match(/^\/api\/lan-agent\/instances\/([^/]+)\/agents\/([^/]+)\/authorization$/);
   if (grantMatch && request.method === "PUT" && context.authority) {
-    if (!context.isManagementRequestAuthorized(request, requestUrl)) { agentUnauthorized(response, context); return true; }
+    if (!(hasAuthenticatedConnectionRequest(request) || context.isManagementRequestAuthorized(request, requestUrl))) { agentUnauthorized(response, context); return true; }
     const etag = request.headers["if-match"];
     if (typeof etag !== "string" || !/^"[a-f0-9]{64}"$/.test(etag)) {
       context.jsonResponse(response, 428, { code: -1, message: "Read the instance catalog and supply its strong If-Match revision." }); return true;
@@ -171,7 +172,7 @@ export function handleLanAgentApi(
   if (instanceAction && request.method === "POST") {
     const ownHook = nodeAccess.kind === "agent" && instanceAction[3] === "context"
       && decodeURIComponent(instanceAction[1]!) === nodeAccess.nodeId && decodeURIComponent(instanceAction[2] ?? "") === nodeAccess.agentId;
-    if (!ownHook && !context.isManagementRequestAuthorized(request, requestUrl)) { agentUnauthorized(response, context, "LAN_AGENT_MANAGEMENT_AUTH_REQUIRED"); return true; }
+    if (!ownHook && !(hasAuthenticatedConnectionRequest(request) || context.isManagementRequestAuthorized(request, requestUrl))) { agentUnauthorized(response, context, "LAN_AGENT_MANAGEMENT_AUTH_REQUIRED"); return true; }
     void context.readJsonBody<Record<string, unknown>>(request).then(async body => {
       const instanceId = decodeURIComponent(instanceAction[1]!);
       const agentId = instanceAction[2] ? decodeURIComponent(instanceAction[2]) : undefined;
@@ -228,7 +229,7 @@ export function handleLanAgentApi(
   }
 
   if (request.method === "GET" && requestUrl.pathname === "/api/lan-agent/nodes") {
-    if (!context.isManagementRequestAuthorized(request, requestUrl)) {
+    if (!(hasAuthenticatedConnectionRequest(request) || context.isManagementRequestAuthorized(request, requestUrl))) {
       agentUnauthorized(response, context, "LAN_AGENT_MANAGEMENT_AUTH_REQUIRED");
       return true;
     }
@@ -245,7 +246,7 @@ export function handleLanAgentApi(
 
   const nodeMatch = requestUrl.pathname.match(/^\/api\/lan-agent\/nodes\/([^/]+)\/(update|tasks)$/);
   if (request.method === "POST" && nodeMatch) {
-    if (!context.isManagementRequestAuthorized(request, requestUrl)) {
+    if (!(hasAuthenticatedConnectionRequest(request) || context.isManagementRequestAuthorized(request, requestUrl))) {
       agentUnauthorized(response, context, "LAN_AGENT_MANAGEMENT_AUTH_REQUIRED");
       return true;
     }

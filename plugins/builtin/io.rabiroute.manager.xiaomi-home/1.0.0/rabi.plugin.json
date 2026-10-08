@@ -36,9 +36,36 @@
         "maximum": 30000,
         "default": 5000
       },
-      "writeEnabled": {
-        "type": "boolean",
-        "default": false
+      "speechBindings": {
+        "type": "array",
+        "maxItems": 64,
+        "default": [],
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mediaPlayerEntityId",
+            "notifyEntityId",
+            "encoding"
+          ],
+          "properties": {
+            "mediaPlayerEntityId": {
+              "type": "string",
+              "pattern": "^media_player\\.[a-z0-9_]+$"
+            },
+            "notifyEntityId": {
+              "type": "string",
+              "pattern": "^notify\\.[a-z0-9_]+$"
+            },
+            "encoding": {
+              "type": "string",
+              "enum": [
+                "text",
+                "json-array"
+              ]
+            }
+          }
+        }
       },
       "allowPublicBaseUrl": {
         "type": "boolean",
@@ -101,11 +128,6 @@
       "ffprobePath": {
         "type": "string",
         "default": "ffprobe"
-      },
-      "artifactReadTokenEnv": {
-        "type": "string",
-        "pattern": "^[A-Z][A-Z0-9_]{2,127}$",
-        "default": "RABIROUTE_XIAOMI_HOME_ARTIFACT_TOKEN"
       },
       "cameraClipRequestTimeoutMs": {
         "type": "integer",

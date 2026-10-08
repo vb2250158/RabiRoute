@@ -32,11 +32,12 @@ test("remote JSON bodies retain their bounded ceiling and stricter explicit limi
   }
 });
 
-test("catalog-external Agent requests retain explicit admin-token gate before handlers", () => {
+test("authenticated Agent uses the existing connection while unrelated requests still authenticate", () => {
   const gate = source.indexOf("const managementAccessAllowed");
   assert.ok(gate > 0);
   const section = source.slice(gate, source.indexOf("if (managerReadOnly", gate));
-  assert.match(section, /requiresManagementAuth \|\| webguiTokenMatches/);
+  assert.match(section, /lanAgentAccess.kind === "agent"/);
+  assert.doesNotMatch(section, /requiresManagementAuth/);
   assert.match(section, /if \(!managementAccessAllowed\)/);
   assert.match(section, /WEBGUI_TOKEN_REQUIRED/);
 });

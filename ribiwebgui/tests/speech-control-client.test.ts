@@ -2,6 +2,31 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { SpeechControlRequestError, speechControlClient } from "../src/speech/speechControlClient";
 
+test("manual ASR requests words and returns separate provider observations", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input, init) => {
+    const form = init?.body as FormData;
+    assert.equal(form.get("response_format"), "verbose_json");
+    assert.equal(form.get("timestamp_granularities"), "word");
+    return new Response(JSON.stringify({ text: "你好", emotion: "NEUTRAL", emotion_labels: ["NEUTRAL"],
+      audio_events: ["Speech"], raw_tags: ["<|zh|>", "<|NEUTRAL|>"], confidence: 0.97,
+      segments: [{ id: 0, start: 0.1, end: 0.8, text: "你好", words: [{ text: "你", start: 0.1, end: 0.4 }] }] }),
+    { headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const result = await speechControlClient.transcribe(new Blob(["fixture"]), "fixture.wav", "fixture/local");
+    assert.equal(result.text, "你好");
+    assert.deepEqual(result.emotionLabels, ["NEUTRAL"]);
+    assert.deepEqual(result.audioEvents, ["Speech"]);
+    assert.deepEqual(result.rawTags, ["<|zh|>", "<|NEUTRAL|>"]);
+    assert.equal(result.confidence, 0.97);
+    assert.equal(result.segments?.[0]?.words?.[0]?.word, "你");
+    assert.equal(result.segments?.[0]?.words?.[0]?.probability, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("preserves runtime failure reason and recovery action from Manager", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async () => new Response(JSON.stringify({

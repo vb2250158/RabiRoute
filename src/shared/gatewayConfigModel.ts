@@ -98,6 +98,7 @@ export type CodexHookSettings = {
   reasoningContextEnabled: boolean;
   planTaskCompletionEnabled: boolean;
   agentCommunicationEnforcementEnabled: boolean;
+  /** @deprecated Ignored since 0.3.22, normalized to false; remove in 0.4.0. */
   onlyPrimaryPersonaCanSendMessages?: boolean;
   completionDeliveries?: AgentCompletionDeliveryRule[];
 };
@@ -171,7 +172,7 @@ export function normalizeCodexHookSettings(value: unknown): CodexHookSettings {
     reasoningContextEnabled: raw.reasoningContextEnabled !== false,
     planTaskCompletionEnabled: raw.planTaskCompletionEnabled !== false,
     agentCommunicationEnforcementEnabled: raw.agentCommunicationEnforcementEnabled !== false,
-    onlyPrimaryPersonaCanSendMessages: raw.onlyPrimaryPersonaCanSendMessages === true,
+    onlyPrimaryPersonaCanSendMessages: false,
     completionDeliveries: normalizeAgentCompletionDeliveries(raw.completionDeliveries),
     planFollowup: normalizePlanFollowup(raw.planFollowup)
   };
@@ -1325,7 +1326,7 @@ function normalizeRouteProfile(
     dataDir: profile.dataDir?.trim() || dataDir,
     routeVariables: profile.routeVariables ?? definition.routeVariables ?? {},
     automationRules: profileAutomations,
-    personaAutomationScriptsEnabled: profile.personaAutomationScriptsEnabled ?? definition.personaAutomationScriptsEnabled === true,
+    personaAutomationScriptsEnabled: true,
     notificationRules: rules
   };
 }
@@ -1465,7 +1466,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     heartbeatIntervalSeconds: normalizePositiveNumber(definition.heartbeatIntervalSeconds, 900),
     heartbeatMessage: definition.heartbeatMessage ?? "定时心跳巡检：请按当前计划、记忆和可用状态执行必要检查。",
     heartbeatSkipWhenAgentBusy: definition.heartbeatSkipWhenAgentBusy === true,
-    personaAutomationScriptsEnabled: definition.personaAutomationScriptsEnabled === true,
+    personaAutomationScriptsEnabled: true,
     gatewayPort: primaryNapcat?.gatewayPort ?? definition.gatewayPort,
     rabiLinkWebhookHost: definition.rabiLinkWebhookHost?.trim() || "0.0.0.0",
     rabiLinkRelayEnabled: definition.rabiLinkRelayEnabled ?? Boolean(definition.rabiLinkRelayUrl?.trim()),
@@ -1525,8 +1526,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
       : hooksSupported
       ? {
           ...normalizeCodexHookSettings(definition.codexHooks),
-          onlyPrimaryPersonaCanSendMessages: (primaryAgentAdapter === "codex" || primaryAgentAdapter === "dsh")
-            && definition.codexHooks?.onlyPrimaryPersonaCanSendMessages === true
+          onlyPrimaryPersonaCanSendMessages: false
         }
       : undefined,
     copilotThreadName: definition.copilotThreadName?.trim() || undefined,
@@ -1571,7 +1571,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
       pipeline,
       routeVariables,
       automationRules,
-      personaAutomationScriptsEnabled: definition.personaAutomationScriptsEnabled === true,
+      personaAutomationScriptsEnabled: true,
       notificationRules
     }, 0, definition, dataDir, rolesDir, options)].filter((profile): profile is RouteProfileDefinition => Boolean(profile))
   };

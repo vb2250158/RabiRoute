@@ -55,6 +55,51 @@ test("Qwen TTS requires tokenizer weights and every declared shard", () => fixtu
   assert.equal(modelFilesPresent(root, model), true);
 }));
 
+const fireRedSpec: ModelFileSpec = {
+  alias: "asr-fireredasr2-aed", family: "FireRedASR2", kind: "huggingface",
+  target: "asr/fireredasr2-aed", repository: "FireRedTeam/FireRedASR2-AED"
+};
+const fireRedFiles = ["model.pth.tar", "cmvn.ark", "dict.txt", "train_bpe1000.model"];
+
+test("FireRed official AED layout accepts an empty or absent optional config.yaml", () => fixture(root => {
+  for (const name of fireRedFiles) file(root, name);
+  assert.equal(modelFilesPresent(root, fireRedSpec), true);
+  file(root, "config.yaml", "");
+  assert.equal(modelFilesPresent(root, fireRedSpec), true);
+  assert.equal(fs.existsSync(path.join(root, "config.json")), false);
+}));
+
+test("FireRed is not downloaded when any required AED file is missing or empty", () => fixture(root => {
+  for (const name of fireRedFiles) file(root, name);
+  file(root, "config.yaml", "");
+  for (const name of fireRedFiles) {
+    fs.rmSync(path.join(root, name));
+    assert.equal(modelFilesPresent(root, fireRedSpec), false, `${name} missing`);
+    file(root, name, "");
+    assert.equal(modelFilesPresent(root, fireRedSpec), false, `${name} empty`);
+    fs.rmSync(path.join(root, name));
+    fs.mkdirSync(path.join(root, name));
+    assert.equal(modelFilesPresent(root, fireRedSpec), false, `${name} is a directory`);
+    fs.rmSync(path.join(root, name), { recursive: true });
+    file(root, name);
+  }
+  assert.equal(modelFilesPresent(root, fireRedSpec), true);
+}));
+
+test("FireRed configured worker model path is recognized without a second model download", () => fixture(root => {
+  const modelRoot = path.join(root, "runtime", "models", "fireredasr2-aed");
+  for (const name of fireRedFiles) file(modelRoot, name);
+  const config = path.join(root, "config.json");
+  file(root, "config.json", JSON.stringify({ providers: { asr: { http_providers: [
+    { id: "fireredasr2", models: [
+      { id: "fireredasr2-aed", installed: false, command: ["python", "worker.py", "--model", "models/fireredasr2-aed"], working_directory: "runtime" }
+    ] }
+  ] } } }));
+  const configured = configuredModelPaths(fireRedSpec, config);
+  assert.deepEqual(configured, [modelRoot]);
+  assert.equal(configured.some(candidate => modelFilesPresent(candidate, fireRedSpec)), true);
+}));
+
 test("junctions work and broken junctions fail closed", () => fixture(root => {
   const target = path.join(root, "target");
   for (const name of ["config.json", "model.bin", "tokenizer.json"]) file(target, name);

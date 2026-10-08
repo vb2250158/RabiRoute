@@ -158,7 +158,7 @@ Proactive group send:
 }
 ```
 
-The examples use a Codex Primary Persona sender: `sender.agentType`, the current complete `sender.sessionId`, and `routeId` are required. When the Codex **Only Primary Persona Can Send Messages** Hook is enabled, `sender.agentType` must be `primary_persona` and `sender.sessionId` must exactly match the Route's `codexThreadId`. `routeId` must select an enabled Route exactly, and `params.chatId` is mandatory. A source response may include `params.reqId`; a proactive send omits it. Outbox still checks `messageAdapterPolicies.wecom.outputEnabled`, `supportedOutputs`, and credentials. It returns `blocked` or `failed` when policy or delivery prevents sending and records the result in `outbox-adapter.log.jsonl`.
+The examples use a Codex Primary Persona sender: `sender.agentType`, the current complete `sender.sessionId`, and `routeId` are required. All Agents identify their actual role and complete session ID under the same delivery contract. `routeId` must select an enabled Route exactly, and `params.chatId` is mandatory. A source response may include `params.reqId`; a proactive send omits it. Outbox still checks `messageAdapterPolicies.wecom.outputEnabled`, `supportedOutputs`, and credentials. It returns `blocked` or `failed` when policy or delivery prevents sending and records the result in `outbox-adapter.log.jsonl`.
 
 ## Logs and health
 

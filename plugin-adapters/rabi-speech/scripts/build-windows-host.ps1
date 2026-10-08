@@ -29,9 +29,18 @@ New-Item -ItemType Directory -Force -Path $buildDeps, $runtime | Out-Null
 $previousPythonPath = $env:PYTHONPATH
 $previousPythonHome = $env:PYTHONHOME
 $previousPath = $env:PATH
+$previousDependenciesRoot = $env:RABISPEECH_DEPS_ROOT
+$previousServiceRoot = $env:RABISPEECH_ROOT
+$dependenciesRoot = if ($previousDependenciesRoot) {
+  [IO.Path]::GetFullPath($previousDependenciesRoot)
+} else {
+  Join-Path $root ".deps"
+}
 try {
   $env:PYTHONPATH = $buildDeps + $(if ($previousPythonPath) { ";$previousPythonPath" } else { "" })
-  & $pythonExe @prefixArgs -c "import PyInstaller" 2>$null
+  # A missing optional build tool is a normal probe result. Emitting an import
+  # traceback makes Windows PowerShell 5 stop before the installer branch.
+  & $pythonExe @prefixArgs -c "import importlib.util; raise SystemExit(0 if importlib.util.find_spec('PyInstaller') else 1)"
   if ($LASTEXITCODE -ne 0) {
     & $pythonExe @prefixArgs -m pip install --upgrade --target $buildDeps "pyinstaller==6.16.0"
     if ($LASTEXITCODE -ne 0) { throw "Failed to install the RabiSpeech Windows host build dependency." }
@@ -54,14 +63,20 @@ try {
   $env:PYTHONHOME = $pythonHome
   $env:PATH = "$pythonHome;$previousPath"
   $env:RABISPEECH_ROOT = $root
+  $env:RABISPEECH_DEPS_ROOT = $dependenciesRoot
   $probe = & $hostExe $entry --probe | ConvertFrom-Json
   if ([IO.Path]::GetFullPath([string]$probe.service_root) -ne $root) {
     throw "RabiSpeech Windows host probe resolved the wrong runtime root."
+  }
+  if ([IO.Path]::GetFullPath([string]$probe.dependencies) -ne $dependenciesRoot) {
+    throw "RabiSpeech Windows host probe resolved the wrong dependencies root."
   }
 } finally {
   $env:PYTHONPATH = $previousPythonPath
   $env:PYTHONHOME = $previousPythonHome
   $env:PATH = $previousPath
+  $env:RABISPEECH_DEPS_ROOT = $previousDependenciesRoot
+  $env:RABISPEECH_ROOT = $previousServiceRoot
 }
 
 $hostExe = Join-Path $runtime "RabiSpeech.exe"

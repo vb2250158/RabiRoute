@@ -88,6 +88,7 @@ class SpeechRecordStore:
                 "language": resolved.language or None,
                 "duration": resolved.duration,
                 "segments": [asdict(segment) for segment in resolved.segments],
+                **resolved.recognition_metadata(),
                 "audio_file": _relative_audio_file(audio_file),
                 "audio_expires_at": audio_expires_at,
                 "source_device_id": source_device_id or None,

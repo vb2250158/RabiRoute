@@ -282,7 +282,7 @@ function routeSummary(
   const definition = runtime.definition;
   const roleId = definition.agentRoleId ?? "";
   const rolesRoot = resolveRolesRoot(rootDir, definition.rolesDir, defaultRolesRoot);
-  const presentation = routeCatalogPersona(personaPresentations, rolesRoot, roleId);
+  const presentation = definition.agentRoleDeviceId ? undefined : routeCatalogPersona(personaPresentations, rolesRoot, roleId);
   const avatar = roleId ? personaAvatarFromCatalog(roleId, presentation) : {};
   const enabled = definition.enabled !== false;
   const running = Boolean(runtime.process);
@@ -301,12 +301,16 @@ function routeSummary(
     return {
       id: definition.id,
       name: definition.name,
+      routeName: definition.routeName,
+      configName: sanitizeConfigName(definition.configName) || definition.id,
+      voiceCallProtocol: 1,
       enabled,
       running,
       messageAdapters,
       messageAdaptersDisabled,
       agentRoleId: roleId,
       personaDisplayName: presentation?.displayName || roleId,
+      personaSourceWorkerId: definition.agentRoleDeviceId || "",
       chatAvailable: enabled
         && normalizedMessageAdapters.has("rabilink")
         && !normalizedDisabledAdapters.has("rabilink"),
@@ -423,6 +427,13 @@ function localRoutes(ctx: RabiApiContext, includeProfiles = false, mobilePresent
           isPersonaOnly: true,
           ...(mobilePresentation ? {} : { runtimeStatus: {} })
         });
+    }
+  }
+  if (mobilePresentation) {
+    const owner = ctx.globalConfig.read();
+    for (const route of routes) {
+      route.ownerWorkerId = owner.rabiLinkRelay.deviceId;
+      route.ownerComputerName = os.hostname();
     }
   }
   return { code: 0, data: { routes }, routeCatalog: ctx.routeCatalogVersion() };

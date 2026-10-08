@@ -93,7 +93,7 @@ test("test HTTP server helper excludes WHATWG Fetch blocked ports", async () => 
   }
 });
 
-test("Relay never forwards local-only model settings or QQ message reads", async (t) => {
+test("Relay forwards authenticated model settings but rejects direct-local QQ message reads", async (t) => {
   let forwarded = 0;
   const local = http.createServer((request, response) => {
     if (!["/api/events", "/api/speech/events"].includes(request.url || "")) forwarded += 1;
@@ -128,8 +128,8 @@ test("Relay never forwards local-only model settings or QQ message reads", async
   t.after(() => runtime.stop());
   runtime.sync({ enabled: true, url: `http://127.0.0.1:${relayPort}`, token: "test-only-token", deviceId: "test-pc", deviceGuid: "test-guid", deviceName: "Test PC", claimWaitMs: 60000,
     localWebguiUrl: `http://127.0.0.1:${localPort}`, localSpeechUrl: "" });
-  await waitForRelayRuntime(runtime, "local-only settings rejection", () => completed.size === paths.length, () => ({ completed: completed.size }));
-  assert.equal(forwarded, 0);
+  await waitForRelayRuntime(runtime, "settings forwarding", () => completed.size === paths.length, () => ({ completed: completed.size }));
+  assert.equal(forwarded, 3);
 });
 
 test("Relay rejects retired persona synchronization paths before local fetch", async (t) => {

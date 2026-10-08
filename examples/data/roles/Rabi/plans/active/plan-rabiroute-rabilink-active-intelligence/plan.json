@@ -7,26 +7,95 @@
   "priority": "high",
   "kind": "product",
   "currentStepId": "physical-acceptance",
-  "currentStep": "主机级语音事实、人格同步、Android 断网恢复与设备回执已经形成自动化闭环；手机端会持久缓存人格显示名称、Route 元数据和按版本/ETag 管理的头像，并通过 Relay 事件失效刷新。`mobileSlim` 常驻包只保留 arm64-v8a，排除眼镜诊断、Rokid SDK、桌面 ABI 与本地 ASR/TTS 模型；手机和眼镜实现经显式 bridge 隔离。当前继续补真人声纹、双实体 PC、轻量包长时间运行、Rokid 真机和人工观察证据。",
-  "nextAction": "安装并长时间运行经过独立导出验收的 mobileSlim APK，验证断网恢复、头像/Route 元数据离线缓存、事件刷新、TTS 播放回执和 25 MiB/签名约束；同时完成真人声纹、双实体 PC 与 Rokid 真机证据，全部通过后再更新正式成熟度并决定 AIUI 保留范围。",
+  "currentStep": "0.3.24 手机通话复用现有采集、最终转写和播放，冻结真实电脑/路线并隔离过期输入与迟到回复；聊天列表只显示可投递的路线。同应用知识读写复用连接鉴权，旧人格复制同步已退役。源码和回归测试不代表手机、双实体 PC、Rokid 或长稳验收完成。",
+  "nextAction": "在独立导出的 mobileSlim APK 上验证至少两轮真实语音、正确电脑/路线、手机播放、静音、挂断、迟到回复、原记录恢复和断网过期输入；继续原有真人声纹、双实体 PC、Rokid 与长稳验收。",
   "steps": [
-    { "id": "record-first-ledger", "title": "完成 record-first 账本、审阅器和主动下行", "status": "已完成" },
-    { "id": "phone-first-client", "title": "把手机升级为可独立使用的完整聊天客户端", "status": "已完成" },
-    { "id": "reliable-conversation", "title": "完成稳定队列、cursor、通知、失败恢复和开机恢复", "status": "已完成" },
-    { "id": "bidirectional-media", "title": "完成双向附件和纯附件消息闭环", "status": "已完成" },
-    { "id": "wearable-health", "title": "完成穿戴健康时间线、查询和告警路由", "status": "已完成" },
-    { "id": "phone-smoke", "title": "完成 Android 手机侧真机冒烟", "status": "已完成" },
-    { "id": "improve-first-run-guidance", "title": "统一移动 UI 并补齐首次配置与失败修复引导", "status": "已完成" },
-    { "id": "speech-and-voiceprint-context", "title": "统一主机语音事实、精确 Route 分发和人格声纹关系", "status": "已完成" },
-    { "id": "persona-sync-automation", "title": "完成人格 LAN-first 与 Relay fallback 同步自动化闭环", "status": "已完成" },
-    { "id": "event-driven-reliability", "title": "完成事件驱动控制面、设备回执和失败关闭验收工具", "status": "已完成" },
-    { "id": "multi-phone-audio-reliability", "title": "完成多手机稳定身份、输入选择、PC 字节计数和播放 marker 修复", "status": "已完成" },
-    { "id": "speech-device-observability", "title": "完成设备型号、持久音频流事件、ASR 原声回听和 Android TTS 重播", "status": "已完成" },
-    { "id": "mobile-persona-directory", "title": "让手机端展示全部人格并按人格身份名称组织会话", "status": "已完成" },
-    { "id": "mobile-avatar-and-route-cache", "title": "按人格版本缓存头像并持久保存 Route 显示元数据", "status": "已完成" },
-    { "id": "mobile-slim-package", "title": "隔离手机与眼镜实现并建立轻量常驻包导出验收", "status": "已完成" },
-    { "id": "physical-acceptance", "title": "完成真人声纹、双实体 PC、Android soak、眼镜和人工观察验收", "status": "进行中", "blockedBy": "仍缺对应实体环境与真人私有证据" },
-    { "id": "decide-aiui-migration", "title": "依据真机证据决定 AIUI 保留与原生迁移范围", "status": "未开始" }
+    {
+      "id": "record-first-ledger",
+      "title": "完成 record-first 账本、审阅器和主动下行",
+      "status": "已完成"
+    },
+    {
+      "id": "phone-first-client",
+      "title": "把手机升级为可独立使用的完整聊天客户端",
+      "status": "已完成"
+    },
+    {
+      "id": "reliable-conversation",
+      "title": "完成稳定队列、cursor、通知、失败恢复和开机恢复",
+      "status": "已完成"
+    },
+    {
+      "id": "bidirectional-media",
+      "title": "完成双向附件和纯附件消息闭环",
+      "status": "已完成"
+    },
+    {
+      "id": "wearable-health",
+      "title": "完成穿戴健康时间线、查询和告警路由",
+      "status": "已完成"
+    },
+    {
+      "id": "phone-smoke",
+      "title": "完成 Android 手机侧真机冒烟",
+      "status": "已完成"
+    },
+    {
+      "id": "improve-first-run-guidance",
+      "title": "统一移动 UI 并补齐首次配置与失败修复引导",
+      "status": "已完成"
+    },
+    {
+      "id": "speech-and-voiceprint-context",
+      "title": "统一主机语音事实、精确 Route 分发和人格声纹关系",
+      "status": "已完成"
+    },
+    {
+      "id": "persona-sync-automation",
+      "title": "完成人格 LAN-first 与 Relay fallback 同步自动化闭环",
+      "status": "已完成"
+    },
+    {
+      "id": "event-driven-reliability",
+      "title": "完成事件驱动控制面、设备回执和失败关闭验收工具",
+      "status": "已完成"
+    },
+    {
+      "id": "multi-phone-audio-reliability",
+      "title": "完成多手机稳定身份、输入选择、PC 字节计数和播放 marker 修复",
+      "status": "已完成"
+    },
+    {
+      "id": "speech-device-observability",
+      "title": "完成设备型号、持久音频流事件、ASR 原声回听和 Android TTS 重播",
+      "status": "已完成"
+    },
+    {
+      "id": "mobile-persona-directory",
+      "title": "让手机端展示全部人格并按人格身份名称组织会话",
+      "status": "已完成"
+    },
+    {
+      "id": "mobile-avatar-and-route-cache",
+      "title": "按人格版本缓存头像并持久保存 Route 显示元数据",
+      "status": "已完成"
+    },
+    {
+      "id": "mobile-slim-package",
+      "title": "隔离手机与眼镜实现并建立轻量常驻包导出验收",
+      "status": "已完成"
+    },
+    {
+      "id": "physical-acceptance",
+      "title": "完成真人声纹、双实体 PC、Android soak、眼镜和人工观察验收",
+      "status": "进行中",
+      "blockedBy": "仍缺对应实体环境与真人私有证据"
+    },
+    {
+      "id": "decide-aiui-migration",
+      "title": "依据真机证据决定 AIUI 保留与原生迁移范围",
+      "status": "未开始"
+    }
   ],
   "waitingFor": "真人声纹样本、第二台实体 PC、Android 长时间运行和可用的 Rokid 眼镜",
   "project": {
@@ -41,6 +110,35 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-07-09T00:00:00+08:00",
-  "updatedAt": "2026-07-31T14:30:00+08:00",
-  "keywords": ["RabiLink", "RabiSpeech", "稳定设备 ID", "头像缓存", "ETag", "Route 元数据", "离线身份", "mobileSlim", "arm64-v8a", "25 MiB", "v2/v3 签名", "Rokid bridge", "模型隔离", "ASR 原声", "TTS 重播", "人格列表", "Rabi Glass", "声纹关系", "人格同步", "Relay fallback", "设备回执", "Android soak", "Action Gate", "实体环境验收"]
+  "updatedAt": "2026-10-08T21:56:40+08:00",
+  "keywords": [
+    "RabiLink",
+    "RabiSpeech",
+    "稳定设备 ID",
+    "头像缓存",
+    "ETag",
+    "Route 元数据",
+    "离线身份",
+    "mobileSlim",
+    "arm64-v8a",
+    "25 MiB",
+    "v2/v3 签名",
+    "Rokid bridge",
+    "模型隔离",
+    "ASR 原声",
+    "TTS 重播",
+    "人格列表",
+    "Rabi Glass",
+    "声纹关系",
+    "人格同步",
+    "Relay fallback",
+    "设备回执",
+    "Android soak",
+    "Action Gate",
+    "实体环境验收",
+    "Agent 通话",
+    "迟到回复",
+    "真实路线",
+    "连接鉴权"
+  ]
 }

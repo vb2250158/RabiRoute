@@ -8,6 +8,12 @@
 
 Linux 源码 Host 由 `scripts/linux-host.mjs` 和 `scripts/lib/linux-host-runtime.mjs` 拥有：复用 Manager 的 READY/健康身份合同，以内核 `flock` 保证同用户单实例，使用仅回环的当前进程控制接口。`src/linuxHostParent.ts` 在父 Host 的 IPC 断开后请求 Manager 正常退出。界面复用 WebGUI，不替代 Windows 托盘或 Qt 功能；运行和容器边界见 [Linux Host](linux-host.md)。
 
+家庭设备遥控由 `vacuumRemote.ts` 唯一持有会话和松键序列，WebGUI 与 Agent 共用 Manager 接口；暂停读回、初始化等待、HA 独立计时器与退出协调见[设备 API](home-device-agent-api.md)。
+
+完成连接鉴权后即可使用已提供的接口，不再增加逐功能或逐人格授权。发送仍须遵守来源身份、目标、消息格式和幂等回执合同。详见[连接与接口使用](connection-access.md)。
+
+家庭设备简化参数合同在 `src/shared/homeMediaContract.ts`；`src/integrations/xiaomiHome/entityActions.ts` 从实时 HA 服务、目标 feature 与实体参数派生通用动作目录、revision 和 Schema，并校验调用。设备客户端与持久回执由同目录 `managerApi.ts` 唯一持有；通用动作与简化动作共用执行和回执链，不新增旁路或逐设备权限。音箱便捷播报仍显式绑定到通知实体。WebGUI 不持有 HA 凭据，Agent 使用[设备接口](home-device-agent-api.md)。
+
 0.3.22 连接合同：同一 RabiLink 应用已鉴权设备默认使用 PC 实际提供的全部服务。设备固定公钥与应用作用域继续复核；知识读写复用 Manager 接口，无额外 MCP 密钥或知识 grant。旧逐服务权限字段和知识表单已退役。实现与迁移见[通用连接](rabilink-peer-tunnel.md)及[知识运行合同](rabilink-knowledge-runtime.md)。
 
 设备接入边界已调整：手表、手环和眼镜在移动端记录系统设置，由记录系统统一投递事件。PC 独立设备入口已移除；下文旧设备协议仅作兼容维护，实施与退出条件见[移动端记录与事件边界](mobile-recording-event-boundary.md)。
@@ -340,7 +346,7 @@ Desktop 任务审批与 `src/outbox.ts` 的 Action Gate 是两道不同边界：
 
 `src/messageProcessing/board.ts` 是 Manager 拥有的消息处理状态机，`src/messageProcessing/persistence.ts` 负责把状态保存到运行期 `data/.runtime/message-processing-board.json`。业务规则不直接决定文件位置。Manager 启动时同步读取现有快照；运行期间把连续变更合并为最新待写快照，由 Worker 使用紧凑 JSON 和原子替换保存，避免大型状态文件的序列化、`fsync` 和重命名阻塞 HTTP 主线程。`/meta.messageProcessingPersistence` 报告待写、写入、重试、最近耗时和错误。Gateway 在消息组进入 Codex 消息处理任务前登记需求，投递成功后记录精确 Desktop 任务；消息处理 Agent 通过结果接口提交回复、不回复或结构化转交，Outbox 再用 `replyContext.messageProcessingRequirementId` 回写真实发送结果。直接 @、直接回复、私聊和计划进展是必须处理项；普通群讨论仍由 Agent 判断是否参与。
 
-`src/napcatMedia.ts` 在 NapCat 消息进入时把图片 URL 立即转成受限大小的本地运行文件，并把成功或失败写进消息附件记录；`src/messageProcessing/sourceEvidence.ts` 再从当前消息组和可追溯引用链生成消息 ID、附件清单和可投递图片路径。`src/messageProcessing/managedAttachmentDelivery.ts` 按 `requirementId + attachmentId + contentHash` 把可读图片复制到目标 Agent 工作区内的受管缓存，拒绝缓存路径中的符号链接，并按每批最多八张生成稳定批次身份。正文只进入第一批；后续批次只说明批次位置。附件复制失败时仍投递一次正文并列出不可用附件，要求处理端等待附件恢复或转交，不能推断图片内容。`messageAgentPool.ts` 使用持久批次回执复用已经成功的批次，避免同一 requirement 重试时重复投递。`src/agentThreads.ts` 继续只接受目标工作区内、实际存在的受支持图片路径，`src/codexDesktopBridge.ts` 把它们转换成 Desktop `localImage` 输入。`board.ts` 保留聚合需求的全部来源证据，并单独保存 Agent 已核对的 `sourceEvidenceReview`。回复 outcome 可以先进入 `awaiting_send`；发送审批再按 `proposedSend.params.replyToMessageId` 解析本次主消息、明确回复链和正文实际引用的附件。只有这个精确子集中的附件不可读才阻止回复；静默关闭仍必须覆盖整个聚合需求。`AgentPacket` 先给出宽泛最近消息，再给出当前消息；当前消息前五分钟内最接近的讨论片段和引用证据位于最近消息之后；已经完整显示的同 ID 消息只保留指向最近消息的引用，供处理端结合已经读过的历史解释纠正和短追问。
+`src/napcatMedia.ts` 在 NapCat 消息进入时把图片 URL 立即转成受限大小的本地运行文件，并把成功或失败写进消息附件记录；`src/messageProcessing/sourceEvidence.ts` 再从当前消息组和可追溯引用链生成消息 ID、附件清单和可投递图片路径。`src/messageProcessing/managedAttachmentDelivery.ts` 按 `requirementId + attachmentId + contentHash` 把可读图片复制到目标 Agent 工作区内的附件缓存，拒绝缓存路径中的符号链接，并按每批最多八张生成稳定批次身份。正文只进入第一批；后续批次只说明批次位置。附件复制失败时仍投递一次正文并列出不可用附件，要求处理端等待附件恢复或转交，不能推断图片内容。`messageAgentPool.ts` 使用持久批次回执复用已经成功的批次，避免同一 requirement 重试时重复投递。`src/agentThreads.ts` 继续只接受目标工作区内、实际存在的受支持图片路径，`src/codexDesktopBridge.ts` 把它们转换成 Desktop `localImage` 输入。`board.ts` 保留聚合需求的全部来源证据，并单独保存 Agent 已核对的 `sourceEvidenceReview`。回复 outcome 可以先进入 `awaiting_send`；发送审批再按 `proposedSend.params.replyToMessageId` 解析本次主消息、明确回复链和正文实际引用的附件。只有这个精确子集中的附件不可读才阻止回复；静默关闭仍必须覆盖整个聚合需求。`AgentPacket` 先给出宽泛最近消息，再给出当前消息；当前消息前五分钟内最接近的讨论片段和引用证据位于最近消息之后；已经完整显示的同 ID 消息只保留指向最近消息的引用，供处理端结合已经读过的历史解释纠正和短追问。
 
 `src/replyImageDescriptions.ts` 在 NapCat 群聊引用发送进入幂等 reservation 前，按精确 Route、群、实例和 `replyToMessageId` 读取来源消息。受跟踪发送已经通过 send-context 审批时，图片检查只使用该需求的精确来源消息和已审核正式记录；历史 `conversationKey` 不能改写正式群号，同 ID 的其它历史副本也不能替代该证据。正式群、Route、实例或目标不一致，记录不唯一，或图片附件未审核时失败关闭；没有受跟踪审批的普通发送不使用这项回退。来源含图片时，`params.replyImageDescriptions` 必须与图片数量和原顺序一一对应；来源找不到、图片不可读、描述缺失或空泛都会阻止发送。真实平台发送成功后，每张 `napcat-media` 图片旁会创建或追加图片同名 `.md`，记录来源消息、图片序号、发送 Agent 类型与完整会话、`deliveryId`、QQ 回执和本次理解。幂等回执只保存说明文件映射，不把描述正文复制进按平台消息 ID 查询的运维结果；Manager 另写不含正文和图片路径的 `agent_reply_image_descriptions_archived` 事件。
 
@@ -617,7 +623,7 @@ SpeechServicePage / SpeechHostMonitor
 
 `src/shared/speechControlContract.ts` 是 Manager 与 WebGUI 之间的稳定 camelCase Interface，也拥有 Route 语音默认值。`src/manager/speechControl.ts` 负责 Route policy、RabiSpeech payload 映射和 read model 正规化。`POST /api/speech/messages` 会等待 Gateway 子任务返回真实终态：Desktop owner `start/steer` 成功才是 `delivered`，关键词模式未命中则是 `recorded`，失败为 4xx/5xx；它不等 Agent 回答、Outbox 或 TTS 播放结束。Python 的 snake_case、模型进程状态和回环地址不能泄漏回 Vue 页面；RabiSpeech 仍是独立的回环 Provider Runtime，不合并进 Manager。本地 Provider 默认启用；外部 API Provider 必须在本机配置显式启用、从环境变量取密钥，并通过 capability 的 `local_only` / `relay_safe` 暴露边界。
 
-模型管理是独立的主机控制面，不属于某条 Route。`GET /api/speech/model-management` 返回环境、目录和任务状态；两个 POST 入口分别安装核心环境和单个允许清单模型，不接受任意下载仓库、地址或路径；单独的本机设置入口校验模型总目录覆盖值，目录路径只返回给本机 WebGUI。Manager 同一时间只允许一个任务，并继续受只读模式的全局写操作门禁约束。`src/manager/speechModelFiles.ts` 核对管理目录及已配置模型路径中的代表文件，下载状态不再只取决于安装清单；文件存在不等于校验和或推理就绪。弹窗使用紧凑环境栏、筛选搜索和表格，仅在存在当前或最近任务时显示任务行，说明默认折叠。模型清单中的 `runtime=core|isolated` 只说明运行环境要求，不代表已检测到环境缺失；“模型已下载”不能被展示为推理、波形或真实设备已经验收。
+模型管理是独立的主机控制面，不属于某条 Route。`GET /api/speech/model-management` 返回环境、目录和任务状态；两个 POST 入口分别安装核心环境和单个允许清单模型，不接受任意下载仓库、地址或路径；设置入口复用连接鉴权并校验模型总目录覆盖值，目录路径只返回给已鉴权连接。Manager 同一时间只允许一个任务，并继续受只读模式的全局写操作门禁约束。`src/manager/speechModelFiles.ts` 核对管理目录及已配置模型路径中的代表文件，下载状态不再只取决于安装清单；文件存在不等于校验和或推理就绪。弹窗使用紧凑环境栏、筛选搜索和表格，仅在存在当前或最近任务时显示任务行，说明默认折叠。模型清单中的 `runtime=core|isolated` 只说明运行环境要求，不代表已检测到环境缺失；“模型已下载”不能被展示为推理、波形或真实设备已经验收。
 
 `src/manager/speechEventProxy.ts` 单独拥有 Manager SSE 客户端与 RabiSpeech 上游流的一对一生命周期。浏览器或验收客户端断开时只中止对应的上游 fetch；由此产生的 `AbortError` 是正常终态，必须在代理层消费，不能变成未处理 Node stream error 或拖垮 Manager。上游不是 `text/event-stream` 时在写入 SSE 响应头之前失败关闭，不把旧 Manager/WebGUI HTML 冒充事件流。
 
@@ -629,11 +635,11 @@ locale 只允许作为浏览器侧 UI 偏好缓存，键为 `rabiroute:webgui:lo
 
 ## Windows 应用生命周期
 
-`RabiRouteHost.exe` 是 Windows 正式运行态唯一的生命周期所有者和稳定入口。每次启动创建新的 `applicationGenerationId`，在同一个 Windows Job Object 中直接启动 Manager 与 Tray；任一必需子进程死亡、身份不匹配或健康失效时，Host 先回收整代，再按有界退避创建新代。Host 退出时 Job Object 清理其全部受管子进程；Manager 启动的 NapCat 子进程随该代回收，并在下一代绑定检查完成后按配置自动恢复；独立启动的普通 QQ、浏览器和其他外部应用不进入这个 Job。
+`RabiRouteHost.exe` 是 Windows 正式运行态唯一的生命周期所有者和稳定入口。每次启动创建新的 `applicationGenerationId`，在同一个 Windows Job Object 中直接启动 Manager 与 Tray；任一必需子进程死亡、身份不匹配或健康失效时，Host 先回收整代，再按有界退避创建新代。Host 退出时 Job Object 清理其全部子进程；Manager 启动的 NapCat 子进程随该代回收，并在下一代绑定检查完成后按配置自动恢复；独立启动的普通 QQ、浏览器和其他外部应用不进入这个 Job。
 
 Manager 默认绑定 `127.0.0.1:0`，由操作系统分配空闲端口。Manager READY 后把 `applicationGenerationId`、`managerInstanceId`、PID 与完整 `managerBaseUrl` 发布给 Host；Host 核验 `/meta` 后才把本代端点交给 Tray。端口不是身份，Tray 不缓存旧 URL、不扫描 `8790..8799`、不启动或停止 Manager，也不能脱离 Host 独立运行。用户退出只经 Host 的带代际 fencing 控制管道停止整棵树，不使用 Manager shutdown API。
 
-代码生效分为三层：WebGUI 开发态可使用 Vite HMR；正式受管插件只从已构建 package/profile 产生候选 plugin generation，并在成功后原子发布；Host、Manager、Tray 与后端核心改动必须本机构建、打包并切换完整 application generation。正式安装不从 NAS 源码热跑，避免同一运行代混入新旧模块。
+代码生效分为三层：WebGUI 开发态可使用 Vite HMR；正式插件只从已构建 package/profile 产生候选 plugin generation，并在成功后原子发布；Host、Manager、Tray 与后端核心改动必须本机构建、打包并切换完整 application generation。正式安装不从 NAS 源码热跑，避免同一运行代混入新旧模块。
 
 声明 Web 入口的插件缺失入口文件时，Web 发布构建必须失败，不得静默省略该模块。开发候选封装前还检查已复制到 staging 的插件入口及其引用资源。发布验收除了根 HTML 与资源哈希，还需核对带当前 `webRelease` 的 `/api/plugins/modules` 成功、页面插件入口可读取并引用新页面；单个页面资源返回 200 不代表实际加载链完整。
 
@@ -860,4 +866,12 @@ Manager 复用 Route catalog worker 的 upsert、日志、回滚和持久化回�
 
 ## 电脑实例与 Agent 管理
 
+米家原始云地图的连接归属仍在 `src/integrations/xiaomiHome/`：`vacuumCloud.ts` 持有独立受保护米家云会话、用户触发的有界 QR 等待、账号设备校验和有大小限制的文件下载；`vacuumMapDecoder.ts` 在该组件内完成有界 version-2 解密与栅格转换，`vacuumPath.ts` 拥有有界、只读路径规划，按已核对的型号栅格合同和限制区域膨胀后运行 A*，以显示文件哈希校验快照；`vacuumFeedback.ts` 定义地图／任务／坐标系续读身份、游标去重和跨任务反馈丢弃，由云组件在轨迹查询前后读取地图核对；`vacuumCloudPage.ts` 与 Agent 共用 `/feedback`，只渲染连接状态、地图、轨迹位置、选点和路径预览。它不从 Agent 或 HA 提取云凭据，不拥有设备动作，不运行后台地图轮询；页面显式刷新复用同一读取合同，组件合并并发读图。读取时间和新增轨迹点均不证明实时定位或到达；接口与成熟度见[云地图合同](vacuum-cloud-map.md)。
+
 `shared/agentInstance.ts` 定义电脑身份和 Agent 引用，`agentInstanceBindings` 把路由绑定到实例内 Agent，IP 不参与持久身份。`agentAdapters/instanceManagement.ts` 复用现有扫描、任务与 Hook 安装逻辑；本机直接调用，远端通过 `lanAgentRegistry.ts` 的连接所有权校验 RPC 调用。`apps/rabi-agent` 持有远端私有配置，WebGUI 的 `InstanceAgentSettings.vue` 复用基本管理界面。能力范围与尚未完成的高级功能对等见[接入说明](lan-rabi-agent-bootstrap.md)。
+
+设备目录由 `deviceDirectory.ts` 与原 `managerApi.ts` 共同负责：固定 HA 只读模板取得设备登记归属，按资源精确归组。WebGUI 设备 renderer 仅选择实体、参数、显示状态及回执；动作沿用 `homeDeviceClient.ts` 调用原 Rabi 动作合同，写前读实时 Schema/stateVersion、核对 Manager 身份，写后只核对身份，丢失响应只查原键。最近回执在浏览器保留为恢复线索，不替代 Manager 的持久动作记录。
+
+`homeDeviceUsage.ts` 只持有浏览器中的设备卡片使用偏好：设备 ID、打开次数和最近打开时间，最多500条。renderer 在目录刷新成功后读取排序快照，点击仅更新偏好，下次刷新再重排；不改变 Manager 目录、设备能力或权限。
+
+`vacuumCs2Relay.ts` 是同一视频 supervisor 内的会话级 UDP 传输：只接受认证云响应解出的 CS2 设备标识和公共中继地址，执行有界发现、注册、端口分配和设备加入。随机 loopback 桥接将原始加密 MISS 数据交给固定版本 go2rtc；云登录凭据、设备标识和中继令牌不交给 WebGUI 或写入日志。Manager IPC 断开、取消和到期关闭套接字及原生进程。此扩展不拥有设备控制，Home Assistant 仍是查询和动作提供方；没有现成 HA 流时不把视频管理开关当成摄像头实体。

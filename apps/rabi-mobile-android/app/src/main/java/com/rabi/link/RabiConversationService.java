@@ -56,6 +56,81 @@ public final class RabiConversationService extends Service {
     public static final String ACTION_PAUSE_RECORD = "com.rabi.link.recording.PAUSE";
     public static final String ACTION_HEALTH = "com.rabi.link.recording.HEALTH";
     public static final String ACTION_MARK = "com.rabi.link.recording.MARK";
+    public static final String ACTION_CALL_START = "com.rabi.link.call.START";
+    public static final String ACTION_CALL_END = "com.rabi.link.call.END";
+    public static final String ACTION_CALL_MUTE = "com.rabi.link.call.MUTE";
+    private volatile RabiVoiceCallSession voiceCall;
+    private RabiLinkRelayConfig voiceCallRelay;
+    private volatile AudioTrack callPlaybackTrack;
+    private volatile CountDownLatch callPlaybackCompleted;
+    private boolean callStarting;
+
+    public static void startVoiceCall(Context context, String workerId, String routeId) {
+        context.startForegroundService(new Intent(context, RabiConversationService.class).setAction(ACTION_CALL_START)
+                .putExtra("callWorkerId", workerId).putExtra(EXTRA_ROUTE_PROFILE_ID, routeId));
+    }
+    public static void endVoiceCall(Context context) {
+        context.startService(new Intent(context, RabiConversationService.class).setAction(ACTION_CALL_END));
+    }
+    public static void muteVoiceCall(Context context) {
+        context.startService(new Intent(context, RabiConversationService.class).setAction(ACTION_CALL_MUTE));
+    }
+
+    /** Call intent is ephemeral. User recording settings remain the durable source for restoration. */
+    private AllDayRecordingSettings recordingSettings() {
+        AllDayRecordingSettings saved = AllDayRecordingSettings.load(this);
+        RabiVoiceCallSession call = voiceCall;
+        return call == null ? saved : new AllDayRecordingSettings(true, "audio", "mobile", "transcribe",
+                call.routeId, saved.healthEnabled, true, false, saved.windowStartedAt);
+    }
+    private void callStatus(String state, String detail) {
+        getSharedPreferences("rabi_conversation_runtime", MODE_PRIVATE).edit().putString("callState", state)
+                .putBoolean("callActive", voiceCall != null)
+                .putString("callStatus", detail).putBoolean("callMuted", voiceCall != null && voiceCall.muted)
+                .putLong("updatedAt", System.currentTimeMillis()).apply();
+        broadcastRuntimeUpdated();
+    }
+    private void beginVoiceCall(String worker, String route) {
+        if (worker == null || worker.isEmpty() || route == null || route.isEmpty()) { callStatus("error", "未取得明确的电脑和路线，未启动通话"); return; }
+        if (voiceCall != null || callStarting) { updateStatus("已有通话，请先挂断"); return; }
+        getSharedPreferences("rabi_conversation_runtime", MODE_PRIVATE).edit().putString("callRouteId", route).apply();
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            callStatus("error", "麦克风权限未授予，未启动通话"); return;
+        }
+        RabiLinkRelayConfig relay = RabiLinkRelaySettings.load(this);
+        com.rabiroute.sdk.RabiRouteInfo target = null;
+        for (com.rabiroute.sdk.RabiRouteInfo item : RabiRouteMetadataCache.INSTANCE.load(this, relay)) if (route.equals(item.getId())) target = item;
+        if (!relay.getConfigured() || target == null || !target.getRawJson().optBoolean("chatAvailable")
+                || target.getRawJson().optInt("voiceCallProtocol") != 1 || !worker.equals(target.getRawJson().optString("ownerWorkerId"))) {
+            callStatus("error", "电脑未确认通话合同或路线不可用，请刷新会话并检查详情"); return;
+        }
+        voiceCall = new RabiVoiceCallSession(worker, route);
+        voiceCallRelay = relay;
+        callStarting = true;
+        getSharedPreferences("rabi_conversation_runtime", MODE_PRIVATE).edit().putString("callId", voiceCall.id)
+                .putString("callRouteId", route).putString("callWorkerId", worker).apply();
+        callStatus("connecting", "正在保存原记录，连接所选电脑与路线");
+        backend.queueDiagnostic("conversation.call_start", "info", "live voice capture requested");
+        pauseRecordingInternal(() -> { callStarting = false; applyRecording(); });
+    }
+    private void finishVoiceCall(boolean restoreRecording) {
+        RabiVoiceCallSession call = voiceCall;
+        if (call == null) return;
+        endCallPlayback(call);
+        voiceCall = null; voiceCallRelay = null; callStarting = false;
+        callStatus("ended", "通话已挂断；已送达的 Agent 任务可能继续，迟到回复保留为消息");
+        backend.queueDiagnostic("conversation.call_end", "info", "live input and automatic playback fenced");
+        pauseRecordingInternal(restoreRecording && AllDayRecordingSettings.load(this).running ? this::applyRecording : null);
+    }
+    private void endCallPlayback(RabiVoiceCallSession call) {
+        synchronized (call) {
+            call.ended = true;
+            AudioTrack track = callPlaybackTrack;
+            if (track != null) try { track.pause(); } catch (Throwable ignored) { }
+            CountDownLatch completed = callPlaybackCompleted;
+            if (completed != null) completed.countDown();
+        }
+    }
     private RabiLiveRecordingController videoController;
     private WearableHealthController healthController;
     private com.rabi.link.modules.rokid.VideoAudioDerivation videoAudio;
@@ -111,6 +186,11 @@ public final class RabiConversationService extends Service {
     }
     public static boolean recordingOwnerAvailable() {
         return (currentInstance != null && !currentInstance.shutdownComplete)
+                || android.os.SystemClock.elapsedRealtime() < recordingStartPendingUntil;
+    }
+    public static boolean recoveringRecording() {
+        RabiConversationService current = currentInstance;
+        return (current != null && !current.initialized && !current.shutdownComplete)
                 || android.os.SystemClock.elapsedRealtime() < recordingStartPendingUntil;
     }
     /** Called only from a resumed Activity, where Android permits microphone foreground work. */
@@ -215,7 +295,7 @@ public final class RabiConversationService extends Service {
     }
     private final java.util.concurrent.ExecutorService initializationExecutor = java.util.concurrent.Executors.newSingleThreadExecutor();
     private final java.util.ArrayDeque<Runnable> pendingStarts = new java.util.ArrayDeque<>();
-    private boolean initialized;
+    private volatile boolean initialized;
     private boolean initializing;
     private RabiChatStore chatStore;
     private RokidCxrController glassController;
@@ -332,6 +412,9 @@ public final class RabiConversationService extends Service {
     @Override
     public void onCreate() {
         currentInstance = this;
+        getSharedPreferences("rabi_conversation_runtime", MODE_PRIVATE).edit().putString("callState", "ended")
+                .putBoolean("callActive", false)
+                .putString("callStatus", "没有进行中的通话").apply();
         super.onCreate();
         com.rabi.link.recording.RecordingResourceCache.start(this);
         createChannel();
@@ -341,6 +424,8 @@ public final class RabiConversationService extends Service {
         });
         phoneAudioCapture = new RabiPhoneAudioCapture(this, new RabiPhoneAudioCapture.Listener() {
             @Override public void onPcm(byte[] pcm) {
+                RabiVoiceCallSession call = voiceCall;
+                if (call != null && call.muted) return;
                 if (backend != null && inputMode == RabiConversationSettings.InputMode.PHONE) {
                     backend.streamPcmFromSource(pcm, RabiGlassPcBackend.SOURCE_PHONE);
                     captureReceived(pcm);
@@ -371,6 +456,44 @@ public final class RabiConversationService extends Service {
         backend = new RabiGlassPcBackend(this, new RabiGlassPcBackend.Listener() {
             @Override public void onStatus(String status) { updateStatus(status); if (glassBridge != null) glassBridge.sendGlassAudioStatus(status); }
             @Override public void onTranscript(String text, String routeProfileId) { chatStore.append(null, "user", "voice", text, "", "audio/pcm", routeProfileId); updateRuntime("transcript", text); if (glassBridge != null) glassBridge.sendGlassTranscript(text); updateStatus("识别 · " + shortText(text)); }
+            @Override public void onFinalRecordingTranscript(String captureId, String eventId, String text, long endedAt) {
+                notificationHandler.post(() -> {
+                    RabiVoiceCallSession call = voiceCall;
+                    if (call == null || text == null || text.trim().isEmpty()) return;
+                    String id = call.admit(captureId, eventId, endedAt, System.currentTimeMillis());
+                    if (id.isEmpty()) return;
+                    chatStore.append(id, "user", "voice", text, "", "audio/pcm", call.routeId);
+                    backend.submitText(text, call.routeId, id);
+                    callStatus("waiting", "转写已入队，等待投递与 Agent 回复");
+                });
+            }
+            @Override public boolean acceptsLiveInput(String id) {
+                RabiVoiceCallSession call = voiceCall;
+                return call != null && call.acceptsInput(id, System.currentTimeMillis());
+            }
+            @Override public void onLiveInputAccepted(String id, String taskId) {
+                String[] parts = id.split("\\.");
+                if (parts.length == 6 && !taskId.isEmpty() && !getSharedPreferences("rabi_voice_call_history", MODE_PRIVATE).edit()
+                        .putString("task:" + taskId, parts[1]).commit()) throw new IllegalStateException("通话关联保存失败");
+            }
+            @Override public String replyCallId(org.json.JSONObject item) {
+                org.json.JSONObject metadata = item.optJSONObject("metadata");
+                String task = item.optString("taskId");
+                if (task.isEmpty() && metadata != null) task = metadata.optString("messageId", metadata.optString("sourceMessageId"));
+                if (task.startsWith("rabi-call-v1.")) {
+                    String[] parts = task.split("\\.");
+                    if (parts.length == 6) return parts[1];
+                }
+                return getSharedPreferences("rabi_voice_call_history", MODE_PRIVATE).getString("task:" + task, "");
+            }
+            @Override public boolean phoneCallReply(org.json.JSONObject item) {
+                RabiVoiceCallSession call = voiceCall;
+                return call != null && call.acceptsReply(replyCallId(item), item.optString("routeProfileId"));
+            }
+            @Override public boolean synthesizeReply(org.json.JSONObject item) {
+                String id = replyCallId(item);
+                return id.isEmpty() || phoneCallReply(item);
+            }
             @Override public void onDeliveryState(String clientMessageId, String routeProfileId, String state, String failure) {
                 chatStore.updateDelivery(clientMessageId, state, failure);
                 updateRuntime("delivery", state + (failure == null || failure.trim().isEmpty() ? "" : " · " + friendlyError(failure)));
@@ -392,7 +515,10 @@ public final class RabiConversationService extends Service {
                         ? "Agent 发来了 " + (attachments == null ? 0 : attachments.length()) + " 个附件"
                         : text;
                 updateRuntime("reply", replySummary); showAgentMessage(messageId, routeProfileId, replySummary);
-                if (com.rabi.link.modules.rokid.RabiGlassTextOutput.enabled(RabiConversationService.this)
+                String replyCall = getSharedPreferences("rabi_glass_phone_backend", MODE_PRIVATE).getString("replyCall:" + messageId, "");
+                RabiVoiceCallSession call = voiceCall;
+                boolean liveReply = call != null && call.acceptsReply(replyCall, routeProfileId);
+                if (!liveReply && com.rabi.link.modules.rokid.RabiGlassTextOutput.enabled(RabiConversationService.this)
                         && text != null && !text.trim().isEmpty()) {
                     // Capture owns its CXR session; text must not silently replace an active recorder.
                     boolean displayed = false;
@@ -410,9 +536,9 @@ public final class RabiConversationService extends Service {
                 if (inputMode == RabiConversationSettings.InputMode.GLASSES && glassBridge != null) {
                     glassBridge.sendGlassReplyText(replySummary);
                 }
-                boolean playbackRequested = settings.autoPlayAgentVoice && pcm != null && pcm.length > 0;
+                boolean playbackRequested = (liveReply || (call == null && replyCall.isEmpty() && settings.autoPlayAgentVoice)) && pcm != null && pcm.length > 0;
                 boolean played = false;
-                boolean glassesOutput = inputMode == RabiConversationSettings.InputMode.GLASSES;
+                boolean glassesOutput = !liveReply && inputMode == RabiConversationSettings.InputMode.GLASSES;
                 String outputDeviceKind = glassesOutput ? RabiGlassPcBackend.SOURCE_GLASSES : RabiGlassPcBackend.SOURCE_PHONE;
                 String playbackFailure = "";
                 if (playbackRequested) {
@@ -421,11 +547,13 @@ public final class RabiConversationService extends Service {
                         played = glassBridge != null && glassBridge.sendAudioPcmToGlass(messageId, pcm);
                         if (!played) playbackFailure = glassBridge == null ? "眼镜播放通道未连接" : "眼镜未确认播放完成";
                     } else {
-                        played = playOnPhone(pcm);
+                        if (liveReply) callStatus("speaking", "手机正在播报；播报期间暂停收音，暂不支持自然插话");
+                        played = playOnPhone(pcm, liveReply ? call : null);
                         if (!played) playbackFailure = "手机未确认播放完成";
                     }
                     chatStore.updatePlayback(messageId, played ? "played" : "failed", playbackFailure);
                     updateRuntime("ttsPlayback", played ? "语音播放完成" : "语音播放失败 · " + playbackFailure);
+                    if (liveReply && voiceCall == call && !call.ended) callStatus(played ? (call.muted ? "muted" : "listening") : "error", played ? (call.muted ? "已静音" : "聆听中") : playbackFailure);
                 }
                 return new RabiGlassPcBackend.ReplyDeliveryResult(true, playbackRequested, played,
                         outputDeviceKind, playbackFailure);
@@ -447,6 +575,11 @@ public final class RabiConversationService extends Service {
                 notificationHandler.post(() -> {
                     captureFailure = reason == null ? "采集被阻止" : reason;
                     terminalCaptureError = captureFailure;
+                    if (voiceCall != null) {
+                        finishVoiceCall(false);
+                        callStatus("error", "通话记录失败，采集已停止 · " + captureFailure);
+                        return;
+                    }
                     AllDayRecordingSettings.load(RabiConversationService.this).withRunning(false, System.currentTimeMillis()).save(RabiConversationService.this);
                     pauseRecordingInternal(null);
                     setCaptureStatus("采集失败 · " + captureFailure);
@@ -455,6 +588,7 @@ public final class RabiConversationService extends Service {
             }
             @Override public void onError(String message) {
                 updateRuntime("error", friendlyError(message));
+                if (voiceCall != null) callStatus("error", "通话连接或处理异常 · " + friendlyError(message));
                 updateStatus("错误 · " + friendlyError(message));
                 if (backend != null) backend.queueDiagnostic("conversation.error", "error", "conversation backend error");
             }
@@ -503,6 +637,7 @@ public final class RabiConversationService extends Service {
         cancelNetworkEventFallbackCheck();
         RabiGlassPcBackend target = backend;
         if (target != null) target.onNetworkAvailable();
+        if (voiceCall != null) callStatus("connecting", "网络已恢复，正在确认连接；过期通话输入不补投");
         if (healthController != null) healthController.syncNow();
         if (glassStatusPublisher != null) glassStatusPublisher.onNetworkAvailable();
         com.rabi.link.recording.RecordingResourceCache.kick();
@@ -513,6 +648,7 @@ public final class RabiConversationService extends Service {
         networkKnownOffline = true;
         RabiGlassPcBackend target = backend;
         if (target != null) target.onNetworkUnavailable();
+        if (voiceCall != null) callStatus("offline", "网络已断开，记录仍保留；超过90秒的输入不交给 Agent");
         scheduleNetworkEventFallbackCheck();
     }
 
@@ -604,6 +740,24 @@ public final class RabiConversationService extends Service {
             pauseRecordingInternal(null);
             return START_NOT_STICKY;
         }
+        if (ACTION_CALL_START.equals(action)) {
+            beginVoiceCall(intent.getStringExtra("callWorkerId"), intent.getStringExtra(EXTRA_ROUTE_PROFILE_ID));
+            return START_STICKY;
+        }
+        if (ACTION_CALL_END.equals(action)) { finishVoiceCall(true); return START_STICKY; }
+        if (ACTION_CALL_MUTE.equals(action)) {
+            RabiVoiceCallSession call = voiceCall;
+            if (call != null) {
+                call.muted = !call.muted;
+                backend.recordAudioGap("call_mute_boundary", 0, RabiGlassPcBackend.SOURCE_PHONE);
+                boolean speaking = callPlaybackTrack != null;
+                callStatus(speaking ? "speaking" : call.muted ? "muted" : "listening",
+                        speaking ? (call.muted ? "手机正在播报 · 麦克风已静音" : "手机正在播报 · 播报期间暂停收音")
+                                : call.muted ? "麦克风已静音，回复仍可播报" : "聆听中");
+            }
+            return START_STICKY;
+        }
+        if (ACTION_RECORD.equals(action) || ACTION_PAUSE_RECORD.equals(action) || ACTION_STOP.equals(action)) finishVoiceCall(false);
         if (ACTION_ASR.equals(action)) {
             promote("正在处理录音转录", false);
             configureBackend();
@@ -763,10 +917,12 @@ public final class RabiConversationService extends Service {
         if (now - lastCaptureUiAt < 1000) return;
         lastCaptureUiAt = now;
         notificationHandler.post(() -> {
-            if (shutdownComplete || generation != captureGeneration || !recordId.equals(captureRecordId) || !AllDayRecordingSettings.load(this).running) return;
+            if (shutdownComplete || generation != captureGeneration || !recordId.equals(captureRecordId) || !recordingSettings().running) return;
             getSharedPreferences("rabi_conversation_runtime", MODE_PRIVATE).edit()
                     .putLong("captureLastReceivedAt", now).putBoolean("captureHasSignal", hasSignal).apply();
             setCaptureStatus(("glasses".equals(activeCaptureSource) ? "眼镜" : "手机") + (hasSignal ? " · 正在接收声音" : " · 收到静音数据，请检查麦克风占用"));
+            if (voiceCall != null && "connecting".equals(getSharedPreferences("rabi_conversation_runtime", MODE_PRIVATE).getString("callState", "")))
+                callStatus("listening", "手机正在收音；每句转写会交给所选路线");
         });
     }
 
@@ -779,7 +935,7 @@ public final class RabiConversationService extends Service {
 
     private void applyRecording() {
         if (captureTransition) { afterCaptureStopped = this::applyRecording; setCaptureStatus("正在保存上一段，完成后应用新模式"); return; }
-        AllDayRecordingSettings s = AllDayRecordingSettings.load(this);
+        AllDayRecordingSettings s = recordingSettings();
         if (!s.running) { pauseRecordingInternal(null); return; }
         if (voiceServiceActive || (videoController != null && videoController.getActive())) {
             pauseRecordingInternal(this::applyRecording);
@@ -852,7 +1008,7 @@ public final class RabiConversationService extends Service {
         }
         automaticSource.disconnected();
         startSelectedAudio("mobile");
-        if (voiceServiceActive) {
+        if (voiceServiceActive && voiceCall == null) {
             try { startGlassesBackend(); }
             catch (RuntimeException error) { updateRuntime("glasses", "眼镜暂不可用 · 使用手机"); }
             notificationHandler.removeCallbacks(audioSourceWatchdog);
@@ -861,12 +1017,15 @@ public final class RabiConversationService extends Service {
     }
 
     private void startSelectedAudio(String source) {
-        AllDayRecordingSettings s = AllDayRecordingSettings.load(this);
+        AllDayRecordingSettings s = recordingSettings();
         if (!s.running || shutdownComplete || !"audio".equals(s.mode)) return;
         try {
+            if (!com.rabi.link.recording.CaptureOwnership.acquire("conversation")) throw new IllegalStateException("麦克风仍由其他记录持有，未启动");
             com.rabi.link.recording.AudioLevels.reset();
             activeCaptureSource = source;
-            captureRecordId = backend.beginCapture(source, s.routeProfileId, s.processingPolicy);
+            RabiVoiceCallSession call = voiceCall;
+            captureRecordId = call == null ? backend.beginCapture(source, s.routeProfileId, s.processingPolicy)
+                    : backend.beginCapture("mobile", call.routeId, "transcribe", call.captureId);
             updateRuntime("recordId", captureRecordId);
             updateRuntime("actualAudioSource", source);
             voiceServiceActive = true;
@@ -878,6 +1037,11 @@ public final class RabiConversationService extends Service {
             }
             setCaptureStatus(("glasses".equals(source) ? "眼镜" : "手机") + " · 等待实际声音数据");
         } catch (Throwable error) {
+            if (voiceCall != null) {
+                finishVoiceCall(false);
+                callStatus("error", "通话收音未启动 · " + friendlyError(error.getMessage()));
+                return;
+            }
             AllDayRecordingSettings.load(this).withRunning(false, System.currentTimeMillis()).save(this);
             terminalCaptureError = "录音未启动 · " + friendlyError(error.getMessage());
             pauseRecordingInternal(null);
@@ -886,7 +1050,7 @@ public final class RabiConversationService extends Service {
 
     /** Seal the old physical source before accepting the new one; keep CXR monitoring alive. */
     private void reconcileAudioSource() {
-        if (captureTransition || shutdownComplete || !voiceServiceActive) return;
+        if (captureTransition || shutdownComplete || !voiceServiceActive || voiceCall != null) return;
         AllDayRecordingSettings s = AllDayRecordingSettings.load(this);
         if (!s.running || !"audio".equals(s.mode)) return;
         String next = automaticSource.preferred(android.os.SystemClock.elapsedRealtime());
@@ -904,7 +1068,7 @@ public final class RabiConversationService extends Service {
     }
 
     private void applyUploadPolicy() {
-        if (backend != null) backend.setProcessingEnabled(AllDayRecordingSettings.load(this).uploadEnabled);
+        if (backend != null) backend.setProcessingEnabled(recordingSettings().uploadEnabled);
     }
 
     private void drainVideoAudio() {
@@ -948,9 +1112,9 @@ public final class RabiConversationService extends Service {
         ++captureGeneration;
         setCaptureStatus("正在停止并保存");
         if (healthController != null) healthController.stop();
+        setInputMode(RabiConversationSettings.InputMode.PAUSED);
         if (phoneAudioCapture != null) phoneAudioCapture.pause();
         stopGlassesBackend();
-        setInputMode(RabiConversationSettings.InputMode.PAUSED);
         voiceServiceActive = false;
         updateRuntime("actualAudioSource", "");
         if (videoController != null && videoController.getActive()) {
@@ -971,15 +1135,21 @@ public final class RabiConversationService extends Service {
         }
         com.rabi.link.recording.AudioLevels.reset();
         captureRecordId = "";
+        com.rabi.link.recording.CaptureOwnership.release("conversation");
         updateRuntime("recordId", "");
         setCaptureStatus(terminalCaptureError.isEmpty() ? "全天记录已暂停 · 已保存内容仍可处理" : "全天记录已停止 · " + terminalCaptureError);
         Runnable after = afterCaptureStopped;
         afterCaptureStopped = null;
         if (!shutdownComplete) {
-            promote(captureStatus, after != null && AllDayRecordingSettings.load(this).running);
+            promote(captureStatus, after != null && recordingSettings().running);
             if (com.rabi.link.recording.CaptureCompletionPolicy.mayRestart(after != null,
-                    AllDayRecordingSettings.load(this).running, captureSaveFailed, shutdownComplete)) after.run();
+                    recordingSettings().running, captureSaveFailed, shutdownComplete)) after.run();
             else {
+                if (callStarting && voiceCall != null) {
+                    endCallPlayback(voiceCall);
+                    voiceCall = null; voiceCallRelay = null; callStarting = false;
+                    callStatus("error", "原记录未能安全保存，通话未启动；请检查记录详情");
+                }
                 com.rabi.link.recording.RecordingResourceCache.kick();
         drainVideoAudio();
                 if (healthController != null) healthController.syncNow();
@@ -1150,7 +1320,7 @@ public final class RabiConversationService extends Service {
     }
 
     private boolean configureBackend() {
-        RabiLinkRelayConfig relay = RabiLinkRelaySettings.load(this);
+        RabiLinkRelayConfig relay = voiceCallRelay == null ? RabiLinkRelaySettings.load(this) : voiceCallRelay;
         if (!relay.getConfigured()) {
             if (backend != null) {
                 backend.configure("", "", RabiMobileDeviceIdentity.load(this));
@@ -1161,7 +1331,8 @@ public final class RabiConversationService extends Service {
         }
         backend.configure(relay.getBaseUrl(), relay.getToken(), RabiMobileDeviceIdentity.load(this));
         applyUploadPolicy();
-        backend.setTargetWorkerId(com.rabi.link.recording.TargetWorkerIdentity.load(this, relay.getBaseUrl(), relay.getToken()));
+        RabiVoiceCallSession call = voiceCall;
+        backend.setTargetWorkerId(call == null ? com.rabi.link.recording.TargetWorkerIdentity.load(this, relay.getBaseUrl(), relay.getToken()) : call.workerId);
         backend.reloadSettings();
         return true;
     }
@@ -1207,7 +1378,11 @@ public final class RabiConversationService extends Service {
     }
 
     private boolean playOnPhone(byte[] pcm) {
+        return playOnPhone(pcm, null);
+    }
+    private boolean playOnPhone(byte[] pcm, RabiVoiceCallSession call) {
         synchronized (phonePlaybackLock) {
+            if (call != null && (voiceCall != call || call.ended)) return false;
             if (pcm == null || pcm.length < 4) return false;
             phoneAudioCapture.setPlaybackSuppressed(true);
             int minimum = AudioTrack.getMinBufferSize(16000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
@@ -1236,7 +1411,12 @@ public final class RabiConversationService extends Service {
                 if (written != pcm.length) return false;
                 int markerResult = track.setNotificationMarkerPosition(markerFrames);
                 if (markerResult != AudioTrack.SUCCESS) return false;
-                track.play();
+                if (call == null) track.play();
+                else synchronized (call) {
+                    if (voiceCall != call || call.ended) return false;
+                    callPlaybackTrack = track; callPlaybackCompleted = completed;
+                    track.play();
+                }
                 long timeoutMs = Math.max(5000, (pcm.length * 1000L) / 32000L + 5000L);
                 if (!completed.await(timeoutMs, TimeUnit.MILLISECONDS)) return false;
                 return markerReached.get();
@@ -1248,6 +1428,9 @@ public final class RabiConversationService extends Service {
             } finally {
                 try { track.stop(); } catch (Throwable ignored) { }
                 track.release();
+                if (call != null) synchronized (call) {
+                    if (callPlaybackTrack == track) { callPlaybackTrack = null; callPlaybackCompleted = null; }
+                }
                 phoneAudioCapture.setPlaybackSuppressed(false);
             }
         }
@@ -1390,8 +1573,10 @@ public final class RabiConversationService extends Service {
 
     private Notification notification(String text) {
         AllDayRecordingSettings s = AllDayRecordingSettings.load(this);
+        RabiVoiceCallSession call = voiceCall;
         PendingIntent content = PendingIntent.getActivity(this, REVIEW_NOTIFICATION_ID,
-                new Intent(this, com.rabi.link.recording.RabiRecordingHubActivity.class),
+                call == null ? new Intent(this, com.rabi.link.recording.RabiRecordingHubActivity.class)
+                        : new Intent(this, MainActivity.class).putExtra(EXTRA_ROUTE_PROFILE_ID, call.routeId),
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         PendingIntent pause = PendingIntent.getService(this, REVIEW_NOTIFICATION_ID + 1,
                 new Intent(this, RabiConversationService.class).setAction(ACTION_PAUSE_RECORD),
@@ -1401,11 +1586,15 @@ public final class RabiConversationService extends Service {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, LISTENING_CHANNEL)
                 .setSmallIcon(com.rabi.link.R.drawable.rabiroute_icon)
-                .setContentTitle(s.running ? "Rabi · 全天记录" : "Rabi · 记录已暂停")
-                .setContentText(captureStatus)
+                .setContentTitle(call != null ? "Rabi · 语音通话" : s.running ? "Rabi · 全天记录" : "Rabi · 记录已暂停")
+                .setContentText(call != null ? getSharedPreferences("rabi_conversation_runtime", MODE_PRIVATE).getString("callStatus", "正在连接") : captureStatus)
                 .setContentIntent(content).setOngoing(true).setOnlyAlertOnce(true).setSilent(true)
                 .setVisibility(NotificationCompat.VISIBILITY_PRIVATE);
-        if (s.running) builder.addAction(0, "暂停", pause).addAction(0, "标记", mark);
+        if (call != null) {
+            PendingIntent hangup = PendingIntent.getService(this, REVIEW_NOTIFICATION_ID + 3,
+                    new Intent(this, RabiConversationService.class).setAction(ACTION_CALL_END), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            builder.addAction(0, "挂断", hangup);
+        } else if (s.running) builder.addAction(0, "暂停", pause).addAction(0, "标记", mark);
         return builder.build();
     }
 
@@ -1490,6 +1679,8 @@ public final class RabiConversationService extends Service {
     private void shutdown(boolean explicitStop) {
         if (shutdownComplete) return;
         shutdownComplete = true;
+        RabiVoiceCallSession call = voiceCall;
+        if (call != null) { endCallPlayback(call); voiceCall = null; voiceCallRelay = null; callStatus("ended", "服务已退出，通话已结束；回复仍可保留"); }
         pendingStarts.clear();
         ++captureGeneration;
         if (healthController != null) healthController.close();

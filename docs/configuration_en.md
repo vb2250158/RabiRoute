@@ -88,13 +88,23 @@ On a clean start, the Manager copies the public `examples/data` package when ava
 ```json
 {
   "enabled": true,
-  "messageAdapters": ["napcat", "heartbeat"],
+  "messageAdapters": [
+    "napcat",
+    "heartbeat"
+  ],
   "messageAdapterPolicies": {
     "napcat": {
       "inputEnabled": true,
       "outputEnabled": true,
-      "supportedOutputs": ["text", "image", "voice", "file"],
-      "allowedFileRoots": ["C:/Path/To/Your/Project/ReleasePkg"],
+      "supportedOutputs": [
+        "text",
+        "image",
+        "voice",
+        "file"
+      ],
+      "allowedFileRoots": [
+        "C:/Path/To/Your/Project/ReleasePkg"
+      ],
       "messageGrouping": {
         "settleSeconds": 6,
         "incompleteSettleSeconds": 12,
@@ -115,15 +125,16 @@ On a clean start, the Manager copies the public `examples/data` package when ava
     "sessionContextEnabled": true,
     "reasoningContextEnabled": true,
     "planTaskCompletionEnabled": true,
-    "agentCommunicationEnforcementEnabled": true,
-    "onlyPrimaryPersonaCanSendMessages": false
+    "agentCommunicationEnforcementEnabled": true
   },
   "agentModel": "gpt-5.6-terra",
   "agentReasoningEffort": "high",
   "dshModelProvider": "deepseek-official",
   "dshModel": "deepseek-v4-pro",
   "dshReasoningEffort": "max",
-  "agentAdapters": ["codex"],
+  "agentAdapters": [
+    "codex"
+  ],
   "primaryAgentAdapter": "codex",
   "messageProcessingAgents": {
     "codex": {
@@ -134,7 +145,6 @@ On a clean start, the Manager copies the public `examples/data` package when ava
     }
   },
   "heartbeatSkipWhenAgentBusy": true,
-  "personaAutomationScriptsEnabled": false,
   "dataDir": "./data/route/main",
   "rolesDir": "./data/roles",
   "configName": "main",
@@ -146,7 +156,7 @@ On a clean start, the Manager copies the public `examples/data` package when ava
 ## Core fields
 
 - `messageAdapters`: configurable input types. Current IDs include `napcat`, `remoteAgent`, `heartbeat`, `speech`, `webhook`, `fennenote`, `xiaoai`, `rabilink`, `wearable`, `wecom`, `weixin`, and `feishu`. Legacy `rolePanel` entries remain compatible, but WebGUI no longer presents them as configurable because Manager provides role-panel messaging by default.
-- `personaAutomationScriptsEnabled`: Route-local permission for persona automation to run local scripts. It defaults to `false`, is not stored in the persona or granted to another PC by remote access, and gates script actions triggered by either messages or schedules.
+
 - `messageAdapterPolicies`: `inputEnabled`, `outputEnabled`, `supportedOutputs`, and adapter-specific restrictions. QQ, Weixin, Feishu, WeCom, role-panel, and RabiLink text chats use message groups automatically without an off switch. `messageGrouping` exposes only ordinary settle, unfinished-fragment settle, and maximum wait values, defaulting to `6 / 12 / 20` seconds. ASR/voice transcripts, heartbeat, commands, approvals, health alerts, and structured events continue direct delivery without this wait. Chat dispatch changes only when Codex Message Agent mode is also enabled; otherwise delivery remains per-message. Legacy allow-group/user and output-mode fields are no longer active fine-grained filters.
 - `supportedOutputs`: outbound payload kinds. NapCat supports `text`, `image`, `voice`, and `file` in the current policy model.
 - `allowedFileRoots`: real-path allowlist for local file output. A local QQ group-file upload is blocked when this is empty or the resolved file leaves the allowlist.
@@ -172,7 +182,7 @@ On a clean start, the Manager copies the public `examples/data` package when ava
 - `codexHooks.reasoningContextEnabled`: defaults to `true`. Controls `PreToolUse` / `PostToolUse`, triggered before and after tool calls and returning only newly matched plan, memory, or skill context for the turn.
 - `codexHooks.planTaskCompletionEnabled`: defaults to `true`. Controls `Stop` completion reminders after a plan-bound execution task outputs its final answer for the turn. With Plan Secretary enabled and a valid secretary task available, Manager delivers directly to the plan's `secretaryBinding`, does not write the Primary Persona role-panel timeline, and does not wake the Primary Persona by default. It falls back to the original Primary Persona path only when no usable secretary is enabled. Turning the switch off only makes Manager ignore or reject the Hook; it does not unregister or rewrite the Codex plugin Hook.
 - `codexHooks.agentCommunicationEnforcementEnabled`: shown in WebGUI as **Require the RabiAgent message delivery API**, defaults to `true`, and is stored per Route. When enabled, that Route's Primary Persona, Plan Agents, Plan Secretaries, and Message Agents cannot bypass `/api/agent/threads` with persistent Codex task tools. `PreToolUse` denies the call before execution and explains the required `sourceThreadId`, `sourceAgentType`, and `responsePolicy`; `required` also needs `responseInstruction`. If the target ends a turn without a formal Rabi response, Manager reminds it five minutes after that turn ends. Turning the switch off disables only the bypass check; already tracked requests continue to be followed up.
-- `codexHooks.onlyPrimaryPersonaCanSendMessages`: the field name is retained for compatibility. It defaults to `false` and applies when Codex or DSH is the Primary Agent. When enabled, `/api/agent/send` accepts only `sender.agentType=primary_persona` with a `sender.sessionId` exactly matching the active `codexThreadId` or `dshSessionId`; Plan Agents, Plan Secretaries, and Message Agents are rejected. The setting is discarded when the Primary Agent does not support managed Hooks.
+
 - `copilotThreadName` / `copilotCwd`: independent Copilot CLI session configuration.
 - `agentModel` / `agentReasoningEffort`: the model and reasoning effort Manager applies to new Codex Desktop turns for the Route's Primary Persona. Empty values preserve the target Desktop task's current settings. When Desktop is available, WebGUI uses a short-lived app-server `model/list` request to load models visible to the current account and their reasoning efforts; the model remains manually editable if discovery fails. Accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`, while the selected model's catalog remains the authoritative availability source. These fields affect only the Primary Persona and do not override Message Agents, Plan Secretaries, or independently bound Plan Agents.
 - `heartbeatSkipWhenAgentBusy`: applies only while Codex Message Agent mode is off. With Message Agent mode on, heartbeat goes immediately to an independent Message Agent and is not skipped because the Primary task is active. Other message kinds are unaffected.
@@ -294,7 +304,7 @@ Record-first sources such as FenneNote can be selected through `routeVariables.r
 
 ## Multiple routes and shared roles
 
-Each folder under `data/route` is independently startable and may have its own endpoints and handler workspace. Several Routes may bind the same `agentRoleId`; they reuse that persona's root-level automation rules, speech keywords, and context budgets while retaining their own endpoint, pipeline, hot-delivery, handler configuration, and local script permission.
+Each folder under `data/route` is independently startable and may have its own endpoints and handler workspace. Several Routes may bind the same `agentRoleId`; they reuse that persona's root-level automation rules, speech keywords, and context budgets while retaining their own endpoint, pipeline, hot-delivery, handler configuration, .
 
 Once an ordinary message matches a rule, it is delivered directly to the Route's Primary Agent. When Codex is primary, RabiRoute uses `steer` for an active Desktop turn or `start` for an idle task. Ordinary endpoints do not need another hot-push toggle. Heartbeat's busy-skip switch and speech's hot/keyword mode are explicit exceptions.
 

@@ -80,7 +80,7 @@ test("remote persona automation cannot schedule or execute scripts on the local 
   assert.throws(() => resolvePersonaScript(profile, "check.py"), /owning PC/);
 });
 
-test("persona script resolution requires local opt-in and blocks path escape", () => {
+test("configured local persona scripts run without another permission switch and block path escape", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-automation-"));
   const rolesDir = path.join(root, "roles");
   const scriptsDir = path.join(rolesDir, "Rabi", "scripts");
@@ -88,7 +88,7 @@ test("persona script resolution requires local opt-in and blocks path escape", (
   fs.writeFileSync(path.join(scriptsDir, "check.py"), "print('ok')\n", "utf8");
   fs.writeFileSync(path.join(root, "outside.py"), "print('no')\n", "utf8");
 
-  assert.throws(() => resolvePersonaScript(route(rolesDir), "check.py"), /未允许/);
+  assert.equal(resolvePersonaScript(route(rolesDir), "check.py").scriptPath, path.join(scriptsDir, "check.py"));
   const enabled = route(rolesDir, { personaAutomationScriptsEnabled: true });
   assert.equal(resolvePersonaScript(enabled, "scripts/check.py").scriptPath, path.join(scriptsDir, "check.py"));
   assert.throws(() => resolvePersonaScript(enabled, "../outside.py"), /相对路径/);

@@ -24,8 +24,11 @@ import type {
   SpeechSpeakerProfileDeleteResult,
   SpeechSpeakerProfileUpdateCommand,
   SpeechSpeakerRegistry,
-  SpeechSynthesisCommand
+  SpeechSynthesisCommand,
+  SpeechTranscriptionResult
 } from "@shared/speechControlContract";
+import { normalizeSpeechRecognitionMetadata } from "@shared/speechRecognitionMetadata";
+import { normalizeSpeechTranscriptSegment } from "@shared/speechTranscript";
 import type { SelectionSpeechSettings } from "@shared/selectionSpeechContract";
 
 export type SpeechRecordsQuery = {
@@ -55,13 +58,7 @@ export type SpeechIngressHistoryQuery = {
 
 export type SpeechRecordsPayload = { records: SpeechRecord[] };
 
-export type SpeechTranscriptionResult = {
-  text: string;
-  language?: string;
-  duration?: number;
-  segments?: unknown[];
-  words?: unknown[];
-};
+export type { SpeechTranscriptionResult } from "@shared/speechControlContract";
 
 export type SpeechSynthesisResult = {
   audio?: Blob;
@@ -289,8 +286,21 @@ export const speechControlClient = {
     if (sessionId) form.append("session_id", sessionId);
     if (routeId) form.append("route_id", routeId);
     form.append("response_format", "verbose_json");
+    form.append("timestamp_granularities", "word");
     const response = await fetch("/api/speech/asr", { method: "POST", body: form });
     if (!response.ok) throw await responseError(response);
-    return await response.json() as SpeechTranscriptionResult;
+    const value = await response.json() as Record<string, unknown>;
+    return {
+      text: String(value.text || ""),
+      language: typeof value.language === "string" ? value.language : undefined,
+      duration: typeof value.duration === "number" && Number.isFinite(value.duration) ? value.duration : undefined,
+      provider: typeof value.provider === "string" ? value.provider : undefined,
+      model: typeof value.model === "string" ? value.model : undefined,
+      segments: Array.isArray(value.segments)
+        ? value.segments.map((segment, index) => normalizeSpeechTranscriptSegment(segment, index, { includeDiagnosticNames: true }))
+          .filter((segment): segment is NonNullable<typeof segment> => segment !== undefined)
+        : undefined,
+      ...normalizeSpeechRecognitionMetadata(value)
+    };
   }
 };

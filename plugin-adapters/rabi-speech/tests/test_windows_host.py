@@ -1,7 +1,15 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "windows_host.py"
@@ -89,6 +97,116 @@ def test_start_script_prefers_built_windows_host() -> None:
     assert '& $pythonExe @prefixArgs @hostArgs' in source
     assert 'RabiPC\\RabiSpeech' in source
     assert 'RABISPEECH_MODEL_ROOT' in source
+
+
+def test_missing_host_build_tool_probe_is_quiet_and_allows_installation() -> None:
+    source = (SCRIPT.parent / "build-windows-host.ps1").read_text(encoding="utf-8")
+    probe = re.search(r'& \$pythonExe @prefixArgs -c "([^"]+find_spec[^\"]+)"', source)
+    assert probe is not None
+    code = probe.group(1).replace("'PyInstaller'", "'rabispeech_missing_build_tool_test'")
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert result.returncode == 1
+    assert result.stderr == ""
+    assert result.stdout == ""
+
+
+def powershell() -> str:
+    executable = shutil.which("powershell.exe") or shutil.which("pwsh")
+    if executable is None:
+        pytest.skip("PowerShell is required for the Windows installation contract")
+    return executable
+
+
+def powershell_literal(value: Path) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def fake_python(path: Path, receipt: Path) -> None:
+    path.write_text(
+        "[pscustomobject]@{argv=@($args); python_path=[string]$env:PYTHONPATH; "
+        "dependencies=[string]$env:RABISPEECH_DEPS_ROOT} | ConvertTo-Json -Depth 4 | "
+        f"Set-Content -LiteralPath {powershell_literal(receipt)} -Encoding UTF8\n"
+        "$global:LASTEXITCODE = 0\n",
+        encoding="utf-8",
+    )
+
+
+def run_powershell(script: Path, args: list[str], environment: dict[str, str]) -> None:
+    result = subprocess.run(
+        [powershell(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(script), *args],
+        cwd=script.parent.parent,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("external_dependencies", [False, True])
+def test_installer_writes_requested_dependencies_and_passes_them_to_host_builder(
+    tmp_path: Path, external_dependencies: bool
+) -> None:
+    root = tmp_path / "current-package" / "rabi-speech"
+    scripts = root / "scripts"
+    scripts.mkdir(parents=True)
+    installer = scripts / "install.ps1"
+    installer.write_text((SCRIPT.parent / installer.name).read_text(encoding="utf-8"), encoding="utf-8")
+    (root / "requirements.txt").write_text("# fixture\n", encoding="utf-8")
+    pip_receipt = tmp_path / "pip.json"
+    build_receipt = tmp_path / "build.json"
+    python = tmp_path / "fake_python.ps1"
+    fake_python(python, pip_receipt)
+    (scripts / "build-windows-host.ps1").write_text(
+        "[pscustomobject]@{dependencies=[string]$env:RABISPEECH_DEPS_ROOT} | ConvertTo-Json | "
+        f"Set-Content -LiteralPath {powershell_literal(build_receipt)} -Encoding UTF8\n"
+        "$global:LASTEXITCODE = 0\n",
+        encoding="utf-8",
+    )
+    dependencies = tmp_path / "state" / "core-deps" if external_dependencies else root / ".deps"
+    args = ["-Python", str(python)]
+    if external_dependencies:
+        args += ["-DependencyRoot", str(dependencies)]
+    environment = os.environ.copy()
+    environment["OS"] = "Windows_NT"
+    environment.pop("RABISPEECH_DEPS_ROOT", None)
+    run_powershell(installer, args, environment)
+    pip = json.loads(pip_receipt.read_text(encoding="utf-8-sig"))
+    build = json.loads(build_receipt.read_text(encoding="utf-8-sig"))
+    assert dependencies.is_dir()
+    assert Path(pip["argv"][pip["argv"].index("--target") + 1]) == dependencies
+    assert Path(build["dependencies"]) == dependencies
+    if external_dependencies:
+        assert not (root / ".deps").exists()
+
+
+@pytest.mark.parametrize("external_dependencies", [False, True])
+def test_current_model_downloader_uses_effective_dependencies_with_manual_fallback(
+    tmp_path: Path, external_dependencies: bool
+) -> None:
+    root = tmp_path / "current-package" / "rabi-speech"
+    scripts = root / "scripts"
+    scripts.mkdir(parents=True)
+    downloader = scripts / "install_models.ps1"
+    downloader.write_text((SCRIPT.parent / downloader.name).read_text(encoding="utf-8"), encoding="utf-8")
+    (scripts / "install_models.py").write_text("# fixture downloader\n", encoding="utf-8")
+    dependencies = tmp_path / "state" / "core-deps" if external_dependencies else root / ".deps"
+    dependencies.mkdir(parents=True)
+    receipt = tmp_path / "downloader.json"
+    python = tmp_path / "fake_python.ps1"
+    fake_python(python, receipt)
+    environment = os.environ.copy()
+    environment.pop("RABISPEECH_DEPS_ROOT", None)
+    if external_dependencies:
+        environment["RABISPEECH_DEPS_ROOT"] = str(dependencies)
+    run_powershell(downloader, ["-List", "-ModelRoot", str(tmp_path / "models"), "-Python", str(python)], environment)
+    result = json.loads(receipt.read_text(encoding="utf-8-sig"))
+    assert Path(result["argv"][0]) == scripts / "install_models.py"
+    assert result["argv"][-1] == "--list"
+    assert result["python_path"].split(os.pathsep)[:2] == [str(dependencies), str(root)]
+    if external_dependencies:
+        assert not (root / ".deps").exists()
 
 
 def test_reload_uses_uvicorn_factory_and_limits_watch_directory() -> None:

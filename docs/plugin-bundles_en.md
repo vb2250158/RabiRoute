@@ -95,7 +95,7 @@ The Profile is the single source of truth for enabled deployment instances:
 }
 ```
 
-`grants` may grant only permissions declared by the Manifest and allowed by deployment. `policy` bounds instance restart and resources; the kernel supplies one default policy instead of allowing plugins to interpret missing values. A Manager generation reports ready to Host only when every `readyRequires` capability has an active provider.
+Installed plugins use host APIs declared by their Manifest without another Profile grant. Legacy `grants` input and the `grantedPermissions` callback no longer control execution and will be removed in 0.4.0. `policy` still bounds restarts and resources. Every `readyRequires` capability must have an active provider before the generation is ready.
 
 ## Identity and lifecycle
 

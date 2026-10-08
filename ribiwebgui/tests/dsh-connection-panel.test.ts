@@ -16,6 +16,7 @@ test("login link uses one POST body, never query or replay; returned origin is c
   assert.equal(calls[0].url, "/api/agent-adapters/dsh/connection");
   assert.equal(calls[0].init?.method, "POST");
   assert.equal(calls[0].init?.redirect, "error");
+  assert.equal(calls[0].init?.credentials, "same-origin");
   assert.match(String(calls[0].init?.body), /fixture-only/);
 });
 test("failures never expose response secrets or retry", async () => {

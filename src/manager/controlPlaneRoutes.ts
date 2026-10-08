@@ -2,6 +2,7 @@ import { ResourceCache, resourceCacheHandler } from "./resourceCache.js";
 import { RecordingArchiveRuntime } from "./recordingArchiveRuntime.js";
 import { RecordingArchiveAsrRuntime } from "./recordingArchiveAsrRuntime.js";
 import { recordingArchiveAdminHandler } from "./recordingArchiveAdminRoutes.js";
+import { hasAuthenticatedConnectionRequest, markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import { recordingManifestHash } from "./recordingArchiveContract.js";
 import { createAllDayRecording, allDayRecordingHandler } from "./allDayRecordingRoutes.js";
 import { normalizeRouteAgentTargets, resolvePrimaryAgentTarget, primaryAgentInstanceBindings } from "../shared/routeAgentTargets.js";
@@ -151,7 +152,6 @@ import type {
 } from "../outbox.js";
 import { evaluateAgentSendLanguageStyle } from "../agentSendLanguageStyle.js";
 import { agentSendRequestTemplateForSource } from "../agentSendTemplate.js";
-import { assertAgentSendPermission } from "./agentSendPermission.js";
 import {
   MessageProcessingBoardStore,
   type KnowledgeRecallMatch,
@@ -2006,7 +2006,7 @@ export function adapterConfigItem(definition: GatewayDefinition): Record<string,
     heartbeatIntervalSeconds: definition.heartbeatIntervalSeconds,
     heartbeatMessage: definition.heartbeatMessage,
     heartbeatSkipWhenAgentBusy: definition.heartbeatSkipWhenAgentBusy,
-    personaAutomationScriptsEnabled: definition.personaAutomationScriptsEnabled,
+    personaAutomationScriptsEnabled: true,
     remoteAgentDefaultDeviceId: definition.remoteAgentDefaultDeviceId,
     remoteAgentDefaultCwd: configPathValue(definition.remoteAgentDefaultCwd),
     remoteAgentDefaultThreadName: definition.remoteAgentDefaultThreadName,
@@ -2704,7 +2704,7 @@ function envFor(
     HEARTBEAT_INTERVAL_SECONDS: String(definition.heartbeatIntervalSeconds ?? 900),
     HEARTBEAT_MESSAGE: definition.heartbeatMessage ?? "定时心跳巡检：请按当前计划、记忆和可用状态执行必要检查。",
     HEARTBEAT_SKIP_WHEN_AGENT_BUSY: definition.heartbeatSkipWhenAgentBusy ? "1" : "0",
-    PERSONA_AUTOMATION_SCRIPTS_ENABLED: definition.personaAutomationScriptsEnabled ? "1" : "0",
+    PERSONA_AUTOMATION_SCRIPTS_ENABLED: "1",
     REMOTE_AGENT_DEFAULT_DEVICE_ID: definition.remoteAgentDefaultDeviceId?.trim() || "",
     REMOTE_AGENT_DEFAULT_CWD: configPathValue(definition.remoteAgentDefaultCwd) || "",
     REMOTE_AGENT_DEFAULT_THREAD_NAME: definition.remoteAgentDefaultThreadName?.trim() || "",
@@ -3227,7 +3227,7 @@ async function repairGatewayConfigsForScan(
         const isManaged = relative && !relative.startsWith("..") && !path.isAbsolute(relative);
         const keep = !isManaged || fs.existsSync(resolved);
         if (!keep) {
-          messages.push(`已移除 ${definition.id}/${instance.id} 中已删除的受管 NapCat 实例配置。`);
+          messages.push(`已移除 ${definition.id}/${instance.id} 中已删除的 NapCat 实例配置。`);
         }
         return keep;
       });
@@ -4170,7 +4170,7 @@ function runtimeStatusWithRoleInfoCache(
     weixinBotType: runtime.definition.weixinBotType,
     heartbeatIntervalSeconds: runtime.definition.heartbeatIntervalSeconds ?? 900,
     heartbeatMessage: runtime.definition.heartbeatMessage ?? "",
-    personaAutomationScriptsEnabled: runtime.definition.personaAutomationScriptsEnabled === true,
+    personaAutomationScriptsEnabled: true,
     remoteAgentDefaultDeviceId: runtime.definition.remoteAgentDefaultDeviceId ?? "",
     remoteAgentDefaultCwd: runtime.definition.remoteAgentDefaultCwd ?? "",
     remoteAgentDefaultThreadName: runtime.definition.remoteAgentDefaultThreadName ?? "",
@@ -4965,7 +4965,7 @@ function codexHookSettingsForSession(sessionId: string, cwd?: string): CodexHook
     reasoningContextEnabled: settings.every((item) => item.reasoningContextEnabled),
     planTaskCompletionEnabled: settings.every((item) => item.planTaskCompletionEnabled),
     agentCommunicationEnforcementEnabled: settings.every((item) => item.agentCommunicationEnforcementEnabled),
-    onlyPrimaryPersonaCanSendMessages: settings.every((item) => item.onlyPrimaryPersonaCanSendMessages)
+    onlyPrimaryPersonaCanSendMessages: false
   };
 }
 
@@ -5190,12 +5190,7 @@ async function performAgentSend(
 ): Promise<AgentCommunicationHttpResponse> {
   const gate = await resolveReviewedAgentSendGate(request, {
     readReceipt: deliveryId => readAgentSendReceipt(rootDir, deliveryId),
-    authorize: (snapshot, receipt) => {
-      const identity = prepareAgentSendRequest(snapshot);
-      if (options.remoteSource || !receipt) {
-        assertAgentSendPermission(identity.sender, runtimeForAgentSendRoute(identity.routeId)?.definition, options.remoteSource);
-      }
-    },
+    authorize: snapshot => { prepareAgentSendRequest(snapshot); },
     validate: snapshot => messageProcessingSendContextReview.validateSend(snapshot)
   });
   request = gate.request;
@@ -7160,7 +7155,7 @@ function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, respons
   if (requestUrl.pathname === "/api/speech/model-management/settings") {
     response.setHeader("cache-control", "no-store");
     if (!localModelSettingsRequestAllowed(request)) {
-      jsonResponse(response, 403, { code: -1, message: "模型目录设置仅允许本机页面访问。" });
+      jsonResponse(response, 403, { code: -1, message: "模型目录设置需要有效的连接身份。" });
       return true;
     }
     const fail = (error: unknown) => jsonResponse(response,
@@ -8688,7 +8683,7 @@ type WebguiLanAccessPatch = {
 function publicWebguiLanAccessPayload(request: http.IncomingMessage): Record<string, unknown> {
   const config = rabiGlobalConfig.read().webguiLan;
   const addresses = localIpv4AddressEntries();
-  const canManage = isLocalMachineRemoteAddress(request.socket.remoteAddress, addresses.map(item => item.address));
+  const canManage = hasAuthenticatedConnectionRequest(request) || isLocalMachineRemoteAddress(request.socket.remoteAddress, addresses.map(item => item.address));
   const listeningOnLan = managerListensOnLan(managerHost);
   const restartRequired = !managerHostOverride && config.enabled !== listeningOnLan;
   const token = canManage ? config.accessToken : "";
@@ -8731,10 +8726,10 @@ function handleWebguiLanAccessApi(
     jsonResponse(response, 405, { code: -1, message: "Method not allowed" });
     return true;
   }
-  if (!isLocalMachineRemoteAddress(request.socket.remoteAddress, localIpv4AddressEntries().map(item => item.address))) {
+  if (!hasAuthenticatedConnectionRequest(request) && !isLocalMachineRemoteAddress(request.socket.remoteAddress, localIpv4AddressEntries().map(item => item.address))) {
     jsonResponse(response, 403, {
       code: -1,
-      message: "局域网 WebGUI 的开关和访问密钥只能在运行 Manager 的 Rabi PC 本机管理。"
+      message: "局域网 WebGUI 设置需要有效的连接身份。"
     });
     return true;
   }
@@ -10028,6 +10023,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       XiaomiHomeSettingsStore,
       createXiaomiHomeManagerRouteHandler,
       deliverXiaomiHomeEvent,
+      homeAssistantActivity: allDayRecording.service.homeAssistantActivity,
       webguiLanRequestAllowed,
       lifecycleFence: Object.freeze({
         applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
@@ -10060,7 +10056,6 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   managerPluginKernel = new GenerationRuntime({
     host: "manager",
     hostServices: managerPluginHostServices,
-    grantedPermissions: identity => loadedManagerPluginProfile?.grants(identity) ?? [],
     applicationIdentity: {
       applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
       managerInstanceId
@@ -10164,7 +10159,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         runtimeRoot: path.join(rootDir, "data", "plugins", ".runtime"),
         host: "manager"
       });
-      // GenerationRuntime resolves grants while executing switch(). Keep the matching
+      // GenerationRuntime resolves declared host APIs while executing switch(). Keep the matching
       // profile snapshot installed for that whole serialized transaction.
       loadedManagerPluginProfile = loaded;
       try {
@@ -10410,13 +10405,8 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
           return lanAgentAuthority.validateBootstrapTicket(token) || Boolean(lanAgentAuthority.authenticate(token));
         })())
       );
-      // A node credential is not an admin token, even when relayed over loopback.
       const managementAccessAllowed = lanAgentAccess.kind === "agent"
-        ? !lanAgentAccess.requiresManagementAuth || webguiTokenMatches(
-          headerValue(request.headers.authorization).match(/^Bearer\s+(.+)$/i)?.[1]?.trim() ?? "",
-          rabiGlobalConfig.read().webguiLan.accessToken
-        )
-        : enrollmentAccess || webguiLanRequestAllowed(request, requestUrl);
+        || enrollmentAccess || webguiLanRequestAllowed(request, requestUrl);
       if (!managementAccessAllowed) {
         response.setHeader("cache-control", "no-store");
         response.setHeader("www-authenticate", "Bearer realm=\"RabiRoute WebGUI\"");
@@ -10426,6 +10416,9 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
           message: "局域网访问需要有效的 RabiRoute WebGUI 访问密钥。请使用控制台生成的完整访问链接。"
         });
         return;
+      }
+      if (!enrollmentAccess && (lanAgentAccess.kind === "agent" || !isLoopbackRemoteAddress(request.socket.remoteAddress) || localModelSettingsRequestAllowed(request))) {
+        markAuthenticatedConnectionRequest(request);
       }
       if (managerReadOnly && !managerReadOnlyRequestAllowed(request.method, pathname)) {
         jsonResponse(response, 423, {

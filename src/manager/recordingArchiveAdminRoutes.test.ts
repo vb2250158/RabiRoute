@@ -6,6 +6,7 @@ import path from "node:path";
 import http from "node:http";
 import { RecordingArchiveBindings, archiveAdminDigest, archiveSettingsEtag } from "./recordingArchiveBindings.js";
 import { recordingArchiveAdminHandler } from "./recordingArchiveAdminRoutes.js";
+import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 
 test("administrative settings enforce preconditions, persist replay, and never expose paths", async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "archive-admin-"));
@@ -21,7 +22,11 @@ test("administrative settings enforce preconditions, persist replay, and never e
   const bindings = new LostResponseBindings(state, () => role);
   const options = { bindings, receiptRoot: state, identity: () => ({ applicationGenerationId: "gen", managerInstanceId: "instance" }), workerId: () => "pc-test", readOnly: () => false };
   let handler = recordingArchiveAdminHandler(options);
-  const server = http.createServer((req, res) => handler(req, new URL(req.url!, "http://localhost"), res));
+  let verifiedConnection = false;
+  const server = http.createServer((req, res) => {
+    if (verifiedConnection) markAuthenticatedConnectionRequest(req);
+    handler(req, new URL(req.url!, "http://localhost"), res);
+  });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
   const url = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}/api/resource-cache/archive-settings`;
@@ -32,6 +37,10 @@ test("administrative settings enforce preconditions, persist replay, and never e
   const put = (extra = {}, body = input) => fetch(url, { method: "PUT", headers: { ...headers, ...extra }, body: JSON.stringify(body) });
   assert.equal((await put({ "x-rabilink-tunnel-local": "gen" })).status, 403);
   assert.equal((await put({ origin: "http://other.invalid" })).status, 403);
+  verifiedConnection = true;
+  const authenticated = await fetch(url, { headers: { "x-rabilink-tunnel-local": "gen" } });
+  assert.equal(authenticated.status, 200);
+  verifiedConnection = false;
   assert.equal((await put({ "x-rabiroute-expected-manager-instance-id": "old" })).status, 409);
   assert.equal((await put({ "if-match": "W/\"old\"" })).status, 400);
   assert.equal((await put({ "if-match": "\"stale\"", "idempotency-key": "stale-op" })).status, 412);

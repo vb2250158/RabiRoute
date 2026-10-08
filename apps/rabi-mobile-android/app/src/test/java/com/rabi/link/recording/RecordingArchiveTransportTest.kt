@@ -112,4 +112,35 @@ class RecordingArchiveTransportTest {
         fails<IllegalArgumentException> { t.readObject(target(), hash, 4) }
         fails<IllegalArgumentException> { t.putObject(target(), "a".repeat(64), pcm) }
     }
+    @Test fun evictionRequiresVisibleHistoryAndEveryOriginalByte() {
+        val pcm = ByteArray(32000)
+        val hash = MessageDigest.getInstance("SHA-256").digest(pcm).joinToString("") { "%02x".format(it.toInt() and 255) }
+        val manifest = RecordingArchiveContractTest.fixture().put("deviceId", "phone")
+        for (name in listOf("segments", "objects")) {
+            val rows = manifest.getJSONArray(name)
+            for (i in 0 until rows.length()) rows.getJSONObject(i).put("sha256", hash)
+        }
+        val manifestHash = RecordingArchiveContract.recordingManifestHash(manifest)
+        for (failure in 0..3) {
+            var reads = 0
+            val t = transport { _, path, _ ->
+                when {
+                    path == "/archive-capabilities" -> reply(200, cap())
+                    path.endsWith("/manifest") -> reply(200, if (failure == 3) JSONObject(manifest.toString()).put("timeBasis", "media") else manifest)
+                    path.startsWith("/recordings?") -> reply(200, JSONObject()
+                        .put("storageNamespaceId", ns).put("offline", false).put("nextCursor", JSONObject.NULL)
+                        .put("items", org.json.JSONArray().apply {
+                            if (failure != 1) put(JSONObject().put("recordId", "record-1").put("manifestHash", manifestHash))
+                        }))
+                    path.startsWith("/objects/") -> {
+                        reads++
+                        RecordingArchiveTransport.Reply(200, if (failure == 2) pcm.copyOf().apply { this[0] = 1 } else pcm)
+                    }
+                    else -> error("Unexpected path $path")
+                }
+            }
+            if (failure == 0) { assertTrue(t.verifyArchivedPlayback(target(), manifest)); assertEquals(2, reads) }
+            else fails<IllegalArgumentException> { t.verifyArchivedPlayback(target(), manifest) }
+        }
+    }
 }

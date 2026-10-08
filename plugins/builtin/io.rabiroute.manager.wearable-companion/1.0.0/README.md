@@ -7,4 +7,4 @@
 - worker 只使用 Host READY 发布的动态 Manager URL，并在每次写入时携带 `applicationGenerationId` 与 `managerInstanceId`。
 - 手机、ADB 或 PowerShell 暂不可用时进入可诊断的 degraded 状态，不创建独立计划任务，也不扫描或猜测端口。
 
-`resources/` 中的脚本只由此插件的受管 worker 调用，不能作为独立生命周期入口。
+`resources/` 中的脚本只由此插件的 worker 调用，不能作为独立生命周期入口。

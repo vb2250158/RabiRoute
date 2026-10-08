@@ -59,4 +59,4 @@ Wiki extraction retains character facts, voice/emotion-relevant traits, dialogue
 
 ## Extension boundary
 
-The provider registration interface remains, but default configuration, installers, documentation, and tests list local models only. A future provider must be explicitly installed and registered by the local administrator; remote requests cannot download models or load code.
+The provider registration interface remains, but default configuration, installers, documentation, and tests list local models only. A future provider must be explicitly installed and registered by the local administrator; authenticated connections may use existing model download APIs, while requests cannot select arbitrary code modules.

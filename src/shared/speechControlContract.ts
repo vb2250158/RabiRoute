@@ -281,7 +281,26 @@ export type SpeechMessageStatus = "delivered" | "recorded" | "failed";
 
 export type SpeechSourceDeviceTrust = "speech_runtime_record_binding";
 
-export type SpeechHistoryItem = {
+/** Provider observations about audio, independent of transcript text and speaker identity. */
+export type SpeechRecognitionMetadata = {
+  emotion?: string;
+  emotionLabels?: string[];
+  audioEvents?: string[];
+  rawTags?: string[];
+  /** Whole-transcript confidence; it is not a per-word probability. */
+  confidence?: number;
+};
+
+export type SpeechTranscriptionResult = SpeechRecognitionMetadata & {
+  text: string;
+  language?: string;
+  duration?: number;
+  provider?: string;
+  model?: string;
+  segments?: SpeechTranscriptSegment[];
+};
+
+export type SpeechHistoryItem = SpeechRecognitionMetadata & {
   time: number;
   text: string;
   provider: string;
@@ -335,7 +354,7 @@ export type SpeechTranscriptSegment = {
   speakerSuggestionName?: string;
 };
 
-export type SpeechRecord = {
+export type SpeechRecord = SpeechRecognitionMetadata & {
   processingPolicy?: "transcribe" | "agent";
   routeProfileId?: string;
   id: string;

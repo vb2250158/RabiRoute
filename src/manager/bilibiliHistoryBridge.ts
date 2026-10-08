@@ -4,6 +4,7 @@ import path from "node:path";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { sanitizeRoleId } from "../shared/routeIdentity.js";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
+import { hasAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import {
   BilibiliHistoryRecordStore,
   type BilibiliHistoryApiItem
@@ -286,8 +287,8 @@ export class BilibiliHistoryBridge {
 
   handle(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse): boolean {
     if (!requestUrl.pathname.startsWith("/api/bilibili-history/")) return false;
-    if (!isLoopback(request)) {
-      json(response, 403, { code: -1, error: "LOOPBACK_ONLY" });
+    if (!isLoopback(request) && !hasAuthenticatedConnectionRequest(request)) {
+      json(response, 403, { code: -1, error: "CONNECTION_AUTH_REQUIRED" });
       return true;
     }
     if (request.method === "OPTIONS") {

@@ -11,12 +11,14 @@ import {
   type SpeechMicrophoneConfig,
   type SpeechProvider,
   type SpeechRecord,
+  type SpeechTranscriptionResult,
   type SpeechRouteDeliveryHistory
 } from "@shared/speechControlContract";
 import SpeechServerSelect from "../components/SpeechServerSelect.vue";
 import SpeechParameterSlider from "../components/SpeechParameterSlider.vue";
 import SpeechRecordsAndSpeakers from "../components/SpeechRecordsAndSpeakers.vue";
 import SpeechHostMonitor from "../components/SpeechHostMonitor.vue";
+import SpeechRecognitionDetails from "../components/SpeechRecognitionDetails.vue";
 import { useGatewayStore } from "../stores/gatewayStore";
 import TtsModelParameters from "../components/TtsModelParameters.vue";
 import { normalizeTtsParameters, ttsCommandSettings, type TtsParameters } from "../speech/ttsParameters";
@@ -69,7 +71,8 @@ const asrBusy = ref(false);
 const actionMessage = ref("");
 const submittedPlaybackJob = ref<string | null>(null);
 const transcript = ref("");
-const transcriptHistory = ref<Array<{ time: string; text: string; model: string }>>([]);
+const lastTranscription = ref<SpeechTranscriptionResult | null>(null);
+const transcriptHistory = ref<Array<{ time: string; text: string; model: string; result?: SpeechTranscriptionResult }>>([]);
 const listening = computed(() => microphoneStatus.value?.running === true);
 const utteranceActive = computed(() => microphoneStatus.value?.utteranceActive === true);
 const micLevel = computed(() => Number(microphoneStatus.value?.level || 0));
@@ -488,8 +491,9 @@ async function transcribeBlob(blob: Blob, name = "speech.wav"): Promise<void> {
       undefined
     );
     transcript.value = String(result.text || "").trim();
+    lastTranscription.value = result;
     if (!transcript.value) throw new Error("ASR 没有返回可用文本。");
-    transcriptHistory.value.unshift({ time: new Date().toLocaleTimeString(), text: transcript.value, model: asrModel.value });
+    transcriptHistory.value.unshift({ time: new Date().toLocaleTimeString(), text: transcript.value, model: asrModel.value, result });
     transcriptHistory.value = transcriptHistory.value.slice(0, 20);
     actionMessage.value = "本机 ASR 识别完成。";
   } finally {
@@ -555,9 +559,13 @@ async function syncMicrophoneFromStore(): Promise<void> {
   transcriptHistory.value = (next.history || []).slice(0, 20).map(item => ({
     time: new Date(item.time * 1000).toLocaleTimeString(),
     text: item.text,
-    model: `${item.provider}/${item.model}`
+    model: `${item.provider}/${item.model}`,
+    result: item
   }));
-  if (next.history?.[0]?.text && transcript.value !== next.history[0].text) transcript.value = next.history[0].text;
+  if (next.history?.[0]?.text) {
+    transcript.value = next.history[0].text;
+    lastTranscription.value = next.history[0];
+  }
 }
 
 async function syncRuntimeUiFromStore(): Promise<void> {
@@ -1151,10 +1159,12 @@ onBeforeUnmount(() => {
         </label>
       </div>
       <v-textarea v-model="transcript" label="识别文本" rows="3" :loading="asrBusy" />
+      <SpeechRecognitionDetails v-if="lastTranscription" :result="lastTranscription" />
       <div v-if="transcriptHistory.length" class="transcript-history">
         <div v-for="item in transcriptHistory" :key="`${item.time}-${item.text}`">
           <span>{{ item.time }} · {{ item.model }}</span>
           <p>{{ item.text }}</p>
+          <SpeechRecognitionDetails v-if="item.result" :result="item.result" />
         </div>
       </div>
       <div class="section-note mt-3">上方仅保留当前页面运行期的转写预览；下方读取按日期持久化的最近 ASR/TTS 双向记录。</div>

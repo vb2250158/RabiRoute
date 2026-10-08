@@ -6,6 +6,7 @@ import type { LanAgentRegistry } from "./lanAgentRegistry.js";
 import type { LanAgentReleaseStore } from "./lanAgentReleaseStore.js";
 import { handleLanAgentApi } from "./lanAgentRoutes.js";
 import { webguiRequestToken, webguiTokenMatches } from "./webguiLanAccess.js";
+import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 
 const PLACEHOLDER_REQUEST_VALUE = "test-only-placeholder-lan-management";
 
@@ -24,7 +25,7 @@ function jsonResponse(response: http.ServerResponse, statusCode: number, body: u
   response.end(payload);
 }
 
-async function startServer() {
+async function startServer(verifiedConnection = false) {
   let updateRequests = 0;
   const registry = {
     listNodes: () => [{ nodeId: "node-a", connected: true }],
@@ -39,6 +40,7 @@ async function startServer() {
     manifest: () => ({ version: "0.1.0", publicKeySha256: "a".repeat(64) })
   } as unknown as LanAgentReleaseStore;
   const server = http.createServer((request, response) => {
+    if (verifiedConnection) markAuthenticatedConnectionRequest(request);
     const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
     if (!handleLanAgentApi(request, requestUrl, response, {
       readJsonBody,
@@ -62,6 +64,16 @@ async function startServer() {
     close: () => new Promise<void>(resolve => server.close(() => resolve()))
   };
 }
+
+test("LAN Agent management reuses an authenticated connection without another WebGUI token", async () => {
+  const app = await startServer(true);
+  try {
+    assert.equal((await fetch(`${app.baseUrl}/api/lan-agent/nodes`)).status, 200);
+    const result = await fetch(`${app.baseUrl}/api/lan-agent/nodes/node-a/update`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ version: "0.2.0" }) });
+    assert.equal(result.status, 202);
+    assert.equal(app.updateRequests(), 1);
+  } finally { await app.close(); }
+});
 
 test("LAN Agent management rejects unauthenticated loopback reads and writes", async () => {
   const app = await startServer();

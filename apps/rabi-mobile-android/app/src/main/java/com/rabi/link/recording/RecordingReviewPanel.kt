@@ -79,7 +79,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
     private val ruler = RecordingTimeRuler(context)
     private val reviewColumn = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
     private val eventColumn = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-    private val listStatus = label("正在读取记录…", 12f)
+    private val listStatus = label("", 12f)
     private val scroll = ListView(context).apply { divider = null; dividerHeight = dp(10); setPadding(dp(12),0,dp(12),dp(12)); clipToPadding = false }
     private var displayedItems = emptyList<Item>()
     private var sourceFilter = 0
@@ -108,6 +108,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
     private var dragging = false
     private var closed = false
     private var loading = false
+    private var loadAfterRecovery = false
     private var reachedOlder = false
     private var reachedNewer = false
     private var revision = 0
@@ -240,7 +241,8 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
                 highlightAt(time); renderRows()
             }
         }
-        updateRange(); showEmpty("实时 · 无画面"); load(); refreshLive(); main.postDelayed(liveTick,1000)
+        lastDataSignal = dataSignal()
+        updateRange(); showEmpty("实时 · 无画面"); main.post { if(!closed) load() }; refreshLive(); main.postDelayed(liveTick,1000)
     }
     private fun dp(value: Int) = (context.resources.displayMetrics.density * value).toInt()
     private fun label(text: String, size: Float = 14f) = TextView(context).apply {
@@ -290,7 +292,19 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
                     liveWaveform = AudioWaveformView(context,true).also { preview.addView(it,FrameLayout.LayoutParams(-1,-1).apply { bottomMargin = dp(64) }) }
                 }
                 liveWaveform?.state = if(runtime.getBoolean("captureHasSignal",false)) "正在收音" else "收到静音"
-            } else if(liveWaveform != null || preview.childCount == 0) showEmpty("无画面 · 等待声音")
+            } else {
+                val settings = AllDayRecordingSettings.load(context)
+                val status = runtime.getString("allDayStatus", "").orEmpty()
+                val message = when {
+                    status.contains("storage_low") -> "手机空间不足 · 采集已暂停"
+                    status.contains("失败") || status.contains("未能启动") -> "采集异常 · 请查看状态"
+                    RabiConversationService.recoveringRecording() || settings.running -> "正在启动采集"
+                    settings.autoResume -> "等待恢复采集"
+                    else -> "采集已暂停"
+                }
+                val shown = (preview.getChildAt(0) as? TextView)?.text?.toString()
+                if(liveWaveform != null || shown != message) showEmpty(message)
+            }
         } else if(url != liveUrl) {
             releasePlayback(); liveUrl = url
             livePlayer = ExoPlayer.Builder(context).build().also { current ->
@@ -303,11 +317,15 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
         refreshChangedData()
     }
     private fun refreshChangedData() {
-        val runtime = context.getSharedPreferences("rabi_conversation_runtime",Context.MODE_PRIVATE)
-        val signal = "${runtime.getLong("captureLastReceivedAt",0)}:${runtime.getString("allDayStatus","")}:${File(context.filesDir,"rabi-conversation/audio-spool").lastModified()}"
+        if(loadAfterRecovery && !RabiConversationService.recoveringRecording()) {
+            loadAfterRecovery = false; load(); return
+        }
+        val signal = dataSignal()
         if(signal != lastDataSignal) reachedNewer = false
-        if(!listDriving && signal != lastDataSignal && System.currentTimeMillis() - lastLoad >= 5000) { lastDataSignal = signal; load() }
+        if(!listDriving && signal != lastDataSignal && System.currentTimeMillis() - lastLoad >= 1000) { lastDataSignal = signal; load() }
     }
+    private fun dataSignal() = if(archiveView) context.getSharedPreferences("recording_archive_session",Context.MODE_PRIVATE).getLong("catalogUpdatedAt",0).toString()
+        else "${RabiAudioRecordRepository.revision(context)}:${RecordingStore.revision()}"
     private fun adjacent(older: Boolean) {
         if(loading || navigating || closed) return
         ruler.cancelGesture(); listDriving = false; dragging = false; live = false
@@ -315,6 +333,8 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
     }
     private fun matchesFilter(item: Item) = (sourceFilter == 0 || (sourceFilter == 2) == (item.entry.source == "glasses")) && (typeFilter == 0 || (typeFilter == 1) == item.audio)
     private fun load(older: Boolean? = null, adjacent: Boolean = false) {
+        // Recover the capture writer before competing with it for tens of thousands of historical files.
+        if(!archiveView && RabiConversationService.recoveringRecording()) { loadAfterRecovery = true; return }
         if(archiveView) {
             if(!RecordingArchiveReviewAccess.useRemoteHistory(archiveView,RecordingArchiveSession.load(context) != null)) {
                 listStatus.text = "尚未配置电脑归档 · 全部本机记录仍可切换查看"
@@ -343,7 +363,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
         val visibleRange = ruler.visibleRange()
         val margin = maxOf(86_400_000L,ruler.window)
         val requestedRange = maxOf(0,visibleRange.first-margin)..(visibleRange.last+margin)
-        loading = true; listStatus.text = if(items.isEmpty()) "正在读取记录…" else "正在更新…"; lastLoad = System.currentTimeMillis(); val version = ++revision
+        loading = true; lastLoad = System.currentTimeMillis(); val version = ++revision
         worker.execute {
             val result = runCatching {
                 val store = RecordingStore(context)
@@ -401,7 +421,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
     }
     private fun loadArchive(next: Boolean) {
         if(closed || loading || next && archiveCursor == null) return
-        loading = true; listStatus.text = "正在读取电脑历史…"
+        loading = true
         val version = ++revision
         val requestedSource = sourceFilter
         val requestedType = typeFilter

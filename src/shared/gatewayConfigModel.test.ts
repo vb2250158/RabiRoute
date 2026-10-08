@@ -426,7 +426,7 @@ test("default gateway agent adapter uses codex", () => {
   assert.deepEqual(normalizeGatewayDefinition(gateway()).agentAdapters, ["codex"]);
 });
 
-test("Codex Hook settings default enabled and preserve explicit opt-out", () => {
+test("Codex Hook settings preserve feature opt-outs and ignore retired primary-only access", () => {
   assert.deepEqual(normalizeCodexHookSettings(undefined), {
     sessionContextEnabled: true,
     reasoningContextEnabled: true,
@@ -450,7 +450,7 @@ test("Codex Hook settings default enabled and preserve explicit opt-out", () => 
     reasoningContextEnabled: true,
     planTaskCompletionEnabled: false,
     agentCommunicationEnforcementEnabled: false,
-    onlyPrimaryPersonaCanSendMessages: true,
+    onlyPrimaryPersonaCanSendMessages: false,
     completionDeliveries: [],
     planFollowup: { enabled: false, cooldownSeconds: 300, rules: [] }
   });

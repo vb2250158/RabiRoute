@@ -58,6 +58,7 @@ function modelDirectoryPresent(root: string, model: ModelFileSpec): boolean {
     }
     case "faster-whisper": return has("config.json") && has("model.bin") && has("tokenizer.json");
     case "sensevoice": return has("config.yaml") && has("model.pt");
+    case "fireredasr2": return ["model.pth.tar", "cmvn.ark", "dict.txt", "train_bpe1000.model"].every(has);
     default: return has("config.json") && transformerWeights(root);
   }
 }

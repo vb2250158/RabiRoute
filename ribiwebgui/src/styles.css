@@ -2207,8 +2207,7 @@ button.channel-topology-node:focus-visible {
 .automation-toolbar,
 .automation-group-head,
 .automation-card-topline,
-.automation-editor-head,
-.script-permission-row {
+.automation-editor-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2221,8 +2220,7 @@ button.channel-topology-node:focus-visible {
 
 .automation-toolbar > div:first-child,
 .automation-group-head > div:first-child,
-.automation-section-heading,
-.script-permission-row > div:first-child {
+.automation-section-heading {
   display: grid;
   gap: 3px;
   min-width: 0;
@@ -2230,8 +2228,7 @@ button.channel-topology-node:focus-visible {
 
 .automation-toolbar strong,
 .automation-group-head strong,
-.automation-section-heading strong,
-.script-permission-row strong {
+.automation-section-heading strong {
   color: var(--rr-heading);
   font-size: 14px;
   font-weight: 900;
@@ -2239,8 +2236,7 @@ button.channel-topology-node:focus-visible {
 
 .automation-toolbar span,
 .automation-group-head span,
-.automation-section-heading span,
-.script-permission-row span {
+.automation-section-heading span {
   color: var(--rr-muted-soft);
   font-size: 12px;
   font-weight: 620;
@@ -2642,13 +2638,7 @@ button.channel-topology-node:focus-visible {
   overflow: auto;
 }
 
-.script-permission-row {
-  margin-top: 14px;
-  border: 1px solid rgba(192, 122, 34, .28);
-  border-radius: 10px;
-  padding: 13px 15px;
-  background: var(--rr-warning-surface);
-}
+
 
 @media (max-width: 900px) {
   .automation-card-grid,
@@ -2658,8 +2648,7 @@ button.channel-topology-node:focus-visible {
 
   .automation-toolbar,
   .automation-group-head,
-  .automation-editor-head,
-  .script-permission-row {
+  .automation-editor-head {
     align-items: flex-start;
     flex-direction: column;
   }
@@ -8027,7 +8016,6 @@ html[data-rabiroute-theme="dark"] :is(
 
 html[data-rabiroute-theme="dark"] :is(
   .knowledge-approval-panel[data-state="incomplete"],
-  .script-permission-row,
   .knowledge-memory-consolidation-panel,
   .knowledge-memory-consolidation-panel > span
 ) {

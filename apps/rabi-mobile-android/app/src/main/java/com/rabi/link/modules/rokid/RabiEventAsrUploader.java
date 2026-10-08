@@ -17,10 +17,17 @@ import java.util.UUID;
 /** Transcription-only events use ASR priority; Agent audio keeps its existing explicit message owner. */
 final class RabiEventAsrUploader implements AutoCloseable {
     private final Context context;
+    private final java.util.function.Supplier<RabiLinkRelayConfig> relayConfiguration;
     private RabiSpeechTunnel tunnel;
     private String activeWorker = "", activeUrl = "", activeToken = "";
-    RabiEventAsrUploader(Context context) { this.context = context.getApplicationContext(); }
+    RabiEventAsrUploader(Context context) { this(context, () -> RabiLinkRelaySettings.INSTANCE.load(context)); }
+    RabiEventAsrUploader(Context context, java.util.function.Supplier<RabiLinkRelayConfig> relayConfiguration) {
+        this.context = context.getApplicationContext(); this.relayConfiguration = relayConfiguration;
+    }
 
+    interface TranscriptListener { void finalTranscript(String captureId, String eventId, String text, long endedAt); }
+    private TranscriptListener transcriptListener;
+    void setTranscriptListener(TranscriptListener listener) { transcriptListener = listener; }
     boolean process(RabiDurableAudioSpool spool, RabiDurableAudioSpool.Segment head, java.util.function.BooleanSupplier current) throws Exception {
         List<RabiDurableAudioSpool.Segment> event = spool.transcriptionEvent(head);
         if (event.isEmpty()) return false;
@@ -42,7 +49,7 @@ final class RabiEventAsrUploader implements AutoCloseable {
                 pcm.write(spool.readPcm(part));
             }
             byte[] audio = wav(pcm.toByteArray());
-            RabiLinkRelayConfig relay = RabiLinkRelaySettings.INSTANCE.load(context);
+            RabiLinkRelayConfig relay = relayConfiguration.get();
             if (!relay.getConfigured()) throw new IllegalStateException("RabiLink 尚未配置");
             List<RabiLinkPc> workers = com.rabi.link.transport.AsrDirectory.INSTANCE.load(relay).getWorkers();
             for (RabiLinkPc worker : workers) {
@@ -82,6 +89,11 @@ final class RabiEventAsrUploader implements AutoCloseable {
             if (receipt == null) throw new IllegalStateException("没有可用的 ASR 电脑，录音已保留，稍后重试");
         }
         RabiRecordingEventSync.enqueue(context, receipt, event);
+        if (transcriptListener != null) {
+            long endedAt = 0;
+            for (RabiDurableAudioSpool.Segment part : event) endedAt = Math.max(endedAt, part.endedAt);
+            transcriptListener.finalTranscript(head.captureId, head.eventId, receipt.optString("text"), endedAt);
+        }
         for (RabiDurableAudioSpool.Segment part : event) {
             if (!current.getAsBoolean()) throw new IllegalStateException("ASR processing context changed");
             if ("acked".equals(part.uploadState)) continue;

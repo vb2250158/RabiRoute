@@ -29,7 +29,7 @@ async function serve(context: TestContext, listener: http.RequestListener) {
   return `http://127.0.0.1:${address.port}`;
 }
 
-test("real HTTP role Skill routes reject before reading and preserve aliases, list, detail and 404", async context => {
+test("authenticated HTTP reads another persona without binding; aliases, detail and 404 remain", async context => {
   let reads = 0;
   const completed: Promise<void>[] = [];
   const listenerCounts: Array<[number, number]> = [];
@@ -54,11 +54,11 @@ test("real HTTP role Skill routes reject before reading and preserve aliases, li
   for (const prefix of ["/api/roles", "/roles"]) {
     for (const suffix of ["/skills", "/skills/example"]) {
       const response = await fetch(`${base}${prefix}/other-persona${suffix}`, { signal: AbortSignal.timeout(2000) });
-      assert.equal(response.status, 403);
-      assert.equal((await response.json()).error, "LAN_AGENT_PERSONA_NOT_CONFIGURED");
+      assert.equal(response.status, 200);
+      await response.arrayBuffer();
     }
   }
-  assert.equal(reads, 0);
+  assert.equal(reads, 4);
   for (const prefix of ["/api/roles", "/roles"]) {
     const listed = await fetch(`${base}${prefix}/persona-one/skills`, { signal: AbortSignal.timeout(2000) });
     assert.equal(listed.status, 200);
@@ -71,7 +71,7 @@ test("real HTTP role Skill routes reject before reading and preserve aliases, li
     await missing.arrayBuffer();
   }
   await Promise.all(completed);
-  assert.equal(reads, 6);
+  assert.equal(reads, 10);
   assert.ok(listenerCounts.every(([request, response]) => request === 0 && response === 0));
 });
 

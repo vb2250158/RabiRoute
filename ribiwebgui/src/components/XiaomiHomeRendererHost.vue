@@ -11,7 +11,8 @@ defineProps<{
 const activeTab = ref("setup");
 const tabs = [
   { value: "setup", title: "Setup", rendererId: "builtin.xiaomi-home-auth.v1" },
-  { value: "settings", title: "设置", rendererId: "builtin.xiaomi-home-message-endpoint.v1" }
+  { value: "settings", title: "设置", rendererId: "builtin.xiaomi-home-message-endpoint.v1" },
+  { value: "devices", title: "设备列表", rendererId: "builtin.xiaomi-home-devices.v1" }
 ] as const;
 </script>
 
@@ -27,6 +28,7 @@ const tabs = [
       :aria-label="tab.title"
     >
       <TrustedWebRendererHost
+        v-if="tab.value !== 'devices' || activeTab === 'devices'"
         :renderers="renderers.filter(renderer => renderer.rendererId === tab.rendererId)"
         :context="context"
       />

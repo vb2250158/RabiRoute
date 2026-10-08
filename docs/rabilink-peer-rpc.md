@@ -47,4 +47,4 @@ Manager RabiLink 插件拥有调用入口和 WebRTC 连接；停用时撤销路�
 
 人格数据同步功能已从源码移除：不再提供 LAN 同步文件传输、合并或 `/persona-sync/proxy`。跨电脑访问继续通过 RabiLink 在目标电脑读取数据，不创建同步副本；此 RPC 只注册读取操作，写入使用 Manager 通用连接。已有的人格、计划、记忆和历史冲突证据不删除。视频仍保留独立通道和“禁止服务器承载视频字节”的带宽合同。
 
-验证入口：`src/rabiPeer.test.ts`、`scripts/rabilink-relay-peers.test.mjs`，以及 Relay runtime 与共用 peer LAN 通道回归。源码变更和自动化传输成功不代替本机受管部署、远程 Relay 升级或真实双 PC 验收。
+验证入口：`src/rabiPeer.test.ts`、`scripts/rabilink-relay-peers.test.mjs`，以及 Relay runtime 与共用 peer LAN 通道回归。源码变更和自动化传输成功不代替本机部署、远程 Relay 升级或真实双 PC 验收。

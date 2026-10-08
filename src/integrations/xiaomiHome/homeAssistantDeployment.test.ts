@@ -111,3 +111,51 @@ test("HA OS install preserves the preset directory and resumes after reboot with
   await owner.stop();
   await assert.rejects(owner.install(saved.revision), /正在停止/);
 });
+
+test("HA OS subscriptions deliver measured progress and terminal state, then release the watcher", async t => {
+  const f = fixture(t);
+  let changed: (() => void) | undefined;
+  let unsubscribed = false;
+  let status: HomeAssistantOsStatus = { state: "installing", message: "下载", progress: { phase: "download", percent: 25, completedBytes: 25, totalBytes: 100 } };
+  const owner = new HomeAssistantDeployment(f.root, () => "http://127.0.0.1:8123", f.io, {
+    inspect: async () => status,
+    run: async () => status,
+    subscribe: listener => { changed = listener; return () => { unsubscribed = true; }; }
+  });
+  const initial = await owner.inspect();
+  await owner.save({ mode: "haos", containerName: "homeassistant", autoStart: false }, initial.revision);
+  const received: Awaited<ReturnType<typeof owner.inspect>>[] = [];
+  const unsubscribe = owner.subscribe(value => received.push(value));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(received[0]?.progress?.percent, 25);
+  assert.equal(received[0]?.canInstall, false);
+  status = { state: "reboot_required", message: "重启" };
+  changed?.();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(received[1]?.state, "reboot_required");
+  assert.equal(received[1]?.progress, undefined);
+  unsubscribe();
+  changed?.();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(received.length, 2);
+  assert.equal(unsubscribed, true);
+});
+
+test("HA OS operation completion notifies other pages after clearing its active flag", async t => {
+  const f = fixture(t);
+  let status: HomeAssistantOsStatus = { state: "not_installed", message: "未安装" };
+  const owner = new HomeAssistantDeployment(f.root, () => "http://127.0.0.1:8123", f.io, {
+    inspect: async () => status,
+    run: async () => { status = { state: "installed", message: "已安装" }; return status; }
+  });
+  const initial = await owner.inspect();
+  const saved = await owner.save({ mode: "haos", containerName: "homeassistant", autoStart: false }, initial.revision);
+  const snapshots: Awaited<ReturnType<typeof owner.inspect>>[] = [];
+  const unsubscribe = owner.subscribe(value => snapshots.push(value));
+  t.after(unsubscribe);
+  await new Promise(resolve => setImmediate(resolve));
+  await owner.install(saved.revision);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(snapshots.at(-1)?.state, "starting", "all subscribers must leave installing even without another file change");
+  assert.equal(snapshots.at(-1)?.canInstall, true);
+});

@@ -6,7 +6,7 @@ English | <a href="./local-speech-model-downloads.md">简体中文</a>
 
 # RabiSpeech local model downloads and setup
 
-This guide covers local models only. Paid speech APIs are archived, and remote callers cannot install models or mutate the local allowlist.
+This guide covers local models only. Paid speech APIs are archived. Installation and downloads reuse Manager connection authentication; no caller can mutate the model allowlist.
 
 ## On-demand downloads from Model Management
 
@@ -16,13 +16,23 @@ Open **Model Management** at the top right of **Speech Service** in RibiWebGUI. 
 2. Select **Download model** in the model table. Manager runs only one install or download job at a time, and the page receives state changes through events instead of periodic queries.
 3. Model file status and runtime requirements are separate. **Needs isolated runtime** describes a requirement, not a detected missing environment; actual inference still requires the checks described below.
 
+The installed page always invokes the current version's installation scripts and stores core dependencies in `plugin-adapters/rabi-speech/.deps` under the installation state directory. The current version supplies the Windows host, which is copied to its stable executable path at startup. Dependency status requires the core API, capture, and playback module files, rather than an empty directory. Complete dependencies from earlier version-local installations remain a compatibility fallback for startup and downloads; after migration, only the stable directory is used. This fallback serves existing unmigrated installations and can be removed once those installations have migrated. A missing Windows build tool is probed through a quiet exit code before installation, so PowerShell stderr handling does not abort the installer early.
+
 Existing models are checked read-only in the download root and model locations from the current RabiSpeech configuration; no synthetic install entry is required. Checks cover known components, nonempty files, and shards named by indexes. Empty directories and broken links are not downloaded models, but these checks are not full checksum or inference validation. For models stored elsewhere, configure the matching worker model path instead of downloading again or editing status records.
 
 Expand **Model directory** to configure one root. Saving an empty value restores the default, including an existing `RABISPEECH_MODEL_ROOT` environment override. An explicit local absolute path overrides that default; the UI displays the effective directory. Detection and subsequent UI downloads share this root and the catalog's `tts/`, `asr/`, and `speaker/` subpaths. Changing it never moves or deletes models, and separately configured worker locations remain discoverable.
 
-Directory settings are accessible only through the local WebGUI and persist in `data/speech/model-directory-settings.json` under the installation state root, outside release payloads. Changes are rejected during install/download jobs; concurrent edits require refresh rather than silent overwrite. Network paths, drive roots, installation trees, and source worktrees are not accepted as custom roots.
+Directory settings are accessible through the local WebGUI or an authenticated remote connection and persist in `data/speech/model-directory-settings.json` under the installation state root, outside release payloads. Changes are rejected during install/download jobs; concurrent edits require refresh rather than silent overwrite. Network paths, drive roots, installation trees, and source worktrees are not accepted as custom roots.
 
-The page and command line share the allowlist in `plugin-adapters/rabi-speech/model-catalog.json`. Downloads cannot supply arbitrary repositories or URLs; the root is changed only through the separately validated local settings endpoint. CLI calls still use an explicit `--root`. Licensed ONNX-VITS packages remain manual imports.
+The page and command line share the allowlist in `plugin-adapters/rabi-speech/model-catalog.json`. Downloads cannot supply arbitrary repositories or URLs; the root is changed only through the separately validated settings endpoint. CLI calls still use an explicit `--root`. Licensed ONNX-VITS packages remain manual imports.
+
+## Reusing existing workers and reading test results
+
+To reuse an existing isolated environment, configure the model's real `command`, `working_directory`, and loopback `base_url` in the private local `config.json`. RabiSpeech then starts that worker on demand. The command's `--model` argument must identify the weights actually used; `installed=true` alone does not replace file checks. Retire the old standalone service's startup entry before migration so two supervisors do not own the same workers. Lightweight fixed system voices can also implement the `local_tts` `/speak` and `/status/<id>` contract without downloading a cloning model. A system voice does not imply character voice cloning.
+
+FireRedASR2-AED detection requires the four nonempty official files `model.pth.tar`, `cmvn.ark`, `dict.txt`, and `train_bpe1000.model`; the officially empty `config.yaml` is not a missing-file signal. Optional SenseVoice `emotion`, `emotion_labels`, `audio_events`, `raw_tags`, and utterance `confidence` are preserved in detailed transcriptions, saved records, and recent microphone results. The page displays them separately from recognized text. Missing metadata is never inferred, and utterance confidence is not converted into per-word probabilities.
+
+**Enable ASR streaming** uses host capture, speech detection, and silence-based segmentation, then displays each completed segment. A model's streaming capability does not guarantee incremental word updates from the configured worker; verify its actual backend. Start with manual file transcription to test a model without resident microphone capture or sending test text to an Agent.
 
 ## Private runtime layout
 

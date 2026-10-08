@@ -102,7 +102,7 @@ xcopy examples\data data /E /I
 cp -R examples/data/. data/
 ```
 
-如果只想本地试跑定时任务，可以启用“定时任务”入口，不用接 NapCat。运行脚本还要在当前 Route 单独打开本机脚本权限。
+如果只想本地试跑定时任务，可以启用“定时任务”入口，不用接 NapCat。配置脚本动作后即可运行所属人格 scripts 目录内的脚本。
 
 ## 适配 Codex
 

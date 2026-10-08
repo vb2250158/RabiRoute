@@ -327,7 +327,7 @@ Entries collaborate through public APIs, events, or durable facts, not shared mu
 | `isolated` | out-of-tree code or high-risk dependencies | separate Runtime Host, bounded RPC, resource policy, and process lease |
 | `declarative` | Desktop/Web manifests and presentation data | no plugin code execution |
 
-Installation records source, version, hash, permissions, and enabled Profile. Added permissions require renewed authorization. Installed does not mean unrestricted host access.
+Installation records source, version, hash, permissions, and enabled Profile. Changes to declared host APIs revalidate dependency contracts without another permission grant. Installed does not mean unrestricted host access.
 
 ## Atomic generation switching
 

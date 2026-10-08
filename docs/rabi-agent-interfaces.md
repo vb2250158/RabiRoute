@@ -6,6 +6,10 @@
 
 # Agent 需要关注的 Rabi 接口
 
+完成连接鉴权后即可使用已提供的接口，不再增加逐功能或逐人格授权。发送仍须遵守来源身份、目标、消息格式和幂等回执合同。详见[连接与接口使用](connection-access.md)。
+
+家庭设备、音箱播报和媒体控制使用[家庭设备 Agent 接口](home-device-agent-api.md)：先发现资源与参数，再提交带状态版本、生命周期围栏和幂等键的动作，通过原键只读查询回执。服务受理不表示声音已播放。
+
 人格的电脑/手机时间轴查询、来源选择与采集控制见[人格全天记录接口](persona-all-day-recording.md#本机接口)。读取事件不代表已经开启采集，空列表不证明全天没有活动。
 
 > 状态：现行 Agent 接口指南。远端 Agent 设备链路仍为实验能力；其它接口按当前 Manager API 和测试核对。
@@ -21,7 +25,7 @@
 
 ## 计划与记忆写入合同
 
-`focused` 消息包只给出本节入口。涉及计划、近期记忆、反馈或整理结果的写入前，必须先读本节及目标接口章节；文档不可读时停止该操作。写入仍受当前授权和 Action Gate 约束。计划状态先读取当前人格的 `plan-statuses`，不猜 key；附件通过计划 `attachments` 提交。
+`focused` 消息包只给出本节入口。涉及计划、近期记忆、反馈或整理结果的写入前，必须先读本节及目标接口章节；文档不可读时停止该操作。写入复用连接鉴权，并遵守当前任务授权与投递合同。计划状态先读取当前人格的 `plan-statuses`，不猜 key；附件通过计划 `attachments` 提交。
 
 1. 从 Host 状态（安装版）、结构化 READY（源码版）或测试显式注入取得当前完整 Manager URL。每次请求设置最长 12 秒的有界超时。写入前 GET `/meta`，核对非空 `applicationGenerationId`、`managerInstanceId` 与当前 Host/READY 身份；普通业务请求要求 `health.live=true`、`health.requiredReady=true`，且 `health.state` 为 `healthy` 或 `degraded`。`businessReady=false` 或无关 Route 降级不阻断全部请求，计划恢复、目标路线等依赖由 Manager 对应接口判断。
 2. 每项逻辑写入先生成并保存稳定 `Idempotency-Key` 与完整请求体。PATCH 计划/近期记忆、POST 计划反馈或回传记忆整理结果前，先 GET 对应单项资源或 feedback，把返回的强 ETag 原样放入 `If-Match`。禁止使用弱 ETag、`*` 或 `updatedAt` 替代版本。新增计划、新增近期记忆和发起整理带幂等键，不带 `If-Match`。
@@ -45,7 +49,7 @@
 
 Help 查询参数为 `operationId`、`path`、`method`，每项最多一次且非空，多个条件取交集；`path` 使用目录中的精确路径模板，`method` 不区分大小写。处理器对未知、重复或空参数返回 400 `AGENT_HELP_INVALID_QUERY` 和修复指引；LAN 权限层可能先拒绝非法查询。指定 `operationId` 未匹配返回 404 `AGENT_HELP_NOT_FOUND`；仅按路径或方法查无结果仍返回 200 空列表以兼容现有调用。错误不回显查询值，不得把凭据放入查询参数。
 
-插件层还提供 `node scripts/agent-api-route-inventory.mjs`：它输出 exact method/path、`dispatchScopes`（prefix）和 `unresolved`（通配或未展开项）三类清单。扫描使用 TypeScript AST，不执行插件；支持属性换序和带引号属性，忽略注释中的伪声明，动态路径、动态方法与 spread 声明记入 unresolved。它只识别显式含 routeId 的对象，无法覆盖完全由导入或工厂生成的声明；exact 数量按文件与 routeId 区分，不是全局唯一 URL 数量。不要把 prefix 或单一 Agent 目录数量当成全部 Rabi API。群聊/私聊和文件使用 `POST /api/agent/send`。发送前可再调用 `GET /api/agent/send/capabilities` 获取当前渠道、参数说明和示例。内置目录的 `params` 键与发送校验共用字段白名单；字段类型、条件必填和权限仍由实际校验器执行，不应把说明文本当作完整 JSON Schema。QQ/NapCat 使用 `channel: "napcat"`，不能写 `channel: "qq"`。未知渠道会返回 `errorCode`、`help`、`repair` 和支持渠道；其他参数错误的帮助完整度以具体处理器为准；跨人格使用 `POST /api/personas/{targetPersonaId}/messages`；持久任务正文与续投使用 Rabi 线程桥 `POST /api/agent/threads`；正式 callback 按来源需求合同调用。保留原 taskBinding、来源身份、requestId、tracking、引用和稳定幂等字段。Rabi 的 adapter 最终调用 NapCat、Desktop IPC 或其它平台是受管链路的一部分；调用方绕开 Rabi 才属于旁路。
+插件层还提供 `node scripts/agent-api-route-inventory.mjs`：它输出 exact method/path、`dispatchScopes`（prefix）和 `unresolved`（通配或未展开项）三类清单。扫描使用 TypeScript AST，不执行插件；支持属性换序和带引号属性，忽略注释中的伪声明，动态路径、动态方法与 spread 声明记入 unresolved。它只识别显式含 routeId 的对象，无法覆盖完全由导入或工厂生成的声明；exact 数量按文件与 routeId 区分，不是全局唯一 URL 数量。不要把 prefix 或单一 Agent 目录数量当成全部 Rabi API。群聊/私聊和文件使用 `POST /api/agent/send`。发送前可再调用 `GET /api/agent/send/capabilities` 获取当前渠道、参数说明和示例。内置目录的 `params` 键与发送校验共用字段白名单；字段类型、条件必填和权限仍由实际校验器执行，不应把说明文本当作完整 JSON Schema。QQ/NapCat 使用 `channel: "napcat"`，不能写 `channel: "qq"`。未知渠道会返回 `errorCode`、`help`、`repair` 和支持渠道；其他参数错误的帮助完整度以具体处理器为准；跨人格使用 `POST /api/personas/{targetPersonaId}/messages`；持久任务正文与续投使用 Rabi 线程桥 `POST /api/agent/threads`；正式 callback 按来源需求合同调用。保留原 taskBinding、来源身份、requestId、tracking、引用和稳定幂等字段。Rabi 的 adapter 最终调用 NapCat、Desktop IPC 或其它平台是链路的一部分；调用方绕开 Rabi 才属于旁路。
 
 只有按上节动态发现、核对身份并有界重试后确认 Rabi 不可用，才允许在原授权内使用已核实的当前平台入口。旧端口拒绝连接、Hook 概括提示、参数错误、权限/策略拒绝、owner 未加载或接口能力不足，都不能单独证明 Rabi 已挂。截图或旧任务中的地址不能替代当前 generation。Rabi 健康时应解决具体接口问题，不因工具方便而直发。
 
@@ -368,7 +372,7 @@ POST /api/agent/send
 - `tracking.requirementId`：可选，用于关联消息处理看板，不能决定发送目标；回复已登记的消息处理需求时必须填写；
 - `tracking.sendContextReviewToken`：消息处理需求在发送前完成最新群聊上下文核对后取得的短期凭证，只对同一需求、发送者会话、目标和正文有效。
 
-当主 Agent 为 Codex 且开启“仅允许主人格发送消息”Hook 时，唯一允许的发送方是绑定的 Codex 主人格任务：`sender.agentType=primary_persona`，且 `sender.sessionId` 必须与 `codexThreadId` 完全一致。其它情况下以注入的请求模板为准。
+所有 Agent 按注入模板填写实际发送角色与当前完整会话 ID，使用统一投递合同。
 
 QQ 群文本示例：
 
@@ -889,9 +893,9 @@ node rabi-agent.mjs --api GET /api/agent/uploads/<UUID> --agent <agentId>
 
 如果磁盘权限或文件锁故障导致临时预留清理失败，系统保守保留其配额并记录审计，不删除可能活跃的数据。需修复存储故障，并在 Host 重启后再次触发回收；不保证任意存储故障都自动恢复。
 
-大文件通过有背压的二进制流上传、落盘和增量 SHA-256 校验，不把完整安装包读入内存，也不使用 JSON/Base64 传包。上传期限为 30 分钟。可在「RabiLink → 配置」保存 `agentUploads.maxFileMiB`，整数范围 `1..2048`，默认 `2048`；值保存在 `data/Config.json`，重启 Manager 后生效。本机管理员也可使用原权限保护的 `PATCH /api/rabi/identity` 修改该字段；远端 Agent 不得借此提高配额。客户端硬上限仍是 2 GiB，Manager 配置更低时以服务器限制为准。
+大文件通过有背压的二进制流上传、落盘和增量 SHA-256 校验，不把完整安装包读入内存，也不使用 JSON/Base64 传包。上传期限为 30 分钟。可在「RabiLink → 配置」保存 `agentUploads.maxFileMiB`，整数范围 `1..2048`，默认 `2048`；值保存在 `data/Config.json`，重启 Manager 后生效。已鉴权连接也可通过 `PATCH /api/rabi/identity` 修改该配置；上传请求仍遵守服务器当前限制。客户端硬上限仍是 2 GiB，Manager 配置更低时以服务器限制为准。
 
-受控集成测试已用 **734 MiB（769654784 字节）** 文件完成真实客户端 → loopback HTTP → 受管存储 → 模拟 NapCat 的上传和发送摘要核对；文件由 64 KiB 小块生成，测试禁止大于 8 MiB 的 Buffer 分配/拼接，接收端按块核对。用 `RABI_TEST_LARGE_UPLOAD=1` 启用 `src/manager/agentUploadFlow.test.ts` 的大文件用例，默认日常测试跳过。该结果不是 QQ 平台验收：真实 QQ/NapCat 的文件大小、账号及群权限、磁盘可读性和响应期限仍以实际渠道回执为准。旧连接器须按接入文档执行新版 bootstrap，已缓存旧 Hook 的宿主需重载；服务端增大配额不会升级旧客户端。
+受控集成测试已用 **734 MiB（769654784 字节）** 文件完成真实客户端 → loopback HTTP → 文件存储 → 模拟 NapCat 的上传和发送摘要核对；文件由 64 KiB 小块生成，测试禁止大于 8 MiB 的 Buffer 分配/拼接，接收端按块核对。用 `RABI_TEST_LARGE_UPLOAD=1` 启用 `src/manager/agentUploadFlow.test.ts` 的大文件用例，默认日常测试跳过。该结果不是 QQ 平台验收：真实 QQ/NapCat 的文件大小、账号及群权限、磁盘可读性和响应期限仍以实际渠道回执为准。旧连接器须按接入文档执行新版 bootstrap，已缓存旧 Hook 的宿主需重载；服务端增大配额不会升级旧客户端。
 
 最短发送示例：先完成上述上传并确认回执，再把以下 JSON 经标准输入交给 `node rabi-agent.mjs --api POST /api/agent/send --agent <agentId> --body-stdin`。占位身份与目标替换为当前注入模板，`fileId` 使用上传回执 `data.id`；为本次发送保存独立、稳定的 `deliveryId`：
 
@@ -910,11 +914,11 @@ node rabi-agent.mjs --api GET /api/agent/uploads/<UUID> --agent <agentId>
 - `payload.text` 可省略；`replyToMessageId` 必须是具体来源消息 ID 或明确不引用的空字符串，原引用核对和 tracking 要求不变。
 - `fileId` 仅用于 `channel=napcat`、`target=group`、`type=file`，与 `path`/`url`/`fileName` 互斥；不能借此发送图片、语音或其它渠道。显示文件名（`displayName`）取自上传元数据，不由发送请求另行覆盖。
 - Manager 内部可信 resolver 每次请求重新核对授权、归属、完整性和 TTL，并持有 inflight lease 防止在途文件被清理；不扩大 `allowedFileRoots`，原本地 `path` 流程及其根目录检查照旧。
-- 渠道仍须允许发送并支持 `file`；`onlyPrimary` 仍核对可信 provider、精确 Route 的远端实例/节点与 Agent 绑定、获批会话及 `primary_persona` 身份。上传成功不是群发送成功，必须检查 `/api/agent/send` 的 Manager 与 NapCat 回执；发送不确定时查询原 `deliveryId` 回执。
+- 渠道仍须允许发送并支持 `file`；发送者身份仍按投递合同核对。上传成功不是群发送成功，必须检查 `/api/agent/send` 的 Manager 与 NapCat 回执；发送不确定时查询原 `deliveryId` 回执。
 - NapCat 已接受群文件但随后 caption 失败时，仍保留 `status=sent`，只补发文本，不重发文件。当前 NapCat 接口读取 Manager 交给它的文件路径；异机 NapCat 必须能够通过共享目录读取该路径。本功能只解决远端 Agent 到 Manager 的上传，不解决任意跨机 NapCat 文件可读性。
 - 这不扩大远端线程桥权限：仍只支持 `responsePolicy: "none"` 单向投递，`required`、`inReplyToRequestId` 正式回复和远端到远端投递仍拒绝。
 
-当图片或文件已经作为受管计划附件存在时，可用 `payload.planAttachment` 按 ID 引用，不必先复制到 `allowedFileRoots` 里的目录：
+当图片或文件已经作为计划附件存在时，可用 `payload.planAttachment` 按 ID 引用，不必先复制到 `allowedFileRoots` 里的目录：
 
 ```json
 {
@@ -932,8 +936,8 @@ node rabi-agent.mjs --api GET /api/agent/uploads/<UUID> --agent <agentId>
 ```
 
 - `planAttachment` 只接受 `type=image` 或 `type=file`，与 `path`/`url`/`fileId` 互斥；`roleId` 为拥有该计划的人格角色 ID。
-- Manager 每次请求从真实计划存储解析该附件，并再次核对解析结果仍位于该计划的受管附件目录内；计划或附件不存在、类型不符、逃出受管目录都拒发。它**不**扩大 `allowedFileRoots`，普通 `path` 流程的根目录检查完全照旧。
-- 与 `fileId` 一样，信任边界是「按 ID 引用受管对象」，不是「任意路径可读」；未接入该 resolver 的运行环境会明确失败而不是退回读取原路径。
+- Manager 每次请求从真实计划存储解析该附件，并再次核对解析结果仍位于该计划的附件目录内；计划或附件不存在、类型不符、逃出目录都拒发。它**不**扩大 `allowedFileRoots`，普通 `path` 流程的根目录检查完全照旧。
+- 与 `fileId` 一样，信任边界是「按 ID 引用对象」，不是「任意路径可读」；未接入该 resolver 的运行环境会明确失败而不是退回读取原路径。
 
 `payload.text` 中的 CQ 码按固定白名单解析为真实消息段，而不是按纯文本发送：
 
@@ -1293,7 +1297,7 @@ POST /roles/:roleId/plans
 GET /api/roles/:roleId/plans/:planId/attachments/:attachmentId
 ```
 
-图片和视频附件使用 `inline` 响应；WebGUI 以紧凑固定宽度的 16:9 缩略图展示 PNG、JPEG、WebP、GIF 与 MP4/M4V、WebM、Ogg Video、MOV/QuickTime，容器不足时才等比缩小，点击后分别打开页内大图或带控制条的视频预览。视频可使用 HTTP 字节范围读取，实际解码能力由浏览器决定；普通文件使用下载响应。该接口只读取计划元数据中已登记且真实路径仍位于本计划受管目录内的文件。
+图片和视频附件使用 `inline` 响应；WebGUI 以紧凑固定宽度的 16:9 缩略图展示 PNG、JPEG、WebP、GIF 与 MP4/M4V、WebM、Ogg Video、MOV/QuickTime，容器不足时才等比缩小，点击后分别打开页内大图或带控制条的视频预览。视频可使用 HTTP 字节范围读取，实际解码能力由浏览器决定；普通文件使用下载响应。该接口只读取计划元数据中已登记且真实路径仍位于本计划目录内的文件。
 
 请求审批前，Agent 应 PATCH 当前步骤的完整 `approvalRequest`。Manager 的完整性判断不阻止计划保存，但缺项时返回 `presentation.approval.state=incomplete`、`enabled=false` 和 `missing[]`；计划卡列出缺项，并禁用审批输入、附件与提交。Agent 必须在同一计划补齐审批人、决定、推荐与备选、reason、真实路径、完整命令、外部目标、验证、回退、排除范围、请求来源与回执后，才允许正式审批。
 
@@ -1347,7 +1351,7 @@ RibiWebGUI 用该接口记录 `presentation.acceptsGuidance=true` 且未进入�
 
 `attachments` 可选。每项使用 `name`、可选 `mimeType` 和 `contentBase64`；最多 8 个，单个不超过 10 MiB、总计不超过 25 MiB。Manager 校验后把内容保存到人格私有的 `plans/feedback/attachments/<feedbackId>/`，记录与 Agent 通知只携带安全元数据和本地路径。同一 `feedbackId` 重试必须保持相同文字、步骤和附件内容。
 
-`planAttachmentIds` 也可选，用于引用当前计划顶层 `attachments` 中已有的受管附件；最多 8 个且必须唯一。RibiWebGUI 在审批输入框键入 `@` 时显示当前计划附件候选，选中后插入可读的 `@附件「文件名」` 标记，并提交对应附件 ID。Manager 以 ID 校验附件确实属于当前计划，把附件元数据与本地路径作为本次审批审计快照保存，并随同一 `plan_feedback` 投递给 Agent；WebGUI 不读取或提交任意本机路径。同一 `feedbackId` 重试也必须保持相同的计划附件引用。
+`planAttachmentIds` 也可选，用于引用当前计划顶层 `attachments` 中已有的附件；最多 8 个且必须唯一。RibiWebGUI 在审批输入框键入 `@` 时显示当前计划附件候选，选中后插入可读的 `@附件「文件名」` 标记，并提交对应附件 ID。Manager 以 ID 校验附件确实属于当前计划，把附件元数据与本地路径作为本次审批审计快照保存，并随同一 `plan_feedback` 投递给 Agent；WebGUI 不读取或提交任意本机路径。同一 `feedbackId` 重试也必须保持相同的计划附件引用。
 
 当反馈关联当前结构化 `qa-* / verify-*` 步骤时，Manager 只把用户或外部入口提交的 `approval_suggestion` 视为 QA 判定候选。`guidance`、`guidance_response`、`approval_response`、`author=agent` 的执行报告，以及正文里的裸 `passed / verified` 测试计数都只作普通反馈记录，不会完成或回退 QA。候选正文明确表示失败或仍复现时，Manager 在同一计划插入或复用 `investigate-<qaStepId>`，清除 QA 步骤的 `completedAt`，按问题类型把最小缺失证据写入 `waitingFor`；证据齐全后继续原 `taskBinding.sessionId + workspace`。只有“QA 明确通过”“验收通过”“确认未再复现”等明确结论才完成当前 QA 步骤。
 
@@ -1701,7 +1705,7 @@ GET /roles/:roleId/skills/:skillId
 
 ### 下载指定技能目录
 
-`GET /api/roles/:roleId/skills/:skillId/download` 返回该技能的完整 ZIP；`GET /roles/:roleId/skills/:skillId/download` 是同权限别名。不接受查询参数、任意文件路径或批量人格导出。远端调用需要已登记节点凭据、准确 Agent 的 Manager API 授权，以及该人格 Route 中的 `instanceId + agentId` 配置；与读取人格技能相同，不增加逐技能授权。本机管理保留原认证。
+`GET /api/roles/:roleId/skills/:skillId/download` 返回该技能的完整 ZIP；`GET /roles/:roleId/skills/:skillId/download` 是同权限别名。不接受查询参数、任意文件路径或批量人格导出。远端调用复用已登记节点凭据及准确 Agent 身份，不要求该人格另有 Route 绑定或逐技能授权；本机使用当前连接。
 
 目录型技能保留所有普通文件、子目录和字节，包括 `scripts/`、`references/`、`agents/`、隐藏文件及二进制配套文件，ZIP 顶层为 `<skillId>/`。平面 Markdown 技能只生成 `<skillId>/SKILL.md`。按技能索引 ID 找真实入口，不假定 frontmatter `id` 等于目录名；重复 ID 返回冲突。不沿 Markdown 引用追踪根外路径或其他技能，需要另一技能时单独下载。下载的是当前 Manager 管理的技能内容，不会将其复制到公开 `resources` 或发布包。
 
@@ -1738,6 +1742,6 @@ node rabi-agent.mjs --api GET "/api/roles/<roleId>/skills/<skillId>/download" --
 
 Manager 失败响应附带 `errorMessages`，包含 zh-CN 和 `en`，并保留原始 message、机器码、提交状态和请求编号。WebGUI 按当前语言显示。已登记的参数、附件、版本冲突和存储错误显示本地化原因；未登记的第三方异常保留诊断原文，不推断未知原因。
 
-正式回传的 inReplyToRequestId 关联受管请求时可省略 prompt，result 与 nextAction 仍必填；普通发送仍要求 prompt。新回复不生成历史结束标记。
+正式回传的 inReplyToRequestId 关联请求时可省略 prompt，result 与 nextAction 仍必填；普通发送仍要求 prompt。新回复不生成历史结束标记。
 
 计划步骤资源记录及分批归档见[计划附件与步骤文件记录](plan-resources.md)。

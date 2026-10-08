@@ -95,7 +95,7 @@ Profile 是某个部署要启用哪些实例的唯一真源：
 }
 ```
 
-`grants` 只能授予 Manifest 已声明并被部署允许的权限。`policy` 约束实例重启与资源；缺省策略由内核统一补齐，不由插件自行解释。只有所有 `readyRequires` 都已由已激活服务提供，Manager generation 才能对 Host 报 ready。
+已安装插件直接使用 Manifest 声明的宿主接口，不再要求 Profile 逐项许可。旧 `grants` 输入与 `grantedPermissions` 回调不参与执行判断，将于 0.4.0 移除。`policy` 继续约束重启与资源；所有 `readyRequires` 都须由已激活服务提供后才报告就绪。
 
 ## 身份与生命周期
 

@@ -43,7 +43,9 @@ if (-not $SkipBuild) {
 
 $desktopRoot = Join-Path $baseRoot "desktop-runtime"
 if ($RebuildDesktopRuntime) {
-    $desktopRoot = Join-Path $env:LOCALAPPDATA ("RabiRoute\build\developer-desktop-" + [guid]::NewGuid().ToString("N"))
+    # Qt wheels contain long development paths before pruning. Keep this local
+    # staging root short enough for the Windows PowerShell cleanup subprocess.
+    $desktopRoot = Join-Path $env:TEMP ("rabi-qt-" + [guid]::NewGuid().ToString("N"))
     Invoke-Checked "powershell.exe" @(
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $SourceRoot "scripts\build-desktop-runtime.ps1"),
         "-OutputRoot", $desktopRoot

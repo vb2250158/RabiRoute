@@ -56,7 +56,7 @@ The phone owner does not replace PC Host/Manager process or business-data owners
 | Processing | Save only / automatic transcription / transcription and review by a selected persona | A setting is not evidence that the processor is online; health-only produces no fake transcription tasks. |
 | Network | Prefer Wi-Fi / allow mobile data / pause synchronization | Offline operation is a condition, not a separate recording feature. |
 | Fallback | Automatic audio source | Prefer glasses delivering PCM; fall back to phone on disconnection/stall. Source changes create record boundaries and expose the actual source. |
-| Retention | Confirmed-media age, storage cap and free-space reserve | Never silently remove unconfirmed or quarantined data. |
+| Retention | Confirmed-media age and physical free-space reserve; phone PCM has no application-capacity quota | Never silently remove unconfirmed or quarantined data. |
 | Recovery | User-approved startup recovery policy | Never bypass system permissions or explicit pause. |
 
 The suggested initial experience is audio with optional health and manually enabled video. This is a recommendation, not an assumption that the user selected defaults or authorized every sensor. Installation/migration must not silently enable new capture capabilities.

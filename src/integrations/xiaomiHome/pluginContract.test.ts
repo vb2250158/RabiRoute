@@ -101,14 +101,19 @@ test("Xiaomi Home plugin registers exact and prefix routes with the Manager cont
     surface: "route.adapters",
     slot: "xiaomiHome",
     rendererId: "builtin.xiaomi-home-auth.v1"
+  }, {
+    kind: "message-endpoint-settings", id: "xiaomi-home-devices", surface: "route.adapters",
+    slot: "xiaomiHome", rendererId: "builtin.xiaomi-home-devices.v1"
   }]);
-  assert.equal(snapshot[0]?.routeCount, 13);
+  assert.equal(snapshot[0]?.routeCount, 19);
+  assert.ok(snapshot[0]?.routes.some(route => route.match.kind === "exact" && route.match.path === "/api/agent/xiaomi-home/entity-actions"));
   assert.ok(snapshot[0]?.routes.some(route => route.match.kind === "exact" && route.match.path === "/api/agent/xiaomi-home/deployment/install"));
+  assert.ok(snapshot[0]?.routes.some(route => route.match.kind === "exact" && route.match.path === "/api/agent/xiaomi-home/deployment/events"));
   assert.deepEqual(
     snapshot[0]?.routes
       .filter(route => route.match.kind === "prefix")
       .map(route => route.match.pathPrefix),
-    ["/api/agent/xiaomi-home/resources/", "/api/agent/xiaomi-home/artifacts/"]
+    ["/api/agent/xiaomi-home/vacuum-cloud/", "/api/agent/xiaomi-home/vacuum-remote/", "/api/agent/xiaomi-home/resources/", "/api/agent/xiaomi-home/artifacts/"]
   );
 
   await harness.dispose();

@@ -119,18 +119,44 @@ export async function connectDshOwner(launchUrl: unknown, expectedRevision: numb
   return { baseUrl: origin, state: 'connected', expiresAt: credential.expiresAt, revision: store.readMetadata().revision };
 }
 
-/** Explicit migration only. Disconnected/expired protected records never fall back to logs. */
-export async function migrateDshOwner(baseUrl: string, expectedRevision: number, store = new DshConnectionStore(), signal?: AbortSignal) {
+/** Select only the requested owner's browser cookie. The owner verifies its signature. */
+function browserDshCredential(origin: string, browser?: { hostname: string; cookieHeader?: string }): DshSessionCredential | undefined {
+  const target = new URL(origin);
+  if (!browser?.cookieHeader || browser.hostname !== target.hostname) return undefined;
+  const name = `dsh-auth-${createHash('sha256').update(target.host).digest('base64url')}`;
+  const matches = browser.cookieHeader.split(';').map(value => value.trim()).filter(value => value.startsWith(`${name}=`));
+  if (!matches.length) return undefined;
+  if (matches.length !== 1 || matches[0].length > 8192) throw new DshConnectionError('DSH browser login is invalid; reopen the current login link.', 401);
+  const cookie = matches[0];
+  const parts = cookie.slice(name.length + 1).split('.');
+  try {
+    if (parts.length !== 3 || parts[0] !== 'v1' || !parts.slice(1).every(value => /^[A-Za-z0-9_-]+$/.test(value))) throw new Error('invalid');
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+    const now = Date.now();
+    if (payload.version !== 1 || payload.authority !== target.host || !Number.isSafeInteger(payload.issuedAt)
+      || !Number.isSafeInteger(payload.expiresAt) || payload.issuedAt > now || payload.expiresAt <= now
+      || payload.expiresAt <= payload.issuedAt || payload.expiresAt - payload.issuedAt > 366 * 24 * 60 * 60 * 1000) throw new Error('invalid');
+    return { cookie, expiresAt: payload.expiresAt };
+  } catch { throw new DshConnectionError('DSH browser login is invalid or expired; reopen the current login link.', 401); }
+}
+
+/** Explicit connect: reuse saved or browser login; blocked records never fall back to logs. */
+export async function migrateDshOwner(baseUrl: string, expectedRevision: number, store = new DshConnectionStore(), signal?: AbortSignal,
+  browser?: { hostname: string; cookieHeader?: string }) {
   const origin = dshLocalOrigin(baseUrl);
   if (store.readMetadata().revision !== expectedRevision) throw new DshConnectionError('DSH connections changed; refresh before retrying.', 409);
   const saved = store.resolve(origin);
-  if (saved && saved.state !== 'connected') throw new DshConnectionError('Reconnect using the current DSH login link.', 401);
   let credential: DshSessionCredential;
   if (saved?.state === 'connected') credential = saved;
   else {
-    const logPath = await launchLogFor(origin);
-    if (!logPath) throw new DshConnectionError('Provide the current DSH login link to connect.', 401);
-    credential = await exchange(origin, logPath, true, signal);
+    const browserCredential = browserDshCredential(origin, browser);
+    if (browserCredential) credential = browserCredential;
+    else {
+      if (saved) throw new DshConnectionError('Reconnect using the current DSH login link.', 401);
+      const logPath = await launchLogFor(origin);
+      if (!logPath) throw new DshConnectionError('Log in to DSH in this browser or provide the current login link.', 401);
+      credential = await exchange(origin, logPath, true, signal);
+    }
   }
   try { await verifyDshCredential(origin, credential.cookie, signal); }
   catch (error) {

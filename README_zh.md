@@ -17,7 +17,7 @@
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="许可证：MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 20 或更高版本" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="当前版本：0.3.23" src="https://img.shields.io/badge/version-0.3.23-3178c6">
+  <img alt="当前版本：0.3.24" src="https://img.shields.io/badge/version-0.3.24-3178c6">
   <img alt="状态：积极开发中" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
@@ -38,6 +38,10 @@ Agent 负责回答、写代码、调用工具和执行任务。RabiRoute 负责�
 - **连接语音和移动设备。** RabiSpeech、RabiLink 手机/眼镜、穿戴设备与远程 Relay 已有实现，但仍按实验集成验收。
 
 ## 快速上手
+
+已连接 Home Assistant 时，Agent 可以查询全部已接入设备实体，并调用其当前提供的按钮、设置和小米设备动作；复用一次连接鉴权，动作保留回执。接入开发者参阅[家庭设备接口](docs/home-device-agent-api.md)。
+
+米家 Setup 另提供实验性云地图文件扫码连接，见[地图连接说明](docs/vacuum-cloud-map.md)。支持 version-2 地图解码；实时定位与坐标导航须分别验收。
 
 ### Windows 安装包
 
@@ -73,7 +77,7 @@ npm run status:linux -- --json
 
 ## 当前能力
 
-仓库当前版本为 `0.3.23`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
+仓库当前版本为 `0.3.24`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
 
 | 范围 | 当前状态 | 用户可以完成什么 |
 | --- | --- | --- |
@@ -95,7 +99,7 @@ npm run status:linux -- --json
 
 ## 近期变化
 
-### 0.3.23：一次连接，默认使用服务
+### 0.3.24：一次连接，默认使用服务
 
 同一 RabiLink 应用已鉴权设备默认可以使用 PC 提供的服务，包括语音、人格、资源、管理和知识读写。配置页移除重复权限开关、MCP 密钥和白名单；设备身份、应用隔离和服务就绪仍分别核对。见[通用连接](docs/rabilink-peer-tunnel.md)及[知识服务](docs/rabilink-knowledge-runtime.md)。
 
@@ -105,11 +109,11 @@ RabiLink 配置新增 **重置实例 ID**，用于修复两台电脑复制配置
 
 ### 0.3.19 实验实现：本机路由引用远端人格
 
-本机 Route 可以选择另一台 PC 的人格，读取正文、消息规则和上下文额度，同时沿用本机消息端和处理 Agent。0.3.19 新增这项实验实现：两端复用同一 RabiLink 应用认证，自动交换并固定设备公钥，再沿 LAN、P2P 或 Relay 读取受限人格服务，无需逐服务手工授权。0.3.23 起同一应用已鉴权连接默认允许实际提供的服务，固定公钥继续核对；来源 PC 需升级。操作、失败行为和待完成的真实双 PC 验收见[远端人格引用](docs/remote-persona-reference.md)。
+本机 Route 可以选择另一台 PC 的人格，读取正文、消息规则和上下文额度，同时沿用本机消息端和处理 Agent。0.3.19 新增这项实验实现：两端复用同一 RabiLink 应用认证，自动交换并固定设备公钥，再沿 LAN、P2P 或 Relay 读取受限人格服务，无需逐服务手工授权。0.3.22 起同一应用已鉴权连接默认允许实际提供的服务，固定公钥继续核对；来源 PC 需升级。操作、失败行为和待完成的真实双 PC 验收见[远端人格引用](docs/remote-persona-reference.md)。
 
 ### 0.3.5：远端 Agent 授权、审批专注视图与移动记录
 
-- 远端 Agent 使用独立节点凭据和逐 Agent 授权，可读取受控 API、公开技能及上传文件；旧节点须按[迁移说明](docs/lan-rabi-agent-bootstrap.md)重新接入。
+- 远端 Agent 使用独立节点凭据和已登记 Agent 身份，可读取受控 API、公开技能及上传文件；旧节点须按[迁移说明](docs/lan-rabi-agent-bootstrap.md)重新接入。
 - 计划新增待处理专注视图，保存审批后显示“已审批”，可回填编辑；确认投递后才转入分析。
 - Android 0.3.38-dev 增加统一时间线回看、声音事件拆分、浅深色皮肤和多电脑连接；多电脑真机及全天长稳验收仍待完成。
 
@@ -166,6 +170,8 @@ data/roles/<RoleId>/personaConfig.json
 可独立构建的客户端位于 [`apps/`](apps/)，共享 SDK 位于 [`packages/`](packages/)，可复用 Agent 指南位于 [`skills/`](skills/)。
 
 ## 文档入口
+
+实验性家庭设备控制和音箱播报见[ Agent 接口](docs/home-device-agent-api.md)，包括设备发现、显式播报绑定与回执核对。
 
 ### 第一次使用
 

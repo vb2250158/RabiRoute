@@ -412,8 +412,6 @@ function safeLocalUrl(config: RabiLinkRelayRuntimeConfig, pathname: string): str
   const localUrl = new URL(pathname.startsWith("/") ? pathname : `/${pathname}`, base);
   localUrl.protocol = base.protocol;
   localUrl.host = base.host;
-  // Relay requests arrive over loopback too; reject private directory controls here
-  // before the Manager's local-socket guard could mistake them for local UI requests.
   // Decode repeatedly so encoded separators, dot segments and nested escapes cannot
   // turn a retired API into an ordinary WebGUI request at a downstream boundary.
   let encodedPath = localUrl.pathname;
@@ -423,9 +421,6 @@ function safeLocalUrl(config: RabiLinkRelayRuntimeConfig, pathname: string): str
     const checkedPath = normalizedPath.replace(/\/+$/, "").toLowerCase();
     if (checkedPath === "/api/persona-sync" || checkedPath.startsWith("/api/persona-sync/")) {
       throw new Error("Persona synchronization API has been removed.");
-    }
-    if (checkedPath === "/api/speech/model-management/settings") {
-      throw new Error("Model directory settings are available only in the local WebGUI.");
     }
     if (checkedPath === "/api/agent/qq/history" || checkedPath.startsWith("/api/agent/qq/messages/")) {
       throw new Error("QQ message and attachment reads require direct local management access.");
@@ -511,7 +506,7 @@ async function proxyWebguiRequest(
     const headers: Record<string, string> = {};
     for (const [key, value] of Object.entries(request.headers || {})) {
       const lower = key.toLowerCase();
-      if (["accept", "content-type", "user-agent", "range", "if-range", "idempotency-key", "if-match"].includes(lower)) {
+      if (["accept", "content-type", "user-agent", "range", "if-range", "idempotency-key", "if-match", "x-rabiroute-expected-application-generation-id", "x-rabiroute-expected-manager-instance-id"].includes(lower)) {
         headers[lower] = String(value || "");
       }
     }

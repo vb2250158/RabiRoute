@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import type http from "node:http";
 import test from "node:test";
+import { markAuthenticatedConnectionRequest } from "../../manager/connectionRequestAccess.js";
 import {
   YeYuGamerManagerApiClient,
   type YeYuGamerCommandReceipt,
@@ -104,7 +105,7 @@ test("Manager facade exposes only four reads and one work-item dispatch on loopb
   }
 });
 
-test("Manager facade refuses non-loopback callers before config or credentials are read", () => {
+test("Manager facade refuses unauthenticated remote callers before config or credentials are read", () => {
   let configReads = 0;
   let responsePayload: unknown;
   const handled = handleYeYuGamerManagerApi(
@@ -120,6 +121,29 @@ test("Manager facade refuses non-loopback callers before config or credentials a
   assert.equal(handled, true);
   assert.equal(configReads, 0);
   assert.equal((responsePayload as { status: number }).status, 403);
+});
+
+test("authenticated remote callers reuse connection access for reads and plan dispatch", async () => {
+  for (const method of ["GET", "POST"]) {
+    const req = request(method, "192.0.2.10");
+    markAuthenticatedConnectionRequest(req);
+    let result!: number;
+    let dispatches = 0;
+    const client: YeYuGamerManagerRouteClient = {
+      getHealth: async () => ({} as never), getMeta: async () => ({} as never),
+      getSnapshot: async () => ({} as never), getCapabilities: async () => ({} as never),
+      createWorkItem: async () => { dispatches++; return receipt(); }
+    };
+    const path = method === "GET" ? "health" : "work-items";
+    handleYeYuGamerManagerApi(req, new URL(`http://localhost/api/agent/yeyu-gamer/${path}`), {} as http.ServerResponse, {
+      getConfig: () => ({}), createClient: () => client,
+      readJsonBody: async () => ({ workItem: { kind: "observation", note: "contract test" }, idempotencyKey: "dispatch-1", expectedStateVersion: 3 }) as never,
+      jsonResponse: (_response, status) => { result = status; }
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(result, method === "GET" ? 200 : 202);
+    assert.equal(dispatches, method === "GET" ? 0 : 1);
+  }
 });
 
 test("invalid integration config fails closed without making a live external request", async () => {

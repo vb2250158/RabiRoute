@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -59,6 +60,7 @@ export class HomeAssistantDeployment {
   private flight?: Promise<void>;
   private readonly os: HomeAssistantOsDriver;
   private installing = false;
+  private readonly changes = new EventEmitter();
 
   constructor(runtimeDir: string, private readonly baseUrl: () => string, private readonly io = driver, os?: HomeAssistantOsDriver) {
     this.file = path.join(runtimeDir, "home-assistant-deployment.json");
@@ -131,7 +133,8 @@ export class HomeAssistantDeployment {
           state: this.failure ? "error" : this.installing || status.state === "installing" ? "installing" : ready ? "ready" : status.state === "reboot_required" ? "reboot_required" : status.state === "error" ? "error" : installed ? "starting" : "stopped",
           message: this.failure || (ready ? "Home Assistant OS 已就绪。" : status.message),
           image: status.version ? `Home Assistant OS ${status.version}` : undefined,
-          installationPath: status.root, canInstall: !this.installing, canStart: installed && !this.installing };
+          progress: status.progress,
+          installationPath: status.root, canInstall: !this.installing && status.state !== "installing", canStart: installed && !this.installing };
       } catch {
         return { ...base, installation: "unknown", state: "error", message: "无法读取 Home Assistant OS 安装状态，请检查本机安装日志。" };
       }
@@ -209,6 +212,28 @@ export class HomeAssistantDeployment {
     });
   }
 
+  subscribe(listener: (snapshot: HomeAssistantDeploymentSnapshot) => void): () => void {
+    let closed = false;
+    let reading = false;
+    let pending = false;
+    const changed = async () => {
+      pending = true;
+      if (reading || closed) return;
+      reading = true;
+      try {
+        do {
+          pending = false;
+          const snapshot = await this.inspect();
+          if (!closed) listener(snapshot);
+        } while (pending && !closed);
+      } finally { reading = false; }
+    };
+    const unsubscribe = this.os.subscribe?.(() => { void changed(); });
+    this.changes.on("changed", changed);
+    void changed();
+    return () => { closed = true; this.changes.off("changed", changed); unsubscribe?.(); };
+  }
+
   private async runOs(operation: "Install" | "Start"): Promise<HomeAssistantDeploymentSnapshot> {
     this.installing = true;
     this.failure = "";
@@ -222,6 +247,7 @@ export class HomeAssistantDeployment {
       this.audit(operation.toLowerCase(), "failed");
     } finally {
       this.installing = false;
+      this.changes.emit("changed");
     }
     return this.inspect();
   }

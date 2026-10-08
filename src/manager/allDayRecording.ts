@@ -2,9 +2,11 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
-import { ALL_DAY_SOURCES, DEFAULT_ALL_DAY_SETTINGS, isReviewEvent, matchesReviewType, normalizeAllDaySettings, type AllDayEvent, type AllDaySettings, type AllDaySnapshot } from "../shared/allDayRecording.js";
+import { ALL_DAY_CAPTURE_SOURCES, ALL_DAY_SOURCES, DEFAULT_ALL_DAY_SETTINGS, isReviewEvent, matchesReviewType, normalizeAllDaySettings, type AllDayEvent, type AllDaySettings, type AllDaySnapshot } from "../shared/allDayRecording.js";
+import type { HomeAssistantActivityPort, HomeAssistantActivityRecord, HomeAssistantActivityRequest } from "../shared/homeAssistantActivity.js";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+const activityDayStart = (time: number) => new Date(time).setHours(0, 0, 0, 0);
 export const recordingDay = (time: number) => new Date(time).toISOString().slice(0, 10);
 export async function atomicRecordingJson(file: string, value: unknown): Promise<void> {
   const audit = (outcome: "started" | "committed" | "failed") => recordDataMutationAudit({
@@ -187,7 +189,7 @@ export class AllDayRecordingStore {
     return [...computer, ...mobile].filter(isReviewEvent).sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id));
   }
   async page(roleId: string, direction: "older" | "newer", cursor: { time: number; id: string }, source = "all", limit = 100, eventType = "all") {
-    if (!["all", "asr", "image", "window", "status"].includes(eventType)) throw new Error("Invalid event type");
+    if (!["all", "asr", "image", "window", "status", "device"].includes(eventType)) throw new Error("Invalid event type");
     if (!Number.isFinite(cursor.time) || cursor.time < 0 || cursor.id.length > 512 || !["all", ...ALL_DAY_SOURCES, "mobile", "session"].includes(source)) throw new Error("Invalid event cursor");
     const settings = await this.settings(roleId);
     const directories = [path.join(this.directory(roleId), "events"), ...(settings.mobileDeviceIds.length ? [path.join(this.mobileRoot, "events")] : [])];
@@ -257,7 +259,7 @@ export type AllDayCaptureDependencies = {
   audioFile(recordId: string): Promise<Buffer>;
   changed(roleId: string): void;
 };
-type RecordingSession = { audioSessionId?: string; roleId: string; id: string; settings: AllDaySettings; startedAt: number; lastSampleAt: number | null; audioSince: number; error: string; timer?: NodeJS.Timeout; pending?: Promise<void>; stopping: boolean; windowTitle: string | null };
+type RecordingSession = { homeAssistantSince?: number; audioSessionId?: string; roleId: string; id: string; settings: AllDaySettings; startedAt: number; lastSampleAt: number | null; audioSince: number; error: string; timer?: NodeJS.Timeout; pending?: Promise<void>; stopping: boolean; windowTitle: string | null };
 
 /** One host capture owner; explicit enable intent survives orderly shutdown. */
 export class AllDayRecordingService {
@@ -265,6 +267,24 @@ export class AllDayRecordingService {
   private transition: Promise<unknown> = Promise.resolve();
   private sourceErrors: Partial<Record<typeof ALL_DAY_SOURCES[number], string>> = {};
   constructor(readonly store: AllDayRecordingStore, private readonly dependencies: AllDayCaptureDependencies) {}
+  private readonly activityListeners = new Set<(request: HomeAssistantActivityRequest | null) => void>();
+  readonly homeAssistantActivity: HomeAssistantActivityPort = {
+    subscribe: listener => { this.activityListeners.add(listener); listener(this.activityRequest()); return () => { this.activityListeners.delete(listener); }; },
+    receive: (roleId, record) => this.receiveHomeAssistant(roleId, record),
+    report: (roleId, error) => {
+      const session = this.session;
+      if (!session || session.roleId !== roleId || !session.settings.sources.homeAssistant) return;
+      if (error) this.sourceErrors.homeAssistant = error; else delete this.sourceErrors.homeAssistant;
+      session.error = Object.entries(this.sourceErrors).map(([source, message]) => `${source}: ${message}`).join("; ");
+      this.dependencies.changed(roleId);
+    }
+  };
+  private activityRequest(): HomeAssistantActivityRequest | null {
+    const session = this.session;
+    return session && !session.stopping && session.settings.sources.homeAssistant
+      ? { roleId: session.roleId, startedAt: session.homeAssistantSince ?? session.startedAt } : null;
+  }
+  private notifyActivity(): void { for (const listener of this.activityListeners) listener(this.activityRequest()); }
   async restore() { const roleId = await this.store.enabledRole(); if (roleId) await this.start(roleId); }
   private serialize<T>(action: () => Promise<T>): Promise<T> {
     const result = this.transition.catch(() => undefined).then(action);
@@ -290,9 +310,12 @@ export class AllDayRecordingService {
           }
           await this.store.configure(roleId, settings);
           if (!session.settings.sources.microphone && settings.sources.microphone) session.audioSince = Date.now();
+          if (!session.settings.sources.homeAssistant && settings.sources.homeAssistant) session.homeAssistantSince = activityDayStart(Date.now());
           session.settings = settings; session.windowTitle = null;
+          if (!settings.sources.homeAssistant) delete this.sourceErrors.homeAssistant;
         } finally { session.stopping = false; this.schedule(session, 0); }
       } else await this.store.configure(roleId, settings);
+      this.notifyActivity();
       this.dependencies.changed(roleId);
       return this.snapshot(roleId);
     });
@@ -304,15 +327,16 @@ export class AllDayRecordingService {
         return this.snapshot(roleId);
       }
       const settings = await this.store.settings(roleId);
-      if (!ALL_DAY_SOURCES.some(source => settings.sources[source]) && await this.store.enabledRole() !== roleId) throw new Error("Select at least one computer source");
+      if (!ALL_DAY_SOURCES.some(source => settings.sources[source]) && await this.store.enabledRole() !== roleId) throw new Error("Select at least one recording source");
       const now = Date.now();
-      this.sourceErrors = {};
-      const session: RecordingSession = { roleId, id: randomUUID(), settings, startedAt: now, audioSince: now, lastSampleAt: null, error: "", stopping: false, windowTitle: null };
+      this.sourceErrors = settings.sources.homeAssistant ? { homeAssistant: "Home Assistant 活动连接尚未就绪" } : {};
+      const session: RecordingSession = { homeAssistantSince: settings.sources.homeAssistant ? activityDayStart(now) : undefined, roleId, id: randomUUID(), settings, startedAt: now, audioSince: now, lastSampleAt: null, error: "", stopping: false, windowTitle: null };
       await this.store.enableRole(roleId);
       this.session = session;
       try { await this.statusEvent(session, "Recording started"); }
       catch (error) { this.session = null; if (settings.sources.microphone) await this.dependencies.stopMicrophone(session.id); throw error; }
       this.schedule(session, 0);
+      this.notifyActivity();
       this.dependencies.changed(roleId);
       return this.snapshot(roleId);
     });
@@ -323,6 +347,7 @@ export class AllDayRecordingService {
       const session = this.session;
       if (!session || session.roleId !== roleId) return this.snapshot(roleId);
       session.stopping = true;
+      this.notifyActivity();
       clearTimeout(session.timer);
       await session.pending;
       try {
@@ -334,11 +359,43 @@ export class AllDayRecordingService {
     });
   }
   async dispose() { if (this.session) await this.stop(this.session.roleId, true); }
+  /** Persist the Activity stream under the active recording persona, independent of Agent routing. */
+  receiveHomeAssistant(roleId: string, input: HomeAssistantActivityRecord): Promise<boolean> {
+    const enrolled = this.session;
+    return this.serialize(async () => {
+      const session = this.session;
+      if (!session || session !== enrolled || session.roleId !== roleId || session.stopping || !session.settings.sources.homeAssistant) return false;
+      try {
+        const time = input.occurredAt;
+        if (!Number.isFinite(time) || !input.id || typeof input.text !== "string" || !input.name) throw new Error("Invalid Home Assistant activity");
+        if (time < (session.homeAssistantSince ?? session.startedAt) || time > Date.now() + 60_000) return false;
+        const event: AllDayEvent = {
+          id: `homeAssistant:${input.id}`, startedAt: time, endedAt: time,
+          source: "homeAssistant", deviceId: input.entityId ?? `home:activity:${input.domain ?? "logbook"}`, kind: "device",
+          text: input.text, state: "saved",
+          homeAssistant: { eventKind: "logbook", resourceName: input.name, entityId: input.entityId, domain: input.domain, state: input.state }
+        };
+        if (await this.store.hasEvent(roleId, event)) return false;
+        await this.store.append(roleId, event);
+        session.lastSampleAt = Date.now();
+        delete this.sourceErrors.homeAssistant;
+        session.error = Object.entries(this.sourceErrors).map(([source, message]) => `${source}: ${message}`).join("; ");
+        this.dependencies.changed(roleId);
+        return true;
+      } catch (error) {
+        this.sourceErrors.homeAssistant = error instanceof Error ? error.message : String(error);
+        session.error = `homeAssistant: ${this.sourceErrors.homeAssistant}`;
+        this.dependencies.changed(roleId);
+        return false;
+      }
+    });
+  }
   private async statusEvent(session: RecordingSession, text: string) {
     const now = Date.now();
     await this.store.append(session.roleId, { id: randomUUID(), startedAt: now, endedAt: now, source: "session", deviceId: this.store.hostId, kind: "status", text, state: "saved" });
   }
   private schedule(session: RecordingSession, delay: number) {
+    if (!ALL_DAY_CAPTURE_SOURCES.some(source => session.settings.sources[source])) return;
     // Sampling deadline is explicit recording work, not a UI/business-state polling loop.
     session.timer = setTimeout(() => {
       session.pending = this.sample(session).catch(error => { session.error = error instanceof Error ? error.message : String(error); }).finally(() => {
@@ -363,7 +420,8 @@ export class AllDayRecordingService {
   private async sample(session: RecordingSession) {
     const now = Date.now();
     const errors: string[] = [];
-    this.sourceErrors = {};
+    for (const source of ALL_DAY_CAPTURE_SOURCES) delete this.sourceErrors[source];
+    if (this.sourceErrors.homeAssistant) errors.push(`homeAssistant: ${this.sourceErrors.homeAssistant}`);
     let microphoneReady = false;
     if (session.settings.sources.microphone) {
       try { session.audioSessionId = await this.dependencies.startMicrophone(session.id) || session.id; microphoneReady = true; }

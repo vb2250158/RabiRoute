@@ -57,7 +57,7 @@ data/route/voice/adapterConfig.json
 data/route/dev-review/adapterConfig.json
 ```
 
-上面三套路由可以分别配置消息端、端口、热投递模式、Agent 投递方式和本机脚本权限，也可以指向同一个人格。不要为了多个 Route 复制人格；同一个人格复用根级 `personaConfig.json` 中的自动化规则、语音唤醒关键词和分消息端上下文额度。
+上面三套路由可以分别配置消息端、端口、热投递模式、Agent 投递方式，也可以指向同一个人格。不要为了多个 Route 复制人格；同一个人格复用根级 `personaConfig.json` 中的自动化规则、语音唤醒关键词和分消息端上下文额度。
 
 ## 人格之间怎样联系
 

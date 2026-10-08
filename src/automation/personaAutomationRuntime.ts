@@ -164,9 +164,6 @@ export function resolvePersonaScript(
   configuredPath: string
 ): { scriptPath: string; command: string; argsPrefix: string[]; cwd: string } {
   if (route.agentRoleDeviceId) throw new Error("Remote persona scripts must execute on their owning PC.");
-  if (!route.personaAutomationScriptsEnabled) {
-    throw new Error("当前 Route 未允许人格自动化运行本机脚本。");
-  }
   const relativeInput = String(configuredPath || "").trim().replace(/\\/g, "/").replace(/^\.\//, "");
   if (!relativeInput || path.isAbsolute(relativeInput) || relativeInput.split("/").includes("..")) {
     throw new Error("脚本路径必须是人格 scripts 目录内的相对路径。");

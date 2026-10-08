@@ -13,7 +13,12 @@
       "enabled": true,
       "config": {},
       "grants": [],
-      "policy": { "resources": { "maxChildProcesses": 2, "shutdownTimeoutMs": 5000 } }
+      "policy": {
+        "resources": {
+          "maxChildProcesses": 2,
+          "shutdownTimeoutMs": 5000
+        }
+      }
     },
     {
       "id": "manager:core",
@@ -262,7 +267,6 @@
       "config": {
         "baseUrl": "http://127.0.0.1:8123",
         "requestTimeoutMs": 5000,
-        "writeEnabled": false,
         "allowPublicBaseUrl": false,
         "allowInsecurePrivateHttp": false,
         "agentRoleId": "YeYu",
@@ -272,8 +276,7 @@
         "cameraClipCaptureEnabled": false,
         "cameraClipAllowedHosts": [],
         "ffmpegPath": "ffmpeg",
-        "ffprobePath": "ffprobe",
-        "artifactReadTokenEnv": "RABIROUTE_XIAOMI_HOME_ARTIFACT_TOKEN"
+        "ffprobePath": "ffprobe"
       },
       "grants": []
     }

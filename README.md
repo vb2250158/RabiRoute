@@ -10,18 +10,18 @@ English | <a href="./README_zh.md">简体中文</a>
 
 <h2 align="center">Let Agents connect everything around us.</h2>
 
-<p align="center">Send chat, voice, scheduled, and device messages to the right Agent while keeping context, permissions, and delivery evidence explicit.</p>
+<p align="center">Send chat, voice, scheduled, and device messages to the right Agent with shared context and clear delivery results.</p>
 
 <p align="center">
   <a href="https://github.com/vb2250158/RabiRoute/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/vb2250158/RabiRoute?color=19bfc1"></a>
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 20 or newer" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="Current version: 0.3.23" src="https://img.shields.io/badge/version-0.3.23-3178c6">
+  <img alt="Current version: 0.3.24" src="https://img.shields.io/badge/version-0.3.24-3178c6">
   <img alt="Status: active development" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
-RabiRoute is an **agent-neutral message gateway, delivery-policy router, and action gate**. It receives QQ, webhook, scheduled, voice, desktop, and device messages, then uses a message Route to deliver each message to a selected Agent or program.
+RabiRoute is an **agent-neutral message gateway and delivery-policy router**. It receives QQ, webhook, scheduled, voice, desktop, and device messages, then uses a message Route to deliver each message to a selected Agent or program.
 
 The Agent answers, writes code, calls tools, and performs the task. RabiRoute decides where the message came from, who receives it, which recent messages travel with it, whether an external reply is allowed, and where results and receipts are stored.
 
@@ -29,8 +29,12 @@ The Agent answers, writes code, calls tools, and performs the task. RabiRoute de
 
 ## What you can build
 
+- **Query and control imported home devices.** Discover all Home Assistant entities and their current actions, including buttons, settings and structured Xiaomi device commands. Agents reuse connection authentication and receive durable action receipts. See the [device API](docs/home-device-agent-api_en.md).
+
+Experimental vacuum cloud map files can be connected through Mi Home QR login in Xiaomi Setup. See the [map connection guide](docs/vacuum-cloud-map_en.md); version-2 map decoding is available, while live localization and coordinate navigation require separate acceptance.
+
 - **Route chat to an Agent.** QQ groups, direct messages, the persona panel, and other inputs can enter a fixed project and Desktop task through a Route.
-- **Run scheduled Agent work.** Persona rules can trigger an Agent by interval, time window, daily time, or one-time schedule, or run an explicitly allowed local script.
+- **Run scheduled Agent work.** Persona rules can trigger an Agent by interval, time window, daily time, or one-time schedule, or run a configured local script.
 - **Carry continuous context.** Each persona owns its message history and references to plans, memories, and skills; every Route can limit the recent messages included in a delivery.
 - **Configure each persona's plan workflow.** Plan status keys, labels, descriptions, colors, order, views, approval behavior, and delayed archival come from that persona's configuration; Agents can evolve the catalog without a code release.
 - **Control external sends.** Agents reply to QQ, RabiLink, and other channels through one sending API. Targets, quoted messages, sender identity, and receipts are validated and recorded.
@@ -73,13 +77,13 @@ The manual trigger performs a real delivery. See [Complete the first Route](docs
 
 ## Current capabilities
 
-The repository version is `0.3.23`. The table lists behavior backed by current code, configuration surfaces, and tests. Features that require accounts, external services, or physical devices still need acceptance in their target environment.
+The repository version is `0.3.24`. The table lists behavior backed by current code, configuration surfaces, and tests. Features that require accounts, external services, or physical devices still need acceptance in their target environment.
 
 | Area | Status | What it provides |
 | --- | --- | --- |
 | Routing core | Verified | Receive messages, persist events, match rules, build Agent context, deliver to a handler, and record replies. |
 | NapCat / OneBot | Verified | Bind one NapCat to each Route, manage quick/password/QR login and security confirmation inside the Route card, receive QQ group/direct messages, preserve media evidence, and send replies through OneBot HTTP. |
-| Schedules and persona automation | Verified | Trigger an Agent from messages or time rules; run persona-local scripts only after separate permission is enabled. |
+| Schedules and persona automation | Verified | Trigger an Agent from messages or time rules; run configured persona-local scripts. |
 | Codex Desktop | Verified | A full task ID selects the existing task, and each delivery supplies its workspace; report success only after the target rollout records the `deliveryId`. Deleted or archived bindings can be replaced under controlled rules. |
 | RibiWebGUI | Verified | Manage Routes, personas, message inputs, Agents, plans, memories, logs, diagnostics, themes, and desktop settings. |
 | Persona plan workflow | Verified | Use persona-configured status keys and presentation metadata as the single source for Manager, WebGUI, and Desktop; add, update, replace, or retire states through guarded APIs while preserving plan history. |
@@ -89,13 +93,17 @@ The repository version is `0.3.23`. The table lists behavior backed by current c
 | WorkBuddy | Experimental | Deliver a message into a WorkBuddy task the user already owns, using that task's own model, tools and approvals. Delivery needs a one-time local gateway credential; without it, delivery fails closed. Discovery, binding, and lifecycle hooks are implemented; the desktop exposes no pairing handoff yet and cold start is unverified. |
 | RabiSpeech / RabiLink / mobile and wearables | Experimental | Connect speech, phones, glasses, Relay, and health-data paths, with separate acceptance for each device and network environment. |
 | Media workspace | Experimental | Save media canvas projects, combine image/video/audio/text cards, and optionally use local H3; model setup and GPU inference require separate acceptance. |
-| LAN Rabi Agent | Experimental | Connect existing Codex/DSH tasks on another computer through an onboarding prompt; Manager separately grants node access to APIs and skills. Real two-machine and legacy-node migration acceptance remains pending. |
+| LAN Rabi Agent | Experimental | Connect existing Codex/DSH tasks on another computer through an onboarding prompt; authenticated nodes can use the provided APIs and skills. Real two-machine and legacy-node migration acceptance remains pending. |
 
 See [Current capabilities and maturity](docs/current-capabilities_en.md) for complete status, limits, and sources of truth.
 
 ## Recent changes
 
-### 0.3.23: one connection, default service access
+### Connection access
+
+Authenticate once, then use provided APIs without another permission switch for device control, scripts, sends or persona skills. See [connections and API access](docs/connection-access_en.md).
+
+### 0.3.24: one connection, default service access
 
 Authenticated devices in the same RabiLink application can use services provided by the PC, including speech, personas, resources, management and knowledge reads/writes. Settings remove duplicate permission switches, MCP secrets and allowlists. Identity, application isolation and service readiness remain checked separately. See [connections](docs/rabilink-peer-tunnel_en.md) and [knowledge](docs/rabilink-knowledge-runtime_en.md).
 
@@ -105,11 +113,11 @@ RabiLink configuration adds **Reset instance ID** to repair identities copied be
 
 ### 0.3.19 experimental implementation: remote persona references
 
-Local Routes can select a persona owned by another PC and read its text, message rules and context budgets while keeping their existing message inputs and handling Agent. Version 0.3.19 adds this experimental implementation: both PCs reuse authentication for the same RabiLink application, automatically exchange and pin device public keys, then use LAN, P2P or Relay to access a restricted persona service without per-service manual grants. Since 0.3.23, authenticated devices in the same application can use provided services by default; source PCs need the new capability and pinned keys remain checked. See [remote persona references](docs/remote-persona-reference_en.md) for operation, failure behavior and the pending two-PC acceptance.
+Local Routes can select a persona owned by another PC and read its text, message rules and context budgets while keeping their existing message inputs and handling Agent. Version 0.3.19 adds this experimental implementation: both PCs reuse authentication for the same RabiLink application, automatically exchange and pin device public keys, then use LAN, P2P or Relay to access a restricted persona service without per-service manual grants. Since 0.3.22, authenticated devices in the same application can use provided services by default; source PCs need the new capability and pinned keys remain checked. See [remote persona references](docs/remote-persona-reference_en.md) for operation, failure behavior and the pending two-PC acceptance.
 
 ### 0.3.5: Remote Agent authorization, focused approvals and mobile recording
 
-- Remote Agents use individual node credentials and per-Agent grants for controlled APIs, public skills and file uploads. Existing nodes must follow the [migration guide](docs/lan-rabi-agent-bootstrap_en.md).
+- Remote Agents use individual node credentials for APIs, public skills and file uploads. Existing nodes must follow the [migration guide](docs/lan-rabi-agent-bootstrap_en.md).
 - Plans add a focused pending-feedback view, persist submitted approvals for later editing, and return to analysis only after confirmed delivery.
 - Android 0.3.38-dev adds unified timeline playback, sound-event splitting, light/dark themes and saved computers. Physical multi-computer and all-day endurance acceptance remain pending.
 
@@ -130,7 +138,7 @@ flowchart LR
     C --> D[Route rules]
     D --> E[Context and attachments]
     E --> F[Agent or program]
-    F --> G[Delivery policy and action gate]
+    F --> G[Delivery and result tracking]
     G --> H[Reply · receipt · audit]
 ```
 
@@ -166,6 +174,8 @@ data/roles/<RoleId>/personaConfig.json
 Buildable clients live under [`apps/`](apps/), shared SDKs under [`packages/`](packages/), and reusable Agent guides under [`skills/`](skills/).
 
 ## Documentation
+
+For experimental home device control and speaker announcements, see the [Agent API](docs/home-device-agent-api_en.md), including device discovery, explicit speech binding and receipt verification.
 
 ### First use
 

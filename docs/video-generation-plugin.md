@@ -31,7 +31,7 @@
 
 启动只要求运行环境和至少一个完整工作流；缺少可选音频或加速权重不会阻断已有无声工作流。模型管理列出缺失文件及受影响工作流；所有工作流缺失时启动返回具体文件名。目录设置和安装接口仅允许本机同源访问，且不能与推理同时进行。关闭程序会停止下载，重启不会自动重试。全新机器的 CUDA 驱动兼容性须在目标机器验证。
 
-初始化接口（与模型管理相同的本机鉴权）：`GET /api/video/models/initialization` 返回 `{revision, modelRoot, files, downloadBytes, additionalBytes, availableBytes, canDownload, errors}`；`POST /api/video/models/initialize` 接收 `{expectedRevision}`，返回后台任务，由 `GET /api/video/models` 和 `video.models` 事件跟踪。过期目录版本、空间不足或无效已有文件返回 409，不启动下载；同一安装进行中拒绝重复请求。目录 PATCH 可附 `layout: "categorized"`，旧客户端省略时保留原布局。预览不下载，POST 后页面可关闭但应用需保持运行。
+初始化接口（与模型管理相同的连接鉴权）：`GET /api/video/models/initialization` 返回 `{revision, modelRoot, files, downloadBytes, additionalBytes, availableBytes, canDownload, errors}`；`POST /api/video/models/initialize` 接收 `{expectedRevision}`，返回后台任务，由 `GET /api/video/models` 和 `video.models` 事件跟踪。过期目录版本、空间不足或无效已有文件返回 409，不启动下载；同一安装进行中拒绝重复请求。目录 PATCH 可附 `layout: "categorized"`，旧客户端省略时保留原布局。预览不下载，POST 后页面可关闭但应用需保持运行。
 
 也可使用下列手工导入流程。部署者准备支持 H3 的 ComfyUI Git 源码、具备 CUDA/PyTorch/ComfyUI 依赖的本机 Python，以及以下四个模型（旧 FL2VA 无声 8 步路线；完整标准、声音与 Ref2VA 依赖见工作流文档）：
 

@@ -1,4 +1,5 @@
 import type http from "node:http";
+import { hasAuthenticatedConnectionRequest } from "../../manager/connectionRequestAccess.js";
 import {
   YeYuGamerManagerApiClient,
   YeYuGamerManagerApiError,
@@ -91,12 +92,12 @@ export function handleYeYuGamerManagerApi(
   if (!(request.method === "GET" && readMethod)
     && !(request.method === "POST" && isWorkItemDispatch)) return false;
 
-  if (!isLoopbackAddress(request.socket.remoteAddress)) {
+  if (!isLoopbackAddress(request.socket.remoteAddress) && !hasAuthenticatedConnectionRequest(request)) {
     context.jsonResponse(response, 403, {
       code: -1,
       error: {
-        code: "yeyu_gamer_loopback_required",
-        message: "YeYu Gamer Manager integration is available only to a local RabiRoute Agent."
+        code: "yeyu_gamer_connection_auth_required",
+        message: "A verified RabiRoute connection is required."
       }
     });
     return true;

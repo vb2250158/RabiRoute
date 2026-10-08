@@ -23,7 +23,6 @@ public final class RabiConversationSettings {
     private static final String KEY_PROACTIVITY_PREFERENCE = "proactivityPreference";
     private static final String KEY_AUTO_START_VOICE_SERVICE = "autoStartVoiceService";
     private static final String KEY_AUDIO_RETENTION_HOURS = "audioRetentionHours";
-    private static final String KEY_AUDIO_MAX_STORAGE_MB = "audioMaxStorageMb";
     private static final String KEY_AUDIO_RESERVE_FREE_MB = "audioReserveFreeMb";
 
     public enum InputMode {
@@ -70,7 +69,6 @@ public final class RabiConversationSettings {
     public final String ttsModel;
     public final String ttsVoice;
     public final int audioRetentionHours;
-    public final int audioMaxStorageMb;
     public final int audioReserveFreeMb;
 
     public RabiConversationSettings(
@@ -82,7 +80,7 @@ public final class RabiConversationSettings {
             String ttsVoice
     ) {
         this(inputMode, proactivityPreference, autoStartVoiceService, autoPlayAgentVoice,
-                ttsModel, ttsVoice, 6, 8192, 1024);
+                ttsModel, ttsVoice, 6, 1024);
     }
 
     public RabiConversationSettings(
@@ -93,7 +91,6 @@ public final class RabiConversationSettings {
             String ttsModel,
             String ttsVoice,
             int audioRetentionHours,
-            int audioMaxStorageMb,
             int audioReserveFreeMb
     ) {
         this.inputMode = inputMode == null ? InputMode.PHONE : inputMode;
@@ -106,7 +103,6 @@ public final class RabiConversationSettings {
         this.ttsModel = clean(ttsModel, "local-tts/gpt-sovits");
         this.ttsVoice = clean(ttsVoice, "Rabi");
         this.audioRetentionHours = clamp(audioRetentionHours, 0, 168);
-        this.audioMaxStorageMb = clamp(audioMaxStorageMb, 1024, 65536);
         this.audioReserveFreeMb = clamp(audioReserveFreeMb, 256, 16384);
     }
 
@@ -127,7 +123,6 @@ public final class RabiConversationSettings {
                 values.getString("ttsModel", "local-tts/gpt-sovits"),
                 values.getString("ttsVoice", "Rabi"),
                 values.getInt(KEY_AUDIO_RETENTION_HOURS, 6),
-                values.getInt(KEY_AUDIO_MAX_STORAGE_MB, 8192),
                 values.getInt(KEY_AUDIO_RESERVE_FREE_MB, 1024)
         );
     }
@@ -141,7 +136,7 @@ public final class RabiConversationSettings {
                 .putString("ttsModel", ttsModel)
                 .putString("ttsVoice", ttsVoice)
                 .putInt(KEY_AUDIO_RETENTION_HOURS, audioRetentionHours)
-                .putInt(KEY_AUDIO_MAX_STORAGE_MB, audioMaxStorageMb)
+                .remove("audioMaxStorageMb")
                 .putInt(KEY_AUDIO_RESERVE_FREE_MB, audioReserveFreeMb)
                 .remove("asrModel")
                 .remove("asrLanguage")

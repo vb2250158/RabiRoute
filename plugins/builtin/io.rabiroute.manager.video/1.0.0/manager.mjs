@@ -37,7 +37,7 @@ export const activate = definePlugin({ async activate(context) {
       }
       if (route.startsWith("/models")) {
         response.setHeader("cache-control", "no-store");
-        if (!runtime.localSettingsAllowed(request)) throw new VideoError("模型管理仅允许本机页面访问。", 403);
+        if (!runtime.localSettingsAllowed(request)) throw new VideoError("模型管理需要有效的连接身份。", 403);
         if (request.method === "GET" && route === "/models") return respond(response, await models.snapshot());
         if (request.method === "GET" && route === "/models/initialization") return respond(response, await models.downloadPlan());
         if (request.method === "POST" && route === "/models/initialize") {

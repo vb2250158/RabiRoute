@@ -6,10 +6,13 @@
 
 # RabiRoute 文档
 
+[连接与接口使用](connection-access.md)：完成一次鉴权后使用接口，说明已移除的重复限制。
+
 这里同时包含现行使用说明、实验集成、设计方案、调研和历史交接。文件存在不代表功能已经完成；阅读前先看状态。
 
 ## 先看这里
 
+- [查看设备并测试动作](user-guide/home-devices.md) — 查看设备卡片、能力和状态，并测试已接通的设备动作。
 - [工作区计划查询](workspace-plan-query.md) — 按宿主会话与工作区过滤的分页搜索接口。
 
 - [人格全天记录](persona-all-day-recording.md) — **新增实现**。按日期查看电脑与已选择手机的时间轴和事件，明确采集来源、暂停状态和记录缺口。
@@ -34,6 +37,9 @@
 - [NapCat 无值守](napcat-unattended.md) — QQ 登录状态、快速登录、Manager 恢复和守护边界。
 
 ## 接入开发：路由、人格与 Agent 接口
+
+- [家庭设备与音箱 Agent 接口](home-device-agent-api.md) — 查询全部已接入实体、发现并调用其按钮／设置／设备动作、绑定文字播报并查询幂等回执。
+- [扫地机云地图连接](vacuum-cloud-map.md) — 米家扫码、原始文件及 version-2 解码合同；实时定位和导航仍待验收。
 
 - [消息投递模板与归属](message-delivery-templates.md)：开发者查看渲染入口、场景差异和历史回执退出条件。
 - [计划与记忆摘要搜索](knowledge-search.md)
@@ -92,6 +98,7 @@
 - [RabiLink Cloudflare Worker](rabilink-relay-cloudflare-worker.md) — Relay 边缘代理实现。
 - [RabiLink 眼镜端三条路线对比](rabilink-glasses-route-comparison.md) — 原生灵珠智能体、AIUI 与原生 App 的宿主、生命周期、设备能力、发布成本和当前建议。
 - [Rabi 移动设备消息端](mobile-message-endpoint.md) — **实验集成**。手机独立聊天、可选眼镜、可靠队列、通知、附件、配置助手和真机验收边界。
+- [手机语音通话](mobile-voice-call.md) — **实验实现**。从聊天页发起语音对话，了解静音、挂断、记录恢复与迟到回复的行为。
 - [RabiLink 手机边缘枢纽](rabilink-phone-edge-hub.md) — 手机/穿戴设备契约和 Android SDK。
 - [手机与电脑视频直连](rabilink-direct-video.md) — **实验接入**。直连视频的带宽边界、SDK 条件、构建方式和真机验证结果。
 - [移动端记录与事件边界](mobile-recording-event-boundary.md) — 开发维护：设备配置归属、统一事件方向与旧协议退出条件。

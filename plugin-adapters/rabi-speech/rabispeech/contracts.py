@@ -67,6 +67,24 @@ class TranscriptionResult:
     model: str
     segments: list[TranscriptSegment] = field(default_factory=list)
     record_id: str | None = None
+    emotion: str | None = None
+    emotion_labels: list[str] = field(default_factory=list)
+    audio_events: list[str] = field(default_factory=list)
+    raw_tags: list[str] = field(default_factory=list)
+    confidence: float | None = None
+
+    def recognition_metadata(self) -> dict[str, object]:
+        """Optional provider observations, separate from transcript text and identity."""
+        metadata: dict[str, object] = {}
+        if self.emotion is not None:
+            metadata["emotion"] = self.emotion
+        for name in ("emotion_labels", "audio_events", "raw_tags"):
+            values = getattr(self, name)
+            if values:
+                metadata[name] = list(values)
+        if self.confidence is not None:
+            metadata["confidence"] = self.confidence
+        return metadata
 
 
 class TtsProvider(Protocol):

@@ -11,6 +11,9 @@ const mutationPattern = /\bfs(?:\.promises)?\.(?:writeFile|appendFile|rename|unl
 const auditPattern = /\bauditRecordingArchiveMutation\s*\(|\brecordDataMutationAudit\s*\(|\batomicWriteFileSync\s*\(|\bappendAdapterLog\s*\(/;
 
 const infrastructureExclusions = new Map([
+  ["src/linuxProcessLease.ts", "kernel ownership lease descriptor and atomic temporary file; no persona, message or business state"],
+  ["src/markdownImage.ts", "isolated temporary browser profile cleanup after bounded image rendering; send receipts remain owned and audited by the send pipeline"],
+  ["src/integrations/xiaomiHome/vacuumVideoWorker.ts", "IPC-owned native transport supervisor removes its temporary environment-reference config; session lifecycle is recorded by the owning vacuum video service"],
   ["src/planPageCatalogCheckpoint.ts", "disposable plan projection cache; source JSON remains authoritative and is reconciled on restore; atomic temporary publication does not mutate business records"],
   ["src/manager/sourcePatchService.ts", "source patch publication journals and recovery fences; publication events use the injected audit callback"],
   ["src/manager/webPatchService.ts", "immutable Web bundle cache; committed state emits web_patch_committed through the injected audit callback"],

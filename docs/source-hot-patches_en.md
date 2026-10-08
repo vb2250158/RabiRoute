@@ -115,7 +115,7 @@ After a full build, also run `npm run test:hot-patches:manager`. Following the p
 
 ### State migration in isolated Workers
 
-`HotPatchProcess` can bind state to a named dependency supplied during initialization and run explicit synchronous migrations with `applyWithStateMigration` / `rollbackWithStateMigration` inside the Worker. The migration source is intended for managed candidate callers only; all retained revision leases must drain first. A failed migration keeps the old code and state, while a successful one returns a new `snapshot` and state proof. The Worker PID, connections, and bounded mutation queue remain unchanged.
+`HotPatchProcess` can bind state to a named dependency supplied during initialization and run explicit synchronous migrations with `applyWithStateMigration` / `rollbackWithStateMigration` inside the Worker. The migration source is intended for candidate callers only; all retained revision leases must drain first. A failed migration keeps the old code and state, while a successful one returns a new `snapshot` and state proof. The Worker PID, connections, and bounded mutation queue remain unchanged.
 
 State dependencies enter the Worker through structured cloning, and callers can request a read-only proof with `snapshot(stateDependency)`. Arbitrary business objects or functions are not transferred across IPC. If migration times out, the Worker is treated as failed and accepted calls are not replayed.
 

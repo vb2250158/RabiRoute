@@ -130,6 +130,33 @@ class RecordingArchiveTransport internal constructor(
         hashId(sha256); require(expectedBytes in 1..1024 * 1024)
         return requireNotNull(read(t, "/objects/$sha256")).also { require(it.size == expectedBytes && digest(it) == sha256) }
     }
+    /** Verify the exact remote recording and its playback bytes before releasing the phone original. */
+    fun verifyArchivedPlayback(t: RecordingArchiveCoordinator.Target, manifest: JSONObject): Boolean {
+        val remote = getManifest(t,manifest.getString("recordId"))
+        require(RecordingArchiveContract.recordingManifestHash(remote) == RecordingArchiveContract.recordingManifestHash(manifest))
+        val expectedHash = RecordingArchiveContract.recordingManifestHash(manifest)
+        var cursor: String? = null
+        val cursors = mutableSetOf<String>()
+        var visible = false
+        do {
+            val page = readCatalog(t,cursor,100,manifest.getLong("startedAt"),manifest.getLong("endedAt"))
+            require(!page.optBoolean("offline",false)) { "Archive history is unavailable" }
+            val rows = page.getJSONArray("items")
+            for(i in 0 until rows.length()) {
+                val row = rows.getJSONObject(i)
+                if(row.getString("recordId") == manifest.getString("recordId") && row.getString("manifestHash") == expectedHash) visible = true
+            }
+            cursor = if(page.isNull("nextCursor")) null else page.getString("nextCursor")
+            require(cursor == null || cursors.add(cursor)) { "Archive history cursor did not advance" }
+        } while(!visible && cursor != null)
+        require(visible) { "Recording is absent from archive history" }
+        val objects = remote.getJSONArray("objects")
+        for(i in 0 until objects.length()) {
+            val value = objects.getJSONObject(i)
+            readObject(t,value.getString("sha256"),value.getInt("bytes"))
+        }
+        return true
+    }
     fun readCatalog(t: RecordingArchiveCoordinator.Target, cursor: String? = null, limit: Int = 50,
                     from: Long? = null, to: Long? = null, source: String? = null): JSONObject {
         require(limit in 1..100 && (cursor == null || cursor.length <= 8192))
