@@ -91,7 +91,7 @@ export type AgentSendChannelHelp = Readonly<{
 }>;
 
 export const AGENT_SEND_CHANNEL_HELP: readonly AgentSendChannelHelp[] = freezeChannelHelp([
-  { channel: "napcat", description: "QQ 群聊或私聊；QQ 不使用 channel=qq。", params: { target: "group|private", groupId: "群号（group 时必填）", userId: "QQ 号（private 时必填）", instanceId: "NapCat 实例 ID（可选）", replyToMessageId: "来源 QQ 消息 ID；群聊必填，可传空字符串表示不引用", replyImageDescriptions: "引用图片的描述字符串数组（可选；图片引用仍受下游要求约束）", allowAdditionalReply: "是否允许追加回复（可选布尔值，默认 false）" }, example: { channel: "napcat", params: { target: "group", groupId: "example-group-id", replyToMessageId: "example-message-id" }, payload: { type: "text", text: "消息正文" } } },
+  { channel: "napcat", description: "QQ 群聊或私聊；支持 Markdown 渲染成图片；QQ 不使用 channel=qq。", params: { target: "group|private", groupId: "群号（group 时必填）", userId: "QQ 号（private 时必填）", instanceId: "NapCat 实例 ID（可选）", replyToMessageId: "来源 QQ 消息 ID；群聊必填，可传空字符串表示不引用", replyImageDescriptions: "引用图片的描述字符串数组（可选；图片引用仍受下游要求约束）", allowAdditionalReply: "是否允许追加回复（可选布尔值，默认 false）" }, example: { channel: "napcat", params: { target: "group", groupId: "example-group-id", replyToMessageId: "example-message-id" }, payload: { type: "text", text: "消息正文" } } },
   { channel: "wecom", description: "企业微信会话。", params: { chatId: "会话 ID", userId: "用户 ID（可选）", reqId: "请求 ID（可选）" }, example: { channel: "wecom", params: { chatId: "chat-id" }, payload: { type: "text", text: "消息正文" } } },
   { channel: "weixin", description: "微信会话。", params: { sessionId: "会话 ID", userId: "用户 ID（可选）" }, example: { channel: "weixin", params: { sessionId: "session-id" }, payload: { type: "text", text: "消息正文" } } },
   { channel: "feishu", description: "飞书会话。", params: { chatId: "会话 ID", userId: "用户 ID（可选）" }, example: { channel: "feishu", params: { chatId: "chat-id" }, payload: { type: "text", text: "消息正文" } } },
@@ -109,7 +109,7 @@ export const AGENT_SEND_REQUEST_CONTRACT = freezeChannelHelp({
   allowedFields: {
     request: ["deliveryId", "sender", "routeId", "channel", "params", "payload", "tracking", "styleValidation"],
     sender: ["agentType", "sessionId"],
-    payload: ["type", "text", "path", "url", "fileName", "fileId", "fileSha256", "planAttachment"]
+    payload: ["type", "text", "path", "url", "fileName", "fileId", "fileSha256", "planAttachment", "segments"]
   },
   channelValues: AGENT_SEND_CHANNEL_HELP.map(item => item.channel),
   paramsAllowedFields: Object.fromEntries(AGENT_SEND_CHANNEL_HELP.map(item => [item.channel, Object.keys(item.params)])),
@@ -117,7 +117,7 @@ export const AGENT_SEND_REQUEST_CONTRACT = freezeChannelHelp({
     "field-types-and-value-constraints",
     "required-and-conditional-fields",
     "cross-field-validation",
-    "nested-tracking-and-planAttachment-contracts",
+    "nested-tracking-planAttachment-and-segments-contracts",
     "runtime-authorization-and-delivery-policy",
     "response-and-error-contracts"
   ]
@@ -206,11 +206,64 @@ function planAttachmentReference(
   return { ...(roleId ? { roleId } : {}), planId, attachmentId };
 }
 
-function payloadFields(payload: Record<string, unknown>): Pick<AgentReplyRequest, "payload" | "payloadType" | "text"> {
+function payloadFields(payload: Record<string, unknown>, channel: AgentSendChannel): Pick<AgentReplyRequest, "payload" | "payloadType" | "text"> {
   assertOnlyFields(payload, AGENT_SEND_REQUEST_CONTRACT.allowedFields.payload, "payload");
-  const type = textValue(payload.type, "payload.type") as "text" | "image" | "voice" | "file";
-  if (!(["text", "image", "voice", "file"] as string[]).includes(type)) {
-    throw new Error("payload.type must be text, image, voice, or file.");
+  const type = textValue(payload.type, "payload.type") as "text" | "image" | "voice" | "file" | "markdown";
+  if (!(["text", "image", "voice", "file", "markdown"] as string[]).includes(type)) {
+    throw new Error("payload.type must be text, image, voice, file, or markdown.");
+  }
+  if (type === "markdown") {
+    if (channel !== "napcat" || ["path", "url", "fileName", "fileId", "fileSha256", "planAttachment", "segments"].some(key => Object.prototype.hasOwnProperty.call(payload, key))) {
+      throw new Error("payload.type=markdown requires channel=napcat and payload.text only.");
+    }
+    const validatedText = textValue(payload.text, "payload.text") as string;
+    const text = typeof payload.text === "string" ? payload.text : validatedText;
+    if (Buffer.byteLength(text, "utf8") > 32 * 1024) throw new Error("payload.text exceeds the 32 KiB Markdown limit.");
+    return { payloadType: "image", text, payload: { type: "markdown", text } };
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, "segments")) {
+    if (channel !== "napcat" || type !== "image") {
+      throw new Error("payload.segments requires channel=napcat and payload.type=image.");
+    }
+    if (["text", "path", "url", "fileName", "fileId", "fileSha256", "planAttachment"].some(key => Object.prototype.hasOwnProperty.call(payload, key))) {
+      throw new Error("payload.segments cannot be combined with top-level media or text fields.");
+    }
+    if (!Array.isArray(payload.segments) || payload.segments.length === 0 || payload.segments.length > 32) {
+      throw new Error("payload.segments must contain 1 to 32 ordered text/image segments.");
+    }
+    let imageCount = 0;
+    const segments = payload.segments.map((raw, index) => {
+      const label = `payload.segments[${index}]`;
+      const segment = objectValue(raw, label);
+      const segmentType = textValue(segment.type, `${label}.type`);
+      if (segmentType === "text") {
+        assertOnlyFields(segment, ["type", "text"], label);
+        const segmentText = textValue(segment.text, `${label}.text`) as string;
+        return { type: "text" as const, text: typeof segment.text === "string" ? segment.text : segmentText };
+      }
+      if (segmentType === "markdown") {
+        assertOnlyFields(segment, ["type", "text"], label);
+        const segmentText = textValue(segment.text, `${label}.text`) as string;
+        const text = typeof segment.text === "string" ? segment.text : segmentText;
+        if (Buffer.byteLength(text, "utf8") > 32 * 1024) throw new Error(`${label}.text exceeds the 32 KiB Markdown limit.`);
+        imageCount++;
+        return { type: "markdown" as const, text };
+      }
+      if (segmentType === "image") {
+        assertOnlyFields(segment, ["type", "path", "url"], label);
+        const hasPath = Object.prototype.hasOwnProperty.call(segment, "path");
+        const hasUrl = Object.prototype.hasOwnProperty.call(segment, "url");
+        if (hasPath === hasUrl) throw new Error(`${label} requires exactly one of path or url.`);
+        const file = textValue(hasPath ? segment.path : segment.url, `${label}.${hasPath ? "path" : "url"}`) as string;
+        imageCount++;
+        return hasPath ? { type: "image" as const, path: file } : { type: "image" as const, url: file };
+      }
+      throw new Error(`${label}.type must be text, image, or markdown.`);
+    });
+    if (imageCount === 0 || imageCount > 16) throw new Error("payload.segments requires 1 to 16 images.");
+    const text = segments.filter((segment): segment is Extract<typeof segment, { type: "text" | "markdown" }> => segment.type === "text" || segment.type === "markdown")
+      .map(segment => segment.text).join("\n");
+    return { payloadType: "image", text, payload: { type: "image", text, segments } };
   }
   const validatedText = textValue(payload.text, "payload.text", type === "text");
   // Validation rejects empty input; message whitespace belongs to the sender.
@@ -272,7 +325,7 @@ function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
   }
   const params = objectValue(request.params, "params");
   const rawPayload = objectValue(request.payload, "payload");
-  const payload = payloadFields(rawPayload);
+  const payload = payloadFields(rawPayload, channel);
   if (Object.prototype.hasOwnProperty.call(rawPayload, "fileId") && (channel !== "napcat" || params.target !== "group")) {
     throw new Error("payload.fileId requires channel=napcat and params.target=group.");
   }

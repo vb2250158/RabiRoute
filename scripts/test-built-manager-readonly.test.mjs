@@ -4,8 +4,10 @@ import { collectBuiltManagerReadOnlySummary } from "./test-built-manager-readonl
 
 test("built Manager read-only summary rejects unhealthy or mismatched READY identity before business reads", async () => {
   for (const meta of [
-    { health: { state: "starting", requiredReady: false } },
-    { health: { state: "healthy", requiredReady: true }, applicationGenerationId: "other", managerInstanceId: "other" }
+    { health: { live: true, state: "starting", requiredReady: false } },
+    { health: { live: false, state: "healthy", requiredReady: true } },
+    { health: { live: true, state: "degraded", requiredReady: false } },
+    { health: { live: true, state: "healthy", requiredReady: true }, applicationGenerationId: "other", managerInstanceId: "other" }
   ]) {
     const requests = [];
     await assert.rejects(() => collectBuiltManagerReadOnlySummary("http://127.0.0.1:45678", async url => {
@@ -27,7 +29,7 @@ test("built Manager read-only summary keeps private persona data out of evidence
   const fetchImpl = async url => {
     const request = new URL(url);
     if (request.pathname === "/meta") return jsonResponse({
-      health: { state: "healthy", requiredReady: true },
+      health: { live: true, state: "degraded", requiredReady: true },
       applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-manager"
     });
     if (request.pathname === "/gateways") {
@@ -85,7 +87,7 @@ test("built Manager read-only summary fails persona-scoped coverage when no pers
   const fetchImpl = async url => {
     const request = new URL(url);
     if (request.pathname === "/meta") return jsonResponse({
-      health: { state: "healthy", requiredReady: true },
+      health: { live: true, state: "healthy", requiredReady: true },
       applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-manager"
     });
     if (request.pathname === "/gateways") return jsonResponse({ data: { manager: [] } });
@@ -113,7 +115,7 @@ test("built Manager read-only summary retries while the initial route catalog is
   const fetchImpl = async url => {
     const request = new URL(url);
     if (request.pathname === "/meta") return jsonResponse({
-      health: { state: "healthy", requiredReady: true },
+      health: { live: true, state: "healthy", requiredReady: true },
       applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-manager"
     });
     if (request.pathname === "/gateways") {
@@ -149,7 +151,7 @@ test("built Manager read-only failures redact the persona id from boundary error
   const fetchImpl = async url => {
     const request = new URL(url);
     if (request.pathname === "/meta") return jsonResponse({
-      health: { state: "healthy", requiredReady: true },
+      health: { live: true, state: "healthy", requiredReady: true },
       applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-manager"
     });
     if (request.pathname === "/gateways") return jsonResponse({ data: { manager: [] } });

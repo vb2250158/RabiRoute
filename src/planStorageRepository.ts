@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { atomicWriteFileSync } from "./shared/filePersistence.js";
+import { orderedPlanHistoryPaths, PLAN_HISTORY_FILE } from "./planHistoryShards.js";
 import {
   canonicalHistoricalPlanStorageCollisionKey,
   canonicalLogicalPlanId,
@@ -512,19 +513,31 @@ function packageInventoryHash(files: Array<Pick<PlanStoragePackageFile, "path" |
 function validatePackageIdentity(planId: string, bucket: PlanStorageBucket, files: PlanStoragePackageFile[]): void {
   const byPath = new Map(files.map((file) => [file.path, file.content]));
   const planBytes = byPath.get("plan.json");
-  const historyBytes = byPath.get("history.jsonl");
+  const historyBytes = byPath.get(PLAN_HISTORY_FILE);
   if (!planBytes || !historyBytes) throw new Error("Plan storage package requires plan.json and history.jsonl.");
+  const historyPaths = orderedPlanHistoryPaths(byPath.keys());
   const plan = JSON.parse(planBytes.toString("utf8")) as { id?: unknown; status?: unknown; archiveStatus?: unknown; activationStatus?: unknown };
   if (canonicalLogicalPlanId(plan.id) !== planId) throw new Error("Plan storage package plan.json identity mismatch.");
   if ((bucket === "archive") !== (plan.activationStatus !== undefined ? plan.activationStatus === "已归档" : plan.archiveStatus === "已归档" || plan.status === "已归档")) {
     throw new Error("Plan storage package bucket does not match plan status.");
   }
-  const historyLines = historyBytes.toString("utf8").split(/\r?\n/).filter(Boolean);
-  if (!historyLines.length) throw new Error("Plan storage package requires non-empty history.");
-  for (const line of historyLines) {
-    const record = JSON.parse(line) as { id?: unknown; planId?: unknown };
-    if (typeof record.id !== "string" || record.planId !== planId) {
-      throw new Error("Plan storage package history identity mismatch.");
+  for (const historyPath of historyPaths) {
+    const bytes = byPath.get(historyPath)!;
+    // A complete legacy base row may omit LF even when later physical shards exist.
+    // The logical reader inserts a separator at that boundary; new shards require LF.
+    if (!bytes.byteLength || (historyPath !== PLAN_HISTORY_FILE && bytes.at(-1) !== 10)) {
+      throw new Error(`Plan storage package history shard must contain complete lines: ${historyPath}`);
+    }
+    const lines = bytes.toString("utf8").split(/\r?\n/);
+    if (bytes.at(-1) === 10) lines.pop(); // The final newline terminates the last complete record.
+    if (!lines.length || lines.some(line => !line)) {
+      throw new Error(`Plan storage package history shard must contain non-empty records: ${historyPath}`);
+    }
+    for (const line of lines) {
+      const record = JSON.parse(line) as { id?: unknown; planId?: unknown };
+      if (!record || typeof record !== "object" || typeof record.id !== "string" || record.planId !== planId) {
+        throw new Error(`Plan storage package history identity mismatch: ${historyPath}`);
+      }
     }
   }
 }
@@ -1532,6 +1545,58 @@ function storedTransactionOperations(spec: PlanStorageTransactionSpec): StoredTr
   });
 }
 
+function validateProjectedTransactionPackage(
+  directory: string,
+  operations: StoredTransactionOperation[],
+  lease: PlanStorageLease
+): void {
+  const inventory = inventoryPlanStorageDirectory(directory, lease);
+  const files = new Map(inventory.files.map(file => [windowsPlanStoragePathCollisionKey(file.path), { path: file.path, size: file.bytes }]));
+  const targets = new Set<string>();
+  const directoryRoots = new Set<string>();
+  for (const operation of operations) {
+    const rootKey = windowsPlanStoragePathCollisionKey(operation.relativePath);
+    if ([...targets, ...directoryRoots].some(target => target === rootKey || target.startsWith(`${rootKey}/`) || rootKey.startsWith(`${target}/`))) {
+      throw new Error(`Plan storage transaction has overlapping targets: ${operation.relativePath}`);
+    }
+    const published = operation.type === "publish-directory" && fs.existsSync(path.join(directory, ...operation.relativePath.split("/")));
+    if (published) {
+      const current = inventoryPlanStorageDirectory(path.join(directory, ...operation.relativePath.split("/")), lease);
+      const expectedHash = sha256(JSON.stringify(operation.files.map(file => [file.relativePath, file.size, file.sha256])));
+      const actualHash = sha256(JSON.stringify(current.files.map(file => [file.path, file.bytes, file.sha256])));
+      if (expectedHash !== actualHash) {
+        throw new Error(`Plan storage transaction directory target contains different content: ${operation.relativePath}`);
+      }
+    }
+    const updates = operation.type === "replace-file"
+      ? [{ relativePath: operation.relativePath, size: operation.size }]
+      : operation.files.map(file => ({ relativePath: `${operation.relativePath}/${file.relativePath}`, size: file.size }));
+    for (const update of updates) {
+      const key = windowsPlanStoragePathCollisionKey(update.relativePath);
+      if (targets.has(key) || [...targets].some(target => target.startsWith(`${key}/`) || key.startsWith(`${target}/`))
+        || [...directoryRoots].some(root => key === root || key.startsWith(`${root}/`) || root.startsWith(`${key}/`))) {
+        throw new Error(`Plan storage transaction has overlapping targets: ${update.relativePath}`);
+      }
+      targets.add(key);
+      if (operation.type === "publish-directory" && files.has(key) && !published) {
+        throw new Error(`Plan storage transaction directory target already exists: ${operation.relativePath}`);
+      }
+      files.set(key, { path: update.relativePath, size: update.size });
+    }
+    if (operation.type === "replace-file" && [...files.keys()].some(key => key.startsWith(`${rootKey}/`))) {
+      throw new Error(`Plan storage transaction file target is a directory: ${operation.relativePath}`);
+    }
+    if (operation.type === "publish-directory") directoryRoots.add(rootKey);
+  }
+  if (files.size > MAX_PACKAGE_FILES) throw new Error("Plan storage package has an invalid file count.");
+  let total = 0;
+  for (const { path: relativePath, size } of files.values()) {
+    if (size > MAX_PACKAGE_FILE_BYTES) throw new Error(`Plan storage package file is too large: ${relativePath}`);
+    total += size;
+    if (total > MAX_PACKAGE_BYTES) throw new Error("Plan storage package is too large.");
+  }
+}
+
 function transactionSpecHash(kind: string, operations: StoredTransactionOperation[]): string {
   return sha256(JSON.stringify({ kind, operations }));
 }
@@ -1642,6 +1707,7 @@ function applyStoredTransactionUnderLease(
   const location = resolveCanonicalPlanStorageLocation(manifest.roleDir, manifest.planId);
   if (!location) throw new Error(`Plan storage transaction canonical plan location disappeared: ${manifest.planId}`);
   verifyStagedTransactionPayload(transactionRoot, location.directory, manifest.operations);
+  validateProjectedTransactionPackage(location.directory, manifest.operations, lease);
   const payload = path.join(transactionRoot, "payload");
   const changedPaths: string[] = [];
   manifest.operations.forEach((operation, index) => {
@@ -1713,6 +1779,7 @@ export function commitPlanStorageTransactionUnderLease(
   const location = resolveCanonicalPlanStorageLocation(lease.roleDir, lease.planId);
   if (!location) throw new Error(`Plan storage transaction requires a canonical plan: ${lease.planId}`);
   const operations = storedTransactionOperations(spec);
+  validateProjectedTransactionPackage(location.directory, operations, lease);
   const specHash = transactionSpecHash(spec.kind, operations);
   const semanticHash = String(spec.semanticHash || specHash).toLocaleLowerCase("en-US");
   if (!/^[a-f0-9]{64}$/.test(semanticHash)) throw new Error("Plan storage transaction semanticHash is invalid.");

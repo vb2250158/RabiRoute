@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { appendPlanHistoryRecord, orderedPlanHistoryPaths, readPlanHistoryBytes } from "./planHistoryShards.js";
 import { normalizePlanHistoryActor, type PlanHistoryActor } from "./shared/planHistoryActor.js";
 import { ensurePersonaPlanWorkflow } from "./personaPlanWorkflow.js";
 import { planActivationStatus, planMarkerStatus } from "./planState.js";
@@ -19,9 +20,12 @@ export function feedbackPlanTransition(lease: PlanStorageLease, feedback: PlanFe
   const marker = planMarkerStatus(before);
   if (phase === "saved" && (marker !== workflow.roles.approval && marker !== workflow.roles.approved
     || planApprovalGate(before).state !== "pending")) return unchanged;
+  const historyFiles = new Map(readCanonicalPlanStoragePackageUnderLease(lease).files
+    .filter(file => file.path === "history.jsonl" || file.path.startsWith("history/"))
+    .map(file => [file.path, file.content] as const));
   if (phase === "delivered") {
     if (feedback.deliveryStatus !== "delivered" || !feedback.approvalTransition || marker !== workflow.roles.approved) return unchanged;
-    const historyText = readCanonicalPlanStoragePackageUnderLease(lease).files.find(file => file.path === "history.jsonl")?.content.toString("utf8") || "";
+    const historyText = readPlanHistoryBytes(historyFiles).toString("utf8");
     const history = historyText.split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line) as { after: PlanItem });
     const index = history.findIndex(row => row.after.storageRevision === feedback.approvalTransition!.planRevision);
     if (index < 0) return unchanged;
@@ -35,13 +39,14 @@ export function feedbackPlanTransition(lease: PlanStorageLease, feedback: PlanFe
   const after: PlanItem = { ...before, status, markerStatus: status,
     updatedAt: new Date().toISOString(), storageRevision: createStorageRevision() };
   const record = phase === "saved" ? { ...feedback, approvalTransition: { planRevision: after.storageRevision! } } : feedback;
-  const history = readCanonicalPlanStoragePackageUnderLease(lease).files.find(file => file.path === "history.jsonl")?.content.toString("utf8") || "";
   const historyActor = phase === "delivered"
     ? { kind: "system" as const, displayName: "计划反馈投递", channel: "manager" }
     : normalizePlanHistoryActor(actor) ?? { kind: "unknown" as const };
   const row = { actor: historyActor, id: `history-${randomUUID()}`,  planId: before.id, kind: "updated", recordedAt: after.updatedAt, before, after };
+  appendPlanHistoryRecord(historyFiles, row);
+  const latestPath = orderedPlanHistoryPaths(historyFiles.keys()).at(-1)!;
   return { record, operations: [
     { type: "replace-file", relativePath: "plan.json", content: Buffer.from(`${JSON.stringify(after, null, 2)}\n`) },
-    { type: "replace-file", relativePath: "history.jsonl", content: Buffer.from(`${history}${history && !history.endsWith("\n") ? "\n" : ""}${JSON.stringify(row)}\n`) }
+    { type: "replace-file", relativePath: latestPath, content: historyFiles.get(latestPath)! }
   ] };
 }

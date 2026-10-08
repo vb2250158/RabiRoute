@@ -17,6 +17,8 @@ import { decidePlanFollowup, type PlanFollowupReceipt } from "./planFollowup.js"
 const STORE_VERSION = 8;
 const MAX_CONTEXT_CHARS = 6200;
 const CONTROL_PATTERN = /\[rabi:(use|bind)\s+([^\]\r\n]{1,80})\]|\[rabi:(status|refresh|off)\]/i;
+// Only the delivery's explicit runId line may select a consolidation run.
+const CONSOLIDATION_RUN_LINE = /^runId：([^\s\r\n]{1,240})\s*$/gm;
 
 /** Role dirs already reported as having no published plan catalog, so a cold role logs once. */
 const coldPlanCatalogRoles = new Set<string>();
@@ -72,6 +74,10 @@ export type CodexHookSessionBinding = {
   baseFingerprint?: string;
   lastTurnId?: string;
   turnContextKeys?: string[];
+  /** Manager-validated run scope for this turn; never inferred from outstanding runs. */
+  activeRunId?: string;
+  consolidationTurnId?: string;
+  consolidationInputMemoryIds?: string[];
   lastPlanCompletionPlanId?: string;
   lastPlanCompletionTurnId?: string;
   lastPlanCompletionAt?: string;
@@ -158,6 +164,10 @@ export type CodexHookContextServiceOptions = {
   planStorageReady?: () => boolean;
   assertSessionPersonaOwner?: (sessionId: string, cwd?: string) => void;
   chatHistoryRoleIds?: (request: CodexHookContextRequest) => readonly string[];
+  /** Undefined means an ordinary session; an empty input list means dedicated but not yet verified. */
+  memoryConsolidationInputIds?: (
+    request: CodexHookContextRequest, roleId: string, runId?: string
+  ) => { runId?: string; inputMemoryIds: readonly string[] } | undefined;
   onChatHistoryChanged?: (roleId: string) => void;
 };
 
@@ -261,6 +271,11 @@ function triggerKind(eventName: CodexHookEventName): RabiContextTriggerKind {
   if (eventName === "UserPromptSubmit") return "user_prompt";
   if (eventName === "PreToolUse") return "reasoning_pre_tool";
   return "reasoning_post_tool";
+}
+
+function explicitConsolidationRunId(prompt: string): string | undefined {
+  const matches = [...prompt.matchAll(CONSOLIDATION_RUN_LINE)];
+  return matches.length === 1 ? matches[0][1] : undefined;
 }
 
 function triggerSignal(request: CodexHookContextRequest): string {
@@ -377,6 +392,7 @@ export class CodexHookContextService {
   private readonly planStorageReady?: () => boolean;
   private readonly assertSessionPersonaOwner?: CodexHookContextServiceOptions["assertSessionPersonaOwner"];
   private readonly chatHistoryRoleIds?: CodexHookContextServiceOptions["chatHistoryRoleIds"];
+  private readonly memoryConsolidationInputIds?: CodexHookContextServiceOptions["memoryConsolidationInputIds"];
   private readonly onChatHistoryChanged?: CodexHookContextServiceOptions["onChatHistoryChanged"];
 
   private readonly deliverAgentCompletion?: CodexHookContextServiceOptions["deliverAgentCompletion"];
@@ -392,6 +408,7 @@ export class CodexHookContextService {
     this.planStorageReady = options.planStorageReady;
     this.assertSessionPersonaOwner = options.assertSessionPersonaOwner;
     this.chatHistoryRoleIds = options.chatHistoryRoleIds;
+    this.memoryConsolidationInputIds = options.memoryConsolidationInputIds;
     this.onChatHistoryChanged = options.onChatHistoryChanged;
   }
 
@@ -572,10 +589,33 @@ export class CodexHookContextService {
     const growth = readText(path.join(role.roleDir, "growth.md"));
     const skills = readText(path.join(role.roleDir, "skills.md"));
     const baseFingerprint = fingerprint([persona, growth, skills]);
-    const includeBase = forceBase || binding.baseFingerprint !== baseFingerprint;
     const managerBaseUrl = normalizeManagerBaseUrl(request.managerBaseUrl);
     const turnId = String(request.turnId || "").trim() || undefined;
-    const sameTurn = Boolean(turnId && binding.lastTurnId === turnId);
+    const explicitRunId = request.eventName === "UserPromptSubmit" ? explicitConsolidationRunId(prompt) : undefined;
+    const checkpointRunId = request.eventName !== "SessionStart" && request.eventName !== "UserPromptSubmit"
+      && turnId && binding.consolidationTurnId === turnId ? binding.activeRunId : undefined;
+    // A new prompt or session start never inherits a previous run. Checkpoints must
+    // match both the saved turn and a freshly Manager-validated run projection.
+    const resolvedScope = this.memoryConsolidationInputIds?.(
+      request, role.roleId, explicitRunId ?? checkpointRunId
+    );
+    const dedicated = resolvedScope !== undefined || binding.consolidationInputMemoryIds !== undefined;
+    // Checkpoint delivery may lag behind a newer prompt in the same reused session.
+    // Never let that late event clear or overwrite the new run's scope.
+    if (dedicated && request.eventName !== "SessionStart" && request.eventName !== "UserPromptSubmit"
+      && (!turnId || binding.consolidationTurnId !== turnId)) {
+      return { action, binding, additionalContext: "" };
+    }
+    const requestedRunId = explicitRunId ?? checkpointRunId;
+    const verifiedRunId = requestedRunId && resolvedScope?.runId === requestedRunId
+      ? requestedRunId : undefined;
+    const scopedRunId = request.eventName === "SessionStart" || (request.eventName !== "UserPromptSubmit" && !turnId)
+      ? undefined : verifiedRunId;
+    const consolidationInputMemoryIds = dedicated
+      ? scopedRunId ? [...new Set(resolvedScope?.inputMemoryIds ?? [])] : []
+      : undefined;
+    const includeBase = !dedicated && (forceBase || binding.baseFingerprint !== baseFingerprint);
+    const sameTurn = Boolean(turnId && binding.lastTurnId === turnId && (!dedicated || binding.activeRunId === scopedRunId));
     const seenContextKeys = new Set(sameTurn ? binding.turnContextKeys ?? [] : []);
     const contextResolution = rabiContextManager.resolve({
       kind: triggerKind(request.eventName),
@@ -587,7 +627,8 @@ export class CodexHookContextService {
       turnId: request.turnId,
       eventId: request.toolUseId,
       toolName: request.toolName,
-      seenContextKeys: [...seenContextKeys]
+      seenContextKeys: [...seenContextKeys],
+      consolidationInputMemoryIds
     });
     const isReasoningCheckpoint = contextResolution.policy.presentation === "recall_delta";
     const unseenEntries = contextResolution.entries.filter((entry) => !seenContextKeys.has(entry.key));
@@ -609,7 +650,16 @@ export class CodexHookContextService {
     const focusedContext = view.mode === "focused";
     const blocks: string[] = [];
 
-    if (includeBase) {
+    if (dedicated) {
+      const matches = visibleRequiredItems.filter((item) => item.type === "recent_memory");
+      if (matches.length > 0) {
+        blocks.push(section("本轮整理候选记忆", [
+          `Rabi Manager API 基址：${managerBaseUrl}`,
+          ...matches.map((item) => `- ${item.id}：${item.title} GET ${item.endpoint}`)
+        ]));
+      }
+    }
+    if (!dedicated && includeBase) {
       blocks.push(section("Rabi 会话人格", [
         "当前 Codex 会话已由 Rabi PC Manager 显式绑定人格。绑定只对当前 session_id 生效。",
         `角色 ID：${role.roleId}`,
@@ -635,7 +685,7 @@ export class CodexHookContextService {
       }
     }
 
-    if (shouldRender && (!isReasoningCheckpoint || includeBase)) {
+    if (!dedicated && shouldRender && (!isReasoningCheckpoint || includeBase)) {
       blocks.push(section("记忆与计划", [
         `Rabi Manager API 基址：${managerBaseUrl}`,
         ...view.apiHintLines,
@@ -661,7 +711,7 @@ export class CodexHookContextService {
         "下列 GET 路径均相对于上方 Rabi Manager API 基址。",
         ...view.requiredReadLines
       ]));
-    } else if (shouldRender) {
+    } else if (!dedicated && shouldRender) {
       blocks.push(section("Rabi 推理期上下文刷新", [
         `触发点：${request.eventName}`,
         request.toolName ? `工具：${request.toolName}` : "",
@@ -691,7 +741,10 @@ export class CodexHookContextService {
       lastEventAt: timestamp,
       lastEventName: request.eventName,
       cwd: request.cwd || binding.cwd,
-      baseFingerprint,
+      baseFingerprint: dedicated ? binding.baseFingerprint : baseFingerprint,
+      activeRunId: dedicated ? scopedRunId : undefined,
+      consolidationTurnId: dedicated && scopedRunId ? turnId : undefined,
+      consolidationInputMemoryIds: dedicated ? consolidationInputMemoryIds : undefined,
       lastTurnId: request.eventName === "SessionStart" ? undefined : turnId ?? binding.lastTurnId,
       turnContextKeys: request.eventName === "SessionStart" ? [] : deliveredKeys
     };

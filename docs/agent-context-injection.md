@@ -43,6 +43,8 @@ Manager 或 UI 预览
 
 入口适配器只提供角色、消息或工具信号、session/turn/event 身份和来源；它们不决定关键词得分、计划归档、记忆活跃窗口或 `viewedAt`。入口默认使用聚焦上下文，推理期触发只注入本轮新增的相关必读项，预览则禁止产生知识副作用。
 
+持久记忆整理 Agent 的一次投递有 Manager 记录的固定候选 ID 集合和明确 `runId`。初始 AgentPacket 与该专用会话的 Hook 召回只列出这批候选近期记忆，不额外列出角色的计划、技能、沉淀记忆或其他近期记忆；继续沿用同一专用会话时，也不能把旧批次的必读项视为新批次。Hook 从 Manager 持有的 Route 专用会话绑定核对适配器、人格及已投递且仍为 `requested` 的批次；没有明确且核验通过的 `runId` 时不进行宽范围召回。普通会话的相关召回和 Rabi API 可用性不变；计划绑定仅用于计划文件变更归属，不是调用 API 的授权前置条件。整理结果仍由处理 Agent 按结果接口合同提交，原始近期记忆保留并标记沉淀状态。
+
 ## 注入原则
 
 默认注入只放轻量信息：
@@ -319,6 +321,10 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 处理端写出的 Codex 最终文本只属于当前任务记录，不代表来源用户、主人格或另一个 Agent 已经收到。需要向消息端发送时，处理端必须从 `sendRequestJson` 开始，填写 `sender.agentType` 和当前完整 `sender.sessionId`，再明确提交 `routeId`、`channel`、渠道专用 `params` 和 `payload`，并取得该渠道回执；不得把 `replyContextJson` 原样提交，也不得根据来源自动猜测目标。NapCat 群聊引用消息含图片时，必须按原图顺序填写 `params.replyImageDescriptions`，逐张写明实际内容和图片表达的意思；不能查看、缺少描述或数量不一致时不得发送。需要交给主人格、秘书或计划 Agent 时，必须调用 Manager 线程桥并携带发送任务自己的完整 ID 和 Agent 类型。只生成回复草稿、审批问题或阶段摘要而没有进入上述出口，不能标记为已回复或已通知。
 
 `sendRequestJson` 的 `payload.type` 是待填占位而不是固定的 `text`：只要存在已实际核对、能降低理解成本的图片、截图、效果图、流程图或文档页面，就应提交 `type=image` 并在同一 `payload.text` 里写清图片来源类型与关注点；纯文字是没有可用图片时的退路。NapCat 模板额外给出授权目录内的 `payload.path` 占位，本地图片仍只能取自路由 `allowedFileRoots`，越界即拒发。图片与说明必须落在同一条消息；配图不改变引用、`replyImageDescriptions`、发送回执或 QA 证据边界。
+
+需要多段文字与多张图交替发送时，NapCat 使用 `payload: {"type":"image","segments":[{"type":"text","text":"说明一"},{"type":"image","path":"<授权图片路径>"},{"type":"text","text":"说明二"},{"type":"image","path":"<另一张授权图片路径>"}]}`；不再同时填顶层 `payload.text` 或 `payload.path`。各段按原顺序组成一条消息，所有本地图片在发送前校验。
+
+需要把 Markdown 排版成图片时，NapCat 可直接填 `payload: {"type":"markdown","text":"# 标题\n\n**正文**"}`；混排时改在 `segments` 中加入 `{"type":"markdown","text":"# 标题\n\n**正文**"}`。Markdown 段由 Rabi 本机渲染成 PNG 后占据原顺序位置；原始 HTML、外部图片与脚本不会进入渲染页面。
 
 跨人格能力凭据只证明“当前 AgentPacket 所属 Route 与人格”，不会出现在 `GET /api/personas`、目标 timeline 或投递回执中。`sourceRouteId` 不能单独证明发送身份。目标人格收到跨人格消息后，普通回复不会自动返回来源；需要回复时必须显式反向 POST，并使用收到的会话、引用和跳数字段。
 

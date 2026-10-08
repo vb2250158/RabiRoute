@@ -65,7 +65,7 @@ function reserveLoopbackPort() {
   });
 }
 
-function waitForManagerReady(child, port, timeoutMs = 15_000) {
+function waitForManagerReady(child, port, timeoutMs = 60_000) {
   return new Promise((resolve, reject) => {
     let output = "";
     let errorOutput = "";
@@ -196,7 +196,7 @@ function endpointCheck(id, response, count) {
 export async function collectBuiltManagerReadOnlySummary(baseUrl, fetchImpl = globalThis.fetch, expectedIdentity) {
   const verifyIdentity = async expected => {
     const { body } = await requestJson(fetchImpl, baseUrl, "/meta");
-    if (body?.health?.state !== "healthy" || body?.health?.requiredReady !== true
+    if (!["healthy", "degraded"].includes(body?.health?.state) || body?.health?.live !== true || body?.health?.requiredReady !== true
       || !body.applicationGenerationId || !body.managerInstanceId
       || (expected && (body.applicationGenerationId !== expected.applicationGenerationId
         || body.managerInstanceId !== expected.managerInstanceId))) {

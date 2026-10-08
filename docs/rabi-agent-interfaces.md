@@ -41,7 +41,7 @@
 
 `contractRevision` 表示帮助结构版本；`catalogDigest` 是完整接口目录的 JSON 序列化内容 SHA-256（`sha256:` 前缀），不随筛选条件或 `generatedAt` 改变。发送能力的 `channelsDigest` 只摘要完整渠道描述数组，不包含外层通用 contract。摘要用于发现内容变化，不是 ETag、授权、schema 验证或 Manager 身份凭据；切代仍须重新发现并核验 `/meta`。
 
-发送能力另提供 `data.requestContract`（`version: 1`、`kind: partial-field-allowlist`）：`allowedFields.request/sender/payload` 是 `src/agentSend.ts` 拥有的冻结字段名白名单，`prepareAgentSendRequest` 直接使用同一定义；`channelValues` 和 `paramsAllowedFields` 从现有 `AGENT_SEND_CHANNEL_HELP` 派生。`requestContractDigest` 单独摘要该局部结构的 JSON 序列化内容（SHA-256，`sha256:` 前缀）；`channelsDigest` 不覆盖它。字段名数组只说明哪些键允许出现，**不是完整 JSON Schema**，不证明字段必填或值有效。`requestContract.missing` 明确列出未覆盖的值类型/约束、必填与条件、跨字段规则、嵌套 tracking/planAttachment 合同、运行时授权/投递策略及响应/错误合同；请继续读取专题合同。此发现增量不提升 send 的 `baseline` 或精确 schema 标记，不改变解析顺序、执行权限或幂等语义。
+发送能力另提供 `data.requestContract`（`version: 1`、`kind: partial-field-allowlist`）：`allowedFields.request/sender/payload` 是 `src/agentSend.ts` 拥有的冻结字段名白名单，`prepareAgentSendRequest` 直接使用同一定义；`channelValues` 和 `paramsAllowedFields` 从现有 `AGENT_SEND_CHANNEL_HELP` 派生。`requestContractDigest` 单独摘要该局部结构的 JSON 序列化内容（SHA-256，`sha256:` 前缀）；`channelsDigest` 不覆盖它。字段名数组只说明哪些键允许出现，**不是完整 JSON Schema**，不证明字段必填或值有效。`requestContract.missing` 明确列出未覆盖的值类型/约束、必填与条件、跨字段规则、嵌套 tracking/planAttachment/segments 合同、运行时授权/投递策略及响应/错误合同；请继续读取专题合同。此发现增量不提升 send 的 `baseline` 或精确 schema 标记，不改变解析顺序、执行权限或幂等语义。
 
 Help 查询参数为 `operationId`、`path`、`method`，每项最多一次且非空，多个条件取交集；`path` 使用目录中的精确路径模板，`method` 不区分大小写。处理器对未知、重复或空参数返回 400 `AGENT_HELP_INVALID_QUERY` 和修复指引；LAN 权限层可能先拒绝非法查询。指定 `operationId` 未匹配返回 404 `AGENT_HELP_NOT_FOUND`；仅按路径或方法查无结果仍返回 200 空列表以兼容现有调用。错误不回显查询值，不得把凭据放入查询参数。
 
@@ -53,7 +53,38 @@ Help 查询参数为 `operationId`、`path`、`method`，每项最多一次且�
 
 旁路送达只证明平台接收，不能冒充 callback、knowledge-callback、Outbox 或计划状态已记录。保留原标识、目标、时间、摘要和真实平台回执；恢复后先查状态，再按接口支持方式补录，不为补回执重发正文，不直接修改真实存储。没有补录能力时明确保留“旁路已送达，正式回传待恢复”。下一次独立投递仍从 Rabi 开始。
 
+### QQ 只读诊断（源码合同；本机身份未验证）
+
+`GET /api/agent/qq/diagnostics?routeId=<精确RouteID>` 只接受当前已认证的 `TrustedLanAgentSource`，不接受请求体或其它 query。Manager 从当前批准且已启用的 LAN Agent binding 核对来源 session、provider、node/Agent 与该 Route 的远端 primary target；普通本机 loopback、DSH 会话名、请求参数和 send permission 开关都不能代替可信来源。没有本机可信身份时返回 403，不得绕过管理能力拒绝。
+
+授权后要求 Route 已启用、QQ 消息端已启用、恰有一个已启用的配置实例、Gateway 正在运行，并仅向该实例配置的本机 OneBot HTTP origin 发出短时 `GET /get_status`。请求禁止重定向、不缓存、无 body；不访问 WebUI、其它 Route 或其它 QQ 实例。返回只有 `routeId`、`instanceId`、`wsConnected` 和 `oneBot.reachable/online/good` 布尔值，不含 QQ 号、昵称、URL、token、消息正文、原始错误或路径。WS 值来自对应 Route 的实例运行状态，只有其 `lastConnectedAt` 不早于当前 Gateway 的 `startedAt` 才可为 true；历史状态不能代替当前进程；OneBot 探针失败为 HTTP 503/未知，不解释为 QQ 离线。该诊断**不赋予发送权限**，不回填登录/账号配置，不代表真实 QQ 已验收；当前 DSH 本机 trusted source 尚不可宣称可用，禁止真实 QQ 烟测。
+
+### QQ 群文件元数据（源码合同；运行态未验证）
+
+`GET /api/agent/qq/group-files?routeId=<精确RouteID>&groupId=<精确群号>[&folderId=<文件夹ID>]` 要求当前已认证的 `TrustedLanAgentSource`、对应 Route 已批准且启用的远端 primary Agent，以及 `messageAdapterPolicies.napcat.readableGroupFileIds` 中对该群号独立配置的读取授权（默认空）。普通 loopback、消息发送权限、目标群和允许发送的文件根目录都不提供此读取授权。只选精确 Route 下唯一启用的 NapCat 实例，不跨 Route、账号或群回退；拒绝多余/重复参数和请求体。读取前后均复核授权，不泄露凭据、原始上游错误、其它群的元数据；不下载或发送文件。
+
+根目录调用只读 `get_group_root_files`，指定 `folderId` 调用只读 `get_group_files_by_folder`，固定 `file_count: 50`、3 秒超时、最多 256 KiB 响应和 50 项投影，返回有界的文件/文件夹元数据。`completenessUnknown: true` 与 `potentiallyTruncated: true` 始终表示无法证明穷尽；非法条目可能丢弃，`projectionTruncated` 仅标记投影裁剪。找到精确文件可作为存在证据，空结果或未找到**不能证明缺失**，不得以此自动补发。补发缺失文件还需要平台支持并经验证的完整分页/搜索覆盖，或覆盖对应期间的可信自发事件与原 Outbox 终态经平台对照形成的逐文件闭环；缺少这些证据时停止缺失判定并回传未知，不能扩大范围或绕过权限。此为源码接线与测试合同，不代表当前安装版本、DSH 工具能力或 QQ 在线状态已验收。
+
 ## 消息查询：先 Rabi，无法完成时才绕过
+
+### QQ 原消息、历史分页与附件下载
+
+本机 Agent 可通过以下入口读取当前 Route 绑定的 QQ 会话，无需取得 NapCat 地址或 token：
+
+```http
+GET /api/agent/qq/history?routeId=<routeId>&kind=group&target=<groupId>&limit=50
+GET /api/agent/qq/history?routeId=<routeId>&kind=group&target=<groupId>&cursor=<nextCursor>&limit=50
+GET /api/agent/qq/messages/<messageId>?routeId=<routeId>&kind=group&target=<groupId>
+GET /api/agent/qq/messages/<messageId>/attachments/0?routeId=<routeId>&kind=group&target=<groupId>
+```
+
+私聊使用 `kind=private`，`target` 为对方账号。先动态发现 Manager 并核对 `/meta`；接口可从 `GET /api/agent/help?path=/api/agent/qq/history` 发现。每次调用必须给出精确 Route、会话类型和目标；`limit` 为 1–100，默认 50。历史页返回 `data.entries`、`nextCursor`、`cursorStalled`、`completenessUnknown: true`；沿游标逐页读取，游标停滞或空页时停止，分页覆盖不保证 QQ 完整历史。原消息优先调用 `get_msg`；缓存失效时查询同会话、原消息 ID 锚定的最多 10 条历史页，未命中返回 404 `QQ_MESSAGE_NOT_IN_PAGE`，不扩大为全群扫描。
+
+消息返回 `messageId`、时间、发送者、正文和 `attachments[]`。每项包含从零开始的 `index`、`kind`、`name`、Manager 相对地址 `contentUrl`；用当前 Manager 地址加 `contentUrl` 下载二进制即可。下载重新核对原消息和会话，再以该消息资源 ID 调用 `get_file`。图片、视频、音频和文件均使用同一入口；视频缩略图不算原视频。结果不暴露 NapCat URL、鉴权或本地路径；不接受调用方 URL、文件路径、任意 OneBot 动作或资源 ID。
+
+单附件最多 64 MiB，JSON 响应最多 1 MiB；消息读取最长 8 秒，附件读取最长 30 秒，每个服务上下文最多两个并发读取，超额返回 429 `QQ_READ_BUSY`。下载可能触发 NapCat 自身媒体缓存，Rabi 不另存业务记录。空路径且没有受支持下载地址返回 422 `QQ_MEDIA_REFERENCE_UNAVAILABLE`，超限返回 413，消息 ID／会话不符或读取中 Route 改变返回 409；上游失败返回 503，不回显原始错误。调用方按需要保存返回的文件并检查非空结果。
+
+这些入口要求直接本机回环管理连接；LAN Agent 和 Relay 请求返回 403 `QQ_READ_LOCAL_REQUIRED`。远端目录可发现接口不表示具有读取权限，远端对象读取授权尚未接入。仅选择指定 Route 的唯一启用实例，拒绝含多个实例的配置，不跨 Route 或账号回退；本机管理读取权限不赋予发送权限。既有 `message-endpoint-history` 继续用于 Rabi 已记录消息的跨来源检索；原消息与附件需求优先使用上述受管入口。
 
 正常群聊、私聊和最新反馈查询先走 Rabi。安装版通过 `RabiRouteHost.exe --command status --json` 获取当前 `managerBaseUrl`、`applicationGenerationId`、`managerInstanceId`；源码模式使用结构化 READY 地址。读取 `<managerBaseUrl>/meta`，按上节合同核对 generation/实例身份；普通查询要求 `health.live=true`、`health.requiredReady=true`，接受 `healthy` 或 `degraded`，再由目标接口判断依赖是否可用。旧地址或瞬时失败时重新发现并有界重试；Hook 的概括性“Host 未运行”提示不能替代实际失败原因。不扫描端口、不读取退役实例锁、不直接启停 Manager。
 
@@ -332,7 +363,7 @@ POST /api/agent/send
 - `routeId`：精确的已启用 Route ID；
 - `channel`：发送渠道；
 - `params`：该渠道的目标参数；
-- `payload`：`text`、`image`、`voice` 或 `file`；
+- `payload`：`text`、`image`、`voice`、`file`；NapCat 另支持把 `markdown` 渲染成图片；
 - `styleValidation`：枚举值 `1 | 0`，默认 `1`。`1` 使用人格绑定的目标语言风格 Skill 校验文本；`0` 跳过本次校验；
 - `tracking.requirementId`：可选，用于关联消息处理看板，不能决定发送目标；回复已登记的消息处理需求时必须填写；
 - `tracking.sendContextReviewToken`：消息处理需求在发送前完成最新群聊上下文核对后取得的短期凭证，只对同一需求、发送者会话、目标和正文有效。
@@ -370,6 +401,34 @@ QQ 群文本示例：
   }
 }
 ```
+
+NapCat 图文混排使用 `payload.type=image` 和有序的 `payload.segments`，一次发送一条群聊或私聊消息：
+
+```json
+{
+  "deliveryId": "send-mixed-001",
+  "sender": { "agentType": "primary_persona", "sessionId": "<当前完整会话 ID>" },
+  "routeId": "main",
+  "channel": "napcat",
+  "params": { "target": "group", "groupId": "456", "replyToMessageId": "", "replyImageDescriptions": [] },
+  "payload": {
+    "type": "image",
+    "segments": [
+      { "type": "text", "text": "第一张：" },
+      { "type": "image", "path": "<授权目录中的第一张图片>" },
+      { "type": "text", "text": "第二张：" },
+      { "type": "image", "path": "<授权目录中的第二张图片>" },
+      { "type": "text", "text": "两张图的差异见上。" }
+    ]
+  }
+}
+```
+
+`segments` 仅用于 NapCat 图片消息；按数组顺序发送 1–32 个 `text`、`image` 或 `markdown` 段，其中须有 1–16 个图片或 Markdown 段。每个图片段只填 `path` 或 `url` 之一；本地路径逐张按 `allowedFileRoots` 校验，任何一张不合格都会在平台发送前拒绝整条消息。使用 `segments` 时不要再填顶层 `payload.text`、`path`、`url` 或 `planAttachment`。原单图 `payload.text + path/url/planAttachment` 仍可使用。文字与 Markdown 源文会合并用于语言风格校验；`replyImageDescriptions` 仍只描述**被引用的来源消息**中的图片。
+
+单独把 Markdown 文本渲染成图片，提交 `"payload":{"type":"markdown","text":"# 标题\n\n| 项目 | 结果 |\n|---|---|\n| A | 通过 |"}`。需要与普通文字、已有图片交替排布时，在上述 `segments` 数组中加入 `{"type":"markdown","text":"# 标题\n\n**正文**"}`；该段在原位置变成图片，整条消息只发送一次。两种形式都要求 NapCat Route 允许 `image` 输出，不能再附加顶层 `path` 等媒体字段。
+
+Rabi 使用本机 Chromium、Chrome 或 Edge 的无脚本浏览器进程渲染 Markdown，自动检测常见安装位置；也可通过 `RABIROUTE_MARKDOWN_BROWSER_PATH` 指定浏览器可执行文件的绝对路径。标题、列表、表格、引用和代码块会出现在 PNG 中。原始 HTML 转义，链接不可点击，Markdown 图片语法只显示说明占位，不加载本地或远程资源。单段 Markdown 上限 32 KiB、图片高度 4096 像素、PNG 4 MiB；同一消息的 Markdown 图片合计上限 8 MiB。浏览器不可用或渲染失败时，整条消息不进入 NapCat 发送。
 
 人格可在 `personaConfig.json.languageStyle.styleSkillUrl` 绑定自己的语言风格 Skill。不同人格可以绑定不同 URL。URL 可指向 Skill 目录、`SKILL.md` 或 `references/style-data.json`；Manager 从其中读取程序化 JSON 规则。
 
@@ -1104,6 +1163,8 @@ Desktop 偶尔会在消息已经写入目标任务后才返回启动或追加轮
 原目标任务正式回复一个 `pending_delivery` 请求时，线程桥先核对双方完整任务 ID、工作目录和原目标 rollout 的精确投递标记；按需流式读取该任务记录，不再因标记超出最后 4 MiB 而漏判。证据齐全才恢复为 `awaiting_response` 并继续原回复。缺少标记或身份不符时返回 `error.code=agent_reply_state_conflict`，并包含 `requestId`、`currentState`、`expectedState`、`reason`、`commitState` 和 `nextAction`。原因区分发送任务不符、接收任务不符、工作目录不符、原始接收证据缺失或不可读；`commitState=not_started` 仅表示这次回复没有发送，不能据此重发原任务。迟到的原投递提交不会把已回复请求重新打开。
 
 核对已送达但未入账的回复，调用 `POST /api/agent/threads`，正文为 `{"action":"reconcile_delivery","threadId":"<接收回复的原来源任务 ID>","deliveryId":"<原回复投递 ID>"}`。此动作不投递正文，也不接受调用方提供的结果：按需流式读取指定 Desktop 任务的原始用户消息，核对原 reservation、双方任务/工作目录、投递 ID 和后续请求合同，再经请求存储提交。读取限定于开始时的文件长度及 30 秒期限；超时或不可读保留未确认状态，不重发。成功返回 `receipt_recovered`；重复核对返回 `already_recorded`。原请求变为 `responded`，同次要求继续返回的新请求只恢复为 `awaiting_response`，不视为业务已完成。普通工具输出、助手引用或单独 ID 不构成恢复证据。
+
+收件日志能力按回复实际进入的原来源任务（`original.source`）核对。发送回复的处理端没有收件日志时，仅允许使用已持久化的结构化 SHA-256 证据恢复；正文必须精确匹配，双方 Adapter、任务 ID、工作目录、原请求及后续请求方向均须一致。缺少结构化证据的旧回复继续失败关闭，返回 `adapter_has_no_receipt_log`。
 
 提醒触发前也执行上述核对。证据仍不完整时保留 reservation、写入 `lastReminderError` 并停止本次“未回复”提醒，不无限重试或要求重发；下一次任务结束或显式核对可重新检查。读取超时、身份/合同不符及旧版本已删除的 `404` 请求均不凭猜测重建，必须保留正式回传未记录的差异。
 

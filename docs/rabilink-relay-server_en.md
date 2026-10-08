@@ -87,6 +87,12 @@ If no PC worker can serve a remote request, API callers receive structured `RABI
 
 Remote WebGUI uses the `/manage` login cookie, while the PC worker uses a separate RabiLink application token. Relay never forwards that application token, the management cookie, or a LAN `webgui_token` to the local Manager, and these authentication boundaries are not merged.
 
+## Application management after login
+
+After signing in at `/manage`, the left sidebar lists the account's applications. Selecting an application displays its details, token actions, target PC, glasses SN bindings, connected PCs, and logs on the right. Refreshing retains the current selection; creating an application selects it, and deleting the selected application selects the first remaining one. With no applications, the right pane displays the creation form. The sidebar's **New application** button also opens that form. On narrow screens, the application list appears above the details.
+
+The PC list, recent events, glasses logs, and glasses log filters follow the selected application. Account authentication and application-token authorization boundaries remain unchanged.
+
 ## Native read-only RabiLink Home
 
 Home no longer embeds `/admin` or `/manage`. The browser calls only Manager `GET /api/rabi/link-home`; Manager uses its server-held application token to call the configured Relay's fixed `GET /api/rabilink/peers`. Home receives only an allowlisted projection of computer name, identifier, online state, and services within the current application, not raw upstream objects, credentials, or other applications' data. Tokens never reach the Home browser or URLs. This is a read-only endpoint, not an arbitrary-path proxy or a grant of management privileges.

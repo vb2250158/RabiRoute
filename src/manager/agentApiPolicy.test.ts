@@ -32,10 +32,10 @@ test("discovery and enforcement share one immutable catalog with discoverable co
     assert.equal(operation.help.method, operation.method);
     assert.equal(operation.help.pathTemplate, operation.pathTemplate);
     assert.ok(operation.help.nextStep.length > 0);
-    const verified = ["agent:POST:/api/agent/send", "agent:PUT:/api/agent/uploads/:uploadId", "agent:GET:/api/agent/uploads/:uploadId", "home:POST:/api/agent/xiaomi-home/action-requests"].includes(operation.id);
+    const verified = ["agent:POST:/api/agent/send", "agent:PUT:/api/agent/uploads/:uploadId", "agent:GET:/api/agent/uploads/:uploadId", "home:POST:/api/agent/xiaomi-home/action-requests", "agent:GET:/api/agent/qq/diagnostics", "agent:GET:/api/agent/qq/group-files", "agent:POST:/api/agent/send/receipts/:deliveryId/verify", "agent:POST:/api/agent/send/receipts/:deliveryId/settle"].includes(operation.id);
     assert.equal(operation.help.auth.required, verified ? true : null);
     assert.ok(Object.isFrozen(operation.help.auth.scopes));
-    assert.equal(operation.help.effects.mode, verified ? (operation.method === "GET" ? "readOnly" : "mutating") : "unknown");
+    assert.equal(operation.help.effects.mode, verified ? (operation.method === "GET" || operation.pathTemplate.endsWith("/verify") ? "readOnly" : "mutating") : "unknown");
     assert.equal(operation.help.idempotency.required, verified ? operation.method !== "GET" : null);
     assert.ok(operation.description.length > 0);
     assert.equal(operation.contractResourceId, "docs/rabi-agent-interfaces.md");
@@ -110,6 +110,8 @@ test("core business operations are allowed with their exact methods", () => {
     ["GET", "/api/roles/example/message-endpoint-history?conversationKey=napcat%3Agroup%3Aexample&query=token"],
     ["POST", "/api/agent/threads"],
     ["POST", "/api/agent/send"],
+    ["GET", "/api/agent/qq/diagnostics?routeId=example-id"],
+    ["GET", "/api/agent/qq/group-files?routeId=example-id&groupId=123456&folderId=folder_1"],
     ["POST", "/api/agent/requests/request-1/cancel"],
     ["POST", "/api/message-processing/requirements/request-1/knowledge-callback"],
     ["POST", "/api/message-processing/requirements/request-1/send-context"],
@@ -200,6 +202,23 @@ test("query credentials and query-based file or method bypasses are denied", () 
   ]) assert.equal(authorize("GET", `/api/roles/example/plans?${query}`).allowed, false, query);
   assert.equal(authorize("GET", "/api/roles/example/persona-document?file=other.md").allowed, false);
   assert.equal(authorize("GET", "/api/roles/example/plans?query=credential+discussion").allowed, true);
+});
+
+test("QQ group-file discovery only admits exact read route and bounded query names", () => {
+  const target = "/api/agent/qq/group-files";
+  const operation = listAgentApiOperations().find(item => item.pathTemplate === target);
+  assert.ok(operation);
+  assert.deepEqual(operation.queryParameters, ["routeId", "groupId", "folderId"]);
+  assert.deepEqual(operation.repeatableQueryParameters, []);
+  assert.equal(operation.help.auth.required, true);
+  assert.equal(operation.help.effects.mode, "readOnly");
+  for (const query of [
+    "routeId=a&groupId=1&groupId=2", "routeId=a&routeId=b&groupId=1",
+    "routeId=a&groupId=1&folderId=a&folderId=b", "routeId=a&groupId=1&token=fake",
+    "routeId=a&groupId=1&action=download", "routeId=a&groupId=1&file_count=1000"
+  ]) assert.equal(authorize("GET", `${target}?${query}`).allowed, false, query);
+  for (const method of ["POST", "PUT", "PATCH", "DELETE"]) assert.equal(authorize(method, `${target}?routeId=a&groupId=1`).allowed, false);
+  assert.equal(authorize("GET", `${target}/another?routeId=a&groupId=1`).allowed, false);
 });
 
 test("constrained integrations retain exact ID shapes and existing loopback limitations", () => {

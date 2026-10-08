@@ -8,6 +8,7 @@ import { AGENT_SEND_REQUEST_CONTRACT, prepareAgentSendRequest, type AgentSendSen
 import { registerLanAgentBodyGuard, setTrustedLanAgentSource, type TrustedLanAgentSource } from "./lanAgentBodyAuthority.js";
 import { assertAgentSendPermission } from "./agentSendPermission.js";
 import type { GatewayDefinition } from "../shared/gatewayConfigModel.js";
+import { remoteAgentTargetKey } from "../shared/routeAgentTargets.js";
 import {
   createAgentCommunicationRoutes,
   type AgentCommunicationRoutesContext
@@ -61,6 +62,9 @@ function context(overrides: Partial<AgentCommunicationRoutesContext> = {}): Agen
     agentRequests,
     refreshAgentRequestReminderTimers: () => undefined,
     publishManagerEvent: () => undefined,
+    qqDiagnostics: { route: () => undefined, approvedBinding: () => null, isAgentEnabled: () => false,
+      readStatus: () => ({}), routeRunning: () => false, routeStartedAt: () => undefined, jsonResponse: () => undefined },
+    groupFiles: { route: () => undefined, approvedBinding: () => null, isAgentEnabled: () => false, jsonResponse: () => undefined },
     ...overrides
   };
 }
@@ -295,6 +299,68 @@ test("send capabilities returns channels and QQ repair guidance", () => {
   assert.equal(result.statusCode, 200);
   assert.deepEqual(result.body.data.channels.map(item => item.channel), ["napcat", "wecom", "weixin", "feishu", "rabilink", "speech", "fennenote", "role_panel", "plan_feedback"]);
   assert.match(result.body.data.contract.qq, /channel=napcat/);
+});
+
+test("group-file dispatch denies untrusted sources before upstream access", async () => {
+  let probes = 0;
+  const received = deferred<{ status: number; body: unknown }>();
+  const routes = createAgentCommunicationRoutes(context({
+    groupFiles: {
+      route: () => { throw new Error("untrusted lookup"); },
+      approvedBinding: () => null,
+      isAgentEnabled: () => false,
+      readFiles: async () => { probes++; throw new Error("untrusted probe"); },
+      jsonResponse: (_response, status, body) => received.resolve({ status, body })
+    }
+  }));
+  const res = response();
+  res.setHeader = () => res;
+  assert.equal(routes.handler(request("GET"), new URL("http://localhost/api/agent/qq/group-files?routeId=one&groupId=123"), res), true);
+  assert.deepEqual(await received.promise, { status: 403, body: { code: -1, errorCode: "QQ_GROUP_FILES_TRUSTED_SOURCE_REQUIRED" } });
+  assert.equal(probes, 0);
+  res.emit("finish");
+  await routes.stopAcceptingAndDrain();
+});
+
+test("communication drain waits for in-flight authorized group-file read", async () => {
+  const page = deferred<{ files: []; folders: []; completenessUnknown: true; potentiallyTruncated: true; projectionTruncated: false }>();
+  const started = deferred<void>();
+  const responses: number[] = [];
+  const sessionId = "session-11111111-1111-1111-1111-111111111111";
+  const key = remoteAgentTargetKey({ instanceId: "node-one", agentId: "agent-one" });
+  const definition = {
+    id: "route-one", enabled: true, gatewayPort: 8789, messageAdapters: ["napcat"],
+    agentAdapters: ["dsh"], primaryAgentAdapter: "dsh", dshSessionId: sessionId,
+    remoteAgentTargets: [{ id: key, instanceId: "node-one", agentId: "agent-one", provider: "dsh" }],
+    primaryAgentTarget: key,
+    messageAdapterPolicies: { napcat: { readableGroupFileIds: ["123"] } },
+    napcatInstances: [{ id: "qq-one", gatewayPort: 8789, enabled: true, httpUrl: "http://127.0.0.1:3000" }]
+  } as GatewayDefinition;
+  const routes = createAgentCommunicationRoutes(context({
+    groupFiles: {
+      route: id => id === definition.id ? definition : undefined,
+      approvedBinding: () => ({ provider: "dsh", sessionId }),
+      isAgentEnabled: () => true,
+      readFiles: async () => { started.resolve(); return page.promise; },
+      jsonResponse: (_response, status) => { responses.push(status); }
+    }
+  }));
+  const req = request("GET");
+  req.headers = {};
+  setTrustedLanAgentSource(req, { nodeId: "node-one", agentId: "agent-one", provider: "dsh", sessionId, sessionName: "Main" });
+  const res = response();
+  res.setHeader = () => res;
+  assert.equal(routes.handler(req, new URL("http://localhost/api/agent/qq/group-files?routeId=route-one&groupId=123"), res), true);
+  await started.promise;
+  res.emit("close");
+  let drained = false;
+  const stopping = routes.stopAcceptingAndDrain().then(() => { drained = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(drained, false);
+  page.resolve({ files: [], folders: [], completenessUnknown: true, potentiallyTruncated: true, projectionTruncated: false });
+  await stopping;
+  assert.equal(drained, true);
+  assert.deepEqual(responses, [200]);
 });
 
 test("communication drain includes cancel body parsing and side effects", async () => {

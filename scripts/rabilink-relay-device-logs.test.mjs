@@ -102,6 +102,30 @@ test("relay accepts authenticated glasses log batches and exposes account-scoped
     assert.equal(queryBody.logs[0].message, "request failed with token=[redacted]");
     assert.deepEqual(queryBody.facets.devices, ["glass-test-01"]);
 
+    const secondAppResponse = await fetch(`${baseUrl}/manage/api/apps`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "Other Glass" })
+    });
+    assert.equal(secondAppResponse.status, 200);
+    const secondApp = (await secondAppResponse.json()).app;
+    const secondIngest = await fetch(`${baseUrl}/api/rabilink/devices/logs`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-rabilink-token": secondApp.token },
+      body: JSON.stringify({ deviceId: "glass-other", deviceKind: "glasses", source: "other-source",
+        logs: [{ id: "other-log", event: "other.event", message: "Other application" }] })
+    });
+    assert.equal(secondIngest.status, 202);
+    const scopedResponse = await fetch(`${baseUrl}/manage/api/device-logs?appId=${encodeURIComponent(appBody.app.id)}&deviceKind=glasses`, {
+      headers: { cookie }
+    });
+    assert.equal(scopedResponse.status, 200);
+    const scopedBody = await scopedResponse.json();
+    assert.equal(scopedBody.logs.length, 1);
+    assert.equal(scopedBody.logs[0].appId, appBody.app.id);
+    assert.deepEqual(scopedBody.facets.devices, ["glass-test-01"]);
+    assert.deepEqual(scopedBody.facets.sources, ["rabilink-aiui"]);
+
     const unauthorized = await fetch(`${baseUrl}/api/rabilink/devices/logs`, {
       method: "POST",
       headers: { "content-type": "application/json" },

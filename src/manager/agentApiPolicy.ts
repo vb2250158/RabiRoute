@@ -60,7 +60,32 @@ function operations(group: string, prefix: string, definitions: readonly Definit
           effects: "高风险外发：可能向外部消息渠道发送内容；不代表平台最终回执。",
           retry: "deliveryId 是稳定幂等键；超时、5xx、切代或 uncertain 时只读取同 deliveryId 回执，不改 ID、渠道或自动重放。", mutating: true, idempotencyRequired: true
         }
-      : pathTemplate === "/api/agent/uploads/:uploadId"
+      : method === "POST" && ["/api/agent/send/receipts/:deliveryId/verify", "/api/agent/send/receipts/:deliveryId/settle"].includes(pathTemplate)
+        ? {
+            requestBody: "JSON 仅含 originalRequest: AgentSendRequest；原 deliveryId 必须与路径一致。禁止客户端证据、verifier、result 或当前账号覆盖。",
+            response: "返回可信维护处理器的核验或结算结果；缺少能力时 503 失败关闭，不调用 send。",
+            auth: "计划绑定非必须；必须核验调用身份、原发送者、原 Route 和完整原请求绑定。trusted LAN 来源仅从认证请求提取。",
+            effects: pathTemplate.endsWith("/verify") ? "只读可信证据核验；不 deliver、不 retry、不改回执。" : "仅对原 deliveryId 进行受控结算；不 deliver、不 retry、不创建新投递。",
+            retry: "保留原 deliveryId 和完整原请求；不确定时读取原回执，禁止自动外发重试。",
+            mutating: pathTemplate.endsWith("/settle"), idempotencyRequired: true
+          }
+      : pathTemplate === "/api/agent/qq/diagnostics" && method === "GET"
+        ? {
+            requestBody: "无请求体；必须传唯一非空 routeId query。",
+            response: "仅返回所选 Route 的唯一已启用 QQ 实例 ID、WS 连接布尔值与 OneBot online/good 布尔值；探针失败不表示离线。",
+            auth: "仅可信 LAN Agent 来源；每次核对当前启用批准绑定、精确 Route 及该 Route 的远端 primary target。loopback 不可冒用。",
+            effects: "只读当前 Route 的 WS 状态，并在授权后对其唯一实例发起短时 OneBot GET get_status；不读取消息或写入状态。",
+            retry: "只读无幂等键；探针不可用时显示未知，不自动切换 Route 或实例。", mutating: false, idempotencyRequired: false
+          }
+      : pathTemplate === "/api/agent/qq/group-files" && method === "GET"
+         ? {
+             requestBody: "无请求体；必须传唯一非空 routeId、groupId，folderId 可选且至多一次。",
+             response: "返回选定群的有界文件/文件夹元数据；completenessUnknown 与 potentiallyTruncated 表示不可据此证明文件不存在。",
+             auth: "仅可信 LAN Agent 来源；核对精确 Route 与远端 primary target，并独立校验 readableGroupFileIds 中的精确群 ID；发送权限不能替代读取权限。",
+             effects: "只读所选 QQ 实例的 get_group_root_files 或 get_group_files_by_folder；不下载、不发送文件。",
+             retry: "只读无幂等键；结果不完整时不据此去重，授权或实例不可用时不跨 Route 回退。", mutating: false, idempotencyRequired: false
+           }
+       : pathTemplate === "/api/agent/uploads/:uploadId"
         ? {
             requestBody: method === "PUT" ? "application/octet-stream；必须使用 UUID uploadId、同值 Idempotency-Key、x-rabiroute-content-sha256 和 URI 编码文件名；禁止 content-encoding。" : "GET 无请求体。",
             response: "PUT 成功返回 code=0、data { id, fileName, size, sha256, expiresAt }；GET 返回当前上传回执/资源。",
@@ -187,10 +212,17 @@ const catalog: readonly AgentApiOperation[] = Object.freeze([
     ["PUT", "/api/agent/uploads/:uploadId", "上传当前远端 Agent 的受管文件，不自动外发"],
     ["GET", "/api/agent/uploads/:uploadId", "核对当前远端 Agent 的文件上传回执"],
     ["GET", "/api/agent/help", "按 operationId、方法或路径查询当前接口帮助", "operationId path method"],
+    ["GET", "/api/agent/qq/diagnostics", "查询唯一已启用 QQ 实例的脱敏只读诊断", "routeId"],
+    ["GET", "/api/agent/qq/group-files", "读取精确群的有界 QQ 文件元数据", "routeId groupId folderId"],
+    ["GET", "/api/agent/qq/history", "本机读取选定 QQ 会话历史分页；仅本机管理权限", "routeId kind target cursor limit"],
+    ["GET", "/api/agent/qq/messages/:messageId", "本机读取原消息及附件下载入口；仅本机管理权限", "routeId kind target"],
+    ["GET", "/api/agent/qq/messages/:messageId/attachments/:attachmentIndex", "本机下载原消息附件二进制；最多 64 MiB，仅本机管理权限", "routeId kind target"],
     ["GET", "/api/agent/send/capabilities", "列出发送渠道、参数示例与不重试规则"],
     ["POST", "/api/agent/send", "通过渠道策略发送消息或受管附件"],
     ["GET", "/api/agent/send/traces", "按平台消息追踪发送", "channel sentMessageId routeId"],
     ["GET", "/api/agent/send/receipts/:deliveryId", "读取渠道发送回执"],
+    ["POST", "/api/agent/send/receipts/:deliveryId/verify", "只读核验原投递的可信证据；无需计划绑定，不外发或重试"],
+    ["POST", "/api/agent/send/receipts/:deliveryId/settle", "受控结算原投递 ID；无需计划绑定，不外发或重试"],
     ["GET", "/api/agent/requests", "列出 Agent 回复请求", "status"],
     ["GET", "/api/agent/requests/:requestId", "读取 Agent 回复请求"],
     ["POST", "/api/agent/requests/:requestId/cancel", "取消不再需要的回复请求"],

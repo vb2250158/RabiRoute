@@ -44,7 +44,7 @@ export type MemoryConsolidationAgentDependencies = {
   now?: () => Date;
 };
 
-function readState(filePath: string): MemoryConsolidationAgentState {
+export function readMemoryConsolidationAgentState(filePath: string): MemoryConsolidationAgentState {
   try {
     const raw = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<MemoryConsolidationAgentState>;
     const binding = raw.binding;
@@ -120,7 +120,7 @@ export class MemoryConsolidationAgent {
   private deliveryTail: Promise<void> = Promise.resolve();
 
   constructor(private readonly options: MemoryConsolidationAgentOptions, dependencies: MemoryConsolidationAgentDependencies = {}) {
-    this.state = readState(options.statePath);
+    this.state = readMemoryConsolidationAgentState(options.statePath);
     this.request = dependencies.request ?? ((payload) => requestMessageAgentManager(options.managerBaseUrl, payload));
     this.now = dependencies.now ?? (() => new Date());
   }

@@ -146,6 +146,7 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 - `messageAdapterPolicies`：每个消息端的管道级权限。`inputEnabled` 控制是否接收，`outputEnabled` 控制是否允许出站。QQ、微信、飞书、企业微信、角色面板和 RabiLink 文字聊天默认使用消息组，不提供关闭开关；可用 `messageGrouping` 的三个秒数调整普通停顿、疑似半句话停顿和最长等待，默认 `6 / 12 / 20` 秒。ASR / 语音转写、heartbeat、命令、审批、健康告警和结构化事件照常直接投递，不进入这段等待。只有 Codex Agent 同时开启消息处理模式时，聊天消息才交给消息处理 Agent；否则保持原有逐条路由。
 - `supportedOutputs`：这个消息端允许发送的消息类型。NapCat/OneBot 当前支持 `text`、`image`、`voice`、`file`；旧的纯文本 `text/message/content` 请求仍兼容。QQ 群本地文件使用 `upload_group_file`，不是把大文件伪装成普通文本或普通消息段。
 - `allowedFileRoots`：本地文件出站白名单目录，仅在 `payloadType=file` 且使用本地路径时生效。文件必须真实存在、是普通文件，并且解析真实路径后仍位于其中一个目录内；未配置时本地群文件上传会被阻止。公开示例只能使用占位路径，运行期按角色实际构建产物目录配置。
+- `messageAdapterPolicies.napcat.readableGroupFileIds`：Agent 查看 QQ 群文件**元数据**的独立精确群号字符串白名单，默认空数组（拒绝全部），例如 ` ["123456"] ` 仅是虚构示例；不从 `targetGroupId`、输出权限或 `allowedFileRoots` 推导。当前源码已接入 Manager，但尚未完成部署与运行验收，不应据此声称接口在已运行版本可用；调用仍须可信 LAN Agent、精确 Route、当前已批准的主 Agent 会话和唯一启用的 NapCat 实例。只读取当前目录的文件/文件夹元数据，不下载文件、不递归或修改 QQ。NapCat 公开接口未提供可核实的分页游标或完整性标记，因此结果始终声明 `completenessUnknown` 与 `potentiallyTruncated`，不能据此断言群文件查全。
 - `gatewayPort`：NapCat WebSocket Client 连接的端口。
 - `napcatHttpUrl`：RabiRoute 调用的 OneBot HTTP 服务地址。一个 Route 只绑定一个 NapCat；多个 QQ 应分别建立 Route。多个 Route 仍可明确共用同一个 NapCat 和 HTTP 地址；自动端口分配只处理 RabiRoute 自己监听的端口，不会把已经配置的 NapCat 地址改到一个未启动的端口。
 - `webhookPort`：Webhook 监听端口。未配置时回退到 `gatewayPort`。

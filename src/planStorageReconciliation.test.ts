@@ -241,6 +241,57 @@ test("historical mixed-case plan directories migrate atomically and recover afte
   assert.deepEqual(repeated.failures, []);
 });
 
+test("name migration splits grown history, preserves order, and resumes after a partial staged rewrite", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-plan-name-shards-"));
+  const roleDir = path.join(root, "roles", "Example");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const planId = "Plan-Long-Paths";
+  const legacy = path.join(roleDir, "plans", "active", "P");
+  const canonical = path.join(roleDir, "plans", "active", "plan-long-paths");
+  fs.mkdirSync(path.join(legacy, "history"), { recursive: true });
+  fs.writeFileSync(path.join(legacy, "plan.json"), JSON.stringify({ id: planId, attachments: [{ path: path.join(legacy, "attachments", "x") }] }));
+  const limit = 16 * 1024 * 1024;
+  const buildRow = (id: number, bytes: number) => JSON.stringify({ id, path: path.join(legacy, "attachments", "x"), padding: "x".repeat(bytes) }) + "\n";
+  const half = Math.floor(limit / 2) - Buffer.byteLength(buildRow(0, 0)) - 2;
+  const first = buildRow(0, half) + buildRow(1, half);
+  const second = buildRow(2, half) + buildRow(3, half);
+  fs.writeFileSync(path.join(legacy, "history.jsonl"), first);
+  fs.writeFileSync(path.join(legacy, "history", "000001.jsonl"), second);
+  let rewrites = 0;
+  const interrupted = canonicalizeRolePlanStorageDirectories(roleDir, { faultInjection: { afterRewrite: () => {
+    if (++rewrites === 2) throw new Error("injected after partial staged rewrite");
+  } } });
+  assert.equal(interrupted.migrated, 0);
+  assert.match(interrupted.failures[0]?.error || "", /injected after partial staged rewrite/);
+  assert.deepEqual(canonicalizeRolePlanStorageDirectories(roleDir).failures, []);
+  const shardPaths = [path.join(canonical, "history.jsonl"), ...fs.readdirSync(path.join(canonical, "history")).sort().map(name => path.join(canonical, "history", name))];
+  assert.ok(shardPaths.length >= 3);
+  assert.ok(shardPaths.every(file => fs.statSync(file).size <= limit));
+  const records = shardPaths.flatMap(file => fs.readFileSync(file, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line) as { id: number; path: string }));
+  assert.deepEqual(records.map(record => record.id), [0, 1, 2, 3]);
+  assert.ok(records.every(record => record.path.startsWith(canonical)));
+});
+
+test("name migration refuses a grown single audit row before renaming its source", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-plan-name-oversize-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const roleDir = path.join(root, "role");
+  const legacy = path.join(roleDir, "plans", "active", "P");
+  const canonical = path.join(roleDir, "plans", "active", "plan-grown-record");
+  fs.mkdirSync(legacy, { recursive: true });
+  fs.writeFileSync(path.join(legacy, "plan.json"), JSON.stringify({ id: "Plan-Grown-Record" }));
+  const render = (padding: number) => JSON.stringify({ id: "one", path: path.join(legacy, "proof"), padding: "x".repeat(padding) }) + "\n";
+  const limit = 16 * 1024 * 1024;
+  const row = render(limit - Buffer.byteLength(render(0)) - 1);
+  fs.writeFileSync(path.join(legacy, "history.jsonl"), row);
+  assert.equal(Buffer.byteLength(row), limit - 1);
+  const result = canonicalizeRolePlanStorageDirectories(roleDir);
+  assert.equal(result.migrated, 0);
+  assert.match(result.failures[0]?.error || "", /record exceeds the per-file limit/);
+  assert.equal(fs.readFileSync(path.join(legacy, "history.jsonl"), "utf8"), row);
+  assert.equal(fs.existsSync(canonical), false);
+});
+
 test("plan locks share one case-folded physical identity and never retry business EEXIST errors", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-plan-lock-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

@@ -62,8 +62,19 @@ function bindingFrom(value: unknown): Binding {
 export function readOsMachineIdentity(): string {
   try {
     if (process.platform === "win32") {
-      const output = execFileSync("reg.exe", ["query", "HKLM\\SOFTWARE\\Microsoft\\Cryptography", "/v", "MachineGuid", "/reg:64"],
-        { encoding: "utf8", windowsHide: true, timeout: 5000, maxBuffer: 16_384, stdio: ["ignore", "pipe", "pipe"] });
+      const registryTool = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "reg.exe");
+      let output = "";
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          output = execFileSync(registryTool, ["query", "HKLM\\SOFTWARE\\Microsoft\\Cryptography", "/v", "MachineGuid", "/reg:64"],
+            { encoding: "utf8", windowsHide: true, timeout: 5000, maxBuffer: 16_384, stdio: ["ignore", "pipe", "pipe"] });
+          break;
+        } catch (error) {
+          // Retry only a cold-start timeout. Access denial and invalid identity
+          // still fail closed; never substitute a hostname or random identity.
+          if (attempt !== 0 || (error as NodeJS.ErrnoException).code !== "ETIMEDOUT") throw error;
+        }
+      }
       const match = /MachineGuid\s+REG_SZ\s+([a-f0-9-]{36})/i.exec(output);
       if (match && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(match[1])) return `win32:${match[1].toLowerCase()}`;
     } else if (process.platform === "linux") {

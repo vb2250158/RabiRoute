@@ -56,7 +56,7 @@ test("an active sending owner fences same-key recovery retries until the first d
     deliveryId: "17345678-1234-4567-8123-123456789abc",
     payload: { roleId: "YeYu", task: { type: "recent_memory_create", input: { title: "one" } } },
     waitForCompletionMs: 0,
-    executionLeaseMs: 100
+    executionLeaseMs: 5_000
   };
   const first = executeDurableDelivery({
     ...base,
@@ -67,21 +67,27 @@ test("an active sending owner fences same-key recovery retries until the first d
     },
     recover: async () => { recoveries += 1; return { state: "retry" as const }; }
   });
-  await started;
+  await Promise.race([
+    started,
+    first.then(outcome => { throw new Error(`The sending owner did not start: ${outcome.state}`); })
+  ]);
 
-  const concurrent = await executeDurableDelivery({
-    ...base,
-    deliver: async () => {
-      sends += 1;
-      return { memoryId: "duplicate" };
-    },
-    recover: async () => { recoveries += 1; return { state: "retry" as const }; }
-  });
-  assert.equal(concurrent.state, "in_progress");
-  assert.equal(sends, 1);
-  assert.equal(recoveries, 0);
+  try {
+    const concurrent = await executeDurableDelivery({
+      ...base,
+      deliver: async () => {
+        sends += 1;
+        return { memoryId: "duplicate" };
+      },
+      recover: async () => { recoveries += 1; return { state: "retry" as const }; }
+    });
+    assert.equal(concurrent.state, "in_progress");
+    assert.equal(sends, 1);
+    assert.equal(recoveries, 0);
+  } finally {
+    releaseFirst({ memoryId: "only-record" });
+  }
 
-  releaseFirst({ memoryId: "only-record" });
   const completed = await first;
   const replay = await executeDurableDelivery({
     ...base,
@@ -379,6 +385,7 @@ test("an independent heartbeat fences a remote retry while the main thread is sy
   const payload = { roleId: "YeYu", mutation: "long-running" };
   const resultPath = path.join(rootDir, "contender-result.json");
   const duplicateMarker = path.join(rootDir, "duplicate-delivery.txt");
+  const contenderReady = path.join(rootDir, "contender-ready.txt");
   const moduleUrl = new URL("./durableDeliveryIdempotency.ts", import.meta.url).href;
   const remoteHost = `${os.hostname()}-simulated-remote`;
   let heartbeatBefore = 0;
@@ -388,6 +395,7 @@ test("an independent heartbeat fences a remote retry while the main thread is sy
     import os from "node:os";
     Object.defineProperty(os, "hostname", { configurable: true, value: () => ${JSON.stringify(remoteHost)} });
     const { executeDurableDelivery } = await import(${JSON.stringify(moduleUrl)});
+    fs.writeFileSync(${JSON.stringify(contenderReady)}, "ready", "utf8");
     await new Promise(resolve => setTimeout(resolve, 650));
     const outcome = await executeDurableDelivery({
       rootDir: ${JSON.stringify(rootDir)},
@@ -411,7 +419,7 @@ test("an independent heartbeat fences a remote retry while the main thread is sy
     namespace,
     deliveryId,
     payload,
-    executionLeaseMs: 300,
+    executionLeaseMs: 1_500,
     deliver: async () => {
       const contender = spawn(
         process.execPath,
@@ -419,6 +427,14 @@ test("an independent heartbeat fences a remote retry while the main thread is sy
         { cwd: process.cwd(), stdio: ["ignore", "ignore", "pipe"] }
       );
       contenderCompletion = waitForChild(contender);
+      const readyDeadline = Date.now() + 15_000;
+      while (!fs.existsSync(contenderReady)) {
+        if (contender.exitCode !== null || Date.now() >= readyDeadline) {
+          contender.kill();
+          throw new Error("The remote contender failed to load before the blocking operation.");
+        }
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
       heartbeatBefore = fs.statSync(durableDeliveryReceiptPath(rootDir, namespace, deliveryId)).mtimeMs;
       Atomics.wait(mainThreadBlock, 0, 0, 3_000);
       heartbeatAfter = fs.statSync(durableDeliveryReceiptPath(rootDir, namespace, deliveryId)).mtimeMs;

@@ -261,6 +261,90 @@ test("one committed plan updates an existing published catalog without a storage
   }
 });
 
+test("plan update rotates near-limit history without losing records or changing a rejected update", t => {
+  const roleDir = makeRoleDir();
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const plan = createPlan(roleDir, {
+    id: "history-near-limit", title: "History boundary", focus: "Preserve audit records",
+    status: "分析中", currentStepId: "investigate", steps: [{ id: "investigate", title: "Inspect" }], keywords: ["history"]
+  });
+  const historyPath = planHistoryFile(roleDir, plan.id, "active");
+  const first = fs.readFileSync(historyPath, "utf8");
+  const template = JSON.parse(first.trim());
+  const makeRow = (index: number, padding: number) => JSON.stringify({ ...template, id: `history-${index}`, padding: "x".repeat(padding) }) + "\n";
+  const rows: string[] = [];
+  let size = Buffer.byteLength(first);
+  while (size + Buffer.byteLength(makeRow(rows.length, 16000)) < 16 * 1024 * 1024 - 18000) {
+    const row = makeRow(rows.length, 16000);
+    rows.push(row);
+    size += Buffer.byteLength(row);
+  }
+  rows.push(makeRow(rows.length, 16 * 1024 * 1024 - size - Buffer.byteLength(makeRow(rows.length, 0)) - 500));
+  const count = rows.length;
+  const original = first + rows.join("");
+  fs.writeFileSync(historyPath, original);
+  const priorPlan = fs.readFileSync(planJsonFile(roleDir, plan.id, "active"));
+  const updated = updatePlan(roleDir, plan.id, { title: "Updated at boundary" });
+  assert.equal(updated.title, "Updated at boundary");
+  const historyFiles = [historyPath, path.join(path.dirname(historyPath), "history", "000001.jsonl")];
+  assert.ok(fs.existsSync(historyFiles[1]), "the new record must be stored in a numbered history shard");
+  const contents = historyFiles.map(file => fs.readFileSync(file, "utf8"));
+  assert.ok(contents.every(content => Buffer.byteLength(content) <= 16 * 1024 * 1024));
+  assert.ok(contents.join("").startsWith(original), "original audit bytes must remain intact");
+  assert.equal(listPlanHistory(roleDir, plan.id).length, count + 2);
+  assert.equal(listPlanHistory(roleDir, plan.id).at(-1)?.after.title, "Updated at boundary");
+  assert.notDeepEqual(fs.readFileSync(planJsonFile(roleDir, plan.id, "active")), priorPlan);
+});
+
+test("legacy history without a trailing newline rotates without joining audit records", t => {
+  const roleDir = makeRoleDir();
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const plan = createPlan(roleDir, { id: "history-legacy-tail", title: "Legacy tail", focus: "Preserve old rows",
+    status: "分析中", currentStepId: "inspect", steps: [{ id: "inspect", title: "Inspect" }], keywords: ["legacy"] });
+  const historyPath = planHistoryFile(roleDir, plan.id, "active");
+  const first = fs.readFileSync(historyPath, "utf8").trimEnd();
+  const row = JSON.parse(first);
+  const nearLimit = `${first}\n${JSON.stringify({ ...row, id: "legacy-last", padding: "x".repeat(16 * 1024 * 1024 - Buffer.byteLength(first) - 1024) })}`;
+  assert.ok(Buffer.byteLength(nearLimit) < 16 * 1024 * 1024);
+  fs.writeFileSync(historyPath, nearLimit);
+  const updated = updatePlan(roleDir, plan.id, { title: "Rotated legacy tail" });
+  assert.equal(updated.title, "Rotated legacy tail");
+  const shardPath = path.join(path.dirname(historyPath), "history", "000001.jsonl");
+  assert.equal(fs.readFileSync(historyPath, "utf8"), nearLimit);
+  assert.ok(fs.readFileSync(shardPath, "utf8").startsWith("{"));
+  assert.deepEqual(listPlanHistory(roleDir, plan.id).map(item => item.id).slice(0, 2), [row.id, "legacy-last"]);
+  updatePlan(roleDir, plan.id, { nextAction: "Still writable" });
+  assert.equal(listPlanHistory(roleDir, plan.id).at(-1)?.after.nextAction, "Still writable");
+});
+
+test("archiving repartitions path-expanded history without dropping or reordering snapshots", t => {
+  const roleDir = makeRoleDir();
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const plan = createPlan(roleDir, { id: "history-archive-grow", title: "Archive growth", focus: "Preserve ordered history",
+    status: "分析中", currentStepId: "inspect", steps: [{ id: "inspect", title: "Inspect" }], keywords: ["history"] });
+  updatePlan(roleDir, plan.id, { activationStatus: "已完成", status: "完成" });
+  const historyPath = planHistoryFile(roleDir, plan.id, "active");
+  const oldPath = path.join(planDirectory(roleDir, plan.id, "active"), "attachments", "proof.txt");
+  const original = fs.readFileSync(historyPath, "utf8");
+  const template = JSON.parse(original.split("\n")[0]!);
+  const makeRow = (id: number, padding: number) => JSON.stringify({ ...template, id: `history-${id}`, path: oldPath, padding: "x".repeat(padding) }) + "\n";
+  const limit = 16 * 1024 * 1024;
+  const first = makeRow(0, limit - Buffer.byteLength(makeRow(0, 0)) - Buffer.byteLength(original) - 10);
+  const second = makeRow(1, limit - Buffer.byteLength(makeRow(1, 0)) - 10);
+  fs.writeFileSync(historyPath, original + first);
+  const firstShard = path.join(path.dirname(historyPath), "history", "000001.jsonl");
+  fs.mkdirSync(path.dirname(firstShard), { recursive: true });
+  fs.writeFileSync(firstShard, second);
+  assert.ok(fs.statSync(historyPath).size <= limit && fs.statSync(firstShard).size <= limit);
+  updatePlan(roleDir, plan.id, { archiveStatus: "已归档", activationStatus: "已归档" });
+  const archivedDir = planDirectory(roleDir, plan.id, "archive");
+  const paths = [path.join(archivedDir, "history.jsonl"), ...fs.readdirSync(path.join(archivedDir, "history")).sort().map(name => path.join(archivedDir, "history", name))];
+  assert.ok(paths.every(file => fs.statSync(file).size <= limit));
+  assert.deepEqual(listPlanHistory(roleDir, plan.id).map(record => record.id).slice(2, 4), ["history-0", "history-1"]);
+  assert.equal(listPlanHistory(roleDir, plan.id).at(-1)?.kind, "archived");
+  assert.equal(paths.length >= 3, true);
+});
+
 test("plan history keeps snapshots after updates and archive moves", () => {
   const roleDir = makeRoleDir();
   const plan = createPlan(roleDir, {
@@ -1581,6 +1665,29 @@ function readRecentMemory(roleDir: string, id: string): Record<string, unknown> 
 function readConsolidatedMemory(roleDir: string, id: string): Record<string, unknown> {
   return listConsolidatedMemories(roleDir).find((memory) => memory.id === id) as unknown as Record<string, unknown>;
 }
+
+test("consolidation input scope excludes role-wide recalls and leaves unrelated memory activity intact", (t) => {
+  const roleDir = makeRoleDir();
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const timestamp = "2026-01-01T00:00:00.000Z";
+  writeRecentMemory(roleDir, { id: "memory-input", title: "Fixed input", focus: "Fixed input", content: "fixed", createdAt: timestamp, updatedAt: timestamp, keywords: ["shared keyword"] });
+  writeRecentMemory(roleDir, { id: "memory-outside", title: "Other memory", focus: "Other memory", content: "other", createdAt: timestamp, updatedAt: timestamp, keywords: ["shared keyword"] });
+  writeConsolidatedMemory(roleDir, { id: "memory-stable", title: "Stable knowledge", focus: "Stable knowledge", content: "stable", createdAt: timestamp, updatedAt: timestamp, keywords: ["shared keyword"] });
+  const plan = createPlan(roleDir, { title: "Shared keyword plan", focus: "shared keyword", status: "分析中", currentStepId: "investigate", steps: [{ id: "investigate", title: "Review" }], keywords: ["shared keyword"] });
+  publishStoredRoleKnowledge(roleDir);
+  const ordinary = roleKnowledgeSnapshotFromStorage(roleDir, "shared keyword", { requiredReadLimit: 10, touchViewedAt: false });
+  assert.ok(ordinary.requiredReadItems.some(item => item.id === plan.id));
+  assert.ok(ordinary.requiredReadItems.some(item => item.id === "memory-outside"));
+  const scoped = roleKnowledgeSnapshotFromStorage(roleDir, "shared keyword", { consolidationInputMemoryIds: ["memory-input"] });
+  assert.deepEqual(scoped.requiredReadItems.map(item => item.id), ["memory-input"]);
+  assert.deepEqual(scoped.matchedItems.map(item => item.id), ["memory-input"]);
+  assert.deepEqual(scoped.activePlans, []);
+  assert.deepEqual(scoped.activeSkills, []);
+  assert.deepEqual(scoped.recentMemories, []);
+  assert.equal(readRecentMemory(roleDir, "memory-outside").viewedAt, undefined);
+  const empty = roleKnowledgeSnapshotFromStorage(roleDir, "shared keyword", { consolidationInputMemoryIds: [] });
+  assert.deepEqual(empty.requiredReadItems, []);
+});
 
 test("keyword recall records recalledAt and delays consolidation", () => {
   const roleDir = makeRoleDir();

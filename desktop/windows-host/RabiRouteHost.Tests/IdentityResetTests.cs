@@ -219,12 +219,25 @@ internal static class IdentityResetTests
         Directory.CreateDirectory(stateRoot);
         await using var log = new HostLog(Path.Combine(stateRoot, "logs", "host"));
         var lifecycle = new IdentityResetLifecycle(package, stateRoot, log);
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var cancellation = new CancellationTokenSource();
+        var descendantPath = Path.Combine(stateRoot, "descendant.pid");
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var watcher = new FileSystemWatcher(stateRoot, "descendant.pid");
+        watcher.Created += (_, _) => started.TrySetResult();
+        watcher.EnableRaisingEvents = true;
+        var helper = lifecycle.RunOfflineAsync(new(Guid.NewGuid().ToString("D"), Guid.NewGuid().ToString("D")), false, cancellation.Token);
+        // Cancel an actually running helper, rather than racing Node startup.
+        try { await started.Task.WaitAsync(TimeSpan.FromSeconds(15)); }
+        finally
+        {
+            cancellation.Cancel();
+            try { await helper; } catch (OperationCanceledException) { }
+        }
         var canceled = false;
-        try { await lifecycle.RunOfflineAsync(new(Guid.NewGuid().ToString("D"), Guid.NewGuid().ToString("D")), false, cancellation.Token); }
+        try { await helper; }
         catch (OperationCanceledException) { canceled = true; }
         check(canceled, "offline helper has a bounded cancelable lifetime");
-        var childPid = int.Parse(File.ReadAllText(Path.Combine(stateRoot, "descendant.pid")));
+        var childPid = int.Parse(File.ReadAllText(descendantPath));
         var childExited = false;
         try { using var child = Process.GetProcessById(childPid); childExited = child.HasExited; } catch (ArgumentException) { childExited = true; }
         check(childExited, "Host Job cancellation prevents an identity helper descendant becoming an orphan");

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { canonicalLogicalPlanId } from "./planStorageIdentity.js";
+import { isPlanHistoryPath, readPlanHistoryBytes, readPlanHistoryDirectory, PLAN_HISTORY_FILE } from "./planHistoryShards.js";
 import { isArchivedPlanStatus, planStorageDirectory } from "./planStorageLayout.js";
 import {
   inventoryPlanStorageDirectory,
@@ -9,7 +10,7 @@ import {
 } from "./planStorageRepository.js";
 
 const PLAN_FILE = "plan.json";
-const HISTORY_FILE = "history.jsonl";
+const HISTORY_FILE = PLAN_HISTORY_FILE;
 
 type PlanHistoryRecordLike = {
   id?: unknown;
@@ -42,16 +43,15 @@ export function readPlanStorageJsonObject(filePath: string): Record<string, unkn
   return value as Record<string, unknown>;
 }
 
-function readHistory(filePath: string, planId: string): PlanHistoryRecordLike[] {
-  if (!fs.existsSync(filePath)) return [];
+function readHistory(directory: string, planId: string): PlanHistoryRecordLike[] {
   const records: PlanHistoryRecordLike[] = [];
-  for (const line of fs.readFileSync(filePath, "utf8").split(/\r?\n/).filter(Boolean)) {
+  for (const line of readPlanHistoryBytes(readPlanHistoryDirectory(directory)).toString("utf8").split(/\r?\n/).filter(Boolean)) {
     const value = JSON.parse(line) as PlanHistoryRecordLike;
     if (!value || typeof value !== "object" || value.planId !== planId || typeof value.id !== "string") {
-      throw new Error(`Plan history contains an invalid record: ${filePath}`);
+      throw new Error(`Plan history contains an invalid record: ${directory}`);
     }
     if (!value.after || typeof value.after !== "object") {
-      throw new Error(`Plan history record has no after snapshot: ${filePath}`);
+      throw new Error(`Plan history record has no after snapshot: ${directory}`);
     }
     records.push(value);
   }
@@ -61,7 +61,7 @@ function readHistory(filePath: string, planId: string): PlanHistoryRecordLike[] 
 function supportingFilesArePreserved(active: PlanStorageInventory, archive: PlanStorageInventory): boolean {
   const archiveByPath = new Map(archive.files.map((file) => [file.path, file]));
   return active.files
-    .filter((file) => file.path !== PLAN_FILE && file.path !== HISTORY_FILE)
+    .filter((file) => file.path !== PLAN_FILE && !isPlanHistoryPath(file.path))
     .every((file) => {
       const archived = archiveByPath.get(file.path);
       return Boolean(archived && archived.bytes === file.bytes && archived.sha256 === file.sha256);
@@ -90,18 +90,16 @@ export function planLineageDominanceReason(
     || activeUpdatedAt > terminalAt) return null;
   if (activePlan.completedAt !== undefined && activePlan.completedAt !== archivePlan.completedAt) return null;
 
-  const activeHistoryFile = path.join(activeDirectory, HISTORY_FILE);
-  const archiveHistoryFile = path.join(archiveDirectory, HISTORY_FILE);
-  const activeHistoryBytes = fs.existsSync(activeHistoryFile) ? fs.readFileSync(activeHistoryFile) : Buffer.alloc(0);
-  const archiveHistoryBytes = fs.existsSync(archiveHistoryFile) ? fs.readFileSync(archiveHistoryFile) : Buffer.alloc(0);
+  const activeHistoryBytes = readPlanHistoryBytes(readPlanHistoryDirectory(activeDirectory));
+  const archiveHistoryBytes = readPlanHistoryBytes(readPlanHistoryDirectory(archiveDirectory));
   if (activeHistoryBytes.byteLength === 0 && archiveHistoryBytes.byteLength === 0) {
     return "terminal_archive_temporally_dominates_legacy_active_snapshot";
   }
   if (archiveHistoryBytes.byteLength < activeHistoryBytes.byteLength
     || !archiveHistoryBytes.subarray(0, activeHistoryBytes.byteLength).equals(activeHistoryBytes)) return null;
 
-  const archiveHistory = readHistory(archiveHistoryFile, id);
-  const activeHistory = readHistory(activeHistoryFile, id);
+  const archiveHistory = readHistory(archiveDirectory, id);
+  const activeHistory = readHistory(activeDirectory, id);
   if (archiveHistory.length === 0 || activeHistory.length > archiveHistory.length) return null;
   let transitionIndex = -1;
   for (let index = archiveHistory.length - 1; index >= 0; index -= 1) {
@@ -139,7 +137,7 @@ export function validateCanonicalArchivedPlanDirectory(archiveDirectory: string,
   if (archivePlan.id !== id || !isArchivedPlanStatus(archivePlan.archiveStatus ?? archivePlan.status)) {
     throw new Error(`Archived plan package has an invalid terminal identity: ${id}`);
   }
-  const history = readHistory(path.join(archiveDirectory, HISTORY_FILE), id);
+  const history = readHistory(archiveDirectory, id);
   const transitionIndex = history.findIndex(record =>
     record.kind === "archived" && isArchivedPlanStatus((record.after as { archiveStatus?: unknown; status?: unknown })?.archiveStatus
       ?? (record.after as { status?: unknown })?.status)
@@ -171,7 +169,7 @@ export function validateCanonicalActivePlanDirectory(activeDirectory: string, pl
   if (activePlan.id !== id || isArchivedPlanStatus(activePlan.archiveStatus ?? activePlan.status)) {
     throw new Error(`Active plan package has an invalid live identity: ${id}`);
   }
-  const history = readHistory(path.join(activeDirectory, HISTORY_FILE), id);
+  const history = readHistory(activeDirectory, id);
   if (history.length === 0 || history.some(record => record.kind === "archived")) {
     throw new Error(`Active plan package history is missing or contains a terminal transition: ${id}`);
   }

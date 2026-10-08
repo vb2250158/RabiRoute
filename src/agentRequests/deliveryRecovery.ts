@@ -23,14 +23,18 @@ export function recoverAgentResponseDelivery(
     return { ...communication, status: "already_recorded" };
   }
   if (original.status !== "awaiting_response") return { ...communication, status: "not_recoverable" };
-  // Recovery replays evidence out of the Codex Desktop rollout files. An adapter
-  // whose transport exposes no equivalent log cannot prove delivery, so it reports
-  // a distinct reason instead of the generic "not_recoverable" dead end.
+  // The original source receives the reply and owns the inbound receipt log.
+  // A sender without its own log is recoverable only with durable exact-hash
+  // evidence; legacy replies still require both adapters' recovery capabilities.
+  const evidenceHash = original.pendingResponseEvidence?.promptHash;
+  const hasStructuredEvidence = typeof evidenceHash === "string" && /^[a-f0-9]{64}$/.test(evidenceHash);
   if (!agentAdapterSupportsReceiptRecovery(original.source.agentAdapter)
-    || !agentAdapterSupportsReceiptRecovery(original.target.agentAdapter)) {
+    || (!agentAdapterSupportsReceiptRecovery(original.target.agentAdapter) && !hasStructuredEvidence)) {
     return { ...communication, status: "adapter_has_no_receipt_log" };
   }
   if (followup && (followup.status === "cancelled"
+    || followup.source.agentAdapter !== original.target.agentAdapter
+    || followup.target.agentAdapter !== original.source.agentAdapter
     || followup.source.threadId !== original.target.threadId
     || followup.target.threadId !== original.source.threadId
     || !sameCodexWorkspace(followup.source.workspace || "", original.target.workspace || "")
@@ -47,6 +51,9 @@ export function recoverAgentResponseDelivery(
           && agentDeliveryPromptHash(prefix) === promptHash);
       if (!exactEvidence || preparation.deliveryId !== deliveryId
         || preparation.inReplyToRequestId !== original.id
+        || preparation.requestId !== followup?.id
+        || preparation.source.agentAdapter !== original.target.agentAdapter
+        || preparation.target.agentAdapter !== original.source.agentAdapter
         || preparation.source.threadId !== original.target.threadId
         || preparation.target.threadId !== original.source.threadId
         || !sameCodexWorkspace(preparation.source.workspace || "", original.target.workspace || "")

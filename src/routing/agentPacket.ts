@@ -1171,10 +1171,23 @@ function buildAgentMessage(
       : rabiContextManager.resolve(contextTrigger)
     : null;
   const knowledge = contextResolution?.knowledge ?? null;
-  const knowledgeAgentInterfaceDocPath = relativeWorkspacePath(knowledge?.agentInterfaceDocPath);
-  const knowledgeView = knowledge
-    ? buildRoleKnowledgeContextView(values.agentRoleId, {
+  const pendingConsolidation = knowledge?.pendingConsolidation;
+  const consolidationInputIds = new Set(pendingConsolidation?.run.inputMemoryIds ?? []);
+  const scopedKnowledge = knowledge && shouldAttachMemoryConsolidation
+    ? {
         ...knowledge,
+        activePlans: [],
+        activeSkills: [],
+        recentMemories: knowledge.recentMemories.filter(item => consolidationInputIds.has(item.id)),
+        matchedItems: knowledge.matchedItems.filter(item => item.type === "recent_memory" && consolidationInputIds.has(item.id)),
+        matchedSkills: [],
+        requiredReadItems: knowledge.requiredReadItems.filter(item => item.type === "recent_memory" && consolidationInputIds.has(item.id))
+      }
+    : knowledge;
+  const knowledgeAgentInterfaceDocPath = relativeWorkspacePath(scopedKnowledge?.agentInterfaceDocPath);
+  const knowledgeView = scopedKnowledge
+    ? buildRoleKnowledgeContextView(values.agentRoleId, {
+        ...scopedKnowledge,
         agentInterfaceDocPath: knowledgeAgentInterfaceDocPath || "docs/rabi-agent-interfaces.md"
       })
     : null;
@@ -1184,7 +1197,6 @@ function buildAgentMessage(
   const matchedIndex = knowledgeView?.matchedIndex ?? "- 暂无";
   const matchedSkillIndex = knowledgeView?.matchedSkillIndex ?? "- 暂无";
   const requiredReadIndex = knowledgeView?.requiredReadLines ?? [];
-  const pendingConsolidation = knowledge?.pendingConsolidation;
   const knowledgePlansDir = relativeWorkspacePath(knowledge?.plansDir);
   const knowledgeMemoryDir = relativeWorkspacePath(knowledge?.memoryDir);
   const recentMessageLimit = Number(values.recentMessageLimit ?? 0);

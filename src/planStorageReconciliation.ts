@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { atomicWriteFileSync } from "./shared/filePersistence.js";
+import { orderedPlanHistoryPaths, readPlanHistoryDirectory, PLAN_HISTORY_FILE_LIMIT } from "./planHistoryShards.js";
 import { canonicalPlanStorageName, planDirectory } from "./planStorageLayout.js";
 import {
   canonicalLogicalPlanId,
@@ -107,12 +108,14 @@ type PlanStorageNameMigrationReceipt = {
   canonicalInventory?: PlanStorageInventory;
   preparedAt: string;
   migratedAt?: string;
+  /** Persisted before rename; recovery never re-renders partially rewritten files. */
+  stagedRewrites?: Array<{ relativePath: string; sha256: string }>;
+  obsoleteHistoryPaths?: string[];
 };
 
 const ACTIVE_BUCKET = "active";
 const ARCHIVE_BUCKET = "archive";
 const PLAN_FILE = "plan.json";
-const HISTORY_FILE = "history.jsonl";
 const QUARANTINE_DIRECTORY = "quarantine";
 const CONFLICT_QUARANTINE_DIRECTORY = "plan-storage-conflicts";
 const NAME_MIGRATION_DIRECTORY = "plan-storage-name-migrations";
@@ -247,7 +250,8 @@ function renderManagedStorageRewrites(
   if (rewrittenPlan.changed) {
     rewrites.push({ relativePath: PLAN_FILE, content: `${JSON.stringify(rewrittenPlan.value, null, 2)}\n` });
   }
-  for (const relativePath of [HISTORY_FILE, "feedback.jsonl"]) {
+  const historyFiles = readPlanHistoryDirectory(directory);
+  for (const relativePath of [...orderedPlanHistoryPaths(historyFiles.keys()), "feedback.jsonl"]) {
     const filePath = path.join(directory, relativePath);
     if (!fs.existsSync(filePath)) continue;
     const source = fs.readFileSync(filePath, "utf8");
@@ -266,6 +270,73 @@ function renderManagedStorageRewrites(
     }
   }
   return rewrites;
+}
+
+function boundedHistoryRewrites(
+  directory: string,
+  rewrites: Array<{ relativePath: string; content: string }>
+): { rewrites: Array<{ relativePath: string; content: string }>; obsoleteHistoryPaths: string[] } {
+  const original = readPlanHistoryDirectory(directory);
+  const paths = orderedPlanHistoryPaths(original.keys());
+  if (!paths.some(relativePath => rewrites.some(rewrite => rewrite.relativePath === relativePath)
+    || original.get(relativePath)!.byteLength > PLAN_HISTORY_FILE_LIMIT)) {
+    return { rewrites, obsoleteHistoryPaths: [] };
+  }
+  const changed = new Map(rewrites.map(rewrite => [rewrite.relativePath, rewrite.content]));
+  const rows: string[] = [];
+  let previousEndedWithNewline = true;
+  for (const relativePath of paths) {
+    const body = changed.get(relativePath) ?? original.get(relativePath)!.toString("utf8");
+    if (!previousEndedWithNewline && rows.length) rows[rows.length - 1] += "\n";
+    rows.push(...body.split(/(?<=\n)/).filter(Boolean));
+    previousEndedWithNewline = body.endsWith("\n");
+  }
+  const shards: Array<{ relativePath: string; content: string }> = [];
+  let content = "";
+  const flush = (): void => {
+    if (!content) return;
+    const relativePath = shards.length === 0 ? "history.jsonl" : `history/${String(shards.length).padStart(6, "0")}.jsonl`;
+    if (shards.length > 999999) throw new Error("Plan history shard capacity exceeded during name migration.");
+    shards.push({ relativePath, content });
+    content = "";
+  };
+  for (const row of rows) {
+    const bytes = Buffer.byteLength(row, "utf8");
+    if (bytes > PLAN_HISTORY_FILE_LIMIT) throw new Error("Plan history record exceeds the per-file limit during name migration.");
+    if (Buffer.byteLength(content, "utf8") + bytes > PLAN_HISTORY_FILE_LIMIT) flush();
+    content += row;
+  }
+  flush();
+  const newPaths = new Set(shards.map(shard => shard.relativePath));
+  return {
+    rewrites: [...rewrites.filter(rewrite => !paths.includes(rewrite.relativePath)), ...shards],
+    obsoleteHistoryPaths: paths.filter(relativePath => !newPaths.has(relativePath))
+  };
+}
+
+function stagedNameMigrationRewrites(
+  preparedPath: string,
+  receipt: PlanStorageNameMigrationReceipt
+): Array<{ relativePath: string; content: Buffer }> {
+  if (!receipt.stagedRewrites) {
+    // Receipts created before staged migration remain recoverable, but never publish an oversized file.
+    const legacy = renderManagedStorageRewrites(receipt.canonicalPath, receipt.sourcePath, receipt.canonicalPath);
+    if (legacy.some(rewrite => Buffer.byteLength(rewrite.content) > PLAN_HISTORY_FILE_LIMIT)) {
+      throw new Error(`Legacy plan name migration needs bounded history recovery: ${receipt.planId}`);
+    }
+    return legacy.map(rewrite => ({ relativePath: rewrite.relativePath, content: Buffer.from(rewrite.content) }));
+  }
+  return receipt.stagedRewrites.map(({ relativePath, sha256: expectedHash }) => {
+    if (relativePath !== "plan.json" && relativePath !== "feedback.jsonl"
+      && relativePath !== "history.jsonl" && !/^history\/\d{6}\.jsonl$/.test(relativePath)) {
+      throw new Error(`Invalid staged plan name migration path: ${relativePath}`);
+    }
+    const content = fs.readFileSync(path.join(path.dirname(preparedPath), "staged", ...relativePath.split("/")));
+    if (sha256(content) !== expectedHash || (relativePath.startsWith("history") && content.byteLength > PLAN_HISTORY_FILE_LIMIT)) {
+      throw new Error(`Staged plan name migration content changed: ${relativePath}`);
+    }
+    return { relativePath, content };
+  });
 }
 
 function findPreparedNameMigrationReceipts(root: string): string[] {
@@ -294,7 +365,8 @@ function completePreparedNameMigration(
   preparedPath: string,
   receipt: PlanStorageNameMigrationReceipt,
   now: () => Date,
-  afterRename?: () => void
+  afterRename?: () => void,
+  afterRewrite?: () => void
 ): string {
   validateNameMigrationReceipt(roleDir, receipt);
   const lease = requireCurrentPlanStorageLease(roleDir, receipt.planId);
@@ -314,13 +386,23 @@ function completePreparedNameMigration(
   if (sourceExists && beforeRewrite.hash !== receipt.sourceInventory.hash) {
     throw new Error(`Plan storage name migration source inventory changed: ${receipt.planId}`);
   }
-  const rewrites = renderManagedStorageRewrites(currentPath, receipt.sourcePath, receipt.canonicalPath);
+  // Validate every staged byte before publishing anything. On retry the source may
+  // already be renamed and partly rewritten, so it must not be used to regenerate rows.
+  const rewrites = stagedNameMigrationRewrites(preparedPath, receipt);
   if (sourceExists) {
     publishPlanStorageDirectoryUnderLease(lease, receipt.sourcePath, receipt.canonicalPath);
     afterRename?.();
   }
   for (const rewrite of rewrites) {
-    atomicWriteFileSync(path.join(receipt.canonicalPath, rewrite.relativePath), rewrite.content);
+    atomicWriteFileSync(path.join(receipt.canonicalPath, ...rewrite.relativePath.split("/")), rewrite.content);
+    afterRewrite?.();
+  }
+  for (const relativePath of receipt.obsoleteHistoryPaths ?? []) {
+    if (relativePath !== "history.jsonl" && !/^history\/\d{6}\.jsonl$/.test(relativePath)) {
+      throw new Error(`Invalid obsolete plan name migration path: ${relativePath}`);
+    }
+    const obsolete = path.join(receipt.canonicalPath, ...relativePath.split("/"));
+    if (fs.existsSync(obsolete)) fs.unlinkSync(obsolete);
   }
   const canonicalInventory = inventoryDirectory(receipt.canonicalPath, lease);
   const completed: PlanStorageNameMigrationReceipt = {
@@ -341,7 +423,8 @@ function migratePlanStorageNameUnderLock(
   bucket: "active" | "archive",
   sourceName: string,
   now: () => Date,
-  afterRename?: () => void
+  afterRename?: () => void,
+  afterRewrite?: () => void
 ): string {
   const canonicalName = planStorageId(planId);
   if (sourceName === canonicalName) throw new Error(`Plan storage directory is already canonical: ${planId}`);
@@ -358,9 +441,8 @@ function migratePlanStorageNameUnderLock(
   if (normalizedPlanId(String(plan.id || "")) !== planId) {
     throw new Error(`Plan storage name migration source identity changed: ${planId}`);
   }
-  // Parse every managed JSON surface before publishing the prepared receipt so
-  // malformed data fails without moving the directory.
-  renderManagedStorageRewrites(sourcePath, sourcePath, canonicalPath);
+  // Parse and stage complete, bounded outputs before publishing the receipt or moving the source.
+  const staged = boundedHistoryRewrites(sourcePath, renderManagedStorageRewrites(sourcePath, sourcePath, canonicalPath));
   const sourceInventory = inventoryDirectory(sourcePath);
   const paths = nameMigrationReceiptPaths(roleDir, planId, bucket, sourceName);
   const finalReceipt = readNameMigrationReceipt(paths.final);
@@ -368,6 +450,13 @@ function migratePlanStorageNameUnderLock(
     throw new Error(`A migrated plan storage name was reintroduced: ${planId}`);
   }
   fs.mkdirSync(paths.root, { recursive: true });
+  const stagedRewrites = staged.rewrites.map(rewrite => {
+    const content = Buffer.from(rewrite.content, "utf8");
+    const target = path.join(paths.root, "staged", ...rewrite.relativePath.split("/"));
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    atomicWriteFileSync(target, content);
+    return { relativePath: rewrite.relativePath, sha256: sha256(content) };
+  });
   const receipt: PlanStorageNameMigrationReceipt = {
     schemaVersion: 1,
     kind: "plan_storage_name_canonicalization",
@@ -377,15 +466,17 @@ function migratePlanStorageNameUnderLock(
     sourcePath,
     canonicalPath,
     sourceInventory,
+    stagedRewrites,
+    obsoleteHistoryPaths: staged.obsoleteHistoryPaths,
     preparedAt: now().toISOString()
   };
   atomicWriteFileSync(paths.prepared, `${JSON.stringify(receipt, null, 2)}\n`);
-  return completePreparedNameMigration(roleDir, paths.prepared, receipt, now, afterRename);
+  return completePreparedNameMigration(roleDir, paths.prepared, receipt, now, afterRename, afterRewrite);
 }
 
 export function canonicalizeRolePlanStorageDirectories(
   roleDir: string,
-  options: { now?: () => Date; faultInjection?: { afterRename?: () => void } } = {}
+  options: { now?: () => Date; faultInjection?: { afterRename?: () => void; afterRewrite?: () => void } } = {}
 ): PlanStorageNameCanonicalizationResult {
   const now = options.now ?? (() => new Date());
   const result: PlanStorageNameCanonicalizationResult = {
@@ -409,7 +500,7 @@ export function canonicalizeRolePlanStorageDirectories(
         result.receipts.push(finalPath);
       } else {
         const recovered = withPlanStorageLease(roleDir, receipt.planId, () =>
-          completePreparedNameMigration(roleDir, preparedPath, receipt, now, options.faultInjection?.afterRename)
+          completePreparedNameMigration(roleDir, preparedPath, receipt, now, options.faultInjection?.afterRename, options.faultInjection?.afterRewrite)
         );
         result.recovered += 1;
         result.receipts.push(recovered);
@@ -463,7 +554,8 @@ export function canonicalizeRolePlanStorageDirectories(
             bucket,
             candidate.name,
             now,
-            options.faultInjection?.afterRename
+            options.faultInjection?.afterRename,
+            options.faultInjection?.afterRewrite
           )
         );
         result.migrated += 1;

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AgentRequestStore, type AgentRequestPersistence } from "./store.js";
+import { AgentRequestStore, type AgentRequestPersistence, type AgentCommunicationPreparation, type AgentRequestRecord } from "./store.js";
+import type { AgentAdapterType } from "../agentAdapters/types.js";
 import { deliveryUserMessagesFromRollout, recoverAgentResponseDelivery } from "./deliveryRecovery.js";
 import { renderRabiDelivery } from "../shared/rabiMessage.js";
 import { renderAgentReplyParameters } from "./replyParameters.js";
@@ -42,6 +43,112 @@ test("new response recovery uses durable structured evidence, independent of pre
   assert.equal(restarted.get(initial.requestId!)?.pendingResponseEvidence, undefined);
 });
 
+test("mixed-adapter structured replies recover from the receiving task log and retain followup direction", () => {
+  for (const required of [false, true]) {
+    const { persistence, store, initial, reply } = fixture(required, { source: "codex", target: "dsh" });
+    const prompt = "Accepted structured reply from the other adapter";
+    store.bindResponseEvidence(reply, prompt);
+    const restarted = new AgentRequestStore(persistence);
+    assert.equal(recoverAgentResponseDelivery(restarted, "source", reply.deliveryId,
+      () => [prompt]).status, "receipt_recovered");
+    const original = restarted.get(initial.requestId!)!;
+    assert.equal(original.status, "responded");
+    assert.equal(original.response?.deliveryId, reply.deliveryId);
+    assert.deepEqual(original.response?.by, reply.source);
+    assert.equal(original.response?.result, reply.result);
+    assert.equal(original.response?.nextAction, reply.nextAction);
+    if (reply.requestId) {
+      const followup = restarted.get(reply.requestId)!;
+      assert.equal(followup.status, "awaiting_response");
+      assert.deepEqual(followup.source, reply.source);
+      assert.deepEqual(followup.target, reply.target);
+    } else assert.equal(restarted.list().length, 1);
+    const saved = structuredClone(persistence.value);
+    assert.equal(recoverAgentResponseDelivery(restarted, "source", reply.deliveryId,
+      () => { throw new Error("recorded delivery must not reread or resend"); }).status, "already_recorded");
+    assert.deepEqual(persistence.value, saved);
+  }
+});
+
+test("recovery still requires a receipt-capable receiver and strict structured evidence for a logless sender", () => {
+  const receiver = fixture(false, { source: "dsh", target: "codex" });
+  receiver.store.bindResponseEvidence(receiver.reply, "accepted response");
+  assert.equal(recoverAgentResponseDelivery(receiver.store, "source", receiver.reply.deliveryId,
+    () => { throw new Error("unsupported receiving log must not be read"); }).status, "adapter_has_no_receipt_log");
+  assert.equal(receiver.store.get(receiver.initial.requestId!)?.status, "awaiting_response");
+  for (const promptHash of [undefined, "", "not-a-sha256"]) {
+    const { persistence, store, initial, reply, message } = fixture(false, { source: "codex", target: "dsh" });
+    if (promptHash !== undefined) {
+      store.bindResponseEvidence(reply, message);
+      const records = store.list();
+      records.find(record => record.id === initial.requestId)!.pendingResponseEvidence!.promptHash = promptHash;
+      persistence.write({ version: 1, requests: Object.fromEntries(records.map(record => [record.id, record])) });
+    }
+    const restarted = new AgentRequestStore(persistence);
+    const saved = structuredClone(persistence.value);
+    assert.equal(recoverAgentResponseDelivery(restarted, "source", reply.deliveryId,
+      () => [message]).status, "adapter_has_no_receipt_log");
+    assert.deepEqual(persistence.value, saved);
+  }
+});
+
+test("mixed-adapter recovery rejects altered body and structured reservation or party identities", () => {
+  const mutations: Array<[string, (preparation: AgentCommunicationPreparation) => void]> = [
+    ["delivery", preparation => { preparation.deliveryId = "wrong-delivery"; }],
+    ["reply request", preparation => { preparation.inReplyToRequestId = "wrong-original"; }],
+    ["followup request", preparation => { preparation.requestId = "wrong-followup"; }],
+    ["source adapter", preparation => { preparation.source.agentAdapter = "codex"; }],
+    ["target adapter", preparation => { preparation.target.agentAdapter = "dsh"; }],
+    ["source task", preparation => { preparation.source.threadId = "wrong-source"; }],
+    ["target task", preparation => { preparation.target.threadId = "wrong-target"; }],
+    ["source workspace", preparation => { preparation.source.workspace = "C:/wrong"; }],
+    ["target workspace", preparation => { preparation.target.workspace = "C:/wrong"; }]
+  ];
+  for (const [name, mutate] of mutations) {
+    const { persistence, store, initial, reply } = fixture(true, { source: "codex", target: "dsh" });
+    const prompt = "Accepted original mixed-adapter body";
+    store.bindResponseEvidence(reply, prompt);
+    const records = store.list();
+    mutate(records.find(record => record.id === initial.requestId)!.pendingResponseEvidence!.preparation);
+    persistence.write({ version: 1, requests: Object.fromEntries(records.map(record => [record.id, record])) });
+    const restarted = new AgentRequestStore(persistence);
+    const saved = structuredClone(persistence.value);
+    assert.equal(recoverAgentResponseDelivery(restarted, "source", reply.deliveryId,
+      () => [prompt]).status, "delivery_unconfirmed", name);
+    assert.deepEqual(persistence.value, saved, name);
+  }
+  const { persistence, store, reply } = fixture(false, { source: "codex", target: "dsh" });
+  store.bindResponseEvidence(reply, "Exact accepted body");
+  const saved = structuredClone(persistence.value);
+  assert.equal(recoverAgentResponseDelivery(store, "source", reply.deliveryId,
+    () => ["Exact accepted body altered"]).status, "delivery_unconfirmed");
+  assert.deepEqual(persistence.value, saved);
+});
+
+test("mixed-adapter followup reservation cannot change adapter or task direction", () => {
+  const mutations: Array<[string, (record: AgentRequestRecord) => void]> = [
+    ["source adapter", record => { record.source.agentAdapter = "codex"; }],
+    ["target adapter", record => { record.target.agentAdapter = "dsh"; }],
+    ["source task", record => { record.source.threadId = "wrong-source"; }],
+    ["target task", record => { record.target.threadId = "wrong-target"; }],
+    ["source workspace", record => { record.source.workspace = "C:/wrong"; }],
+    ["target workspace", record => { record.target.workspace = "C:/wrong"; }]
+  ];
+  for (const [name, mutate] of mutations) {
+    const { persistence, store, reply } = fixture(true, { source: "codex", target: "dsh" });
+    const prompt = "Accepted original mixed-adapter body";
+    store.bindResponseEvidence(reply, prompt);
+    const records = store.list();
+    mutate(records.find(record => record.id === reply.requestId)!);
+    persistence.write({ version: 1, requests: Object.fromEntries(records.map(record => [record.id, record])) });
+    const restarted = new AgentRequestStore(persistence);
+    const saved = structuredClone(persistence.value);
+    assert.equal(recoverAgentResponseDelivery(restarted, "source", reply.deliveryId,
+      () => [prompt]).status, "identity_mismatch", name);
+    assert.deepEqual(persistence.value, saved, name);
+  }
+});
+
 test("failed evidence persistence prevents a false in-memory receipt", () => {
   const { persistence, store, reply } = fixture(false);
   persistence.write = () => { throw new Error("disk failure"); };
@@ -63,11 +170,11 @@ test("failed receipt persistence retains recoverable evidence for a same-process
     () => ["accepted prompt"]).status, "receipt_recovered");
 });
 
-function fixture(required = true) {
+function fixture(required = true, adapters: { source: AgentAdapterType; target: AgentAdapterType } = { source: "codex", target: "codex" }) {
   const persistence = new MemoryPersistence();
   const store = new AgentRequestStore(persistence);
-  const source = { threadId: "source", agentAdapter: "codex" as const, agentType: "agent", workspace: "C:\\repo" };
-  const target = { ...source, threadId: "target" };
+  const source = { threadId: "source", agentAdapter: adapters.source, agentType: "agent", workspace: "C:\\repo" };
+  const target = { ...source, threadId: "target", agentAdapter: adapters.target };
   const initial = store.prepare({ source, target, responsePolicy: "required", responseInstruction: "修复" });
   store.commit(initial);
   const reply = store.prepare({ source: target, target: source,

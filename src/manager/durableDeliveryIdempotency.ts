@@ -53,6 +53,20 @@ export type DurableDeliveryOptions<TResult> = {
   executionLeaseMs?: number;
 };
 
+export type DurableDeliveryVerification<TResult> =
+  | { state: "completed"; result: TResult }
+  | { state: "uncertain"; reason: string };
+
+/** Internal trusted-callers only. Verification must prove the original delivery
+ * from authoritative evidence; this primitive never sends or authorizes retry. */
+export type DurableDeliveryReconcileOptions<TResult> = {
+  rootDir: string;
+  namespace: string;
+  deliveryId: unknown;
+  payload: unknown;
+  verify: (receipt: Readonly<DurableDeliveryReceipt<TResult>>) => Promise<DurableDeliveryVerification<TResult>>;
+};
+
 const RECEIPT_VERSION = 1;
 const DEFAULT_WAIT_MS = 5_000;
 const DEFAULT_EXECUTION_LEASE_MS = 15 * 60_000;
@@ -225,6 +239,8 @@ function requestDigest(payload: unknown): string {
   return createHash("sha256").update(stableJson(payload), "utf8").digest("hex");
 }
 
+export { requestDigest as durableDeliveryRequestDigest };
+
 export function normalizeDurableDeliveryId(value: unknown): string {
   const deliveryId = String(value || "").trim();
   if (!deliveryId) throw new Error("Missing deliveryId.");
@@ -244,9 +260,9 @@ export function durableDeliveryReceiptPath(rootDir: string, namespace: string, d
   return path.join(path.resolve(rootDir), "data", normalizedNamespace(namespace), fileName);
 }
 
-function parseReceipt<TResult>(filePath: string): DurableDeliveryReceipt<TResult> | null {
+function parseReceiptRaw<TResult>(raw: string, readMtimeMs: () => number): DurableDeliveryReceipt<TResult> | null {
   try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<DurableDeliveryReceipt<TResult>>;
+    const parsed = JSON.parse(raw) as Partial<DurableDeliveryReceipt<TResult>>;
     if (
       parsed.version !== RECEIPT_VERSION
       || !parsed.deliveryId
@@ -256,10 +272,18 @@ function parseReceipt<TResult>(filePath: string): DurableDeliveryReceipt<TResult
     if (parsed.state === "sending" && parsed.renewal === "mtime"
       && Number.isFinite(parsed.leaseDurationMs) && Number(parsed.leaseDurationMs) > 0) {
       parsed.leaseExpiresAt = new Date(
-        fs.statSync(filePath).mtimeMs + Number(parsed.leaseDurationMs)
+        readMtimeMs() + Number(parsed.leaseDurationMs)
       ).toISOString();
     }
     return parsed as DurableDeliveryReceipt<TResult>;
+  } catch {
+    return null;
+  }
+}
+
+function parseReceipt<TResult>(filePath: string): DurableDeliveryReceipt<TResult> | null {
+  try {
+    return parseReceiptRaw<TResult>(fs.readFileSync(filePath, "utf8"), () => fs.statSync(filePath).mtimeMs);
   } catch {
     return null;
   }
@@ -443,6 +467,113 @@ function receiptExecutionActive(receipt: DurableDeliveryReceipt<unknown>): boole
   if (sameHostOwnerGone(receipt)) return false;
   const leaseExpiresAt = Date.parse(String(receipt.leaseExpiresAt || ""));
   return Number.isFinite(leaseExpiresAt) && leaseExpiresAt > Date.now();
+}
+
+export type DurableDeliveryReceiptSnapshot<TResult> = Readonly<{
+  receipt: Readonly<DurableDeliveryReceipt<TResult>>;
+  revision: string;
+}>;
+
+/** Read-only proof input, including active owners. No reservation or mutation. */
+export function readDurableDeliveryReceiptSnapshot<TResult>(
+  rootDir: string,
+  namespace: string,
+  deliveryId: string
+): DurableDeliveryReceiptSnapshot<TResult> | null {
+  const normalizedId = normalizeDurableDeliveryId(deliveryId);
+  const filePath = durableDeliveryReceiptPath(rootDir, namespace, normalizedId);
+  try {
+    const before = fs.statSync(filePath);
+    const raw = fs.readFileSync(filePath, "utf8");
+    // Parse exactly the bytes whose digest enters the revision. A second
+    // receipt read could associate another version's fields with this raw hash.
+    const receipt = parseReceiptRaw<TResult>(raw, () => before.mtimeMs);
+    const after = fs.statSync(filePath);
+    if (!receipt || receipt.deliveryId !== normalizedId || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs
+      || before.size !== after.size || before.dev !== after.dev || before.ino !== after.ino
+      || fs.readFileSync(filePath, "utf8") !== raw) return null;
+    const revision = JSON.stringify([
+      createHash("sha256").update(raw, "utf8").digest("hex"),
+      after.mtimeMs, after.ctimeMs, after.size, after.dev, after.ino
+    ]);
+    return { receipt, revision };
+  } catch {
+    return null;
+  }
+}
+
+export type DurableDeliveryReconcileOutcome<TResult> =
+  | { state: "completed"; deliveryId: string; duplicate: boolean; result: TResult;
+      settlement: "committed" | "not_attempted" }
+  | Exclude<DurableDeliveryOutcome<TResult>, { state: "completed" }>;
+
+/** Reconcile only an existing receipt. Completed receipts are replayed, never
+ * overwritten. Any failed proof, CAS, lock, persistence or readback fails closed. */
+export async function reconcileDurableDelivery<TResult>(
+  options: DurableDeliveryReconcileOptions<TResult>
+): Promise<DurableDeliveryReconcileOutcome<TResult>> {
+  const deliveryId = normalizeDurableDeliveryId(options.deliveryId);
+  const pending = (state: "in_progress" | "uncertain" | "conflict", reason: string) =>
+    ({ state, deliveryId, duplicate: true, reason });
+  const uncertain = (reason: string) => pending("uncertain", reason);
+  try {
+    const digest = requestDigest(options.payload);
+    const snapshot = readDurableDeliveryReceiptSnapshot<TResult>(options.rootDir, options.namespace, deliveryId);
+    if (!snapshot) return uncertain("The delivery receipt is missing, unreadable or unstable; do not resend.");
+    const current = snapshot.receipt;
+    if (current.requestDigest !== digest) {
+      return pending("conflict", "The deliveryId belongs to a different payload.");
+    }
+    if (current.state === "completed") {
+      return current.result === undefined ? uncertain("The completed receipt has no result.")
+        : { state: "completed", deliveryId, duplicate: true, result: current.result, settlement: "not_attempted" };
+    }
+    if (receiptExecutionActive(current)) {
+      return pending("in_progress", "An active execution owns this delivery; do not resend.");
+    }
+    // Give the trusted verifier its own copy so it cannot mutate the CAS input.
+    const verification = await options.verify(structuredClone(current));
+    if (!verification || verification.state !== "completed" || verification.result === undefined) {
+      return uncertain(verification?.state === "uncertain" && typeof verification.reason === "string"
+        ? verification.reason : "Verification did not prove a completed delivery.");
+    }
+    return withReceiptMutationLock(options.rootDir, options.namespace, deliveryId, () => {
+      const latest = readDurableDeliveryReceiptSnapshot<TResult>(options.rootDir, options.namespace, deliveryId);
+      if (!latest) return uncertain("The receipt disappeared or became unreadable during verification.");
+      if (latest.receipt.requestDigest !== digest) {
+        return pending("conflict", "The receipt payload changed during verification.");
+      }
+      if (latest.receipt.state === "completed") {
+        return latest.receipt.result === undefined ? uncertain("The completed receipt has no result.")
+          : { state: "completed" as const, deliveryId, duplicate: true, result: latest.receipt.result, settlement: "not_attempted" as const };
+      }
+      if (receiptExecutionActive(latest.receipt)) {
+        return pending("in_progress", "An active execution acquired this delivery during verification.");
+      }
+      if (latest.revision !== snapshot.revision) return uncertain("The receipt snapshot changed during verification.");
+      const committed = writeReceipt(options.rootDir, options.namespace, {
+        ...latest.receipt,
+        state: "completed",
+        updatedAt: new Date().toISOString(),
+        result: verification.result,
+        error: undefined,
+        executionId: undefined,
+        ownerHost: undefined,
+        ownerPid: undefined,
+        leaseExpiresAt: undefined,
+        leaseDurationMs: undefined,
+        renewal: undefined
+      });
+      const readback = readDurableDeliveryReceiptSnapshot<TResult>(options.rootDir, options.namespace, deliveryId);
+      if (!readback || stableJson(readback.receipt) !== stableJson(JSON.parse(JSON.stringify(committed)))) {
+        return uncertain("The reconciled receipt could not be verified after persistence; do not resend.");
+      }
+      return { state: "completed" as const, deliveryId, duplicate: true, result: readback.receipt.result as TResult,
+        settlement: "committed" as const };
+    });
+  } catch {
+    return uncertain("Receipt reconciliation failed; preserve the original deliveryId and do not resend.");
+  }
 }
 
 function claimReceipt<TResult>(input: Readonly<{

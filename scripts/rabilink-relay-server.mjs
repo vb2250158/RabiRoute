@@ -3787,7 +3787,16 @@ function adminPageHtml() {
     .mark { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 8px; background: linear-gradient(135deg, var(--brand), #0f8b8d); color: var(--brand-ink); font-weight: 900; }
     h1 { margin: 0; font-size: clamp(22px, 3vw, 32px); line-height: 1.1; letter-spacing: 0; }
     .subtitle { margin-top: 4px; color: var(--muted); font-size: 14px; }
-    .grid { display: grid; grid-template-columns: minmax(280px, 380px) 1fr; gap: 16px; align-items: start; }
+    .grid { display: grid; grid-template-columns: minmax(240px, 280px) minmax(0, 1fr); gap: 20px; align-items: start; }
+    .sidebar { position: sticky; top: 20px; min-width: 0; }
+    .app-view { min-width: 0; }
+    .app-nav { display: grid; gap: 4px; }
+    .app-nav-item { display: grid; gap: 6px; width: 100%; padding: 14px; border: 1px solid transparent; background: transparent; text-align: left; color: var(--ink); }
+    .app-nav-item:hover { background: var(--soft); }
+    .app-nav-item[aria-current="true"] { background: var(--soft); border-color: var(--accent); }
+    .app-nav-item strong { color: var(--title); overflow-wrap: anywhere; }
+    .app-nav-item span { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+    .app-nav .empty { padding: 18px 12px; }
     .card { position: relative; background: rgba(255, 255, 255, .92); border: 1px solid var(--line); border-radius: 8px; padding: 18px; box-shadow: 0 10px 24px rgba(15, 23, 42, .07); backdrop-filter: blur(14px); }
     .card.combo-layer { z-index: 60; }
     .card + .card { margin-top: 16px; }
@@ -3909,7 +3918,7 @@ function adminPageHtml() {
     .dot { display: inline-flex; align-items: center; min-height: 26px; border-radius: 999px; padding: 4px 9px; background: var(--soft); color: #0f8b8d; font-size: 12px; font-weight: 760; }
     .dot.idle { background: #eef1f0; color: var(--muted); }
     .log-list { display: grid; gap: 8px; max-height: 360px; overflow: auto; padding-right: 2px; }
-    .device-log-toolbar { display: grid; grid-template-columns: repeat(3, minmax(140px, 1fr)) minmax(180px, 1.5fr) auto; gap: 8px; margin-bottom: 12px; }
+    .device-log-toolbar { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(0, 1.5fr) auto; gap: 8px; margin-bottom: 12px; }
     .device-log-toolbar select, .device-log-toolbar input { width: 100%; min-height: 38px; border: 1px solid rgba(17, 32, 51, .18); border-radius: 6px; background: #fff; color: var(--ink); padding: 0 10px; }
     .log-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: start; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: rgba(255, 255, 255, .74); }
     .log-title { color: var(--title); font-weight: 850; overflow-wrap: anywhere; }
@@ -3921,9 +3930,15 @@ function adminPageHtml() {
     .log-text { margin-top: 6px; border-left: 3px solid rgba(25, 191, 193, .32); padding-left: 8px; color: var(--ink); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
     .empty { padding: 28px; text-align: center; color: var(--muted); border: 1px dashed rgba(17, 32, 51, .18); border-radius: 8px; background: rgba(255, 255, 255, .7); }
     .hidden { display: none !important; }
+    @media (max-width: 1100px) {
+      .meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .device-log-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
     @media (max-width: 820px) {
       .topbar { align-items: start; flex-direction: column; }
       .grid { grid-template-columns: 1fr; }
+      .sidebar { position: static; }
+      .app-nav { max-height: 260px; overflow: auto; }
       .meta { grid-template-columns: 1fr; }
       .shell { width: min(100% - 20px, 1160px); padding-top: 18px; }
       .device-log-toolbar { grid-template-columns: 1fr; }
@@ -3956,7 +3971,7 @@ function adminPageHtml() {
     </div>
 
     <section class="grid">
-      <div>
+      <aside class="sidebar">
         <div id="loginCard" class="card">
           <div class="title-row">
             <div>
@@ -3978,6 +3993,17 @@ function adminPageHtml() {
           </div>
         </div>
 
+        <div id="appsCard" class="card hidden">
+          <div class="title-row">
+            <div class="title">应用列表</div>
+            <button id="newAppButton" type="button">新建应用</button>
+          </div>
+          <nav id="appNavigation" class="app-nav" aria-label="应用列表"></nav>
+          <div id="empty" class="empty">还没有应用，点击“新建应用”开始。</div>
+        </div>
+      </aside>
+
+      <div id="appView" class="app-view hidden">
         <div id="appCard" class="card hidden">
           <div class="title-row">
             <div>
@@ -3991,38 +4017,35 @@ function adminPageHtml() {
           </div>
           <div class="actions">
             <button id="createAppButton" class="primary">创建应用</button>
+            <button id="cancelCreateAppButton" type="button">取消</button>
           </div>
         </div>
-      </div>
+        <div id="appDetailsCard" class="card hidden">
+          <div class="title-row">
+            <div>
+              <div class="title">应用详情</div>
+              <div class="note">管理所选应用的 token、通讯 PC 和眼镜绑定。</div>
+            </div>
+          </div>
+          <div id="apps" class="app-list"></div>
+        </div>
 
-      <div>
-        <div class="card">
+        <div id="workersCard" class="card hidden">
           <div class="title-row">
             <div>
               <div class="title">已连接的 PC Rabi</div>
-              <div class="note">这里只显示具备任务、WebGUI、人格同步或语音处理能力的 PC；手机、眼镜、手表和耳机终端不会计入，也不会提供 PC WebGUI 入口。</div>
+              <div class="note">显示所选应用下的 PC，点击“打开 PC WebGUI”管理对应电脑。</div>
             </div>
           </div>
           <div id="workers" class="worker-list"></div>
           <div id="workersEmpty" class="empty">还没有 PC Rabi 上线。启动已绑定服务器 token 的 RabiRoute 后会自动出现。</div>
         </div>
 
-        <div class="card">
-          <div class="title-row">
-            <div>
-              <div class="title">应用列表</div>
-              <div class="note">卡片默认显示 token 预览，登录后可以随时复制完整 token；每个应用可以指定要通讯的 Rabi PC。</div>
-            </div>
-          </div>
-          <div id="apps" class="app-list"></div>
-          <div id="empty" class="empty">还没有应用。先登录或完成首次注册，然后创建一个 RabiLink 应用。</div>
-        </div>
-
         <div id="logsCard" class="card hidden">
           <div class="title-row">
             <div>
               <div class="title">最近日志</div>
-              <div class="note">只显示当前账号的脱敏事件，用来确认插件、PC Rabi 和远程 WebGUI 是否连通。</div>
+              <div class="note">显示所选应用的脱敏事件，用来确认设备和 PC Rabi 是否连通。</div>
             </div>
             <button id="refreshLogsButton" type="button">刷新日志</button>
           </div>
@@ -4034,7 +4057,7 @@ function adminPageHtml() {
           <div class="title-row">
             <div>
               <div class="title">眼镜云日志</div>
-              <div class="note">集中查看当前账号下所有眼镜应用上报的脱敏日志；可按设备、来源、级别和关键词筛选。</div>
+              <div class="note">查看所选应用的眼镜日志，可按设备、来源、级别和关键词筛选。</div>
             </div>
           </div>
           <div class="device-log-toolbar">
@@ -4055,7 +4078,7 @@ function adminPageHtml() {
     const apiBase = "/manage/api";
     const credentialStorageKey = "rabilinkManageCredentials";
     const legacyCredentialStorageKey = "rabilinkAdminCredentials";
-    const state = { account: null, apps: [], workers: [], logs: [], deviceLogs: [], deviceLogFacets: {}, revealed: {}, credentials: loadCredentials(), setupRequired: false };
+    const state = { account: null, apps: [], selectedAppId: "", creatingApp: false, workers: [], logs: [], deviceLogs: [], deviceLogFacets: {}, revealed: {}, credentials: loadCredentials(), setupRequired: false };
     let logStream = null;
     let logStreamAccountId = "";
     const el = (id) => document.getElementById(id);
@@ -4157,6 +4180,10 @@ function adminPageHtml() {
         state.workers = body.workers || [];
         state.logs = body.logs || [];
         state.setupRequired = Boolean(body.setupRequired);
+        if (!state.apps.some((app) => app.id === state.selectedAppId)) {
+          state.selectedAppId = state.apps[0]?.id || "";
+          resetDeviceLogFilters();
+        }
         if (state.account?.username) {
           const pathAccount = consoleAccountFromPath();
           if (pathAccount && pathAccount !== state.account.username) {
@@ -4233,6 +4260,9 @@ function adminPageHtml() {
           body: JSON.stringify({ name: el("appName").value, notes: el("appNotes").value })
         });
         if (body.app?.token) state.revealed[body.app.id] = body.app.token;
+        state.selectedAppId = body.app.id;
+        state.creatingApp = false;
+        resetDeviceLogFilters();
         el("appNotes").value = "";
         flash("notice", "应用已创建，可随时复制完整 token。");
         await load();
@@ -4272,8 +4302,10 @@ function adminPageHtml() {
     }
 
     async function loadDeviceLogs() {
-      if (!state.account) return;
+      if (!state.account || !state.selectedAppId) return;
+      const appId = state.selectedAppId;
       const params = new URLSearchParams({ limit: "200", deviceKind: "glasses" });
+      params.set("appId", appId);
       const deviceId = el("deviceLogDevice").value;
       const source = el("deviceLogSource").value;
       const level = el("deviceLogLevel").value;
@@ -4284,6 +4316,7 @@ function adminPageHtml() {
       if (query) params.set("query", query);
       try {
         const body = await request(apiBase + "/device-logs?" + params.toString());
+        if (appId !== state.selectedAppId || !state.account) return;
         state.deviceLogs = body.logs || [];
         state.deviceLogFacets = body.facets || {};
         renderDeviceLogs();
@@ -4528,8 +4561,9 @@ function adminPageHtml() {
     function renderWorkers() {
       const container = el("workers");
       container.innerHTML = "";
-      el("workersEmpty").classList.toggle("hidden", state.workers.length > 0);
-      for (const worker of state.workers) {
+      const workers = workersForApp(state.selectedAppId);
+      el("workersEmpty").classList.toggle("hidden", workers.length > 0);
+      for (const worker of workers) {
         const node = document.createElement("div");
         node.className = "worker";
         node.innerHTML =
@@ -4567,8 +4601,9 @@ function adminPageHtml() {
     function renderLogs() {
       const container = el("logs");
       container.innerHTML = "";
-      el("logsEmpty").classList.toggle("hidden", state.logs.length > 0);
-      for (const log of state.logs) {
+      const logs = state.logs.filter((log) => log.appId === state.selectedAppId);
+      el("logsEmpty").classList.toggle("hidden", logs.length > 0);
+      for (const log of logs) {
         const node = document.createElement("div");
         node.className = "log-item";
         node.innerHTML =
@@ -4737,15 +4772,51 @@ function adminPageHtml() {
       container.appendChild(panel); lock(false); void readback();
     }
 
+    function resetDeviceLogFilters() {
+      state.deviceLogs = [];
+      state.deviceLogFacets = {};
+      for (const field of ["deviceLogDevice", "deviceLogSource", "deviceLogLevel", "deviceLogQuery"]) el(field).value = "";
+    }
+
+    function selectApp(id) {
+      closeCombos();
+      state.selectedAppId = id;
+      state.creatingApp = false;
+      resetDeviceLogFilters();
+      render();
+      loadDeviceLogs();
+    }
+
+    function renderAppNavigation() {
+      const container = el("appNavigation");
+      container.innerHTML = "";
+      for (const app of state.apps) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "app-nav-item";
+        button.setAttribute("aria-current", String(!state.creatingApp && app.id === state.selectedAppId));
+        button.innerHTML = '<strong></strong><span></span>';
+        button.querySelector("strong").textContent = app.name;
+        const workers = workersForApp(app.id);
+        button.querySelector("span").textContent = (app.enabled === false ? "已停用" : "已启用") + " · " + workers.filter((worker) => worker.online).length + " 台 PC 在线";
+        button.addEventListener("click", () => selectApp(app.id));
+        container.appendChild(button);
+      }
+    }
+
     function render() {
       if (!state.account || [...pendingProfileWrites].some(panel => panel.profileOwnerId !== state.account.id)) { pendingProfileWrites.clear(); el("apps").innerHTML = ""; }
       if (pendingProfileWrites.size) return; // Preserve frozen uncertain writes during unrelated UI refreshes.
       const loggedIn = Boolean(state.account);
+      const selectedApp = state.apps.find((item) => item.id === state.selectedAppId);
+      const showDetails = loggedIn && Boolean(selectedApp) && !state.creatingApp;
       el("loginCard").classList.toggle("hidden", loggedIn && !state.setupRequired);
-      el("appCard").classList.toggle("hidden", !loggedIn);
-      el("logsCard").classList.toggle("hidden", !loggedIn);
-      el("deviceLogsCard").classList.toggle("hidden", !loggedIn);
-      el("logoutButton").classList.toggle("hidden", !state.credentials);
+      el("appsCard").classList.toggle("hidden", !loggedIn);
+      el("appView").classList.toggle("hidden", !loggedIn);
+      el("appCard").classList.toggle("hidden", !loggedIn || (!state.creatingApp && Boolean(selectedApp)));
+      for (const id of ["appDetailsCard", "workersCard", "logsCard", "deviceLogsCard"]) el(id).classList.toggle("hidden", !showDetails);
+      el("cancelCreateAppButton").classList.toggle("hidden", !selectedApp);
+      el("logoutButton").classList.toggle("hidden", !loggedIn);
       el("setupPill").textContent = state.setupRequired ? "首次初始化" : "已初始化";
       el("setupPill").classList.toggle("warn", state.setupRequired);
       el("accountPill").textContent = state.account ? "账号：" + state.account.username : "未登录";
@@ -4754,6 +4825,7 @@ function adminPageHtml() {
       el("authTitle").textContent = state.setupRequired ? "首次注册" : "登录";
       el("authNote").textContent = state.setupRequired ? "创建服务器上的第一个管理账号。" : "每个浏览器只保留一个当前登录账号，用于进入 RabiLink服务器控制台。";
       el("registerButton").textContent = state.setupRequired ? "创建第一个账号" : "新增账号";
+      renderAppNavigation();
       renderWorkers();
       renderLogs();
       renderDeviceLogs();
@@ -4761,7 +4833,7 @@ function adminPageHtml() {
       const container = el("apps");
       container.innerHTML = "";
       el("empty").classList.toggle("hidden", state.apps.length > 0);
-      for (const app of state.apps) {
+      for (const app of showDetails ? [selectedApp] : []) {
         const token = app.tokenPreview || (state.revealed[app.id] ? "完整 token 已加载" : "");
         const node = document.createElement("div");
         node.className = "app";
@@ -4825,6 +4897,12 @@ function adminPageHtml() {
       passwordInput.focus();
     });
     el("createAppButton").addEventListener("click", createApp);
+    el("newAppButton").addEventListener("click", () => {
+      state.creatingApp = true;
+      render();
+      el("appName").focus();
+    });
+    el("cancelCreateAppButton").addEventListener("click", () => selectApp(state.selectedAppId));
     document.addEventListener("click", (event) => {
       if (!event.target.closest(".combo")) closeCombos();
     });
@@ -4837,6 +4915,9 @@ function adminPageHtml() {
       clearCredentials();
       state.account = null;
       state.apps = [];
+      state.selectedAppId = "";
+      state.creatingApp = false;
+      state.revealed = {};
       state.workers = [];
       state.logs = [];
       state.deviceLogs = [];
@@ -5798,7 +5879,7 @@ async function handleAdminApi(req, url, res) {
       to: url.searchParams.get("to") || ""
     };
     const logs = readDeviceLogs({ directory: deviceLogDir, accountId: auth.account.id, ...query });
-    const facetRows = readDeviceLogs({ directory: deviceLogDir, accountId: auth.account.id, limit: 500 });
+    const facetRows = readDeviceLogs({ directory: deviceLogDir, accountId: auth.account.id, appId: query.appId, deviceKind: query.deviceKind, limit: 500 });
     return sendJson(res, 200, {
       code: 0,
       ok: true,

@@ -14,6 +14,7 @@ import {
   CodexHookContextService,
   parseCodexHookControl,
   type CodexHookContextRequest,
+  type CodexHookContextServiceOptions,
   type PlanTaskCompletionDelivery
 } from "./codexHookContext.js";
 import { assertLocalPersonaOwner } from "./localPersonaOwner.js";
@@ -30,6 +31,7 @@ function fixture(options: {
   isManagedAgentSession?: (request: CodexHookContextRequest) => boolean;
   recordAgentRequestStop?: (request: CodexHookContextRequest) => { status: "scheduled"; reason: string; requestIds: string[]; turnId?: string };
   planStorageReady?: () => boolean;
+  memoryConsolidationInputIds?: CodexHookContextServiceOptions["memoryConsolidationInputIds"];
 } = {}): { root: string; rolesRoot: string; roleDir: string; storePath: string; service: CodexHookContextService } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-codex-hook-"));
   const rolesRoot = path.join(root, "roles");
@@ -83,10 +85,94 @@ function fixture(options: {
       hookEnabled: options.hookEnabled,
       isManagedAgentSession: options.isManagedAgentSession,
       recordAgentRequestStop: options.recordAgentRequestStop,
-      planStorageReady: options.planStorageReady
+      planStorageReady: options.planStorageReady,
+      memoryConsolidationInputIds: options.memoryConsolidationInputIds
     })
   };
 }
+
+test("dedicated consolidation hook scopes explicit run inputs and omits unrelated knowledge", (t) => {
+  const { root, roleDir, service } = fixture({
+    memoryConsolidationInputIds: (_request, _roleId, runId) => runId === "run-example"
+      ? { runId, inputMemoryIds: ["memory-hook"] }
+      : { inputMemoryIds: [] }
+  });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(roleDir, "memory", "recent", "memory-other.json"), JSON.stringify({
+    id: "memory-other", title: "不相关记忆", focus: "不相关记忆", content: "专用会话不得接触",
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), keywords: ["专用会话"]
+  }));
+  service.bindSession("session-dedicated", "YeYu");
+  const result = service.handleContext({
+    sessionId: "session-dedicated", eventName: "UserPromptSubmit", turnId: "turn-dedicated",
+    prompt: "执行整理。\nrunId：run-example\n统一管理 触发器和注入器 专用会话",
+    managerBaseUrl: "http://127.0.0.1:8790"
+  });
+  assert.match(result.additionalContext, /memory-hook/);
+  assert.doesNotMatch(result.additionalContext, /plan-hook|memory-other|可用技能：|按需读取：.*\/plans|必须先按 GET 路径读取每一项/);
+  assert.equal(listRecentMemories(roleDir).find((item) => item.id === "memory-other")?.viewedAt, undefined);
+});
+
+test("dedicated session fails closed without a verified run and replaces the prior turn on new prompt", (t) => {
+  const seenRunIds: Array<string | undefined> = [];
+  const { root, roleDir, storePath, service } = fixture({
+    memoryConsolidationInputIds: (_request, _roleId, runId) => {
+      seenRunIds.push(runId);
+      return runId === "run-first" ? { runId, inputMemoryIds: ["memory-hook"] } : { inputMemoryIds: [] };
+    }
+  });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  service.bindSession("session-dedicated", "YeYu");
+  const common = { sessionId: "session-dedicated", managerBaseUrl: "http://127.0.0.1:8790" };
+  assert.equal(service.handleContext({ ...common, eventName: "SessionStart" }).additionalContext, "");
+  assert.equal(service.handleContext({ ...common, eventName: "UserPromptSubmit", turnId: "first", prompt: "runId：run-first\n执行本次整理" }).binding?.activeRunId, "run-first");
+  assert.equal(JSON.parse(fs.readFileSync(storePath, "utf8")).sessions["session-dedicated"].activeRunId, "run-first");
+  const reloaded = new CodexHookContextService({ rolesRoot: () => path.join(root, "roles"), storePath,
+    memoryConsolidationInputIds: (_request, _roleId, runId) => {
+      seenRunIds.push(runId);
+      return runId === "run-first" ? { runId, inputMemoryIds: ["memory-hook"] } : { inputMemoryIds: [] };
+    } });
+  assert.match(reloaded.handleContext({ ...common, eventName: "PreToolUse", turnId: "first", toolName: "search", toolInput: "触发器和注入器" }).additionalContext, /memory-hook/);
+  const newPrompt = reloaded.handleContext({ ...common, eventName: "UserPromptSubmit", turnId: "second", prompt: "请处理下一件事：触发器和注入器" });
+  assert.equal(newPrompt.binding?.activeRunId, undefined);
+  assert.deepEqual(newPrompt.binding?.consolidationInputMemoryIds, []);
+  assert.doesNotMatch(newPrompt.additionalContext, /memory-hook|plan-hook|处理前上下文确认/);
+  const later = reloaded.handleContext({ ...common, eventName: "PostToolUse", turnId: "first", toolName: "search", toolResponse: "触发器和注入器" });
+  assert.doesNotMatch(later.additionalContext, /memory-hook|plan-hook/);
+  assert.deepEqual(seenRunIds, [undefined, "run-first", "run-first", undefined, undefined]);
+  assert.equal(listRecentMemories(roleDir).find((item) => item.id === "memory-hook")?.viewedAt !== undefined, true);
+});
+
+test("late tool checkpoint cannot replace a newer dedicated run", (t) => {
+  const { root, service } = fixture({ memoryConsolidationInputIds: (_request, _roleId, runId) =>
+    runId ? { runId, inputMemoryIds: ["memory-hook"] } : { inputMemoryIds: [] } });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  service.bindSession("session-dedicated", "YeYu");
+  const common = { sessionId: "session-dedicated", managerBaseUrl: "http://127.0.0.1:8790" };
+  service.handleContext({ ...common, eventName: "UserPromptSubmit", turnId: "turn-one", prompt: "runId：run-one" });
+  service.handleContext({ ...common, eventName: "UserPromptSubmit", turnId: "turn-two", prompt: "runId：run-two" });
+  const late = service.handleContext({ ...common, eventName: "PostToolUse", turnId: "turn-one", toolName: "search", toolResponse: "触发器和注入器" });
+  assert.equal(late.additionalContext, "");
+  assert.equal(late.binding?.activeRunId, "run-two");
+  assert.equal(service.getBinding("session-dedicated")?.activeRunId, "run-two");
+});
+
+test("unverified or ambiguous run markers cannot inject remembered candidates", (t) => {
+  const { root, service } = fixture({ memoryConsolidationInputIds: (_request, _roleId, runId) =>
+    runId === "run-valid" ? { runId, inputMemoryIds: ["memory-hook"] } : { inputMemoryIds: [] } });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  service.bindSession("session-dedicated", "YeYu");
+  for (const prompt of [
+    "runId：run-unknown\n触发器和注入器",
+    "文本 runId：run-valid\n触发器和注入器",
+    "runId：run-valid\nrunId：run-other\n触发器和注入器"
+  ]) {
+    const result = service.handleContext({ sessionId: "session-dedicated", eventName: "UserPromptSubmit",
+      turnId: "turn-unknown", prompt, managerBaseUrl: "http://127.0.0.1:8790" });
+    assert.equal(result.binding?.activeRunId, undefined);
+    assert.doesNotMatch(result.additionalContext, /memory-hook|plan-hook|处理前上下文确认/);
+  }
+});
 
 test("Stop completion is rejected before internal plan reads or mutations while recovery is not ready", async (t) => {
   let deliveries = 0;
@@ -192,7 +278,8 @@ test("a changed project file produces one Stop reminder for the bound plan", asy
     cwd: root,
     toolName: "apply_patch",
     toolInput: "*** Begin Patch\n*** Update File: src/example.ts\n*** End Patch",
-    toolResponse: "Done!"
+    toolResponse: "Done!",
+    managerBaseUrl: "http://127.0.0.1:8790"
   });
   const first = await service.handleHook({
     sessionId: "session-plan-worker",
@@ -255,7 +342,7 @@ test("read-only, failed, and out-of-workspace tools do not create a plan reminde
     { turnId: "turn-read", toolName: "exec_command", toolInput: { cmd: "rg TODO" }, toolResponse: "ok" },
     { turnId: "turn-failed", toolName: "apply_patch", toolInput: "*** Begin Patch\n*** Update File: src/nope.ts\n*** End Patch", toolResponse: "Patch failed" },
     { turnId: "turn-outside", toolName: "apply_patch", toolInput: "*** Begin Patch\n*** Update File: C:/outside/nope.ts\n*** End Patch", toolResponse: "Done!" }
-  ]) service.handleContext({ sessionId: "session-plan-worker", eventName: "PostToolUse", cwd: root, ...request });
+  ]) service.handleContext({ sessionId: "session-plan-worker", eventName: "PostToolUse", cwd: root, managerBaseUrl: "http://127.0.0.1:8790", ...request });
   for (const turnId of ["turn-read", "turn-failed", "turn-outside"]) {
     const result = await service.handleHook({ sessionId: "session-plan-worker", eventName: "Stop", turnId, cwd: root });
     assert.equal(result.projectFileChangeReminder?.status, "ignored");
@@ -402,6 +489,7 @@ test("legacy context injection mode restores full indexes", (t) => {
   const result = service.handleContext({
     sessionId: "session-legacy",
     eventName: "UserPromptSubmit",
+    managerBaseUrl: "http://127.0.0.1:8790",
     prompt: "[rabi:use YeYu]"
   });
   assert.match(result.additionalContext, /plan-hook/);
@@ -417,6 +505,7 @@ test("focused context is materially smaller than legacy context for the same rol
   const focused = service.handleContext({
     sessionId: "session-size-focused",
     eventName: "UserPromptSubmit",
+    managerBaseUrl: "http://127.0.0.1:8790",
     prompt: "[rabi:use YeYu]"
   }).additionalContext;
   fs.writeFileSync(path.join(roleDir, "personaConfig.json"), JSON.stringify({
@@ -425,6 +514,7 @@ test("focused context is materially smaller than legacy context for the same rol
   const legacy = service.handleContext({
     sessionId: "session-size-legacy",
     eventName: "UserPromptSubmit",
+    managerBaseUrl: "http://127.0.0.1:8790",
     prompt: "[rabi:use YeYu]"
   }).additionalContext;
 
@@ -435,10 +525,11 @@ test("prompt recall uses roleKnowledgeSnapshot and refreshes memory viewedAt", (
   const { root, roleDir, service } = fixture();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   service.bindSession("session-recall", "YeYu");
-  service.handleContext({ sessionId: "session-recall", eventName: "SessionStart", source: "startup" });
+  service.handleContext({ sessionId: "session-recall", eventName: "SessionStart", source: "startup", managerBaseUrl: "http://127.0.0.1:8790" });
   const result = service.handleContext({
     sessionId: "session-recall",
     eventName: "UserPromptSubmit",
+    managerBaseUrl: "http://127.0.0.1:8790",
     prompt: "这个 Hook 应该只是触发器和注入器"
   });
   assert.match(result.additionalContext, /memory-hook/);
@@ -463,16 +554,18 @@ test("reasoning hooks inject new keyword matches once per turn", (t) => {
   const { root, roleDir, service } = fixture();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   service.bindSession("session-reasoning", "YeYu");
-  service.handleContext({ sessionId: "session-reasoning", eventName: "SessionStart", source: "startup" });
+  service.handleContext({ sessionId: "session-reasoning", eventName: "SessionStart", source: "startup", managerBaseUrl: "http://127.0.0.1:8790" });
   service.handleContext({
     sessionId: "session-reasoning",
     eventName: "UserPromptSubmit",
+    managerBaseUrl: "http://127.0.0.1:8790",
     turnId: "turn-1",
     prompt: "继续处理"
   });
   const pre = service.handleContext({
     sessionId: "session-reasoning",
     eventName: "PreToolUse",
+    managerBaseUrl: "http://127.0.0.1:8790",
     turnId: "turn-1",
     toolName: "Bash",
     toolUseId: "tool-1",
@@ -484,6 +577,7 @@ test("reasoning hooks inject new keyword matches once per turn", (t) => {
   const duplicatePost = service.handleContext({
     sessionId: "session-reasoning",
     eventName: "PostToolUse",
+    managerBaseUrl: "http://127.0.0.1:8790",
     turnId: "turn-1",
     toolName: "Bash",
     toolUseId: "tool-1",
@@ -498,6 +592,7 @@ test("reasoning hooks inject new keyword matches once per turn", (t) => {
   const nextTurn = service.handleContext({
     sessionId: "session-reasoning",
     eventName: "PostToolUse",
+    managerBaseUrl: "http://127.0.0.1:8790",
     turnId: "turn-2",
     toolName: "Bash",
     toolUseId: "tool-2",
@@ -510,10 +605,11 @@ test("irrelevant reasoning hooks remain silent", (t) => {
   const { root, service } = fixture();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   service.bindSession("session-quiet", "YeYu");
-  service.handleContext({ sessionId: "session-quiet", eventName: "SessionStart" });
+  service.handleContext({ sessionId: "session-quiet", eventName: "SessionStart", managerBaseUrl: "http://127.0.0.1:8790" });
   const result = service.handleContext({
     sessionId: "session-quiet",
     eventName: "PreToolUse",
+    managerBaseUrl: "http://127.0.0.1:8790",
     turnId: "turn-quiet",
     toolName: "Bash",
     toolInput: { command: "npm test" }

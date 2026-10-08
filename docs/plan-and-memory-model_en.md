@@ -89,12 +89,18 @@ data/roles/<RoleId>/
   plans/active/<planId>/
     plan.json
     history.jsonl
+    history/000001.jsonl
+    history/000002.jsonl
+    ...
     feedback.jsonl
     attachments/
     feedback-attachments/<feedbackId>/
   plans/archive/<planId>/
     plan.json
     history.jsonl
+    history/000001.jsonl
+    history/000002.jsonl
+    ...
     feedback.jsonl
     attachments/
     feedback-attachments/<feedbackId>/
@@ -501,7 +507,7 @@ The read endpoint returns complete `records` after collapsing delivery-state upd
 
 ## Plan revision history
 
-The plan JSON is the current-state record. Every create, update, and archive also appends a full plan snapshot to that plan directory's `history.jsonl`. The snapshots retain the steps, approval contract, status, and timestamps from that point, so later Agents can review the actual plan before and after an approval result.
+The plan JSON is the current-state record. Every create, update, and archive appends a full plan snapshot. History starts in the same plan directory's `history.jsonl` and rotates in append order to consecutively numbered `history/000001.jsonl`, `history/000002.jsonl`, and so on when the current file reaches its size limit. Reads combine the files in that order; existing plans containing only `history.jsonl` remain readable. Ordinary rotation changes physical layout only: it is not plan archival, memory consolidation, or deletion. Ordinary rotation preserves existing file bytes without reserializing old records. Archiving a directory or migrating its legacy name may rewrite managed absolute paths in history; in that case, complete records are repartitioned without loss or reordering. Name migration stages rewritten outputs and a recovery receipt before moving the directory; recovery reuses the staged outputs rather than partially rewritten files. Each file is limited to 16 MiB, and the entire plan package is limited to 96 MiB; writes exceeding the total package limit are still rejected, even with rotation. Snapshots retain the steps, approval contract, status, and timestamps from that point, so later Agents can review the actual plan before and after an approval result.
 
 ```http
 GET /api/roles/:roleId/plans/:planId/history

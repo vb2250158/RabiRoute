@@ -15,6 +15,16 @@
 
 ## 受控绕过
 
+取原消息或下载附件时，先用当前 Manager 的受管 QQ 接口（完整合同见 [Rabi Agent 接口](../../../docs/rabi-agent-interfaces.md#qq-原消息历史分页与附件下载)）：
+
+```http
+GET /api/agent/qq/history?routeId=<routeId>&kind=group&target=<groupId>&limit=50
+GET /api/agent/qq/messages/<messageId>?routeId=<routeId>&kind=group&target=<groupId>
+GET <managerBaseUrl><attachments[index].contentUrl>
+```
+
+历史页沿 `nextCursor` 翻页，空页或 `cursorStalled=true` 时停止；私聊改为 `kind=private`。附件地址来自 Manager 返回值，下载二进制并核对非空文件；不要把视频缩略图当成视频，也不要自行传 NapCat 文件路径或 URL。消息缓存失效时 Manager 自动回查同会话的有界历史页。接口仅限直接本机回环管理调用，远端权限拒绝不能通过直连 NapCat 绕过；附件下载可能触发 NapCat 的媒体缓存。部署未提供该接口或已核对无法覆盖时，才按下面规则降级。
+
 - 动态发现及有界重试仍失败、接口不可用，或已核对接口无法覆盖所需历史时，才绕过。成功且完整的空结果不触发连接故障降级；摘要窗口不足属于能力不足。鉴权拒绝不得靠旁路逃避权限；独立本地读取必须已有授权及访问权限。
 - Rabi 可用时，从当前 Route 绑定和状态定位 NapCat；Rabi 不可用时，只用当前任务明确提供的连接、当前运行实例配置或已确认的正式日志位置。配置文件存在不代表实例在线。
 - 不从旧任务、记忆、安装残留或示例端口选择账号，不逐个尝试历史账号。直连前通过当前配置的 `get_status`、`get_login_info` 核对在线状态和账号身份，再用只读 `get_group_msg_history`、`get_msg` 查询指定目标。凭据只在请求中使用，不回显；身份不符则停止该连接查询。

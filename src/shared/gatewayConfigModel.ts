@@ -146,6 +146,8 @@ export type MessageAdapterPolicy = {
   outputEnabled?: boolean;
   supportedOutputs?: MessagePayloadKind[];
   allowedFileRoots?: string[];
+  /** Exact QQ group IDs allowed for Agent metadata reads; independent of output and file-upload policy. */
+  readableGroupFileIds?: string[];
   messageGrouping?: MessageGroupingPolicy;
 };
 
@@ -966,6 +968,11 @@ function normalizePathList(value: unknown): string[] {
     .filter(Boolean))];
 }
 
+export function normalizeReadableGroupFileIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((item): item is string => typeof item === "string" && /^[1-9][0-9]{0,15}$/.test(item)))].slice(0, 128);
+}
+
 export function normalizeMessageAdapterPolicy(
   value: unknown,
   adapterType: MessageEndpointType,
@@ -977,6 +984,7 @@ export function normalizeMessageAdapterPolicy(
     outputEnabled: raw.outputEnabled ?? true,
     supportedOutputs: normalizePayloadKinds(raw.supportedOutputs, adapterType),
     allowedFileRoots: normalizePathList(raw.allowedFileRoots),
+    readableGroupFileIds: adapterType === "napcat" ? normalizeReadableGroupFileIds(raw.readableGroupFileIds) : [],
     messageGrouping: normalizeMessageGroupingPolicy(raw.messageGrouping, adapterType)
   };
 }

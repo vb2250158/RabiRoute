@@ -15,6 +15,16 @@ Use this reference for requests such as “check the group,” “read the group
 
 ## Controlled bypass
 
+For original messages and attachments, first use the current Manager's managed QQ endpoints (see the [Agent API contract](../../../docs/rabi-agent-interfaces_en.md#qq-messages-history-pages-and-attachment-downloads)):
+
+```http
+GET /api/agent/qq/history?routeId=<routeId>&kind=group&target=<groupId>&limit=50
+GET /api/agent/qq/messages/<messageId>?routeId=<routeId>&kind=group&target=<groupId>
+GET <managerBaseUrl><attachments[index].contentUrl>
+```
+
+Follow `nextCursor`; stop on an empty page or `cursorStalled=true`. Use `kind=private` for direct messages. Download the Manager-provided attachment URL as binary and check the nonempty file. Do not substitute a video thumbnail or supply a NapCat path or URL. Manager retries expired message-cache lookups through a bounded page in the same conversation. These operations require direct loopback management access; a remote permission denial does not authorize bypassing through NapCat. Downloads may populate NapCat's media cache. Use the fallback below only when the deployed operation is absent or its verified coverage is insufficient.
+
 - Bypass only if dynamic discovery and a bounded retry still fail, the interface is unavailable, or you have verified that it cannot cover the required history. A successful, complete empty result does not trigger connection-failure fallback; an insufficient summary window is a capability limitation. Do not bypass an authentication denial to evade permissions; independent local reads must already be authorized and have the necessary access permissions.
 - When Rabi is available, locate NapCat from current Route bindings and status. When Rabi is unavailable, use only a connection explicitly provided by the current task, the current running instance's configuration, or a confirmed official log location. The existence of a configuration file does not prove that the instance is online.
 - Do not select an account from old tasks, memories, installation remnants, or example ports; do not try historical accounts one by one. Before direct access, use `get_status` and `get_login_info` through the current configuration to verify online status and account identity, then query the specified target with the read-only `get_group_msg_history` and `get_msg`. Use credentials only in requests; never echo them. Stop querying that connection if the identity does not match.

@@ -263,6 +263,7 @@ import {
   type PlanTaskCompletionDelivery,
 } from "./codexHookContext.js";
 import { handleCodexHookApi, hookContextRequest } from "./codexHookRoutes.js";
+import { memoryConsolidationHookScope } from "./memoryConsolidationHookScope.js";
 import { handleLanguageStyleApi } from "./languageStyleRoutes.js";
 import { handlePluginCatalogApi } from "./pluginCatalogRoutes.js";
 import { createSourcePatchHostService, ManagerSourcePatchService } from "./sourcePatchService.js";
@@ -1564,6 +1565,14 @@ const codexHookContextService = new CodexHookContextService({
   deliverPlanTaskCompletion,
   hookEnabled: codexHookEnabled,
   isManagedAgentSession,
+  memoryConsolidationInputIds: (request, roleId, runId) => memoryConsolidationHookScope(
+    request, roleId, runId,
+    routeCatalogConfig.gateways.map((definition) => ({
+      roleId: roleIdForDefinition(definition),
+      roleDir: roleDirForDefinition(definition),
+      dataDir: dataDirFor(definition)
+    }))
+  ),
   recordAgentRequestStop,
   assertSessionPersonaOwner: sessionId => {
     configuredPersonaDefinitionsForSession(sessionId)
@@ -8792,7 +8801,7 @@ function managerHealthPayload(): Record<string, unknown> {
     + watchIncidentCount;
   return {
     protocolVersion: 1,
-    applicationGenerationId: managerHostIdentity?.applicationGenerationId,
+    applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
     managerInstanceId: managerInstanceId || undefined,
     managerBaseUrl: managerBaseUrl || undefined,
     health: buildManagerHealthSnapshot({
@@ -8822,7 +8831,7 @@ function metaPayload(): Record<string, unknown> {
     version,
     health: healthPayload.health,
     githubUrl: "https://github.com/vb2250158/RabiRoute",
-    applicationGenerationId: managerHostIdentity?.applicationGenerationId,
+    applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
     managerInstanceId: managerInstanceId || undefined,
     managerBaseUrl: managerBaseUrl || undefined,
     managerPort,
@@ -9801,6 +9810,26 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       handleCodexHookApi,
       jsonResponse,
       managerPluginRoutes,
+      qqDiagnostics: {
+        route: (routeId: string) => runtimes.get(routeId)?.definition,
+        approvedBinding: (nodeId: string, agentId: string) => lanAgentAuthority.getApprovedAgentBinding(nodeId, agentId),
+        isAgentEnabled: (nodeId: string, agentId: string) => lanAgentAuthority.isAgentEnabled(nodeId, agentId),
+        readStatus: (definition: GatewayDefinition) => readGatewayStatus(definition),
+        routeRunning: (routeId: string) => Boolean(runtimes.get(routeId)?.process && runtimes.get(routeId)?.readiness === "ready"),
+        routeStartedAt: (routeId: string) => runtimes.get(routeId)?.startedAt ?? undefined,
+        jsonResponse
+      },
+      groupFiles: {
+        route: (routeId: string) => runtimes.get(routeId)?.definition,
+        approvedBinding: (nodeId: string, agentId: string) => lanAgentAuthority.getApprovedAgentBinding(nodeId, agentId),
+        isAgentEnabled: (nodeId: string, agentId: string) => lanAgentAuthority.isAgentEnabled(nodeId, agentId),
+        jsonResponse
+      },
+      qqMessages: {
+        local: (request: http.IncomingMessage) => isLoopbackRemoteAddress(request.socket.remoteAddress),
+        route: (routeId: string) => runtimes.get(routeId)?.definition,
+        json: jsonResponse
+      },
       performAgentSend: (request: AgentSendRequest, options: { remoteSource?: TrustedLanAgentSource } = {}) => {
         const source = options.remoteSource;
         return performAgentSend(request, {

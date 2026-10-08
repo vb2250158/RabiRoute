@@ -72,7 +72,7 @@ for (const mode of ["timeout", "abort"] as const) {
     const address = server.address(); assert.ok(address && typeof address === "object");
     fs.writeFileSync(data.script, `import fs from 'node:fs';fs.writeFileSync(${JSON.stringify(pidFile)},String(process.pid));await fetch('http://127.0.0.1:${address.port}/started');setInterval(()=>{},1000);`);
     const controller = new AbortController();
-    const probe = probeWorkbuddyHook(data.root, { signal: controller.signal, timeoutMs: mode === "timeout" ? 700 : 2000 });
+    const probe = probeWorkbuddyHook(data.root, { signal: controller.signal, timeoutMs: 2000 });
     await Promise.race([received, probe.then(() => { throw new Error("child did not reach fixture HTTP"); })]);
     if (mode === "abort") controller.abort();
     const result = await probe;

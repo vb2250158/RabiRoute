@@ -106,6 +106,12 @@ Manager 的本地监听与 Relay 连接相互独立：Manager 先在操作系统
 
 远程 WebGUI 使用 `/manage` 登录 Cookie；PC worker 使用独立的 RabiLink 应用 token。Relay 不会把应用 token、管理 Cookie 或局域网 `webgui_token` 转发给本机 Manager，也不会把三种认证边界合并。
 
+## 登录后的应用管理
+
+登录 `/manage` 后，左侧列出当前账号的应用。点击应用，右侧显示该应用的详情、token 操作、通讯 PC、眼镜 SN 绑定，以及所属 PC 和日志。刷新保留当前选择；创建后选中新应用，删除当前应用后切到剩余的第一个应用。没有应用时，右侧显示创建表单；也可点击左侧“新建应用”进入表单。窄屏按应用列表、应用详情的顺序上下排列。
+
+PC 列表、最近事件和眼镜日志随应用选择切换，眼镜日志筛选项也限定在所选应用。账号管理认证和应用 token 的授权边界保持不变。
+
 ## RabiLink 原生只读主页
 
 主页不再嵌入 `/admin` 或 `/manage`。浏览器只调用 Manager `GET /api/rabi/link-home`；Manager 使用服务端保存的应用 token 调用配置 Relay 的固定 `GET /api/rabilink/peers`，仅向主页返回当前应用内电脑名、标识、在线状态和服务白名单，不透传上游原始对象、凭据或其他应用信息。token 不进入主页浏览器或 URL；此入口只读，不代理任意路径，不授予管理权限。

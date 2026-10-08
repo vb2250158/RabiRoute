@@ -1,7 +1,9 @@
 {
   "schemaVersion": 2,
   "readyRequires": [
-    "manager.core@1"
+    "manager.core@1",
+    "manager.diagnostics@1",
+    "manager.agent-communication@1"
   ],
   "instances": [
     {

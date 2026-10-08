@@ -116,7 +116,7 @@ Manager 的 31 个内置插件与树外插件统一使用 schema/profile v2。�
 
 | 输出 | 当前行为 |
 | --- | --- |
-| QQ / NapCat | 必须明确群/私聊目标；支持 text/image/voice/file；群文件必须通过 `allowedFileRoots`，使用 `upload_group_file`；群聊必须提交 `params.replyToMessageId`，真实 ID 生成引用回复段，空字符串表示明确不引用，省略字段则返回可行动错误。引用消息含图片时还必须按原图顺序提交 `replyImageDescriptions`；发送成功后，每张图片旁保存同名 `.md` 说明和 Agent 会话映射。 |
+| QQ / NapCat | 必须明确群/私聊目标；支持 text/image/voice/file，以及把 Markdown 文本在本机浏览器渲染成 PNG 后作为图片发送。图片消息可用有序 `segments` 把文字、图片和 Markdown 图排成一条消息；本地图片逐张校验 `allowedFileRoots`。群文件使用 `upload_group_file`。群聊必须提交 `params.replyToMessageId`，真实 ID 生成引用回复段，空字符串表示明确不引用，省略字段则返回可行动错误。引用消息含图片时还必须按原图顺序提交 `replyImageDescriptions`；发送成功后，每张来源图片旁保存同名 `.md` 说明和 Agent 会话映射。 |
 | WeCom | 必须提供明确 `params.chatId`；使用 SDK 发送，受 adapter policy 限制。 |
 | 个人微信 | 仅支持回复已收到消息并保存了 context token 的来源会话；可发送文本，或发送消息端策略允许且位于 `allowedFileRoots` 内的本地文件。不能主动向任意联系人发消息；图片、语音和视频的专用发送类型未实现。 |
 | 飞书 | 仅支持文本，回复到原始 `chat_id`；要求应用凭据、事件订阅确认和 adapter 出站 policy。不会回退到通用 Webhook。 |

@@ -1,5 +1,84 @@
 import { config, type NapCatInstanceConfig } from "./config.js";
 
+const GROUP_FILE_RESPONSE_BYTES = 256 * 1024;
+const GROUP_FILE_PAGE_ENTRIES = 50;
+const GROUP_FILE_FIELD_CHARS = 256;
+
+export type GroupFileMetadata = { fileId: string; fileName: string; fileSize?: number; uploadTime?: number; uploader?: string; busid?: number };
+export type GroupFolderMetadata = { folderId: string; folderName: string; totalFileCount?: number };
+export type GroupFilesPage = {
+  files: GroupFileMetadata[];
+  folders: GroupFolderMetadata[];
+  completenessUnknown: true;
+  potentiallyTruncated: true;
+  projectionTruncated: boolean;
+};
+
+function object(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function bounded(value: unknown, max = GROUP_FILE_FIELD_CHARS): string | undefined {
+  return typeof value === "string" && value.length > 0 && value.length <= max && !/[\x00-\x1f\x7f]/.test(value) ? value : undefined;
+}
+
+function nonnegative(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+/** A single bounded projection, not a paginated or exhaustive directory listing. */
+export function parseNapCatGroupFiles(value: unknown): GroupFilesPage {
+  const envelope = object(value);
+  if (!envelope || envelope.status !== "ok" || envelope.retcode !== 0) throw new Error("Invalid group file envelope");
+  const data = object(envelope.data);
+  if (!data || !Array.isArray(data.files) || !Array.isArray(data.folders)) throw new Error("Invalid group file data");
+  const files: GroupFileMetadata[] = [];
+  const folders: GroupFolderMetadata[] = [];
+  for (const entry of data.files.slice(0, GROUP_FILE_PAGE_ENTRIES)) {
+    const file = object(entry);
+    const fileId = bounded(file?.file_id);
+    const fileName = bounded(file?.file_name);
+    if (!fileId || !fileName) continue;
+    files.push({ fileId, fileName, fileSize: nonnegative(file?.file_size), uploadTime: nonnegative(file?.upload_time),
+      uploader: typeof file?.uploader === "number" && Number.isSafeInteger(file.uploader) && file.uploader >= 0 ? String(file.uploader) : bounded(file?.uploader, 32),
+      busid: nonnegative(file?.busid) });
+  }
+  for (const entry of data.folders.slice(0, GROUP_FILE_PAGE_ENTRIES - files.length)) {
+    const folder = object(entry);
+    const folderId = bounded(folder?.folder_id);
+    const folderName = bounded(folder?.folder_name);
+    if (!folderId || !folderName) continue;
+    folders.push({ folderId, folderName, totalFileCount: nonnegative(folder?.total_file_count) });
+  }
+  return { files, folders, completenessUnknown: true, potentiallyTruncated: true,
+    projectionTruncated: data.files.length > GROUP_FILE_PAGE_ENTRIES || data.folders.length > GROUP_FILE_PAGE_ENTRIES - files.length };
+}
+
+/** Only the two documented read actions; no generic action dispatch, redirect, download or token-bearing error. */
+export async function readNapCatGroupFiles(endpoint: NapCatEndpoint, groupId: string, folderId?: string, transport: typeof fetch = fetch): Promise<GroupFilesPage> {
+  const action = folderId === undefined ? "get_group_root_files" : "get_group_files_by_folder";
+  const response = await transport(`${endpoint.httpUrl}/${action}`, {
+    method: "POST", redirect: "error", cache: "no-store", signal: AbortSignal.timeout(3000),
+    headers: { "content-type": "application/json; charset=utf-8", ...(endpoint.accessToken ? { authorization: `Bearer ${endpoint.accessToken}` } : {}) },
+    body: JSON.stringify({ group_id: groupId, ...(folderId === undefined ? {} : { folder_id: folderId }), file_count: GROUP_FILE_PAGE_ENTRIES })
+  });
+  if (!response.ok || Number(response.headers.get("content-length")) > GROUP_FILE_RESPONSE_BYTES || !response.body) throw new Error("Group file upstream unavailable");
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > GROUP_FILE_RESPONSE_BYTES) throw new Error("Group file response too large");
+      chunks.push(value);
+    }
+  } finally { await reader.cancel().catch(() => undefined); }
+  return parseNapCatGroupFiles(JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown);
+}
+
+
 export type OneBotMessageSegment = {
   type: string;
   data: Record<string, unknown>;

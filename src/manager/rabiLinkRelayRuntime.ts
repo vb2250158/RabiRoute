@@ -427,6 +427,9 @@ function safeLocalUrl(config: RabiLinkRelayRuntimeConfig, pathname: string): str
     if (checkedPath === "/api/speech/model-management/settings") {
       throw new Error("Model directory settings are available only in the local WebGUI.");
     }
+    if (checkedPath === "/api/agent/qq/history" || checkedPath.startsWith("/api/agent/qq/messages/")) {
+      throw new Error("QQ message and attachment reads require direct local management access.");
+    }
     if (decodedPath === encodedPath || !/%[0-9a-f]{2}/i.test(decodedPath)) break;
     encodedPath = decodedPath;
   }

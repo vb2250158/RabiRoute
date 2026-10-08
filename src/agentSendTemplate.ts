@@ -68,11 +68,11 @@ export function agentSendRequestTemplateForSource(context: Record<string, unknow
     styleValidation: 1,
     params,
     payload: {
-      type: "<有可核对的图片时填 image，否则填 text>",
-      text: "<这里填写要发送的正文；type=image 时这里仍要写清图片来源类型与关注点>",
+      type: "<纯文字填 text；图片填 image；NapCat Markdown 转图片填 markdown；多段混排仍填 image>",
+      text: "<填写正文及图片来源类型与关注点；type=markdown 时填 Markdown 源文；多段混排时删除 text/path，改填有序 segments：text、image 或 markdown 段>",
       // Only NapCat carries a local path; other channels resolve media by URL or their own id.
       ...(channel === "napcat"
-        ? { path: "<type=image 时填写授权目录内已实际查看过的图片路径，例如 C:\\Data\\CottonProject\\PangHu\\output\\xx.png>" }
+        ? { path: "<单图时填写授权目录内已实际查看过的图片路径；Markdown 或多段混排时删除此字段>" }
         : {})
     },
     ...(context.messageProcessingRequirementId

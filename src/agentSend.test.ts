@@ -168,6 +168,189 @@ test("strict send contract rejects missing explicit channel parameters", () => {
   }), /styleValidation must be 1 .* or 0/);
 });
 
+test("NapCat ordered image payload validates its segments and preserves all caption text", () => {
+  const base: AgentSendRequest = {
+    deliveryId: "ordered-image-validation",
+    sender: { agentType: "codex", sessionId: "thread-ordered-image" },
+    routeId: "route-main",
+    channel: "napcat",
+    params: { target: "group", groupId: "456", replyToMessageId: "" },
+    payload: { type: "image", segments: [
+      { type: "text", text: "第一段" }, { type: "image", path: "one.png" },
+      { type: "text", text: "第二段" }, { type: "image", url: "https://example.invalid/two.png" }
+    ] }
+  };
+  const prepared = prepareAgentSendRequest(base);
+  assert.equal(prepared.internal.text, "第一段\n第二段");
+  assert.deepEqual((prepared.internal.payload as Record<string, unknown>).segments, (base.payload as Record<string, unknown>).segments);
+  const invalid = (payload: unknown) => () => prepareAgentSendRequest({ ...base, payload });
+  assert.throws(invalid({ type: "image", segments: [] }), /1 to 32/);
+  assert.throws(invalid({ type: "image", segments: [{ type: "text", text: "only text" }] }), /1 to 16 images/);
+  assert.throws(invalid({ type: "image", text: "ambiguous", segments: [{ type: "image", path: "one.png" }] }), /cannot be combined/);
+  assert.throws(invalid({ type: "image", segments: [{ type: "image", path: "one.png", url: "https:\/\/example.invalid\/one.png" }] }), /exactly one/);
+  assert.throws(invalid({ type: "image", segments: [{ type: "image", path: "one.png", extra: true }] }), /unsupported fields: extra/);
+  assert.throws(invalid({ type: "image", segments: [{ type: "voice", path: "one.wav" }] }), /must be text, image, or markdown/);
+  assert.throws(() => prepareAgentSendRequest({ ...base, channel: "wecom", params: { chatId: "x" } }), /requires channel=napcat/);
+});
+
+test("NapCat Markdown payload accepts source text and rejects ambiguous fields", () => {
+  const request: AgentSendRequest = {
+    deliveryId: "markdown-validation",
+    sender: { agentType: "codex", sessionId: "thread-markdown" },
+    routeId: "route-main", channel: "napcat",
+    params: { target: "group", groupId: "456", replyToMessageId: "" },
+    payload: { type: "markdown", text: "# 标题\n\n**正文**" }
+  };
+  const prepared = prepareAgentSendRequest(request);
+  assert.equal(prepared.internal.payloadType, "image");
+  assert.equal(prepared.internal.text, "# 标题\n\n**正文**");
+  assert.throws(() => prepareAgentSendRequest({ ...request, payload: { type: "markdown", text: "# 标题", path: "x.png" } }), /payload.text only/);
+  assert.throws(() => prepareAgentSendRequest({ ...request, channel: "wecom", params: { chatId: "x" } }), /requires channel=napcat/);
+  assert.throws(() => prepareAgentSendRequest({ ...request, payload: { type: "markdown", text: "" } }), /payload.text/);
+  const mixed = prepareAgentSendRequest({ ...request, payload: { type: "image", segments: [
+    { type: "text", text: "前言" }, { type: "markdown", text: "| A | B |\n|---|---|\n| 1 | 2 |" }
+  ] } });
+  assert.equal(mixed.internal.text, "前言\n| A | B |\n|---|---|\n| 1 | 2 |");
+});
+
+test("NapCat renders Markdown to a PNG image segment in the ordered message", async (t) => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-markdown-send-"));
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
+  const imageDir = path.join(rootDir, "images");
+  fs.mkdirSync(imageDir);
+  const localImage = path.join(imageDir, "first.png");
+  fs.writeFileSync(localImage, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  const sent: Array<{ path: string; message: Array<{ type: string; data: Record<string, string> }> }> = [];
+  await withJsonServer((body, request) => {
+    sent.push({ path: request.url ?? "", message: body.message as Array<{ type: string; data: Record<string, string> }> });
+    return { status: "ok", retcode: 0, data: { message_id: sent.length } };
+  }, async url => {
+    const opts = options(rootDir, url);
+    opts.runtimes[0].messageAdapterPolicies!.napcat = {
+      outputEnabled: true, supportedOutputs: ["text", "image"], allowedFileRoots: [imageDir]
+    };
+    const request: AgentSendRequest = {
+      deliveryId: "markdown-group-send",
+      sender: { agentType: "codex", sessionId: "thread-markdown-send" },
+      routeId: "route-main", channel: "napcat",
+      params: { target: "group", groupId: "456", replyToMessageId: "" },
+      payload: { type: "image", segments: [
+        { type: "text", text: "前言" }, { type: "image", path: localImage },
+        { type: "markdown", text: "# 报告\n\n| 项目 | 结果 |\n|---|---|\n| 图文 | 通过 |" },
+        { type: "text", text: "结尾" }
+      ] }
+    };
+    assert.equal((await handleAgentSend(request, opts)).status, "sent");
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].path, "/send_group_msg");
+    assert.deepEqual(sent[0].message.map(segment => segment.type), ["text", "image", "image", "text"]);
+    assert.equal(sent[0].message[0].data.text, "前言");
+    assert.equal(sent[0].message[1].data.file, localImage);
+    assert.equal(sent[0].message[3].data.text, "结尾");
+    const renderedFile = sent[0].message[2].data.file;
+    assert.ok(renderedFile.startsWith("base64://"));
+    const png = Buffer.from(renderedFile.slice("base64://".length), "base64");
+    assert.deepEqual([...png.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+    assert.equal(png.readUInt32BE(16), 1000);
+    const privateSend = await handleAgentSend({
+      ...request, deliveryId: "markdown-private-send",
+      params: { target: "private", userId: "789" },
+      payload: { type: "markdown", text: "## 私聊报告\n\n**已完成**" }
+    }, opts);
+    assert.equal(privateSend.status, "sent");
+    assert.equal(sent.length, 2);
+    assert.equal(sent[1].path, "/send_private_msg");
+    assert.equal(sent[1].message[0].type, "image");
+  });
+});
+
+test("Markdown rendering failure leaves NapCat unsent", async (t) => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-markdown-failure-"));
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
+  const previous = process.env.RABIROUTE_MARKDOWN_BROWSER_PATH;
+  process.env.RABIROUTE_MARKDOWN_BROWSER_PATH = path.join(rootDir, "missing-browser.exe");
+  t.after(() => {
+    if (previous === undefined) delete process.env.RABIROUTE_MARKDOWN_BROWSER_PATH;
+    else process.env.RABIROUTE_MARKDOWN_BROWSER_PATH = previous;
+  });
+  let sendCount = 0;
+  await withJsonServer(() => {
+    sendCount++;
+    return { status: "ok", retcode: 0, data: { message_id: 1 } };
+  }, async url => {
+    const opts = options(rootDir, url);
+    opts.runtimes[0].messageAdapterPolicies!.napcat = { outputEnabled: true, supportedOutputs: ["image"] };
+    const result = await handleAgentSend({
+      deliveryId: "markdown-render-failure",
+      sender: { agentType: "codex", sessionId: "thread-markdown-failure" },
+      routeId: "route-main", channel: "napcat",
+      params: { target: "group", groupId: "456", replyToMessageId: "" },
+      payload: { type: "markdown", text: "# Cannot render" }
+    }, opts);
+    assert.equal(result.status, "failed");
+    assert.match(result.reason ?? "", /RABIROUTE_MARKDOWN_BROWSER_PATH/);
+    assert.equal(sendCount, 0);
+  });
+});
+
+test("NapCat sends ordered text and multiple images in one group or private message", async (t) => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-ordered-images-"));
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
+  const imageDir = path.join(rootDir, "images");
+  fs.mkdirSync(imageDir);
+  const first = path.join(imageDir, "first.png");
+  const second = path.join(imageDir, "second.png");
+  fs.writeFileSync(first, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  fs.writeFileSync(second, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  const outside = path.join(rootDir, "outside.png");
+  fs.writeFileSync(outside, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  const sent: Array<{ path: string; body: Record<string, unknown> }> = [];
+  await withJsonServer((body, request) => {
+    sent.push({ path: request.url ?? "", body });
+    return { status: "ok", retcode: 0, data: { message_id: sent.length } };
+  }, async url => {
+    const opts = options(rootDir, url);
+    opts.runtimes[0].messageAdapterPolicies!.napcat = {
+      outputEnabled: true, supportedOutputs: ["text", "image"], allowedFileRoots: [imageDir]
+    };
+    const request: AgentSendRequest = {
+      deliveryId: "ordered-images-group",
+      sender: { agentType: "codex", sessionId: "thread-ordered-images" },
+      routeId: "route-main", channel: "napcat",
+      params: { target: "group", groupId: "456", instanceId: "qq-main", replyToMessageId: "" },
+      payload: { type: "image", segments: [
+        { type: "text", text: "前言 " }, { type: "image", path: first },
+        { type: "text", text: "中间" }, { type: "image", path: second },
+        { type: "text", text: "结尾" }
+      ] }
+    };
+    assert.equal((await handleAgentSend(request, opts)).status, "sent");
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].path, "/send_group_msg");
+    assert.deepEqual(sent[0].body.message, [
+      { type: "text", data: { text: "前言 " } }, { type: "image", data: { file: first } },
+      { type: "text", data: { text: "中间" } }, { type: "image", data: { file: second } },
+      { type: "text", data: { text: "结尾" } }
+    ]);
+    assert.equal((await handleAgentSend({
+      ...request, deliveryId: "ordered-images-private",
+      params: { target: "private", userId: "789", instanceId: "qq-main" }
+    }, opts)).status, "sent");
+    assert.equal(sent.length, 2);
+    assert.equal(sent[1].path, "/send_private_msg");
+    assert.deepEqual(sent[1].body.message, sent[0].body.message);
+    const blocked = await handleAgentSend({
+      ...request, deliveryId: "ordered-images-invalid-path",
+      payload: { type: "image", segments: [
+        { type: "image", path: first }, { type: "image", path: outside }
+      ] }
+    }, opts);
+    assert.equal(blocked.status, "failed");
+    assert.match(blocked.reason ?? "", /outside the configured allowedFileRoots/);
+    assert.equal(sent.length, 2, "no partial platform message may be sent");
+  });
+});
+
 test("NapCat group sends require an explicit reply choice", () => {
   assert.throws(() => prepareAgentSendRequest({
     deliveryId: "group-send-without-reply-choice",

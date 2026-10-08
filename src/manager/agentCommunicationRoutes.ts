@@ -11,6 +11,9 @@ import type { AgentRequestStore } from "../agentRequests/store.js";
 import type { AgentSendTraceQuery } from "./agentSendIdempotency.js";
 import { getTrustedLanAgentSource, hasLanAgentBodyGuard, type TrustedLanAgentSource } from "./lanAgentBodyAuthority.js";
 import { ManagerPluginRequestTracker } from "./managerPluginRequestTracker.js";
+import { handleAgentQqDiagnostics, type AgentQqDiagnosticsContext } from "./agentQqDiagnostics.js";
+import { handleAgentGroupFiles, type AgentGroupFilesContext } from "./agentGroupFiles.js";
+import { handleQqMessageRoutes, type QqMessageRoutesContext } from "./qqMessageRoutes.js";
 import type { ManagerPluginRouteHandler } from "./managerPluginRouteRegistry.js";
 
 export type AgentCommunicationHttpResponse = {
@@ -24,9 +27,17 @@ export type AgentCommunicationRoutesContext = {
   receiptResponse: (deliveryId: string) => AgentCommunicationHttpResponse;
   findSendTraces: (query: AgentSendTraceQuery) => unknown[];
   send: (request: AgentSendRequest, options?: { remoteSource?: TrustedLanAgentSource }) => Promise<AgentCommunicationHttpResponse>;
+  // Host owns authorization, original-request binding and trusted evidence callbacks.
+  maintenance?: {
+    verify: (deliveryId: string, originalRequest: AgentSendRequest, options: { remoteSource?: TrustedLanAgentSource }) => Promise<AgentCommunicationHttpResponse>;
+    settle: (deliveryId: string, originalRequest: AgentSendRequest, options: { remoteSource?: TrustedLanAgentSource }) => Promise<AgentCommunicationHttpResponse>;
+  };
   agentRequests: AgentRequestStore;
   refreshAgentRequestReminderTimers: () => void;
   publishManagerEvent: (eventType: string, data: unknown) => void;
+  qqDiagnostics: AgentQqDiagnosticsContext;
+  groupFiles: AgentGroupFilesContext;
+  qqMessages?: QqMessageRoutesContext;
 };
 
 export type AgentCommunicationRoutes = {
@@ -104,6 +115,61 @@ function handleReceipt(
     code: result.statusCode < 400 ? 0 : -1,
     ...result.body
   });
+  return true;
+}
+
+function handleReceiptMaintenance(
+  request: http.IncomingMessage,
+  requestUrl: URL,
+  response: http.ServerResponse,
+  context: AgentCommunicationRoutesContext,
+  trackOperation: TrackOperation
+): boolean {
+  const match = requestUrl.pathname.match(/^\/api\/agent\/send\/receipts\/([^/]+)\/(verify|settle)$/);
+  if (request.method !== "POST" || !match) return false;
+  const fail = (statusCode: number, errorCode: string, message: string) => {
+    context.jsonResponse(response, statusCode, { code: -1, ok: false, status: "blocked", errorCode, message });
+  };
+  if (!context.maintenance || typeof context.maintenance[match[2] as "verify" | "settle"] !== "function") {
+    fail(503, "AGENT_SEND_MAINTENANCE_UNAVAILABLE", "Receipt maintenance is unavailable.");
+    return true;
+  }
+  const maintenance = context.maintenance;
+  trackHandledOperation(Promise.resolve().then(async () => {
+    let deliveryId: string;
+    try { deliveryId = decodeURIComponent(match[1]); } catch {
+      fail(400, "AGENT_SEND_MAINTENANCE_INVALID_REQUEST", "Invalid receipt maintenance request.");
+      return;
+    }
+    const body = await context.readJsonBody<unknown>(request);
+    const isObject = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+    const originalRequest = isObject(body) ? body.originalRequest : undefined;
+    const allowedFields = ["deliveryId", "sender", "routeId", "channel", "params", "payload", "tracking", "styleValidation"];
+    if (requestUrl.search || deliveryId.length > 200 || !/^[A-Za-z0-9._:-]+$/.test(deliveryId)
+      || !isObject(body) || Object.keys(body).length !== 1 || !isObject(originalRequest)
+      || Object.keys(originalRequest).some(key => !allowedFields.includes(key))
+      || originalRequest.deliveryId !== deliveryId
+      || !isObject(originalRequest.sender)
+      || Object.keys(originalRequest.sender).some(key => !["agentType", "sessionId"].includes(key))
+      || typeof originalRequest.sender.agentType !== "string" || !originalRequest.sender.agentType.trim()
+      || typeof originalRequest.sender.sessionId !== "string" || !originalRequest.sender.sessionId.trim()
+      || typeof originalRequest.routeId !== "string" || !originalRequest.routeId.trim()
+      || typeof originalRequest.channel !== "string" || !originalRequest.channel.trim()
+      || !isObject(originalRequest.params) || !isObject(originalRequest.payload)) {
+      fail(400, "AGENT_SEND_MAINTENANCE_INVALID_REQUEST", "Invalid receipt maintenance request.");
+      return;
+    }
+    const remoteSource = getTrustedLanAgentSource(request);
+    if (hasLanAgentBodyGuard(request) && !remoteSource) {
+      fail(403, "AGENT_SEND_MAINTENANCE_SOURCE_UNAVAILABLE", "Trusted source session is unavailable.");
+      return;
+    }
+    const result = await maintenance[match[2] as "verify" | "settle"](deliveryId, originalRequest, { remoteSource });
+    context.jsonResponse(response, result.statusCode, { code: result.statusCode < 400 ? 0 : -1, ...result.body });
+  }).catch(() => {
+    // Parser and injected-handler exceptions may contain the original request or secrets.
+    fail(400, "AGENT_SEND_MAINTENANCE_FAILED", "Receipt maintenance failed; read the original receipt before further action.");
+  }), trackOperation);
   return true;
 }
 
@@ -261,7 +327,17 @@ export function handleAgentCommunicationApi(
   context: AgentCommunicationRoutesContext,
   trackOperation: TrackOperation = operation => operation
 ): boolean {
+  if (context.qqMessages && handleQqMessageRoutes(request, requestUrl, response, context.qqMessages, trackOperation)) return true;
+  if (request.method === "GET" && requestUrl.pathname === "/api/agent/qq/diagnostics") {
+    trackHandledOperation(handleAgentQqDiagnostics(request, requestUrl, response, context.qqDiagnostics).then(() => undefined), trackOperation);
+    return true;
+  }
+  if (request.method === "GET" && requestUrl.pathname === "/api/agent/qq/group-files") {
+    trackHandledOperation(handleAgentGroupFiles(request, requestUrl, response, context.groupFiles).then(() => undefined), trackOperation);
+    return true;
+  }
   return handleAgentRequests(request, requestUrl, response, context, trackOperation)
+    || handleReceiptMaintenance(request, requestUrl, response, context, trackOperation)
     || handleReceipt(request, requestUrl, response, context)
     || handleTraces(request, requestUrl, response, context)
     || handleAgentHelp(request, requestUrl, response, context)

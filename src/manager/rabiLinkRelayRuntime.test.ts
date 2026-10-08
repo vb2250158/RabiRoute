@@ -93,15 +93,17 @@ test("test HTTP server helper excludes WHATWG Fetch blocked ports", async () => 
   }
 });
 
-test("Relay never forwards local-only model directory settings", async (t) => {
+test("Relay never forwards local-only model settings or QQ message reads", async (t) => {
   let forwarded = 0;
   const local = http.createServer((request, response) => {
-    if (decodeURIComponent(request.url || "").includes("/model-management/")) forwarded += 1;
+    if (!["/api/events", "/api/speech/events"].includes(request.url || "")) forwarded += 1;
     response.end("test response");
   });
   const localPort = await listen(local);
   t.after(() => close(local));
-  const paths = ["/api/speech/model-management/settings", "/api/speech/model-management/../model-management/settings?x=1", "/api/speech/model-management/%73ettings"];
+  const paths = ["/api/speech/model-management/settings", "/api/speech/model-management/../model-management/settings?x=1", "/api/speech/model-management/%73ettings",
+    "/api/agent/qq/history?routeId=test", "/api/agent/qq/messages/123", "/api/agent/qq/messages/123/attachments/0",
+    "/api%2fagent%2fqq%2fhistory", "/api/%2561gent/qq/messages/123", "/api/other/../agent/qq/history"];
   const completed = new Set<string>();
   let claimed = false;
   const relay = http.createServer((request, response) => {
@@ -970,6 +972,11 @@ test("WebGUI drain retries inside the same generation and returns to online", as
       openRelayEvents(response);
       return;
     }
+    if (request.method === "GET" && url.pathname === "/worker/speech-requests") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, requests: [] }));
+      return;
+    }
     if (request.method === "GET" && url.pathname === "/worker/webgui-requests") {
       claimCount += 1;
       if (claimCount === 1) {
@@ -1243,6 +1250,11 @@ test("duplicate Relay availability events keep a single WebGUI drain flight", as
         response.writeHead(200, { "content-type": "application/json" });
         response.end(JSON.stringify({ ok: true, requests: [] }));
       }, 50);
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/worker/speech-requests") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, requests: [] }));
       return;
     }
     response.writeHead(404).end();

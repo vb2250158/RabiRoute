@@ -49,6 +49,7 @@ type ExecuteOptions = {
 };
 
 const RECEIPT_NAMESPACE = "agent-send-idempotency";
+export { RECEIPT_NAMESPACE as AGENT_SEND_RECEIPT_NAMESPACE };
 const MESSAGE_PROCESSING_CONTENT_DEDUPE_MS = 2 * 60 * 1_000;
 const RECENT_REPLY_TARGET_DEDUPE_MS = 10 * 60 * 1_000;
 

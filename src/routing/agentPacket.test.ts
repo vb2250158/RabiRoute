@@ -53,6 +53,82 @@ test("focused packets render one required item and gate optional remote instruct
   }
 });
 
+for (const mode of ["focused", "legacy"] as const) {
+test(`${mode} memory consolidation packet excludes non-candidates while ordinary messages keep recall`, () => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-consolidation-packet-"));
+  try {
+    const rule: NotificationRule = { id: "memory-fixture", name: "memory fixture", enabled: true, routeKinds: ["manual_trigger"], template: "" };
+    const route: RouteProfile = {
+      id: "memory-fixture", name: "memory fixture", enabled: true, recentMessageLimit: 0,
+      resolvedPipeline: resolvePipeline("agent"), agentRoleId: "ExampleRole", agentRoleFile: "persona.md",
+      rolesDir: path.dirname(roleDir), dataDir: roleDir, routeVariables: {}, notificationRules: [rule]
+    };
+    const candidate = {
+      id: "candidate-memory", title: "候选摘要", focus: "候选", content: "本轮候选正文",
+      createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", keywords: ["候选"]
+    };
+    const knowledge: RoleKnowledgeSnapshot = {
+      roleDir, plansDir: path.join(roleDir, "plans"), memoryDir: path.join(roleDir, "memory"),
+      agentInterfaceDocPath: path.resolve("docs/rabi-agent-interfaces.md"),
+      activePlans: [{ id: "unrelated-plan", title: "非候选活动计划", focus: "其他任务", status: "执行中",
+        archiveStatus: "未归档", attachments: [], steps: [], createdAt: candidate.createdAt, updatedAt: candidate.updatedAt, keywords: [] }],
+      activeSkills: [{ id: "unrelated-skill", title: "非候选活动技能", summary: "其他技能", status: "active",
+        path: "skills/unrelated-skill.md", updatedAt: candidate.updatedAt, keywords: [] }],
+      recentMemories: [candidate, { ...candidate, id: "unrelated-recent", title: "非候选近期索引" }],
+      matchedItems: [
+        { id: candidate.id, type: "recent_memory", title: "候选命中索引" },
+        { id: "unrelated-match", type: "recent_memory", title: "非候选记忆命中" },
+        { id: candidate.id, type: "consolidated_memory", title: "非候选同名沉淀记忆" },
+        { id: candidate.id, type: "plan", title: "非候选同名计划" }
+      ],
+      matchedSkills: [{ id: "unrelated-matched-skill", title: "非候选命中技能", summary: "其他技能命中", status: "active",
+        path: "skills/unrelated-matched-skill.md", updatedAt: candidate.updatedAt, keywords: [] }],
+      contextInjection: { ...DEFAULT_FOCUSED_CONTEXT_INJECTION, mode },
+      requiredReadItems: [
+        { id: candidate.id, type: "recent_memory", title: candidate.title, score: 100,
+          endpoint: "/api/roles/ExampleRole/memory/recent/candidate-memory", revisionAt: candidate.updatedAt },
+        { id: "unrelated-memory", type: "recent_memory", title: "非候选召回摘要", score: 90,
+          endpoint: "/api/roles/ExampleRole/memory/recent/unrelated-memory", revisionAt: candidate.updatedAt }
+      ],
+      pendingConsolidation: {
+        run: {
+          id: "run-example", roleDir, requestedAt: candidate.updatedAt, trigger: "manual",
+          recentEditableHours: 24, recentConsolidationHours: 72, inputMemoryIds: [candidate.id],
+          status: "requested", instruction: "只整理本轮输入记忆。"
+        },
+        memories: [candidate]
+      }
+    };
+    const packetFor = (triggerId: string) => buildPublishedAgentPacket({
+      route, routeKind: "manual_trigger",
+      record: { time: 1, source: "manual", triggerId, rawMessage: "执行本次任务" },
+      extraValues: {}, matchedRules: [rule], routeVariables: {}, routeText: "执行本次任务"
+    }, rule, { roleId: "ExampleRole", roleDir, rolePath: path.join(roleDir, "persona.md"), dataDir: roleDir }, { roleKnowledge: knowledge });
+
+    const consolidation = packetFor("memory-consolidation").content;
+    assert.match(consolidation, /\[待整理记忆\][\s\S]*本轮候选正文/);
+    assert.match(consolidation, /\[处理前上下文确认\][\s\S]*GET \/api\/roles\/ExampleRole\/memory\/recent\/candidate-memory/);
+    assert.doesNotMatch(consolidation, /非候选|unrelated-/);
+    assert.match(consolidation, /runId：run-example/);
+    assert.match(consolidation, /memory\/consolidation-runs\/run-example\/result/);
+    assert.match(consolidation, /Idempotency-Key/);
+    assert.match(consolidation, /If-Match/);
+    if (mode === "legacy") assert.match(consolidation, /候选命中索引/);
+
+    const ordinary = packetFor("ordinary-task").content;
+    assert.match(ordinary, /非候选召回摘要/);
+    assert.match(ordinary, /GET \/api\/roles\/ExampleRole\/memory\/recent\/unrelated-memory/);
+    if (mode === "legacy") {
+      for (const title of ["非候选活动计划", "非候选活动技能", "非候选近期索引", "非候选记忆命中", "非候选同名沉淀记忆", "非候选同名计划", "非候选命中技能"]) {
+        assert.ok(ordinary.includes(title), `ordinary legacy packet keeps ${title}`);
+      }
+    }
+  } finally {
+    fs.rmSync(roleDir, { recursive: true, force: true });
+  }
+});
+}
+
 function buildAgentPacket(
   decision: RouteDecision,
   rule: NotificationRule,

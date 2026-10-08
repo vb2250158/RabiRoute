@@ -46,6 +46,25 @@ function fixture(): { root: string; roleDir: string; memoryPath: string; complet
   return { root, roleDir, memoryPath, completedPlanPath };
 }
 
+test("dedicated context carries candidate ID filter and disables plan archiving before snapshot", (t) => {
+  const data = fixture();
+  t.after(() => fs.rmSync(data.root, { recursive: true, force: true }));
+  const manager = new RabiContextManager({
+    published: () => { throw new Error("unexpected published resolver"); },
+    storage: (_roleDir, _signal, options) => {
+      assert.deepEqual(options.consolidationInputMemoryIds, ["memory-hook"]);
+      assert.equal(options.archiveCompletedPlans, false);
+      return { roleDir: data.roleDir, plansDir: path.join(data.roleDir, "plans"),
+        memoryDir: path.join(data.roleDir, "memory"), agentInterfaceDocPath: "docs/rabi-agent-interfaces.md",
+        requiredReadItems: [], activePlans: [], activeSkills: [], recentMemories: [],
+        matchedItems: [], matchedSkills: [], contextInjection: { mode: "focused", requiredReadLimit: 3,
+          matchedItemLimit: 3, personaMaxChars: 1200 } };
+    }
+  });
+  manager.resolve({ kind: "user_prompt", source: "codex_hook", roleId: "YeYu", roleDir: data.roleDir,
+    signalText: "统一管理", consolidationInputMemoryIds: ["memory-hook"] });
+});
+
 test("preview resolves the same indexes without lifecycle side effects", (t) => {
   const data = fixture();
   t.after(() => fs.rmSync(data.root, { recursive: true, force: true }));

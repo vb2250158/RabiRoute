@@ -6,6 +6,19 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.23 - 2026-10-08
+
+### QQ read APIs and synchronization of local changes
+
+- Add QQ history pagination, original-message and attachment downloads scoped to a Route and conversation. Fall back to bounded history when original-message lookup expires, return attachment links and content SHA-256, distinguish video from thumbnails, and hide NapCat credentials and local paths.
+- Allow direct local management reads only; reject LAN Agents, Relay and P2P proxies. Bound concurrency, response sizes and deadlines. The desktop Profile exposes diagnostics and Agent APIs before READY so identity checks do not encounter an unregistered `/meta`.
+- Integrate QQ receipt verification, reconciliation against the original request and account identity checks, plus managed group-file queries; do not resend unconfirmed deliveries. Shard plan history by file size while preserving record order and migration/recovery checks, with matching feedback and memory-search support.
+- Retain unpublished ordered text, image and Markdown-image sends and scoped memory consolidation. Markdown disables scripts and external resources, local images require allowed directories, and builds include the pinned renderer and license.
+- Merge Relay application navigation and device-log source/level/content filters while retaining upstream glasses-profile editing and uncertain-write receipt recovery. Synchronize bilingual contracts, documentation and version surfaces; preserve upstream 0.3.22 and Linux Host updates.
+- Update MCP SDK to 1.32.1 and Vue/source-map dependencies to audited patched versions; the full dependency audit reports zero vulnerabilities. Make the Host cancellation test wait for helper startup before cancellation, preserving descendant-exit and lease-cleanup assertions.
+- Use the Windows system registry executable for machine identity and retry one cold-start timeout within a bounded budget. Standalone `/meta` and `/health` publish their per-process identity; read-only acceptance checks live/required readiness and permits unrelated degradation.
+- Source publication, installed-runtime checks and physical-device acceptance remain separate. This change does not create a GitHub Release or send chat-platform messages.
+
 ## Unreleased - Linux Host (2026-10-07)
 
 - Add a Linux source-start script and minimal Host: build, run the existing WebGUI in background/foreground mode, and query status, open, restart, or quit through a live loopback control connection. Preserve structured READY, dynamic addresses, and `/meta` runtime identity validation.

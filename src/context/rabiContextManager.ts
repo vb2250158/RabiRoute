@@ -30,6 +30,7 @@ export type RabiContextTrigger = {
   eventId?: string;
   toolName?: string;
   seenContextKeys?: readonly string[];
+  consolidationInputMemoryIds?: readonly string[];
   includePendingConsolidation?: boolean;
   consolidationTrigger?: "auto" | "manual" | "api";
   forceConsolidation?: boolean;
@@ -140,10 +141,11 @@ export class RabiContextManager {
       : this.knowledgeResolvers.published;
     const knowledge = resolveKnowledge(trigger.roleDir, String(trigger.signalText || ""), {
       roleId: trigger.roleId,
+      consolidationInputMemoryIds: trigger.consolidationInputMemoryIds,
       includePendingConsolidation: trigger.includePendingConsolidation,
       consolidationTrigger: trigger.consolidationTrigger,
       forceConsolidation: trigger.forceConsolidation,
-      archiveCompletedPlans: policy.archiveCompletedPlans,
+      archiveCompletedPlans: trigger.consolidationInputMemoryIds === undefined && policy.archiveCompletedPlans,
       touchViewedAt: policy.touchViewedAt,
       touchRequiredRead: (item) => !seenContextKeys.has(requiredReadContextKey(item))
     });

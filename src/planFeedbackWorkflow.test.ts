@@ -40,6 +40,47 @@ test("saved approval persists approved; failures wait; confirmed delivery return
   assert.equal(listPlanFeedback(roleDir, plan.id)[0]!.deliveryStatus, "delivered");
   updatePlan(roleDir, plan.id, { nextAction: "Review the recorded decision" });
 });
+test("feedback transition reads and appends history across a shard boundary", t => {
+  const { roleDir, submit, read, plan } = fixture(t);
+  const planDir = path.join(roleDir, "plans", "active", plan.id);
+  const base = path.join(planDir, "history.jsonl");
+  const original = fs.readFileSync(base);
+  const template = JSON.parse(original.toString("utf8").trim());
+  const padding = 16 * 1024 * 1024 - original.byteLength - 1024;
+  fs.appendFileSync(base, `${JSON.stringify({ ...template, id: "history-padding", padding: "x".repeat(padding - 256) })}\n`);
+  const before = fs.readFileSync(base);
+  const saved = submit("sharded-approval", { notifyAgent: false });
+  assert.equal(saved.plan.markerStatus, "已审批");
+  const shard = path.join(planDir, "history", "000001.jsonl");
+  assert.ok(fs.existsSync(shard));
+  assert.deepEqual(fs.readFileSync(base), before);
+  assert.equal(listPlanHistory(roleDir, plan.id).at(-1)?.after.markerStatus, "已审批");
+  updatePlanFeedbackDelivery(roleDir, saved.record, "delivered");
+  assert.equal(read().markerStatus, "分析中");
+  assert.equal(listPlanHistory(roleDir, plan.id).at(-1)?.after.markerStatus, "分析中");
+  assert.deepEqual(fs.readFileSync(base), before);
+});
+test("new history shard and feedback ledger recover after an interrupted approval transaction", t => {
+  const { roleDir, plan, read } = fixture(t);
+  const planDir = path.join(roleDir, "plans", "active", plan.id);
+  const base = path.join(planDir, "history.jsonl");
+  const original = fs.readFileSync(base);
+  const template = JSON.parse(original.toString("utf8").trim());
+  const padding = 16 * 1024 * 1024 - original.byteLength - 1024;
+  fs.appendFileSync(base, `${JSON.stringify({ ...template, id: "history-padding", padding: "x".repeat(padding - 256) })}\n`);
+  const before = fs.readFileSync(base);
+  const record = createPlanFeedbackRecord({ id: "new-shard-crash", roleId: "test", planId: plan.id, planTitle: plan.title,
+    stepId: "review", text: "Scoped approval" });
+  assert.throws(() => commitPlanFeedback(roleDir, record, undefined, { repositoryTransaction: { hooks: {
+    afterOperation(index) { if (index === 1) throw new Error("injected shard interruption"); }
+  } } }), /injected shard interruption/);
+  assert.equal(fs.existsSync(path.join(planDir, "history", "000001.jsonl")), true);
+  assert.equal(recoverPlanFeedbackStoreTransactions(roleDir).failures.length, 0);
+  assert.deepEqual(fs.readFileSync(base), before);
+  assert.equal(read().markerStatus, "已审批");
+  assert.equal(listPlanFeedback(roleDir, plan.id).length, 1);
+  assert.equal(commitPlanFeedback(roleDir, record).created, false);
+});
 test("old feedback receipt cannot advance a newer approval or overwrite changed plan", t => {
   const { roleDir, submit, read, plan } = fixture(t);
   const old = submit("old");

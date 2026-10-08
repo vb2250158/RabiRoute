@@ -368,6 +368,8 @@ Agent 任务间的回复责任由 `src/agentRequests/` 单独保存到 `data/.ru
 
 `src/agentSend.ts` 在 Manager HTTP 边界先校验明确发送合同：稳定 `deliveryId`、调用方声明的 `sender.agentType + sender.sessionId`、精确 `routeId`、`channel`、渠道专用 `params` 和 `payload` 都是必填结构，来源 `replyContext` 不参与目标选择。消息处理回复还必须带与最新上下文核对绑定的 `tracking.requirementId + tracking.sendContextReviewToken`。`src/manager/agentSendIdempotency.ts` 随后在运行期 `data/agent-send-idempotency/` 持久化 reservation，再允许唯一请求进入 Outbox；同 ID 同请求的并发只保留一个结果，不同发送者或其它字段冲突。回执不存在时返回 `missing`；Manager 重启后，只有同 Route Outbox 明确没有同 ID 请求和终态记录时，`reserved/sending` 才能用原 payload 重试一次。Outbox 已记录请求但没有终态、payload 摘要不一致或重试仍无终态时转为 `uncertain` 并禁止再发。`GET /api/agent/send/receipts/:deliveryId` 返回持久回执，`GET /api/agent/send/traces?channel=...&sentMessageId=...` 可以从平台回执反查发送者会话；QQ 等通道仍需使用 `sentMessageId` 做真实平台回读。
 
+NapCat 的显式发送允许按顺序混排文字、图片和 Markdown。`src/agentSend.ts` 校验原始段，Outbox 在发送前统一验证本地图片路径，再由 `src/markdownImage.ts` 把 Markdown 安全渲染为 PNG，作为 OneBot 图片段发出。Markdown 源文本仍保留在请求及幂等摘要中，生成的图片数据不写入请求日志；任何图片校验或渲染失败都会在调用平台发送前结束本次请求。
+
 ```text
 Agent output
   -> action request

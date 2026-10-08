@@ -154,6 +154,9 @@ data/roles/<RoleId>/plans/
     <planId>/
       plan.json
       history.jsonl
+      history/000001.jsonl
+      history/000002.jsonl
+      ...
       feedback.jsonl
       attachments/
       feedback-attachments/<feedbackId>/
@@ -161,6 +164,9 @@ data/roles/<RoleId>/plans/
     <planId>/
       plan.json
       history.jsonl
+      history/000001.jsonl
+      history/000002.jsonl
+      ...
       feedback.jsonl
       attachments/
       feedback-attachments/<feedbackId>/
@@ -689,7 +695,7 @@ POST /api/roles/:roleId/plans/:planId/feedback
 
 ## 计划版本留痕
 
-计划 JSON 保存当前状态；每次创建、更新和归档还会向同一计划目录的 `history.jsonl` 追加一次完整计划快照。快照保留当时的步骤、审批合同、状态和时间，因此后续 Agent 可以复核某次审批完成前后的真实计划内容。
+计划 JSON 保存当前状态；每次创建、更新和归档都追加一次完整计划快照。历史从同一计划目录的 `history.jsonl` 开始，达到单文件容量后按追加顺序轮转到 `history/000001.jsonl`、`history/000002.jsonl` 等连续编号文件；读取时按这一顺序合并，旧计划仅有 `history.jsonl` 时继续正常读取。普通轮转只改变物理存放位置，不是计划归档、记忆沉淀或删除；普通轮转保留旧文件字节，不重新序列化旧记录。目录归档或旧名称迁移需要改写历史中的受管绝对路径，此时按完整记录重新分卷，保序且不丢记录；名称迁移预先暂存改写结果并留有恢复回执，中断后从暂存结果恢复，不从部分改写的文件重新生成。每个文件上限为 16 MiB，整个计划包上限为 96 MiB；超过包总限仍会拒绝写入，分卷不会放宽总限。快照保留当时的步骤、审批合同、状态和时间，因此后续 Agent 可以复核某次审批完成前后的真实计划内容。
 
 ```http
 GET /api/roles/:roleId/plans/:planId/history

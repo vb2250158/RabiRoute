@@ -41,7 +41,7 @@ Use `GET /api/agent/help` to discover the current Agent API operations and query
 
 `contractRevision` identifies the help structure version. `catalogDigest` is SHA-256 of the complete operation catalog serialized as JSON, prefixed with `sha256:`; filters and `generatedAt` do not change it. Send capabilities expose `channelsDigest` for the complete channel descriptor array only, excluding the outer common contract. These digests detect content changes; they are not ETags, authorization, schema verification, or Manager identity credentials. Rediscover and verify `/meta` after generation changes.
 
-Send capabilities additionally expose `data.requestContract` (`version: 1`, `kind: partial-field-allowlist`). `allowedFields.request/sender/payload` are frozen field-name allowlists owned by `src/agentSend.ts` and consumed directly by `prepareAgentSendRequest`; `channelValues` and `paramsAllowedFields` derive from the existing `AGENT_SEND_CHANNEL_HELP`. `requestContractDigest` separately hashes this partial structure serialized as JSON (SHA-256, `sha256:` prefix); `channelsDigest` does not cover it. These arrays describe allowed keys, **not a complete JSON Schema**, and do not establish required fields or valid values. `requestContract.missing` explicitly lists uncovered value types/constraints, required/conditional fields, cross-field validation, nested tracking/planAttachment contracts, runtime authorization/delivery policy, and response/error contracts; continue consulting the detailed contract. This discovery addition does not upgrade send's `baseline` or exact-schema flags and does not change parsing order, execution permissions, or idempotency semantics.
+Send capabilities additionally expose `data.requestContract` (`version: 1`, `kind: partial-field-allowlist`). `allowedFields.request/sender/payload` are frozen field-name allowlists owned by `src/agentSend.ts` and consumed directly by `prepareAgentSendRequest`; `channelValues` and `paramsAllowedFields` derive from the existing `AGENT_SEND_CHANNEL_HELP`. `requestContractDigest` separately hashes this partial structure serialized as JSON (SHA-256, `sha256:` prefix); `channelsDigest` does not cover it. These arrays describe allowed keys, **not a complete JSON Schema**, and do not establish required fields or valid values. `requestContract.missing` explicitly lists uncovered value types/constraints, required/conditional fields, cross-field validation, nested tracking/planAttachment/segments contracts, runtime authorization/delivery policy, and response/error contracts; continue consulting the detailed contract. This discovery addition does not upgrade send's `baseline` or exact-schema flags and does not change parsing order, execution permissions, or idempotency semantics.
 
 Help accepts `operationId`, `path`, and `method`, each nonempty and at most once; filters intersect. Use the exact catalog path template for `path`; `method` is case-insensitive. The handler returns 400 `AGENT_HELP_INVALID_QUERY` with repair guidance for unknown, repeated, or empty filters; LAN authorization may reject invalid queries earlier. An unmatched `operationId` returns 404 `AGENT_HELP_NOT_FOUND`; unmatched path/method searches retain 200 with an empty list for compatibility. Errors do not echo query values. Never place credentials in query parameters.
 
@@ -53,7 +53,38 @@ Timeouts, disconnections, and 5xx responses can occur after acceptance. Read for
 
 A bypass receipt proves platform acceptance only, not a recorded callback, knowledge-callback, Outbox result, or plan state. Preserve original identifiers, target, time, summary, and actual platform receipts. After recovery, read state before reconciling through supported interfaces; never resend delivered content merely to obtain a receipt or directly edit authoritative storage. If reconciliation is unsupported, report that bypass delivery succeeded while the formal callback remains pending. Start with Rabi for each independent delivery.
 
+### Read-only QQ diagnostics (source contract; local identity unverified)
+
+`GET /api/agent/qq/diagnostics?routeId=<exact-Route-ID>` requires a currently authenticated `TrustedLanAgentSource`; it accepts no body or other query parameter. Manager checks the current approved and enabled LAN Agent binding against the source session, provider, node/Agent, and that Route's remote primary target. A local loopback request, DSH session name, query value, or send-permission switch cannot impersonate this trusted source. Without that trusted identity, the endpoint returns 403; do not bypass a management capability denial.
+
+After authorization, the Route must be enabled, its QQ input enabled, exactly one configured instance enabled, and its Gateway process running. Only then does Manager make a short, uncached, non-redirecting, body-free `GET /get_status` against that instance's configured local OneBot HTTP origin. It does not visit WebUI, another Route, or another QQ instance. The response projects only `routeId`, `instanceId`, `wsConnected`, and `oneBot.reachable/online/good` booleans; it excludes QQ IDs, nicknames, URLs, tokens, message bodies, raw errors, and paths. WS state comes from the selected Route's instance runtime state and is true only if `lastConnectedAt` is no earlier than the current Gateway `startedAt`; historical state alone never proves a live connection; a failed OneBot probe returns HTTP 503/unknown, not an offline conclusion. This endpoint **does not grant send permission**, backfill login/account configuration, or establish live QQ acceptance. A trusted source for the current local DSH session has not been established; do not perform a real QQ smoke test.
+
+### QQ group-file metadata (source contract; live runtime unverified)
+
+`GET /api/agent/qq/group-files?routeId=<exact-Route-ID>&groupId=<exact-group-ID>[&folderId=<folder-ID>]` requires a currently authenticated `TrustedLanAgentSource`, the approved and enabled remote primary Agent for that Route, and separate read authority for the exact group in `messageAdapterPolicies.napcat.readableGroupFileIds` (empty by default). Loopback, send permission, a target group, and allowed upload roots do not confer metadata-read authority. The endpoint selects only the uniquely enabled NapCat instance in the exact Route, never falling back across Routes, accounts, or groups; extra or duplicate query parameters and request bodies are rejected. Authorization is checked both before and after reading. Credentials, upstream raw errors, and other groups' metadata are not exposed; files are neither downloaded nor sent.
+
+One directory is queried at a time: the root uses read-only `get_group_root_files`, while `folderId` uses read-only `get_group_files_by_folder`. Upstream `file_count` is fixed at 50, with a three-second timeout, a 256 KiB response cap, and at most 50 projected entries of bounded metadata. `completenessUnknown: true` and `potentiallyTruncated: true` always mean that exhaustive coverage is unproven; invalid entries may be discarded and `projectionTruncated` only describes local projection clipping. An exact match establishes presence, but an empty result or no match **cannot establish absence** and must never trigger an automatic resend. Proving an APK is missing would additionally require verified complete platform pagination/search coverage, or a closed per-file comparison of trustworthy self-send events covering the relevant interval, original Outbox terminal states, and platform evidence. Without such evidence, report unknown and stop the absence decision; do not broaden the group scope or bypass authority. Source wiring and tests do not prove the installed version, DSH tool capability, or live QQ status.
+
 ## Message queries: Rabi first, bypass only when necessary
+
+### QQ messages, history pages, and attachment downloads
+
+Local Agents can read a conversation through its current Route without obtaining the NapCat address or token:
+
+```http
+GET /api/agent/qq/history?routeId=<routeId>&kind=group&target=<groupId>&limit=50
+GET /api/agent/qq/history?routeId=<routeId>&kind=group&target=<groupId>&cursor=<nextCursor>&limit=50
+GET /api/agent/qq/messages/<messageId>?routeId=<routeId>&kind=group&target=<groupId>
+GET /api/agent/qq/messages/<messageId>/attachments/0?routeId=<routeId>&kind=group&target=<groupId>
+```
+
+For direct messages, use `kind=private` and the peer account as `target`. Discover the current Manager and validate `/meta` first. Find these operations through `GET /api/agent/help?path=/api/agent/qq/history`. Every request requires an exact Route, conversation kind, and target. `limit` is 1–100, default 50. History returns `data.entries`, `nextCursor`, `cursorStalled`, and `completenessUnknown: true`. Follow the cursor; stop on an empty page or stalled cursor. Pages do not guarantee complete QQ history. A single-message read tries `get_msg` first, then, on upstream cache failure, reads at most ten messages anchored on that same message ID in the same conversation. A missing match returns 404 `QQ_MESSAGE_NOT_IN_PAGE`, without scanning the whole group.
+
+Messages include `messageId`, time, sender, text, and `attachments[]`. Each attachment has a zero-based `index`, `kind`, `name`, and Manager-relative `contentUrl`; append that URL to the current Manager address to download binary content. Downloads recheck the source message and conversation, then call `get_file` with the message resource ID. Images, videos, audio, and files share this endpoint; a video thumbnail is never treated as the video. Responses hide NapCat URLs, credentials, and local paths. Caller-supplied URLs, paths, resource IDs, and arbitrary OneBot actions are rejected.
+
+Limits are 64 MiB per attachment and 1 MiB per upstream JSON response. Message reads have an eight-second deadline; downloads have thirty seconds. Each service context permits two concurrent reads; excess calls return 429 `QQ_READ_BUSY`. Downloading may populate NapCat's own media cache; Rabi does not create another business record. An empty file path without a supported download URL returns 422 `QQ_MEDIA_REFERENCE_UNAVAILABLE`, excessive size returns 413, mismatched message/conversation or a changed Route returns 409, and upstream failure returns 503 without its raw error. Save the binary response where needed and verify that it is nonempty.
+
+These endpoints require direct loopback management access. LAN Agents and Relay requests receive 403 `QQ_READ_LOCAL_REQUIRED`; discovery does not grant remote object-read permission. Only the specified Route's single enabled NapCat instance is selected; ambiguous configurations fail without switching Route or account. Read access does not grant send access. Existing `message-endpoint-history` remains the search endpoint for messages Rabi has recorded across sources; use the managed endpoints above for original QQ messages and attachments.
 
 Query Rabi first for group chats, private messages, and recent feedback. Installed clients obtain `managerBaseUrl`, `applicationGenerationId`, and `managerInstanceId` through `RabiRouteHost.exe --command status --json`; source mode uses the structured READY address. Read `<managerBaseUrl>/meta` and verify the generation/instance identity under the contract above. Ordinary queries require `health.live=true` and `health.requiredReady=true`, accept either `healthy` or `degraded`, and leave dependency checks to the target endpoint. Rediscover and retry within a bounded attempt when an address is stale or a failure is transient. A generic Hook message saying the Host is not running is not a substitute for the actual discovery failure. Do not scan ports, read retired instance locks, or directly start/stop Manager.
 
@@ -329,6 +360,34 @@ POST /api/agent/send
   }
 }
 ```
+
+For ordered text and multiple images in one NapCat group or private message, use `payload.type=image` with `payload.segments`:
+
+```json
+{
+  "deliveryId": "send-mixed-001",
+  "sender": { "agentType": "primary_persona", "sessionId": "<current full session ID>" },
+  "routeId": "main",
+  "channel": "napcat",
+  "params": { "target": "group", "groupId": "456", "replyToMessageId": "", "replyImageDescriptions": [] },
+  "payload": {
+    "type": "image",
+    "segments": [
+      { "type": "text", "text": "First image: " },
+      { "type": "image", "path": "<first image under an allowed root>" },
+      { "type": "text", "text": "Second image: " },
+      { "type": "image", "path": "<second image under an allowed root>" },
+      { "type": "text", "text": "The difference is shown above." }
+    ]
+  }
+}
+```
+
+`segments` is available only for NapCat image sends. It preserves 1–32 `text`, `image`, or `markdown` segments in order, including 1–16 image or Markdown segments. Each image segment supplies exactly one `path` or `url`; every local path is checked against `allowedFileRoots` before any platform send. Do not combine `segments` with top-level `payload.text`, `path`, `url`, or `planAttachment`. The original single-image `payload.text + path/url/planAttachment` remains supported. Text and Markdown source segments are combined for language-style validation. `replyImageDescriptions` still describes images in the **quoted source message**, not outgoing images.
+
+To render one Markdown document as an image, send `"payload":{"type":"markdown","text":"# Title\n\n| Item | Result |\n|---|---|\n| A | Passed |"}`. To interleave it with text and existing images, add `{"type":"markdown","text":"# Title\n\n**Body**"}` to the ordered `segments` array. That segment becomes an image at its original position, and the whole platform message is sent once. Both forms require the NapCat Route to allow `image` output; do not include top-level media fields with a Markdown payload.
+
+Rabi renders Markdown with a local script-disabled Chromium, Chrome, or Edge process. Common installation locations are detected automatically; `RABIROUTE_MARKDOWN_BROWSER_PATH` may specify an absolute browser executable path. Headings, lists, tables, quotes, and code blocks appear in the PNG. Raw HTML is escaped, links are inert, and Markdown image syntax produces an alt-text placeholder without loading local or remote resources. Each Markdown segment is limited to 32 KiB of source, 4096 image pixels in height, and a 4 MiB PNG; Markdown images in one message are limited to 8 MiB combined. If the browser is unavailable or rendering fails, nothing is sent to NapCat.
 
 `styleValidation` is the enum `1 | 0` and defaults to `1`. A persona may bind its own style Skill through `personaConfig.json.languageStyle.styleSkillUrl`; different personas may use different URLs. The URL may point to a Skill directory, `SKILL.md`, or `references/style-data.json`.
 
@@ -911,6 +970,8 @@ Desktop can report a start/steer timeout after the message reaches the target ta
 When the original target formally replies to a `pending_delivery` request, the bridge verifies both task IDs, workspaces, and the exact accepted user message by streaming that task's rollout on demand, without the former 4 MiB tail cutoff. Verified evidence restores `awaiting_response` before continuing the reply. Otherwise `error.code=agent_reply_state_conflict` includes `requestId`, `currentState`, `expectedState`, `reason`, `commitState`, and `nextAction`. Reasons distinguish sender, destination and workspace mismatches from missing or unreadable receipt evidence. `not_started` refers only to this reply, not the original delivery. A late original delivery commit cannot reopen an answered request.
 
 To reconcile an accepted response that was not recorded, call `POST /api/agent/threads` with `{"action":"reconcile_delivery","threadId":"<original source task receiving the reply>","deliveryId":"<original reply delivery ID>"}`. This action sends no message and accepts no caller-supplied result. It streams original user messages from the specified task and verifies the reservation, task/workspace identities, delivery ID and follow-up contract before committing through the request store. Reads use the file length captured at the start and a 30-second deadline; timeout or access failure retains uncertainty without resending. Success returns `receipt_recovered`; repeated reconciliation returns `already_recorded`. The original becomes `responded`; a required follow-up only becomes `awaiting_response`, not business-complete. Tool output, assistant quotations and an isolated ID are not recovery evidence.
+
+Receipt-log capability is required on the original source task that actually receives the reply (`original.source`). A sender without a receipt log is recoverable only with persisted structured SHA-256 evidence. The accepted message must match exactly, together with both adapters, task IDs, workspaces, the original request, and the follow-up direction. Legacy replies without structured evidence still fail closed with `adapter_has_no_receipt_log`.
 
 Reminder delivery performs the same check first. Incomplete evidence retains the reservation, records `lastReminderError`, and suspends that unanswered-request reminder without endless retries or asking for a resend. A later task completion or explicit reconciliation can check again. Read timeouts, identity/contract mismatches, and deleted legacy `404` requests are not reconstructed by guessing; keep the missing formal-response record explicit.
 

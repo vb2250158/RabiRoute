@@ -39,6 +39,7 @@ import {
 } from "./shared/storageRevision.js";
 import { requiresWorkerFilesystemAccess } from "./shared/pathPolicy.js";
 import { canonicalLogicalPlanId } from "./planStorageIdentity.js";
+import { appendPlanHistoryRecord, isPlanHistoryPath, orderedPlanHistoryPaths, readPlanHistoryDirectory, PLAN_HISTORY_FILE_LIMIT } from "./planHistoryShards.js";
 import {
   memoryStorageCaseFold,
   memoryStorageCollisionKey,
@@ -404,6 +405,8 @@ export type RoleKnowledgeSnapshotOptions = {
   archiveCompletedPlans?: boolean;
   touchViewedAt?: boolean;
   touchRequiredRead?: (item: RequiredReadItem) => boolean;
+  /** When set, recall only these recent-memory inputs for one verified consolidation run. */
+  consolidationInputMemoryIds?: readonly string[];
 };
 
 export const DEFAULT_PLAN_ARCHIVE_AFTER_HOURS = 72;
@@ -1729,11 +1732,11 @@ function planFile(roleDir: string, plan: PlanItem): string {
   return planJsonFile(roleDir, plan.id, planBucketForArchiveStatus(plan.archiveStatus));
 }
 
-function planHistoryFiles(roleDir: string, planId: string): string[] {
-  return [
-    planStorageHistoryFile(roleDir, planId, "active"),
-    planStorageHistoryFile(roleDir, planId, "archive")
-  ];
+function planHistoryFileContents(roleDir: string, planId: string): Buffer[] {
+  return (["active", "archive"] as const).flatMap(bucket => {
+    const files = readPlanHistoryDirectory(planDirectory(roleDir, planId, bucket));
+    return orderedPlanHistoryPaths(files.keys()).map(relative => files.get(relative)!);
+  });
 }
 
 function planLifecycleTransactionId(kind: "plan-create" | "plan-update" | "plan-archive", ...identity: string[]): string {
@@ -1764,17 +1767,11 @@ function createPlanHistoryRecord(before: PlanItem | undefined, after: PlanItem, 
   };
 }
 
-function appendPlanHistoryContent(current: string, record: PlanHistoryRecord): string {
-  const prefix = current && !current.endsWith("\n") ? `${current}\n` : current;
-  return `${prefix}${JSON.stringify(record)}\n`;
-}
-
 export function listPlanHistory(roleDir: string, planId: string): PlanHistoryRecord[] {
   const canonicalPlanId = canonicalLogicalPlanId(planId);
   const records = new Map<string, PlanHistoryRecord>();
-  for (const filePath of planHistoryFiles(roleDir, canonicalPlanId)) {
-    if (!fs.existsSync(filePath)) continue;
-    for (const line of fs.readFileSync(filePath, "utf8").split(/\r?\n/).filter(Boolean)) {
+  for (const content of planHistoryFileContents(roleDir, canonicalPlanId)) {
+    for (const line of content.toString("utf8").split(/\r?\n/).filter(Boolean)) {
       try {
         const value = JSON.parse(line) as Partial<PlanHistoryRecord>;
         if (!value.id || value.planId !== canonicalPlanId || !value.recordedAt || !value.after || typeof value.after !== "object") continue;
@@ -1793,7 +1790,7 @@ export function listPlanHistory(roleDir: string, planId: string): PlanHistoryRec
       }
     }
   }
-  return [...records.values()].sort((left, right) => Date.parse(left.recordedAt) - Date.parse(right.recordedAt));
+  return [...records.values()];
 }
 
 function recentMemoryFile(roleDir: string, memory: RecentMemoryItem): string {
@@ -3368,10 +3365,42 @@ function remapPlanStoragePackage(
   const source = planDirectory(roleDir, planId, fromBucket);
   const destination = planDirectory(roleDir, planId, toBucket);
   const mappings = [{ from: source, to: destination }];
-  for (const filePath of ["history.jsonl", "feedback.jsonl"]) {
+  for (const filePath of [...orderedPlanHistoryPaths(files.keys()), "feedback.jsonl"]) {
     const content = files.get(filePath);
     if (content) files.set(filePath, rewriteJsonlContent(content, mappings));
   }
+  // A longer destination path can grow each serialized audit row. Repartition
+  // complete rows inside the Repository transaction, never truncate an old row.
+  const historyPaths = orderedPlanHistoryPaths(files.keys());
+  const rows: string[] = [];
+  let previousEndedWithNewline = true;
+  for (const relativePath of historyPaths) {
+    const content = files.get(relativePath)!.toString("utf8");
+    if (!previousEndedWithNewline && rows.length) rows[rows.length - 1] += "\n";
+    rows.push(...content.split(/(?<=\n)/).filter(Boolean));
+    previousEndedWithNewline = content.endsWith("\n");
+  }
+  const shards: Buffer[] = [];
+  let current: Buffer[] = [];
+  let size = 0;
+  for (const text of rows) {
+    const row = Buffer.from(text, "utf8");
+    if (row.byteLength > PLAN_HISTORY_FILE_LIMIT) throw new Error("Plan history record exceeds the per-file limit after path migration.");
+    if (size + row.byteLength > PLAN_HISTORY_FILE_LIMIT) {
+      shards.push(Buffer.concat(current));
+      current = [];
+      size = 0;
+    }
+    current.push(row);
+    size += row.byteLength;
+  }
+  if (current.length) shards.push(Buffer.concat(current));
+  if (shards.length > 1_000_000) throw new Error("Plan history shard capacity exceeded after path migration.");
+  for (const relativePath of historyPaths) files.delete(relativePath);
+  shards.forEach((content, index) => {
+    const relativePath = index === 0 ? "history.jsonl" : `history/${String(index).padStart(6, "0")}.jsonl`;
+    files.set(relativePath, content);
+  });
 }
 
 function applyPreparedPlanAttachments(
@@ -3476,7 +3505,7 @@ export function migratePersonaPlanStatusesAtStartup(roleDir: string): PersonaPla
           to: planDirectory(roleDir, next.id, destinationBucket)
         }]);
         const history = createPlanHistoryRecord(historyBefore as unknown as PlanItem, next);
-        files.set("history.jsonl", Buffer.from(appendPlanHistoryContent(files.get("history.jsonl")?.toString("utf8") || "", history), "utf8"));
+        appendPlanHistoryRecord(files, history);
         files.set("plan.json", Buffer.from(`${JSON.stringify(next, null, 2)}\n`, "utf8"));
         commitPlanLifecycleTransitionUnderLease(lease, {
           transactionId: planLifecycleTransactionId("plan-update", next.id, "plan-state-v3", sourcePackage.inventoryHash),
@@ -3556,7 +3585,7 @@ export function createPlan(
     }
     const history = createPlanHistoryRecord(undefined, plan, mutation?.actor);
     files.set("plan.json", Buffer.from(`${JSON.stringify(plan, null, 2)}\n`, "utf8"));
-    files.set("history.jsonl", Buffer.from(appendPlanHistoryContent("", history), "utf8"));
+    appendPlanHistoryRecord(files, history);
     commitPlanLifecycleTransitionUnderLease(lease, {
       transactionId: planLifecycleTransactionId("plan-create", plan.id, recordedAt),
       kind: "plan-create",
@@ -3689,8 +3718,7 @@ export function updatePlan(
         to: planDirectory(roleDir, next.id, destinationBucket)
       }]) as PlanItem;
     const historyRecord = createPlanHistoryRecord(historyBefore, next, mutation?.actor);
-    const currentHistory = files.get("history.jsonl")?.toString("utf8") || "";
-    files.set("history.jsonl", Buffer.from(appendPlanHistoryContent(currentHistory, historyRecord), "utf8"));
+    appendPlanHistoryRecord(files, historyRecord);
     files.set("plan.json", Buffer.from(`${JSON.stringify(next, null, 2)}\n`, "utf8"));
     commitPlanLifecycleTransitionUnderLease(lease, {
       transactionId: planLifecycleTransactionId(
@@ -4313,11 +4341,16 @@ function buildRoleKnowledgeSnapshot(
   >,
   allowPersistence: boolean
 ): RoleKnowledgeSnapshot {
-  const plans = catalog.plans;
+  const consolidationInputIds = options.consolidationInputMemoryIds === undefined
+    ? undefined
+    : new Set(options.consolidationInputMemoryIds);
+  const plans = consolidationInputIds ? [] : catalog.plans;
   const workflow = catalog.planWorkflow;
-  const memories = catalog.recentMemories;
-  const consolidatedMemories = catalog.consolidatedMemories;
-  const skills = catalog.skills;
+  const memories = consolidationInputIds
+    ? catalog.recentMemories.filter((item) => consolidationInputIds.has(item.id))
+    : catalog.recentMemories;
+  const consolidatedMemories = consolidationInputIds ? [] : catalog.consolidatedMemories;
+  const skills = consolidationInputIds ? [] : catalog.skills;
   const appearsInCurrent = (plan: PlanItem): boolean =>
     planCanAutoAdvance(plan, workflow)
       && planStatusDefinition(workflow, plan.status, { allowRetired: true })?.views.includes("current") === true;

@@ -744,11 +744,21 @@ test("legacy message adapter target restrictions are ignored", () => {
 
   assert.deepEqual(Object.keys(messageAdapterPolicyFor(normalized, "napcat")).sort(), [
     "allowedFileRoots",
+    "readableGroupFileIds",
     "inputEnabled",
     "messageGrouping",
     "outputEnabled",
     "supportedOutputs"
   ].sort());
+});
+
+test("group-file metadata ACL is explicit, exact and defaults to deny", () => {
+  const base = gateway({ messageAdapters: ["napcat"], targetGroupId: "123456",
+    messageAdapterPolicies: { napcat: { outputEnabled: true, allowedFileRoots: ["/somewhere"] } } });
+  assert.deepEqual(messageAdapterPolicyFor(normalizeGatewayDefinition(base), "napcat").readableGroupFileIds, []);
+  assert.deepEqual(messageAdapterPolicyFor(normalizeGatewayDefinition({ ...base, messageAdapterPolicies: {
+    napcat: { readableGroupFileIds: ["123456", "123456", " 123456", "0123456", 123456 as any, "777777"] }
+  } }), "napcat").readableGroupFileIds, ["123456", "777777"]);
 });
 
 test("legacy disabled adapter list backfills policy input state", () => {

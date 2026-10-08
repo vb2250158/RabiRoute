@@ -33,6 +33,7 @@ import {
 } from "./messageContextStore.js";
 import { postFenneNoteOutput } from "./fenneNoteOutput.js";
 import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
+import { renderMarkdownToPng } from "./markdownImage.js";
 
 export type AgentReplyRequest = {
   text?: unknown;
@@ -450,6 +451,34 @@ function requestContent(request: AgentReplyRequest): ReplyContent {
   const rawText = request.text ?? request.message ?? request.content ?? payload.text ?? payload.message ?? payload.content;
   const text = valueString(rawText) ? String(rawText) : "";
   const kind = valueString(request.payloadType ?? payload.type ?? payload.payloadType) as MessagePayloadKind | undefined;
+  if (Object.prototype.hasOwnProperty.call(payload, "segments")) {
+    if (request.explicitTarget !== true || request.sendChannel !== "napcat" || kind !== "image" || !Array.isArray(payload.segments)) {
+      throw new Error("Ordered text/image segments require a typed NapCat image send.");
+    }
+    const message: Array<{ type: string; data: Record<string, string> }> = [];
+    for (const item of payload.segments) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("Invalid ordered message segment.");
+      const segment = item as Record<string, unknown>;
+      if (segment.type === "text" && typeof segment.text === "string") {
+        message.push(...textSegmentsForAgentText(segment.text));
+      } else if (segment.type === "markdown" && typeof segment.text === "string") {
+        message.push({ type: "markdown", data: { text: segment.text } });
+      } else if (segment.type === "image") {
+        const file = valueString(segment.path ?? segment.url);
+        if (!file) throw new Error("Missing ordered image url/path.");
+        message.push({ type: "image", data: { file } });
+      } else {
+        throw new Error("Invalid ordered text/image segment.");
+      }
+    }
+    return { text: text || "[image]", kind: "image", message };
+  }
+  if (payload.type === "markdown") {
+    if (request.explicitTarget !== true || request.sendChannel !== "napcat" || kind !== "image" || !text) {
+      throw new Error("Markdown image rendering requires a typed NapCat send with Markdown text.");
+    }
+    return { text, kind: "image", message: [{ type: "markdown", data: { text } }] };
+  }
   if (Object.prototype.hasOwnProperty.call(payload, "fileId")) {
     const fileId = payload.fileId;
     if (typeof fileId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(fileId)
@@ -597,6 +626,25 @@ function validatedNapCatImageMessage(rootDir: string, message: OneBotMessage, al
       : validatedOutboundFilePath(rootDir, file, allowedFileRoots);
     return { ...segment, data: { ...segment.data, file: validatedFile } };
   });
+}
+
+async function renderNapCatMarkdownSegments(message: OneBotMessage): Promise<OneBotMessage> {
+  if (typeof message === "string") return message;
+  const rendered: Exclude<OneBotMessage, string> = [];
+  let totalPngBytes = 0;
+  for (const segment of message) {
+    if (segment.type !== "markdown") {
+      rendered.push(segment);
+      continue;
+    }
+    const png = await renderMarkdownToPng(String(segment.data.text ?? ""));
+    totalPngBytes += png.length;
+    if (totalPngBytes > 8 * 1024 * 1024) {
+      throw new Error("Rendered Markdown images exceed the 8 MiB message limit.");
+    }
+    rendered.push({ type: "image", data: { file: `base64://${png.toString("base64")}` } });
+  }
+  return rendered;
 }
 
 /**
@@ -2241,10 +2289,11 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
       const outboundMessage = content.kind === "image"
         ? validatedNapCatImageMessage(options.rootDir, content.message, policy.allowedFileRoots)
         : napcatSegmentsFromAgentText(text);
+      const renderedMessage = await renderNapCatMarkdownSegments(outboundMessage);
       const sent = await sendGroupMessage({
         groupId: target.groupId,
         message: validatedNapCatAtSegments(napcatGroupReplyMessage(
-          outboundMessage,
+          renderedMessage,
           target.messageId ?? messageId,
           pipeline.replyToSource,
           target.userId
@@ -2255,11 +2304,12 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
       return result;
     }
     if (target.targetType === "private" && target.userId) {
+      const privateMessage = content.kind === "image"
+        ? validatedNapCatImageMessage(options.rootDir, content.message, policy.allowedFileRoots)
+        : napcatSegmentsFromAgentText(text);
       const sent = await sendPrivateMessage({
         userId: target.userId,
-        message: validatedNapCatAtSegments(content.kind === "image"
-          ? validatedNapCatImageMessage(options.rootDir, content.message, policy.allowedFileRoots)
-          : napcatSegmentsFromAgentText(text))
+        message: validatedNapCatAtSegments(await renderNapCatMarkdownSegments(privateMessage))
       }, endpoint);
       const result: AgentReplyResult = { ok: true, status: "sent", routeProfileId: route.profile?.id ?? route.runtime.id, messageId, targetType: "private", userId: target.userId, instanceId: endpoint.id, sentMessageId: valueString(sent.messageId) };
       appendOutboxLog(options, route, "info", "reply_sent", text.slice(0, 500), withConversation(withDeliveryTrace({ ...result })));
