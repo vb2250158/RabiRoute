@@ -148,6 +148,7 @@ class DesktopPetCatalogTest(unittest.TestCase):
                             "personaId": "YeYu",
                             "canvas": {"width": 512, "height": 512},
                             "scale": 0.5,
+                            "sourceFacing": "left",
                             "states": {
                                 "idle": {
                                     "type": "gif",
@@ -188,6 +189,7 @@ class DesktopPetCatalogTest(unittest.TestCase):
 
         self.assertEqual(len(packs), 1)
         self.assertEqual(packs[0].persona_id, "YeYu")
+        self.assertEqual(packs[0].source_facing, "left")
         self.assertEqual(packs[0].states["thinking"].fps, 15)
         self.assertEqual(packs[0].states["thinking"].next_state, "idle")
         self.assertEqual(packs[0].idle_behavior.random_states, ("thinking",))

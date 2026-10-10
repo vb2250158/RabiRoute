@@ -93,6 +93,7 @@ export type AgentScanResult = {
   projects?: AgentScanProject[];
   sessions?: AgentScanSession[];
   models?: AgentScanModel[];
+  agentPresets?: Array<{ id: string; name?: string; description?: string; broken?: string }>;
   sessionPage?: {
     offset: number;
     limit: number;

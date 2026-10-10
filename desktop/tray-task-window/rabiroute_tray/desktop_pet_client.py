@@ -39,6 +39,7 @@ class DesktopPetPack:
     scale: float
     states: dict[str, DesktopPetState]
     idle_behavior: DesktopPetIdleBehavior = DesktopPetIdleBehavior()
+    source_facing: str = "right"
 
 
 @dataclass(frozen=True)
@@ -229,6 +230,7 @@ def parse_desktop_pet_catalog(payload: object, persona_id: str) -> tuple[Desktop
                 scale=_bounded_number(row.get("scale"), 0.5, 0.1, 2),
                 states=states,
                 idle_behavior=idle_behavior,
+                source_facing="left" if row.get("sourceFacing") == "left" else "right",
             )
         )
     return tuple(packs)

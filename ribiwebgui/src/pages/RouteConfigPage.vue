@@ -5788,6 +5788,18 @@ watch(
                   <DshConnectionPanel :base-url="gateway.dshBaseUrl" @update:base-url="gateway.dshBaseUrl = $event; touch()" />
                   <div class="catalog-param-grid">
                     <v-combobox
+                      v-model="gateway.dshAgentPreset"
+                      :items="agentScanFor('dsh')?.agentPresets?.filter(preset => !preset.broken).map(preset => ({ title: preset.name || preset.id, value: preset.id })) ?? []"
+                      item-title="title"
+                      item-value="value"
+                      :return-object="false"
+                      label="会话模式"
+                      hint="保存时同步到 DSH。已有对话的会话不能切换模式，请选择新会话；留空沿用当前模式。"
+                      persistent-hint
+                      clearable
+                      @update:model-value="touch"
+                    />
+                    <v-combobox
                       v-model="gateway.dshBaseUrl"
                       :items="agentScanFor('dsh')?.endpoints?.map(endpoint => endpoint.url) ?? []"
                       label="DSH 地址"

@@ -15,6 +15,7 @@ from .desktop_pet_fullscreen import is_foreground_fullscreen
 from .desktop_pet_idle import DesktopPetIdleScheduler
 from .desktop_pet_motion import corner_positions, foreground_window, logical_bounds, matches_monitor, travel_kind
 from .desktop_pet_window import DesktopPetWindow
+from .desktop_pet_agent_motion import DesktopPetAgentMotion
 from .qt_async import QtAsyncTask, start_qt_task
 
 
@@ -81,6 +82,7 @@ class DesktopPetController(QObject):
         if self._owns_events:
             self._events.settings_changed.connect(self._desktop_settings_changed)
             self._events.start()
+        self._agent_motion = DesktopPetAgentMotion(self, manager_url, self._events)
         self._pack: DesktopPetPack | None = None
         self._idle_scheduler = DesktopPetIdleScheduler(self)
         self._idle_scheduler.animation_requested.connect(self.set_state)
@@ -167,6 +169,7 @@ class DesktopPetController(QObject):
 
     def close(self) -> None:
         self._closed = True
+        self._agent_motion.close()
         self._wander_timer.stop()
         self._fullscreen_timer.stop()
         self._idle_scheduler.stop()
@@ -191,6 +194,8 @@ class DesktopPetController(QObject):
         self._apply_binding(binding)
 
     def set_state(self, state_name: str) -> None:
+        if self.window.travelling and state_name not in {"move", "teleport-out", "teleport-in"}:
+            self.window.cancel_travel()
         self._requested_state = state_name or "idle"
         self._idle_scheduler.state_requested(self._requested_state)
         if self._pack is None or not self.visible:
@@ -252,6 +257,7 @@ class DesktopPetController(QObject):
             self.window.clear_prepared_animations()
             self._idle_scheduler.configure(self._pack.idle_behavior)
             self.set_state(self._requested_state)
+            self._agent_motion.drain()
 
         self._catalog_task = start_qt_task(self._client.packs, completed, on_error=lambda error: error)
 
@@ -331,7 +337,7 @@ class DesktopPetController(QObject):
         if binding.placement and (previous is None or previous.placement != binding.placement):
             self.window.cancel_travel()
             self.window.restore_placement(binding.placement)
-        if binding.locked or not binding.wander_enabled:
+        if binding.locked or (not binding.wander_enabled and not self._agent_motion.command):
             self.window.cancel_travel()
         self._arm_wander()
         self.window.set_click_through(binding.click_through)

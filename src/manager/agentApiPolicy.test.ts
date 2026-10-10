@@ -42,7 +42,7 @@ test("discovery and enforcement share one immutable catalog with discoverable co
     assert.equal(operation.help.method, operation.method);
     assert.equal(operation.help.pathTemplate, operation.pathTemplate);
     assert.ok(operation.help.nextStep.length > 0);
-    const verified = ["agent:POST:/api/agent/send", "agent:PUT:/api/agent/uploads/:uploadId", "agent:GET:/api/agent/uploads/:uploadId", "home:POST:/api/agent/xiaomi-home/action-requests", "agent:GET:/api/agent/qq/diagnostics", "agent:GET:/api/agent/qq/group-files", "agent:POST:/api/agent/send/receipts/:deliveryId/verify", "agent:POST:/api/agent/send/receipts/:deliveryId/settle"].includes(operation.id);
+    const verified = operation.id.startsWith("desktop-pet:") || ["agent:POST:/api/agent/send", "agent:PUT:/api/agent/uploads/:uploadId", "agent:GET:/api/agent/uploads/:uploadId", "home:POST:/api/agent/xiaomi-home/action-requests", "agent:GET:/api/agent/qq/diagnostics", "agent:GET:/api/agent/qq/group-files", "agent:POST:/api/agent/send/receipts/:deliveryId/verify", "agent:POST:/api/agent/send/receipts/:deliveryId/settle"].includes(operation.id);
     assert.equal(operation.help.auth.required, verified ? true : null);
     assert.ok(Object.isFrozen(operation.help.auth.scopes));
     assert.equal(operation.help.effects.mode, verified ? (operation.method === "GET" || operation.pathTemplate.endsWith("/verify") ? "readOnly" : "mutating") : "unknown");

@@ -1327,3 +1327,11 @@ Manager failure responses include `errorMessages` in zh-CN and `en` while preser
 Formal replies may omit prompt when inReplyToRequestId identifies a managed request; result and nextAction remain required. Ordinary sends still require prompt. New replies omit the historical end delimiter.
 
 For step resource records and batched archiving, see [plan resources](plan-resources_en.md).
+
+
+## Desktop-pet movement
+
+Use `POST /api/desktop-pet/roles/:roleId/motion`, then read the actual result at
+`GET /api/desktop-pet/roles/:roleId/motion/:requestId`. This moves only the pet;
+it does not focus/move application windows or change wander settings.
+See [the desktop-pet motion contract](desktop-pet-agent-motion_en.md).

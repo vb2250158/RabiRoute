@@ -38,6 +38,7 @@ class DesktopPetEventStream(QObject):
 
     work_ended = Signal(object)
     settings_changed = Signal(object)
+    motion_requested = Signal(object)
     connection_changed = Signal(bool)
 
     def __init__(self, manager_url: str) -> None:
@@ -90,6 +91,8 @@ class DesktopPetEventStream(QObject):
                             return
                         if event_name == "work_ended" and isinstance(payload, dict):
                             self.work_ended.emit(payload)
+                        elif event_name == "desktop_pet_motion_requested" and isinstance(payload, dict):
+                            self.motion_requested.emit(payload)
                         elif event_name == "desktop_settings_changed" and isinstance(payload, dict):
                             self.settings_changed.emit(payload)
             except AttributeError:

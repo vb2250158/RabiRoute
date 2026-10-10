@@ -51,6 +51,7 @@ export type DshPrimaryBinding = {
   cwd: string;
   baseUrl: string;
   modelSelection?: DshModelSelection;
+  agentPreset?: string;
 };
 
 export function dshRouteConfigPath(): string {
@@ -97,6 +98,7 @@ export function readDshPrimaryBinding(routeConfigPath: string = dshRouteConfigPa
       sessionName,
       cwd,
       baseUrl,
+      ...(typeof parsed.dshAgentPreset === "string" && parsed.dshAgentPreset.trim() ? { agentPreset: parsed.dshAgentPreset.trim() } : {}),
       ...(modelProvider && model ? {
         modelSelection: {
           provider: modelProvider,
@@ -112,6 +114,27 @@ export function readDshPrimaryBinding(routeConfigPath: string = dshRouteConfigPa
 
 type DshRpcOk<T> = { ok: true; value: T };
 type DshRpcError = { ok: false; error: { code?: string; message?: string } };
+
+export type DshAgentPreset = { id: string; name?: string; description?: string; broken?: string; isDefault?: boolean };
+
+export async function listDshAgentPresets(baseUrl?: string): Promise<DshAgentPreset[]> {
+  const result = await dshRpc<{ presets: DshAgentPreset[] }>(resolveDshBaseUrl(baseUrl), "agentPresets/list", {});
+  if (!result.ok) throw new Error(`DSH mode catalog unavailable: ${result.error.message}`);
+  if (!Array.isArray(result.value.presets)) throw new Error("Invalid DSH mode catalog.");
+  return result.value.presets.filter(row => typeof row.id === "string" && row.id.trim());
+}
+
+/** DSH owns preset selection. Never replace a locked session or silently fall back. */
+export async function ensureDshSessionPreset(baseUrl: string, session: DshSessionSummary, preset?: string): Promise<void> {
+  const wanted = preset?.trim();
+  if (!wanted || session.agentPreset === wanted) return;
+  const selected = await dshRpc<string>(baseUrl, "agentPresets/select", { agentId: session.id, agentPreset: wanted });
+  if (!selected.ok) throw new Error(`无法应用 DSH 会话模式 ${wanted}：${selected.error.message}。已开始对话的会话请明确选择新会话。`);
+  if (selected.value !== wanted) throw new Error("DSH returned an unexpected session mode.");
+  const current = await readDshSessionCatalog(baseUrl);
+  if (current.find(row => row.id === session.id)?.agentPreset !== wanted) throw new Error("DSH mode selection could not be verified.");
+  session.agentPreset = wanted;
+}
 
 async function dshRpc<T>(baseUrl: string, method: string, payload: unknown): Promise<DshRpcOk<T> | DshRpcError> {
   const rpcId = randomUUID();
@@ -259,7 +282,7 @@ type DshSessionListItem = {
   blank?: boolean;
   cwd?: string;
   agentPreset?: string;
-  projections?: { values?: { title?: string; modelSelection?: { next: DshModelSelection | null; lastUsed: DshModelSelection | null } } };
+  projections?: { values?: { title?: string; agentPreset?: string; modelSelection?: { next: DshModelSelection | null; lastUsed: DshModelSelection | null } } };
 };
 
 export type DshSessionSummary = {
@@ -271,6 +294,7 @@ export type DshSessionSummary = {
   active: boolean;
   status: { type: "active" | "idle" };
   source: "DSH session (apiproxy)";
+  agentPreset?: string;
 };
 
 export type DshSessionResolution =
@@ -317,6 +341,7 @@ function dshSessionSummary(item: DshSessionListItem): DshSessionSummary | null {
   return {
     id,
     title,
+    ...(item.projections?.values?.agentPreset || item.agentPreset ? { agentPreset: item.projections?.values?.agentPreset || item.agentPreset } : {}),
     updatedAt: updatedAtMs > 0 ? new Date(updatedAtMs).toISOString() : new Date(0).toISOString(),
     cwd,
     archived: false,
@@ -496,6 +521,7 @@ export async function resolveDshSession(params: {
       if (!exact.cwd || !sameDshWorkspace(exact.cwd, cwd)) {
         return { kind: "workspace-mismatch", thread: exact };
       }
+      await ensureDshSessionPreset(baseUrl, exact, params.agentPreset);
       return { kind: "id", thread: exact };
     }
   }
@@ -504,9 +530,14 @@ export async function resolveDshSession(params: {
     .filter((item) => item.cwd && sameDshWorkspace(item.cwd, cwd));
   if (matches.length > 1) {
     const latest = uniquelyLatestDshSession(matches);
-    return latest ? { kind: "name", thread: latest } : { kind: "ambiguous", candidates: matches };
+    if (!latest) return { kind: "ambiguous", candidates: matches };
+    await ensureDshSessionPreset(baseUrl, latest, params.agentPreset);
+    return { kind: "name", thread: latest };
   }
-  if (matches[0]) return { kind: "name", thread: matches[0] };
+  if (matches[0]) {
+    await ensureDshSessionPreset(baseUrl, matches[0], params.agentPreset);
+    return { kind: "name", thread: matches[0] };
+  }
   if (!params.createIfMissing) return { kind: "missing" };
   return {
     kind: "created",
@@ -620,6 +651,7 @@ export async function sendDshSessionMessage(params: {
   prompt: string;
   cwd: string;
   baseUrl?: string;
+  agentPreset?: string;
   imagePaths?: string[];
   modelSelection?: DshModelSelection;
   /** Automatic plan advancement queues behind a turn that starts after its idle check. */
@@ -628,6 +660,11 @@ export async function sendDshSessionMessage(params: {
   requestId?: string;
 }): Promise<DshSessionDelivery> {
   const baseUrl = resolveDshBaseUrl(params.baseUrl);
+  if (params.agentPreset?.trim()) {
+    const session = (await readDshSessionCatalog(baseUrl)).find(row => row.id === params.sessionId);
+    if (!session) throw new Error("The configured DSH session no longer exists.");
+    await ensureDshSessionPreset(baseUrl, session, params.agentPreset);
+  }
   await applyDshSessionModel(baseUrl, params.sessionId, params.modelSelection);
   const imagePaths = params.imagePaths || [];
   const content: Array<{ type: "text"; text: string } | { type: "image"; mediaType: string; data: string; name: string }> = [
@@ -706,6 +743,7 @@ export async function notifyDshSession(message: string, imagePaths: string[] = [
     prompt: message,
     cwd: binding.cwd,
     baseUrl: binding.baseUrl,
+    agentPreset: binding.agentPreset,
     imagePaths,
     modelSelection: binding.modelSelection
   });

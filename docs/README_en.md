@@ -29,6 +29,7 @@ This directory contains current guides, experimental integrations, designs, rese
 
 - [PC onboarding prompt](rabilink-pc-pairing_en.md) — Copy the complete prompt so the target Agent uses a one-time code to install, configure and verify a connection; available after server deployment, with access and persistence verified separately in each cloud environment.
 
+- [DSH session modes](dsh-session-modes_en.md) — Choose a session mode and handle conversations that cannot switch modes.
 - [DSH Web session bridge authentication](dsh-browser-auth_en.md) — **Round-trip delivery accepted**. Connect through the current owner's launch authentication without disabling security or replaying writes.
 - [Configuration](configuration_en.md) — **Current guide**. Configure message inputs, handlers, local directories, and optional plugin permissions.
 - [Resident performance recording and inspection](performance-monitoring_en.md) — **Current guide** for optional continuous Manager, Gateway, and WebGUI metrics, trends, slow operations, and independent JSONL files.
@@ -49,6 +50,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Routing and personas](routing-and-personas_en.md) — **Current guide** for route/role boundaries and persona decision templates.
 - [Use a remote persona from a local Route](remote-persona-reference_en.md) — **Experimental in 0.3.19**. Select a source PC and persona in the same RabiLink application, use an automatic handshake for read-only access, and retain local message inputs and the handling Agent. Real two-PC delivery remains pending acceptance.
 - [Agent context injection](agent-context-injection_en.md) — **Current guide** for the persona-scoped bidirectional ledger, per-endpoint/conversation recent-message budgets, archival boundaries, persona-directory and cross-persona credentials, paths, and reply context inside `AgentPacket`.
+- [Desktop-pet motion API](desktop-pet-agent-motion_en.md) — Move the pet and read arrival, interruption and uncertain receipts.
 - [Rabi Agent interfaces](rabi-agent-interfaces_en.md) — **Current contract** for handler replies, persona discovery, idempotent one-way cross-persona delivery, receipts, thread bridge, plans, memory, Remote Agent, and role skills.
 - [Plans and memory](plan-and-memory-model_en.md) — **Current guide** for Role Knowledge sources, recall, explicit consolidation, and side effects.
 - [Unified dynamic record lifecycle](dynamic-record-lifecycle_en.md) — **Current guide** for archival, memory consolidation, physical sharding, retention, and the 24/72-hour dynamic windows.

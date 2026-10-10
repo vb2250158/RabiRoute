@@ -68,6 +68,15 @@ function operations(group: string, prefix: string, definitions: readonly Definit
             retry: "保留原 deliveryId 和完整原请求；不确定时读取原回执，禁止自动外发重试。",
             mutating: pathTemplate.endsWith("/settle"), idempotencyRequired: true
           }
+      : pathTemplate.startsWith("/api/desktop-pet/roles/") && pathTemplate.includes("/motion")
+        ? {
+            requestBody: method === "POST" ? 'JSON: requestId (8-128 ASCII ID), mode? (auto/walk/teleport), target: {kind:"position",x,y} or {kind:"screen-corner",corner,screenName?} or {kind:"active-window",corner}. Idempotency-Key must equal requestId.' : "No body; use the original requestId.",
+            response: "code=0, data: receipt. accepted/running is not arrival. succeeded includes position and destination in logical desktop pixels; failed/cancelled/uncertain retains the reason. Receipts remain one hour within the same Manager generation.",
+            auth: "Reuse Manager connection authentication. Runtime claim/acknowledgment endpoints are excluded from Agent tools.",
+            effects: method === "POST" ? "Moves only the enabled desktop pet using its existing animations; user drag/hide/lock takes precedence. Does not focus or move application windows or change wander settings." : "Read-only motion receipt.",
+            retry: "Keep requestId, body and generation; query the original receipt before retrying. Same ID/body never repeats movement; different body returns 409. A missing receipt after restart/expiry is unknown, not permission to replay.",
+            mutating: method === "POST", idempotencyRequired: method === "POST"
+          }
       : pathTemplate === "/api/agent/qq/diagnostics" && method === "GET"
         ? {
             requestBody: "无请求体；必须传唯一非空 routeId query。",
@@ -186,6 +195,10 @@ const roleKnowledge: readonly Definition[] = [
 ];
 
 const catalog: readonly AgentApiOperation[] = Object.freeze([
+  ...operations("desktop-pet", "/api/desktop-pet/roles/:roleId", [
+    ["POST", "/motion", "让桌宠走路或传送到坐标、屏幕四角或激活窗口四角"],
+    ["GET", "/motion/:requestId", "查询桌宠实际移动结果与抵达坐标"]
+  ]),
   ...operations("knowledge", "/api/roles/:roleId", roleKnowledge),
   ...operations("knowledge-alias", "/roles/:roleId", roleKnowledge),
   ...operations("persona", "/api/roles/:roleId", [
@@ -402,6 +415,8 @@ export function authorizeAgentApiOperation(method: string, requestTarget: string
   const target = validateAgentApiRequestTarget(method, requestTarget);
   if (!target.allowed) return target;
   const { rawSegments, decodedSegments, query } = target;
+  if (decodedSegments.length === 6 && decodedSegments.slice(0, 3).join("/") === "api/desktop-pet/roles"
+    && decodedSegments[4] === "motion" && decodedSegments[5] === "runtime") return { allowed: false, reason: "operation_not_allowed" };
   const match = matchers.find(({ operation, segments }) => operation.method === method
     && segments.length === rawSegments.length && segments.every((segment, index) => {
       if (!segment.startsWith(":")) return segment === rawSegments[index];

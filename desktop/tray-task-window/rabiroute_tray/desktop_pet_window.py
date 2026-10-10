@@ -4,10 +4,11 @@ import math
 import time
 
 from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QPoint, QSize, Qt, QTimer, Signal, qInfo
-from PySide6.QtGui import QColor, QMouseEvent, QMovie, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QImageReader, QMouseEvent, QMovie, QPainter, QPen, QPixmap, QTransform
 from PySide6.QtWidgets import QApplication, QGraphicsOpacityEffect, QLabel, QWidget
 
 from .desktop_pet_client import DesktopPetPack, LoadedDesktopPetAnimation
+from .desktop_pet_gait import SoleFrame, WalkingGait, walking_gait
 
 class _TravelHalo(QWidget):
     def __init__(self, parent: QWidget) -> None:
@@ -42,6 +43,7 @@ class DesktopPetWindow(QWidget):
     drag_finished = Signal()
     travel_phase_changed = Signal(str)
     travel_finished = Signal()
+    travel_result = Signal(bool)
 
     def __init__(self, persona_name: str = "人格", default_slot: int = 0) -> None:
         flags = (
@@ -65,6 +67,7 @@ class DesktopPetWindow(QWidget):
         self._travel_halo = _TravelHalo(self)
         self._travel_timer = QTimer(self)
         self._travel_timer.setSingleShot(True)
+        self._travel_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._travel_timer.timeout.connect(self._advance_travel)
         self._travel_origin = QPoint()
         self._travel_target = QPoint()
@@ -72,6 +75,16 @@ class DesktopPetWindow(QWidget):
         self._travel_duration = 0.0
         self._travel_kind = ""
         self._travel_arrived = False
+        self._travel_distance = 0.0
+        self._walked_distance = 0.0
+        self._facing_left = False
+        self._walk_last_tick = 0.0
+        self._walk_frame_elapsed = 0.0
+        self._walk_speed = 0.0
+        self._gait: WalkingGait | None = None
+        self._prepared_gaits: dict[tuple[str, str, int, int], WalkingGait | None] = {}
+        self._prepared_gif_delays: dict[tuple[str, str, int, int], tuple[int, ...]] = {}
+        self._png_frame_delays: tuple[int, ...] = ()
         self._drag_offset: QPoint | None = None
         self._dragging = False
         self._movie: QMovie | None = None
@@ -133,15 +146,35 @@ class DesktopPetWindow(QWidget):
         self._travel_target = QPoint(target)
         self._travel_kind = kind
         self._travel_started = time.monotonic()
-        self._travel_duration = 0.9 if kind == "teleport" else max(0.5, min(5.0, distance / 300))
+        self._travel_duration = 0.9 if kind == "teleport" else 0.0
+        self._travel_distance = distance
+        self._walked_distance = 0.0
         self._travel_arrived = False
-        self._travel_timer.start(33)
-        qInfo(f"rabiroute.desktop-pet.motion desktop_pet_travel_started kind={kind}")
         self.travel_phase_changed.emit("teleport-out" if kind == "teleport" else "move")
         if kind == "teleport":
+            self._travel_timer.start(33)
             self._travel_halo.setGeometry(self.rect())
             self._travel_halo.show()
             self._travel_halo.raise_()
+        else:
+            if not self._png_frames or self._gait is None:
+                self.cancel_travel()
+                return False
+            desired_left = target.x() < self.x() if abs(target.x() - self.x()) >= 8 else self._facing_left
+            self._facing_left = desired_left
+            cycle_ms = (sum(max(round(1000 / self._fps_cap), delay) for delay in self._png_frame_delays)
+                        if self._png_frame_delays else len(self._png_frames) * self._png_timer.interval())
+            self._walk_speed = self._gait.cycle_distance * 1000 / cycle_ms
+            self._travel_duration = distance / self._walk_speed
+            self._walk_last_tick = time.monotonic()
+            self._walk_frame_elapsed = 0.0
+            # One clock drives animation and continuous root motion. No frame-sized jumps.
+            self._png_timer.stop()
+            self._display_png_frame()
+            self._travel_timer.start(16)
+        qInfo(f"rabiroute.desktop-pet.motion desktop_pet_travel_started kind={kind} "
+              f"distance={distance:.1f} duration={self._travel_duration:.2f} "
+              f"cycleDistance={self._gait.cycle_distance if kind == 'move' and self._gait else 0:.2f}")
         return True
 
     def cancel_travel(self, *, completed: bool = False) -> None:
@@ -151,11 +184,35 @@ class DesktopPetWindow(QWidget):
         self._travel_opacity.setOpacity(1)
         self._label.setGeometry(self.rect())
         self._travel_halo.hide()
+        if self._png_frames and self._active_animation:
+            self._png_timer.start(self._frame_interval(self._active_animation.state.fps))
         if active:
             qInfo("rabiroute.desktop-pet.motion " + ("desktop_pet_travel_completed" if completed else "desktop_pet_travel_cancelled"))
+            self.travel_result.emit(completed)
             self.travel_finished.emit()
 
     def _advance_travel(self) -> None:
+        if self._travel_kind == "move":
+            now = time.monotonic()
+            # A delayed UI callback slows both clocks; it cannot teleport the body ahead.
+            elapsed = max(0.0, min(0.05, now - self._walk_last_tick))
+            self._walk_last_tick = now
+            self._walk_frame_elapsed += elapsed
+            while self._active_animation and self._walk_frame_elapsed + 0.000001 >= self._frame_interval(self._active_animation.state.fps) / 1000:
+                self._walk_frame_elapsed = max(0.0, self._walk_frame_elapsed - self._frame_interval(self._active_animation.state.fps) / 1000)
+                self._advance_png_frame()
+            self._walked_distance = min(self._travel_distance, self._walked_distance + self._walk_speed * elapsed)
+            progress = self._walked_distance / self._travel_distance
+            delta = self._travel_target - self._travel_origin
+            self.move(self._travel_origin + QPoint(round(delta.x() * progress), round(delta.y() * progress)))
+            if self._walked_distance >= self._travel_distance:
+                self._keep_visible()
+                self.cancel_travel(completed=True)
+            else:
+                self._travel_timer.start(16)
+            return
+        if self._travel_kind != "teleport":
+            return
         progress = min(1.0, (time.monotonic() - self._travel_started) / self._travel_duration)
         if self._travel_kind == "teleport":
             self._travel_opacity.setOpacity(abs(2 * progress - 1))
@@ -165,11 +222,6 @@ class DesktopPetWindow(QWidget):
                 self.travel_phase_changed.emit("teleport-in")
             self._travel_halo.progress = progress
             self._travel_halo.update()
-        else:
-            eased = progress * progress * (3 - 2 * progress)
-            self.move(self._travel_origin + (self._travel_target - self._travel_origin) * eased)
-            hop = round(abs(math.sin((time.monotonic() - self._travel_started) * 12)) * 7 * math.sin(math.pi * progress))
-            self._label.move(0, -hop)
         if progress >= 1:
             self.move(self._travel_target)
             self._keep_visible()
@@ -192,6 +244,8 @@ class DesktopPetWindow(QWidget):
 
     def play(self, pack: DesktopPetPack, animation: LoadedDesktopPetAnimation) -> None:
         self.stop_animation()
+        if self._active_pack is None or self._active_pack.pack_id != pack.pack_id:
+            self._facing_left = pack.source_facing == "left"
         self._active_pack = pack
         self._active_animation = animation
         target = self._target_size(pack)
@@ -200,36 +254,43 @@ class DesktopPetWindow(QWidget):
         self._label.setGeometry(self.rect())
         self._label.setText("")
         self._label.setStyleSheet("background: transparent;")
-        if animation.state.kind == "gif":
+        if animation.state.kind == "gif" and animation.state.name != "move":
             self._play_gif(animation.assets[0], target, animation.state.next_state)
         else:
             self._play_png_sequence(animation, target)
 
     def prepare_animation(self, pack: DesktopPetPack, animation: LoadedDesktopPetAnimation) -> bool:
         """Pre-render a Manager-authorized PNG action before the user can select it."""
-        if animation.state.kind != "png-sequence":
+        if animation.state.kind != "png-sequence" and animation.state.name != "move":
             return True
         target = self._target_size(pack)
         cache_key = self._prepared_key(pack, animation, target)
         if cache_key in self._prepared_png_frames:
             return True
-        frames = self._decode_png_frames(animation, target)
+        frames = self._decode_png_frames(animation, target, cache_key)
         if not frames:
             return False
         self._prepared_png_frames[cache_key] = frames
+        if animation.state.name == "move":
+            self._prepared_gaits[cache_key] = walking_gait(tuple(self._measure_soles(frame) for frame in frames), pack.source_facing)
         return True
 
     def is_animation_prepared(self, pack: DesktopPetPack, animation: LoadedDesktopPetAnimation) -> bool:
-        if animation.state.kind != "png-sequence":
+        if animation.state.kind != "png-sequence" and animation.state.name != "move":
             return True
-        return self._prepared_key(pack, animation, self._target_size(pack)) in self._prepared_png_frames
+        key = self._prepared_key(pack, animation, self._target_size(pack))
+        return key in self._prepared_png_frames and (animation.state.name != "move" or self._prepared_gaits.get(key) is not None)
 
     def clear_prepared_animations(self) -> None:
         self._prepared_png_frames.clear()
+        self._prepared_gaits.clear()
+        self._prepared_gif_delays.clear()
 
     def stop_animation(self) -> None:
         self._png_timer.stop()
         self._png_frames = ()
+        self._gait = None
+        self._png_frame_delays = ()
         if self._movie is not None:
             self._movie.stop()
             self._movie.deleteLater()
@@ -316,6 +377,7 @@ class DesktopPetWindow(QWidget):
             and self._active_animation is not None
             and (abs(self._scale - previous_scale) > 0.001 or self._fps_cap != previous_fps_cap)
         ):
+            self.cancel_travel()
             if abs(self._scale - previous_scale) > 0.001:
                 self.clear_prepared_animations()
             self.play(self._active_pack, self._active_animation)
@@ -372,25 +434,40 @@ class DesktopPetWindow(QWidget):
         movie.finished.connect(lambda: self.animation_finished.emit(next_state))
         self._movie_buffer = buffer
         self._movie = movie
-        self._label.setMovie(movie)
+        movie.frameChanged.connect(self._display_movie_frame)
         movie.start()
+
+    def _display_movie_frame(self, _index: int) -> None:
+        if self._movie is not None:
+            self._label.setPixmap(self._movie.currentPixmap().transformed(
+                QTransform().scale(self._facing_scale(), 1)))
 
     def _play_png_sequence(self, animation: LoadedDesktopPetAnimation, target: QSize) -> None:
         cache_key = self._prepared_key(self._active_pack, animation, target)
         frames = self._prepared_png_frames.get(cache_key)
         if frames is None:
-            frames = self._decode_png_frames(animation, target)
+            frames = self._decode_png_frames(animation, target, cache_key)
             if frames:
                 self._prepared_png_frames[cache_key] = frames
         if not frames:
             self.show_placeholder(f"{self._persona_name}\n素材无法解码")
             return
         self._png_frames = frames
+        self._png_frame_delays = self._prepared_gif_delays.get(cache_key, ())
+        if animation.state.name == "move":
+            if cache_key not in self._prepared_gaits:
+                self._prepared_gaits[cache_key] = walking_gait(tuple(self._measure_soles(frame) for frame in frames), self._active_pack.source_facing)
+            self._gait = self._prepared_gaits[cache_key]
         self._png_index = 0
         self._png_loop = animation.state.loop
         self._png_next_state = animation.state.next_state
-        self._label.setPixmap(self._png_frames[0])
-        self._png_timer.start(max(42, round(1000 / min(animation.state.fps, self._fps_cap))))
+        self._display_png_frame()
+        self._png_timer.start(self._frame_interval(animation.state.fps))
+
+    def _frame_interval(self, fps: int) -> int:
+        if self._png_frame_delays:
+            return max(round(1000 / self._fps_cap), self._png_frame_delays[self._png_index])
+        return max(42, round(1000 / min(fps, self._fps_cap)))
 
     def _target_size(self, pack: DesktopPetPack) -> QSize:
         return QSize(
@@ -406,7 +483,24 @@ class DesktopPetWindow(QWidget):
     ) -> tuple[str, str, int, int]:
         return (pack.pack_id if pack is not None else "", animation.state.name, target.width(), target.height())
 
-    def _decode_png_frames(self, animation: LoadedDesktopPetAnimation, target: QSize) -> tuple[QPixmap, ...]:
+    def _decode_png_frames(self, animation: LoadedDesktopPetAnimation, target: QSize,
+                           cache_key: tuple[str, str, int, int]) -> tuple[QPixmap, ...]:
+        if animation.state.kind == "gif":
+            buffer = QBuffer()
+            buffer.setData(QByteArray(animation.assets[0]))
+            buffer.open(QIODevice.OpenModeFlag.ReadOnly)
+            reader = QImageReader(buffer, b"gif")
+            frames, delays = [], []
+            for _ in range(600):
+                image = reader.read()
+                if image.isNull():
+                    break
+                frames.append(QPixmap.fromImage(image).scaled(target, Qt.AspectRatioMode.KeepAspectRatio,
+                                                              Qt.TransformationMode.SmoothTransformation))
+                delays.append(max(10, reader.nextImageDelay()))
+            buffer.close()
+            self._prepared_gif_delays[cache_key] = tuple(delays)
+            return tuple(frames)
         frames: list[QPixmap] = []
         for payload in animation.assets:
             pixmap = QPixmap()
@@ -425,13 +519,49 @@ class DesktopPetWindow(QWidget):
             return
         next_index = self._png_index + 1
         if next_index >= len(self._png_frames):
-            if not self._png_loop:
+            if not self._png_loop and self._travel_kind != "move":
                 self._png_timer.stop()
                 self.animation_finished.emit(self._png_next_state)
                 return
             next_index = 0
         self._png_index = next_index
-        self._label.setPixmap(self._png_frames[self._png_index])
+        if self._png_frame_delays and self._active_animation and self._travel_kind != "move":
+            self._png_timer.start(self._frame_interval(self._active_animation.state.fps))
+        self._display_png_frame()
+
+    @staticmethod
+    def _measure_soles(pixmap: QPixmap) -> SoleFrame:
+        image = pixmap.toImage()
+        source_width, source_height = image.width(), image.height()
+        if max(source_width, source_height) > 256:
+            image = image.scaled(256, 256, Qt.AspectRatioMode.KeepAspectRatio,
+                                 Qt.TransformationMode.SmoothTransformation)
+        # Only the lowest quarter of each half is eligible: no hands/tail/body.
+        band_top = round(image.height() * 0.75)
+        sole_points = []
+        for left, right in ((0, image.width() // 2), (image.width() // 2, image.width())):
+            point = None
+            for y in range(image.height() - 1, band_top - 1, -1):
+                xs = [x for x in range(left, right) if image.pixelColor(x, y).alpha() >= 128]
+                if xs:
+                    point = (sum(xs) / len(xs) * source_width / image.width(),
+                             y * source_height / image.height())
+                    break
+            sole_points.append(point)
+        return SoleFrame(*sole_points)
+
+    def _facing_scale(self) -> float:
+        source_left = self._active_pack is not None and self._active_pack.source_facing == "left"
+        return -1.0 if self._facing_left != source_left else 1.0
+
+    def _display_png_frame(self) -> None:
+        if not self._png_frames:
+            return
+        frame = self._png_frames[self._png_index]
+        horizontal_scale = self._facing_scale()
+        self._label.setPixmap(frame.transformed(QTransform().scale(horizontal_scale, 1)))
+        floor_offset = self._gait.floor_offsets[self._png_index] if self._travel_kind == "move" and self._gait else 0
+        self._label.move(0, round(floor_offset))
 
     def resizeEvent(self, event) -> None:
         self._label.setGeometry(self.rect())

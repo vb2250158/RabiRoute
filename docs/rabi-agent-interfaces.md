@@ -1745,3 +1745,11 @@ Manager 失败响应附带 `errorMessages`，包含 zh-CN 和 `en`，并保留�
 正式回传的 inReplyToRequestId 关联请求时可省略 prompt，result 与 nextAction 仍必填；普通发送仍要求 prompt。新回复不生成历史结束标记。
 
 计划步骤资源记录及分批归档见[计划附件与步骤文件记录](plan-resources.md)。
+
+
+## 桌宠移动 / Desktop-pet movement
+
+Agent 使用 `POST /api/desktop-pet/roles/:roleId/motion`，并用
+`GET /api/desktop-pet/roles/:roleId/motion/:requestId` 查询实际执行结果。
+接口只控制桌宠，不改变应用窗口焦点或位置，不修改闲逛配置。
+完整参数、幂等与运行限制见[桌宠移动接口](desktop-pet-agent-motion.md)。

@@ -58,6 +58,7 @@ test("desktop pet catalog binds packs to the role and naturally sorts PNG frames
 
   assert.equal(catalog.packs.length, 1);
   assert.equal(catalog.packs[0].personaId, "YeYu");
+  assert.equal(catalog.packs[0].sourceFacing, "right");
   assert.deepEqual(catalog.packs[0].idleBehavior, {
     randomMinSeconds: 75,
     randomMaxSeconds: 180,
@@ -81,6 +82,18 @@ test("desktop pet catalog rejects a manifest owned by another persona", () => {
 
   assert.equal(catalog.packs.length, 0);
   assert.match(catalog.diagnostics[0].message, /personaId/);
+});
+
+test("desktop pet catalog preserves authored left-facing art and normalizes invalid facing", () => {
+  const roleDir = roleFixture();
+  const cacheRoot = roleFixture();
+  writePack(roleDir);
+  const manifestPath = path.join(roleDir, "desktop-pet", "packs", "yeyu-library-default", "pet-pack.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  for (const [value, expected] of [["left", "left"], ["up", "right"]]) {
+    fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, sourceFacing: value }));
+    assert.equal(listDesktopPetPacks("YeYu", roleDir, cacheRoot).packs[0].sourceFacing, expected);
+  }
 });
 
 test("desktop pet catalog ignores template-only pack skeletons", () => {

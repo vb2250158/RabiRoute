@@ -13,6 +13,7 @@ import { CodexDesktopBridge } from "../codexDesktopBridge.js";
 import { listCodexModels, listCodexThreads, type CodexModelCatalogEntry } from "../codexRuntime.js";
 import {
   listDshModels,
+  listDshAgentPresets,
   listDshSessions,
   type DshModelCatalogEntry
 } from "../dshSessionBridge.js";
@@ -112,6 +113,7 @@ export type AgentScanResult = {
   sessions?: AgentScanSession[];
   sessionPage?: AgentSessionPage;
   models?: AgentScanModel[];
+  agentPresets?: Array<{ id: string; name?: string; description?: string; broken?: string }>;
   plugins?: Array<{ id: string; name: string; installed: boolean; version?: string; healthy?: boolean; details?: string[] }>;
   warnings?: string[];
   transport?: { protocol: string; mode: string };
@@ -209,6 +211,7 @@ export type AgentManagerApiContext = {
   dshSessions?: AgentScanSession[];
   listDshSessions?: (query: AgentSessionPageQuery & { baseUrl: string }) => Promise<AgentScanSession[]>;
   listDshModels?: (baseUrl: string) => Promise<{ models: DshModelCatalogEntry[]; warnings: string[] }>;
+  listDshAgentPresets?: typeof listDshAgentPresets;
   discoverLocalDsh?: () => DshLocalDiscovery;
   /** Overrides for the WorkBuddy session descriptor directory and task database. */
   workbuddySessionsDir?: string;
@@ -261,6 +264,11 @@ export async function scanDshAgentAdapter(
         .then((catalog) => ({ catalog, error: "" }))
         .catch((error) => ({ catalog: { models: [], warnings: [] }, error: error instanceof Error ? error.message : String(error) }))
     : Promise.resolve({ catalog: { models: [], warnings: [] }, error: "" });
+  const presetCatalogPromise = dshEndpointHealthy && (ctx.listDshAgentPresets || (ctx.dshSessions == null && ctx.listDshSessions == null))
+    ? (ctx.listDshAgentPresets ?? listDshAgentPresets)(dshBaseUrl)
+        .then(presets => ({ presets, error: "" }))
+        .catch(error => ({ presets: [], error: error instanceof Error ? error.message : String(error) }))
+    : Promise.resolve({ presets: [], error: "" });
   let dshSessionWarning = "";
   let rawDshSessions: AgentScanSession[] = ctx.dshSessions ?? [];
   if (!ctx.dshSessions && (ctx.listDshSessions || dshEndpointHealthy)) {
@@ -314,6 +322,7 @@ export async function scanDshAgentAdapter(
   ]);
   // Base connectivity belongs to the DSH owner API, not optional Rabi UI/tools.
   const modelRead = await modelCatalogPromise;
+  const presetRead = await presetCatalogPromise;
   return {
     agents: { dsh: {
       ...agentScanManifestFields("dsh"),
@@ -323,6 +332,7 @@ export async function scanDshAgentAdapter(
       projects: dshProjects,
       sessions: dshSessions,
       sessionPage: dshSessionPage,
+      agentPresets: presetRead.presets,
       models: modelRead.catalog.models.map((model) => ({
         id: model.id,
         name: model.name,
@@ -333,6 +343,7 @@ export async function scanDshAgentAdapter(
         reasoningEfforts: model.reasoningEfforts
       })),
       warnings: [
+        ...(presetRead.error ? [`读取 DSH 会话模式失败：${presetRead.error}`] : []),
         ...(modelRead.error ? [`读取 DSH 模型目录失败：${modelRead.error}`] : []),
         ...modelRead.catalog.warnings.map((warning) => `DSH 模型目录：${warning}`),
         ...(dshSessionWarning ? [dshSessionWarning] : []),

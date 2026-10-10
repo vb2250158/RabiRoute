@@ -367,6 +367,7 @@ export type GatewayDefinition = {
   dshSessionName?: string;
   dshCwd?: string;
   dshBaseUrl?: string;
+  dshAgentPreset?: string;
   dshModelProvider?: string;
   dshModel?: string;
   dshReasoningEffort?: string;
@@ -1496,6 +1497,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     dshSessionName: definition.dshSessionName?.trim() || undefined,
     dshCwd,
     dshBaseUrl: definition.dshBaseUrl?.trim() || undefined,
+    dshAgentPreset: definition.dshAgentPreset?.trim() || undefined,
     dshModelProvider: definition.dshModelProvider?.trim() || undefined,
     dshModel: definition.dshModel?.trim() || undefined,
     dshReasoningEffort: definition.dshReasoningEffort?.trim() || undefined,

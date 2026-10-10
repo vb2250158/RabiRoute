@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { managerReadWorkerPool } from "./managerReadWorkerPool.js";
 import http from "node:http";
+import { handleDesktopPetMotion } from "./desktopPetMotion.js";
 import path from "node:path";
 import { copyDesktopPetPackDirectoryAsync, importDesktopPetPack } from "./desktopPetPackImport.js";
 import {
@@ -48,6 +49,7 @@ export type DesktopPetPackPresentation = {
     anchorY: number;
   };
   scale: number;
+  sourceFacing: "left" | "right";
   states: Record<string, DesktopPetStateAsset>;
   idleBehavior?: DesktopPetIdleBehavior;
 };
@@ -253,6 +255,7 @@ function readPack(roleId: string, packDir: string): DesktopPetPackPresentation {
       anchorY: finiteNumber(canvas.anchorY, 0.96, 0, 1)
     },
     scale: finiteNumber(defaults.scale, 0.5, 0.1, 2),
+    sourceFacing: manifest.sourceFacing === "left" ? "left" : "right",
     states,
     ...(idleBehavior ? { idleBehavior } : {})
   };
@@ -403,6 +406,7 @@ export function handleDesktopPetApi(
   cacheRoot = DEFAULT_DESKTOP_PET_CACHE_ROOT,
   publishEvent?: DesktopPetEventPublisher
 ): boolean {
+  if (handleDesktopPetMotion(request, requestUrl, response, settings, publishEvent)) return true;
   const bindingMatch = requestUrl.pathname.match(/^\/api\/desktop-pet\/roles\/([^/]+)$/);
   const importMatch = requestUrl.pathname.match(/^\/api\/desktop-pet\/roles\/([^/]+)\/packs\/import$/);
   const cacheMatch = requestUrl.pathname.match(/^\/api\/desktop-pet\/roles\/([^/]+)\/packs\/([^/]+)\/cache$/);

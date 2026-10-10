@@ -100,6 +100,7 @@ export type AgentThreadRequest = {
   reasoningEffort?: CodexReasoningEffort;
   imagePaths?: string[];
   dshBaseUrl?: string;
+  dshAgentPreset?: string;
   dshDeliveryMode?: "queue" | "steer";
   messageSource?: RabiMessageSource;
   contextBlocks?: string[];

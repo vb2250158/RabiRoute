@@ -53,6 +53,7 @@ import { projectDirectoryLayout } from "../shared/projectDirectoryLayout.js";
 import { resolveRuntimeLayout } from "../shared/runtimeLayout.js";
 import { listCodexDesktopWorkspaces, readCodexDesktopThread } from "../codexDesktopBridge.js";
 import { isDshSessionId } from "../dshSessionBridge.js";
+import { bindDshSessionForSave } from "../shared/codexSessionBinding.js";
 import { sameCodexWorkspace } from "../codexTaskIdentity.js";
 import { selectAgentThreadRouteId } from "./agentThreadRouteSelection.js";
 import { agentStateReportDecision } from "../agentAdapters/stateReportOrder.js";
@@ -701,6 +702,7 @@ type GatewayDefinition = {
   dshSessionName?: string;
   dshCwd?: string;
   dshBaseUrl?: string;
+  dshAgentPreset?: string;
   dshModelProvider?: string;
   workbuddySessionId?: string;
   workbuddySessionName?: string;
@@ -1026,7 +1028,8 @@ function agentThreadRequestOptions(
       : runtime?.definition.dshBaseUrl
         ? { dshBaseUrl: runtime.definition.dshBaseUrl }
         : {}),
-    ...extra
+    ...extra,
+    dshAgentPreset: request.dshAgentPreset?.trim() || extra.dshAgentPreset
   };
 }
 
@@ -1894,6 +1897,9 @@ async function writeConfig(
 async function writeGatewayConfig(id: string, definition: GatewayDefinition, hash: string, operationId: string): Promise<void> {
   validateNapcatRouteCardinality(definition);
   const normalized = normalizeDefinition(definition);
+  if (normalized.dshAgentPreset) {
+    await bindDshSessionForSave(normalized, request => handleLocalAgentThreadRequest(request, agentThreadRequestOptions(request)));
+  }
   // The worker merges only this Route with its authoritative catalog inside the CAS transaction.
   try {
     await requireRouteCatalogLifecycle().upsert(normalized, hash, operationId, id);
@@ -2022,6 +2028,7 @@ export function adapterConfigItem(definition: GatewayDefinition): Record<string,
     dshSessionName: definition.dshSessionName,
     dshCwd: configPathValue(definition.dshCwd),
     dshBaseUrl: definition.dshBaseUrl,
+    dshAgentPreset: definition.dshAgentPreset,
     codexPlanAssistantEnabled: definition.codexPlanAssistantEnabled,
     codexPlanAssistantModel: definition.codexPlanAssistantModel,
     codexPlanAssistantSessions: definition.codexPlanAssistantSessions,

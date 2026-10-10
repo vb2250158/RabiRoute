@@ -9,6 +9,7 @@ export const ROLE_CONTEXT_MANAGER_HEADER = "x-rabiroute-expected-manager-instanc
 
 export type RoleContextProjectionRequest = {
   roleId: string;
+  routeId?: string;
   signalText?: string;
   includePendingConsolidation?: boolean;
   consolidationTrigger?: "auto" | "manual" | "api";
@@ -67,11 +68,11 @@ export function handleRoleContextProjectionRequest(
     context.jsonResponse(response, 409, { code: -1, error: "MANAGER_IDENTITY_MISMATCH", message: "Manager generation changed." });
     return true;
   }
-  const routeId = String(request.headers[ROLE_CONTEXT_ROUTE_HEADER] || "").trim();
   const capability = String(request.headers[ROLE_CONTEXT_CAPABILITY_HEADER] || "").trim();
   void context.readJsonBody<RoleContextProjectionRequest>(request, 64 * 1024)
     .then((body) => {
       const roleId = String(body?.roleId || "").trim();
+      const routeId = String(request.headers[ROLE_CONTEXT_ROUTE_HEADER] || body.routeId || "").trim();
       if (!roleId || !context.verifyCapability(routeId, roleId, capability)) {
         context.jsonResponse(response, 403, { code: -1, error: "PERSONA_CAPABILITY_REQUIRED", message: "Persona capability is invalid." });
         return;
@@ -140,13 +141,14 @@ export async function fetchRoleContextProjection(input: FetchRoleContextProjecti
       method: "POST",
       headers: {
         "content-type": "application/json; charset=utf-8",
-        [ROLE_CONTEXT_ROUTE_HEADER]: input.routeId,
+        [ROLE_CONTEXT_ROUTE_HEADER]: /^[\x00-\x7f]*$/.test(input.routeId) ? input.routeId : "",
         [ROLE_CONTEXT_CAPABILITY_HEADER]: input.capability,
         [ROLE_CONTEXT_GENERATION_HEADER]: input.applicationGenerationId,
         [ROLE_CONTEXT_MANAGER_HEADER]: input.managerInstanceId
       },
       body: JSON.stringify({
         roleId: input.roleId,
+        routeId: input.routeId,
         signalText: input.signalText,
         includePendingConsolidation: input.includePendingConsolidation,
         consolidationTrigger: input.consolidationTrigger

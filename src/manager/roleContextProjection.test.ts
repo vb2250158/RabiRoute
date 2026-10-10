@@ -91,6 +91,17 @@ test("role context projection is fenced by route capability and exact Manager id
   });
 });
 
+test("Chinese route IDs reach the owner through JSON and retain capability checks", async () => {
+  await withServer({ verifyCapability: (routeId, roleId, capability) =>
+    routeId === "夜雨" && roleId === "YeYu" && capability === "capability-1"
+  }, async managerBaseUrl => {
+    const input = { ...request(managerBaseUrl), routeId: "夜雨", roleId: "YeYu" };
+    assert.equal((await fetchRoleContextProjection(input)).roleDir, "C:/fixture/roles/YeYu");
+    await assert.rejects(fetchRoleContextProjection({ ...input, capability: "wrong" }),
+      /Persona capability is invalid/);
+  });
+});
+
 test("cold role context returns retryable 503 without a storage fallback", async () => {
   let refreshes = 0;
   await withServer({ resolve: () => undefined, requestRefresh: () => { refreshes += 1; } }, async (managerBaseUrl) => {

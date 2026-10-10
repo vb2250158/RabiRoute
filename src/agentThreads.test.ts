@@ -2128,7 +2128,7 @@ test("DSH Agent thread flow discovers, creates, renames, resolves, and delivers 
     updatedAt: number;
     running: boolean;
     cwd: string;
-    projections: { values: { title: string } };
+    projections: { values: { title: string; agentPreset?: string } };
   }> = [];
   const methods: string[] = [];
   globalThis.fetch = async (_input, init) => {
@@ -2159,7 +2159,7 @@ test("DSH Agent thread flow discovers, creates, renames, resolves, and delivers 
         updatedAt: Date.now(),
         running: false,
         cwd: args.request?.workspaceId === "workspace-rabi" ? process.cwd() : String(args.request?.cwd || ""),
-        projections: { values: { title: sessionId } }
+        projections: { values: { title: sessionId, agentPreset: args.request?.agentPreset } }
       });
       value = { sessionId };
     } else if (body.method === "session/rename") {
@@ -2194,6 +2194,7 @@ test("DSH Agent thread flow discovers, creates, renames, resolves, and delivers 
     assert.equal(created.data.agentAdapter, "dsh");
     assert.equal((created.data.thread as { id: string }).id, sessionId);
     assert.equal(created.data.initialTurnStatus, "started");
+    assert.equal((created.data.thread as { agentPreset?: string }).agentPreset, options.dshAgentPreset);
 
     const listed = await handleAgentThreadRequest({
       action: "list",
@@ -2226,6 +2227,7 @@ test("DSH Agent thread flow discovers, creates, renames, resolves, and delivers 
     assert.equal((sent.data.delivery as { acceptedBy: string; transport: string }).transport, "http");
     assert.equal(methods.filter((method) => method === "workspace/create").length, 1);
     assert.equal(methods.filter((method) => method === "session/create").length, 1);
+    assert.equal(methods.includes("agentPresets/select"), false);
     assert.equal(methods.filter((method) => method === "session/prompt").length, 2);
   } finally {
     globalThis.fetch = originalFetch;

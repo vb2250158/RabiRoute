@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  createDshSession, listDshSessions, readDshSession, listDshModels,
+  createDshSession, listDshSessions, readDshSession, listDshModels, listDshAgentPresets,
   normalizeDshModelCatalogForTest, sendDshSessionMessage, renameDshSession,
   resolveDshSession, type DshModelSelection
 } from "./dshSessionBridge.js";
@@ -12,7 +12,7 @@ import {
 type RpcRequest = { type: string; rpcId: string; method: string; payload: { args: Record<string, any> } };
 type SessionRow = {
   sessionId: string; updatedAt: number; running: boolean; cwd?: string;
-  projections?: { values?: { title?: string; modelSelection?: { next: DshModelSelection | null; lastUsed: DshModelSelection | null } } };
+  projections?: { values?: { title?: string; agentPreset?: string; modelSelection?: { next: DshModelSelection | null; lastUsed: DshModelSelection | null } } };
 };
 const fixtureBaseUrl = "http://127.0.0.1:3080";
 const id = (n: number) => `session-00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -48,7 +48,7 @@ function installDshRpcStub(rows: SessionRow[], response?: (body: RpcRequest) => 
     assert.deepEqual(Object.keys(body.payload), ["args"]);
     const args = body.payload.args;
     const key = body.method === "session/list" ? "_request" : "request";
-    assert.deepEqual(Object.keys(args), body.method === "session/modelCatalog" ? [] : [key]);
+    assert.deepEqual(Object.keys(args), ["session/modelCatalog", "agentPresets/list"].includes(body.method) ? [] : body.method === "agentPresets/select" ? ["agentId", "agentPreset"] : [key]);
     const request = args[key];
     requests.push(body);
     let value: unknown;
@@ -73,6 +73,13 @@ function installDshRpcStub(rows: SessionRow[], response?: (body: RpcRequest) => 
       assert.ok(item);
       item.projections = { values: { title: request.title } };
       value = { title: request.title, seq: 1 };
+    } else if (body.method === "agentPresets/list") {
+      value = { presets: [{ id: "rabi-assistant", name: "Rabi助手模式" }] };
+    } else if (body.method === "agentPresets/select") {
+      const item = rows.find(item => item.sessionId === args.agentId);
+      assert.ok(item);
+      item.projections = { values: { ...item.projections?.values, agentPreset: args.agentPreset } };
+      value = args.agentPreset;
     } else if (body.method === "session/modelCatalog") {
       value = catalog;
     } else if (body.method === "session/selectModel") {
@@ -159,6 +166,31 @@ test("current model catalog is no-argument session/modelCatalog with reasoning a
     assert.deepEqual(await listDshModels(fixtureBaseUrl), normalizeDshModelCatalogForTest(catalog));
     assert.deepEqual((await listDshModels(fixtureBaseUrl)).models[0], { provider: "example-provider", providerName: "Example", id: "reasoner", name: "Reasoner", defaultReasoningEffort: "high", reasoningEfforts: [{ id: "high" }] });
     assert.deepEqual((await listDshModels(fixtureBaseUrl)).warnings, ["Offline：not connected"]);
+  } finally { stub.restore(); }
+});
+
+test("mode catalog and blank-session selection use the official preset owner and preserve identity", async () => {
+  const rows = [row(1)];
+  const stub = installDshRpcStub(rows);
+  try {
+    assert.deepEqual(await listDshAgentPresets(fixtureBaseUrl), [{ id: "rabi-assistant", name: "Rabi助手模式" }]);
+    const params = { sessionId: id(1), title: "Agent 1", cwd: "C:\\work\\example", createIfMissing: true, baseUrl: fixtureBaseUrl, agentPreset: "rabi-assistant" };
+    const resolved = await resolveDshSession(params);
+    assert.equal(resolved.kind, "id");
+    if (resolved.kind === "id") assert.equal(resolved.thread.agentPreset, "rabi-assistant");
+    await resolveDshSession(params);
+    assert.equal(stub.requests.filter(r => r.method === "agentPresets/select").length, 1);
+    assert.equal(stub.requests.some(r => r.method === "session/create"), false);
+    assert.deepEqual(stub.requests.find(r => r.method === "agentPresets/select")?.payload.args, { agentId: id(1), agentPreset: "rabi-assistant" });
+  } finally { stub.restore(); }
+});
+
+test("locked session refuses mode changes and never delivers or creates a substitute", async () => {
+  const stub = installDshRpcStub([row(1)], body => body.method === "agentPresets/select"
+    ? { ok: false, error: { code: "agent-preset/locked", message: "This session has already started" } } : undefined);
+  try {
+    await assert.rejects(sendDshSessionMessage({ sessionId: id(1), prompt: "must not arrive", cwd: "C:\\work\\example", baseUrl: fixtureBaseUrl, agentPreset: "rabi-assistant" }), /already started/);
+    assert.deepEqual(stub.requests.map(r => r.method), ["session/list", "agentPresets/select"]);
   } finally { stub.restore(); }
 });
 

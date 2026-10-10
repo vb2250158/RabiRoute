@@ -52,6 +52,8 @@ Enable **Pet wandering** under **Persona Configuration → Virtual avatar → Lo
 
 Travel on the same screen or a short distance across a monitor edge plays a preloaded looping `move` action while advancing the window. Cross-screen distances longer than the departure screen's diagonal fade out, show a portal halo, relocate and fade in; packs may supply `teleport-out` and `teleport-in` actions. Locking, pointer engagement or dragging, sleep, other actions, menus and fullscreen hiding pause wandering. Manual interaction pauses it for 30 seconds. Automatic travel does not overwrite manually saved placement or record foreground titles/content; minimized windows, the desktop and unrecognized monitors are skipped.
 
+Walking speed derives from grounded sole displacement and the actual playback period. Render size controls stride and the frame cap controls cadence. A shared animation clock updates position continuously approximately every 16ms, avoiding frame-sized jumps; delayed callbacks slow both animation and travel. Pack `sourceFacing` declares original art facing, defaulting to `right`; before stepping, the pet faces its destination and mirrors only when that differs from source facing. Facing persists after arrival. GIF retains original frame delays, without an extra hop or forced five-second arrival. Front-view marching is approximate; side-view turns and strict diagonal foot locking still require suitable art. See [the motion API](../../docs/desktop-pet-agent-motion_en.md) for computation and receipts.
+
 ## Out of scope
 
 - Starting, stopping, repairing, or supervising Manager; only RabiRoute Host owns the Windows application lifecycle.

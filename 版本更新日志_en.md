@@ -6,6 +6,18 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.29 - 2026-10-10
+
+- Add the Agent pet-motion API for logical coordinates, screen corners and active-window corners. Execute each request once, distinguish acceptance, execution, arrival, interruption and uncertain results, and exclude Desktop claim/result endpoints from Agent tools.
+- Calibrate walking speed from grounded sole displacement and animation duration, with one clock advancing frames and position continuously. Respect source facing and GIF frame delays, remove extra hops and forced five-second arrival, and refuse walking without a valid gait.
+- Add DSH Route session-mode selection through the official DSH preset catalog and owner API. Verify modes on save, resolution and delivery; stop when a started session rejects a switch without silently replacing it.
+- Fix persona-context requests for Chinese Route IDs by carrying the ID in JSON while preserving capability, application-generation and Manager-instance checks.
+- This is a source synchronization commit. Installed-runtime, real DSH-session and multi-monitor pet acceptance remain separate.
+
+- Source validation: 3013 backend tests (3000 passed, 13 skipped, no failures), all 486 WebGUI tests and 54 pet Python tests pass. Full build, public sample configuration checks and production/full dependency audits pass. Preserve the creation preset in the DSH owner fixture and verify that continued delivery to the same session does not select the mode again.
+
+- Remove two obsolete synchronous-read TODOs from the Manager storage migration ledger after reproducing the same mismatch on HEAD and candidate sources; retain the remaining storage-boundary gates.
+
 ## 0.3.28 - 2026-10-09
 
 - Fix Manager health stalls and repeated Host recovery caused by synchronous shared gateway-status.json reads during NapCat polling: bounded background workers perform physical reads while the control plane uses generation-owned snapshots, coalesces refreshes, retains the last successful status with an explicit stale marker on failure, and cancels pending work on teardown.

@@ -11,6 +11,7 @@ export type CodexRouteBinding = {
   dshSessionName?: string;
   dshCwd?: string;
   dshBaseUrl?: string;
+  dshAgentPreset?: string;
 };
 
 export type CodexBindingResolveRequest = {
@@ -21,6 +22,7 @@ export type CodexBindingResolveRequest = {
   createIfMissing: true;
   agentAdapter?: PlanAssistantAgentType;
   dshBaseUrl?: string;
+  dshAgentPreset?: string;
 };
 
 export type CodexBindingResolveResponse = {
@@ -90,7 +92,8 @@ export async function bindDshSessionForSave(
     title,
     cwd: gateway.dshCwd?.trim() || undefined,
     createIfMissing: true,
-    dshBaseUrl: gateway.dshBaseUrl?.trim() || undefined
+    dshBaseUrl: gateway.dshBaseUrl?.trim() || undefined,
+    ...(gateway.dshAgentPreset?.trim() ? { dshAgentPreset: gateway.dshAgentPreset.trim() } : {})
   });
   const thread = result.data.thread as Record<string, unknown> | undefined;
   if (result.statusCode < 200 || result.statusCode >= 300 || typeof thread?.id !== "string" || !thread.id) {
