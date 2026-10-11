@@ -4,12 +4,19 @@ import unittest
 import importlib.util
 import sys
 from pathlib import Path
+import types
+from contextlib import asynccontextmanager
+from unittest.mock import Mock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-spec = importlib.util.spec_from_file_location("all_day_capture", Path(__file__).parents[1] / "rabispeech" / "all_day_capture.py")
+test_package = types.ModuleType("capture_tests")
+test_package.__path__ = [str(Path(__file__).parents[1] / "rabispeech")]
+sys.modules[test_package.__name__] = test_package
+spec = importlib.util.spec_from_file_location("capture_tests.all_day_capture", Path(__file__).parents[1] / "rabispeech" / "all_day_capture.py")
 capture_module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = capture_module
+test_package.all_day_capture = capture_module
 spec.loader.exec_module(capture_module)
 register_all_day_capture = capture_module.register_all_day_capture
 capture_sources = capture_module.capture_sources
@@ -43,13 +50,52 @@ class Microphone:
 class AllDayCaptureTests(unittest.TestCase):
     def setUp(self):
         self.microphone = Microphone()
-        api = FastAPI()
-        register_all_day_capture(api, self.microphone, lambda request: None)
+        @asynccontextmanager
+        async def lifespan(api):
+            try:
+                yield
+            finally:
+                await close_capture()
+        api = FastAPI(lifespan=lifespan)
+        close_capture = register_all_day_capture(api, self.microphone, lambda request: None)
         self.client = TestClient(api)
         self.session = "11111111-1111-1111-1111-111111111111"
 
     def test_defaults_never_open_hardware(self):
         self.assertEqual(capture_sources({}, 0), [])
+
+    def test_camera_only_session_stop_renew_shutdown_and_tunnel_boundary(self):
+        owner = Mock()
+        owner.snapshot.return_value = {"source": "camera", "jpeg": "saved"}
+        @asynccontextmanager
+        async def lifespan(api):
+            try:
+                yield
+            finally:
+                await close()
+        api = FastAPI(lifespan=lifespan)
+        with patch.object(capture_module, "CameraOwner", return_value=owner):
+            close = register_all_day_capture(api, self.microphone, lambda request: None)
+        with TestClient(api) as client:
+            self.assertEqual(client.post("/v1/all-day/capture", json={"sources":{"camera":True}}).status_code,422)
+            owner.snapshot.assert_not_called()
+            body={"sessionId":self.session,"sources":{"camera":True},"cameraIndex":2}
+            self.assertEqual(client.post("/v1/all-day/capture",json=body).json()["samples"],[owner.snapshot.return_value])
+            owner.snapshot.assert_called_once_with(self.session,2)
+            self.assertFalse(self.microphone.running)
+            client.post("/v1/all-day/capture/renew",json={"sessionId":self.session})
+            owner.renew.assert_called_once_with(self.session)
+            self.assertEqual(client.post("/v1/all-day/capture/stop",json={"sessionId":None}).status_code,422)
+            owner.stop.assert_not_called()
+            client.post("/v1/all-day/capture/stop",json={"sessionId":self.session})
+            owner.stop.assert_called_once_with(self.session)
+            for action in ("stop","renew"):
+                self.assertEqual(client.post("/v1/all-day/capture/"+action,headers={"x-rabilink-tunnel-local":"generation"},json={"sessionId":self.session}).status_code,403)
+        self.assertEqual(owner.stop.call_args.args,())
+
+    def test_bounded_worker_inherits_private_dependencies(self):
+        # Run this suite with packaged Python too: its ._pth ignores PYTHONPATH.
+        self.assertEqual(capture_module.bounded_capture({}, 0), [])
 
     def test_disconnected_microphone_reopens_same_session(self):
         with self.client as client:
@@ -65,8 +111,8 @@ class AllDayCaptureTests(unittest.TestCase):
             if sources.get("camera"):
                 raise RuntimeError("Camera disconnected")
             return [{"source": "screen", "jpeg": "saved"}]
-        with self.client as client, patch("all_day_capture.bounded_capture", side_effect=capture):
-            response = client.post("/v1/all-day/capture", json={"sources": {"screen": True, "camera": True}})
+        with self.client as client, patch("capture_tests.all_day_capture.bounded_capture", side_effect=capture), patch.object(capture_module.CameraOwner, "snapshot", side_effect=RuntimeError("Camera disconnected")):
+            response = client.post("/v1/all-day/capture", json={"sessionId": self.session, "sources": {"screen": True, "camera": True}})
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json()["samples"], [{"source":"screen","jpeg":"saved"},{"source":"camera","error":"Camera disconnected"}])
 
@@ -85,8 +131,11 @@ class AllDayCaptureTests(unittest.TestCase):
 
     def test_shared_capture_failure_is_an_event_error(self):
         with patch("PIL.ImageGrab.grab", side_effect=RuntimeError("capture unavailable")):
-            self.assertEqual(capture_sources({"screen": True}, 0),
-                             [{"source": "screen", "error": "capture unavailable"}])
+            samples = capture_sources({"screen": True}, 0)
+        self.assertEqual(len(samples), 1)
+        self.assertEqual(samples[0]["source"], "screen")
+        self.assertIn("capture unavailable", samples[0]["error"])
+        self.assertNotIn("jpeg", samples[0])
 
     def test_lease_never_persists_capture_or_stops_another_session(self):
         with self.client as client:
@@ -100,7 +149,7 @@ class AllDayCaptureTests(unittest.TestCase):
             self.assertEqual(self.microphone.persisted, [False, False])
 
     def test_running_microphone_is_shared_and_survives_stop(self):
-        with self.client as client, patch("all_day_capture.bounded_capture", return_value=[]):
+        with self.client as client, patch("capture_tests.all_day_capture.bounded_capture", return_value=[]):
             self.microphone.running = True
             result = client.post("/v1/all-day/microphone/start", json={"sessionId": self.session})
             self.assertEqual(result.status_code, 200)
@@ -132,7 +181,7 @@ class AllDayCaptureTests(unittest.TestCase):
             self.assertEqual(client.post("/v1/all-day/microphone/start", headers=headers, json={"sessionId": self.session}).status_code, 403)
 
     def test_snapshot_options_are_validated_before_worker(self):
-        with self.client as client, patch("all_day_capture.bounded_capture", return_value=[]) as worker:
+        with self.client as client, patch("capture_tests.all_day_capture.bounded_capture", return_value=[]) as worker:
             self.assertEqual(client.post("/v1/all-day/capture", json={"sources": {"screen": "yes"}}).status_code, 422)
             worker.assert_not_called()
             response = client.post("/v1/all-day/capture", json={"sources": {"screen": True}, "cameraIndex": 0})

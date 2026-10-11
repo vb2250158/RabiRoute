@@ -9,6 +9,32 @@ class FakeSocket extends EventEmitter {
   close(): void { this.emit("close"); }
 }
 
+test("transport failure requests deployment recovery but invalid credentials and stop do not", async () => {
+  const socket = new FakeSocket();
+  let attempts = 0;
+  const owner = new XiaomiHomeEventMonitor({}, {
+    credentialToken: "test-only-token",
+    createSocket: () => socket,
+    deliverEvent: async () => undefined,
+    recoverConnection: async () => { attempts++; },
+    reconnectDelayMs: 60000
+  });
+  owner.start();
+  socket.emit("error");
+  assert.equal(attempts, 1);
+  owner.stop();
+  assert.equal(attempts, 1);
+  const authSocket = new FakeSocket();
+  const auth = new XiaomiHomeEventMonitor({}, {
+    credentialToken: "test-only-token", createSocket: () => authSocket,
+    deliverEvent: async () => undefined, recoverConnection: async () => { attempts++; }
+  });
+  auth.start();
+  authSocket.emit("message", JSON.stringify({ type: "auth_invalid" }));
+  assert.equal(attempts, 1);
+  auth.stop();
+});
+
 test("event monitor exposes authorization and subscription state without exposing credentials", () => {
   const missing = new XiaomiHomeEventMonitor({}, {
     deliverEvent: async () => undefined

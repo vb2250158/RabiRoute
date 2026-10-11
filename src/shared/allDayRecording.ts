@@ -31,16 +31,32 @@ export type AllDaySnapshot = {
   sourceErrors?: Partial<Record<AllDaySource, string>>;
   settings: AllDaySettings;
   running: boolean;
+  preparing?: boolean;
   activeRoleId: string | null;
   startedAt: number | null;
   lastSampleAt: number | null;
   error: string;
 };
+export type AllDayHealth = "off" | "waiting" | "preparing" | "starting" | "recording" | "degraded" | "failed" | "stale";
+export function allDayRecordingHealth(snapshot: AllDaySnapshot, now: number): AllDayHealth {
+  if (!snapshot.running) return snapshot.enabled ? "waiting" : "off";
+  if (snapshot.preparing) return "preparing";
+  const sources = ALL_DAY_SOURCES.filter(source => snapshot.settings.sources[source]);
+  const failedSources = sources.filter(source => snapshot.sourceErrors?.[source]);
+  if (snapshot.error && (!snapshot.lastSampleAt || failedSources.length === sources.length || !failedSources.length)) return "failed";
+  if (snapshot.error || failedSources.length) return "degraded";
+  if (!ALL_DAY_CAPTURE_SOURCES.some(source => snapshot.settings.sources[source])) return "waiting";
+  if (snapshot.lastSampleAt === null) return "starting";
+  return now - snapshot.lastSampleAt > Math.max(30_000, snapshot.settings.intervalSeconds * 2_000) ? "stale" : "recording";
+}
 /** Derived history metadata can be displayed while interrupted indexes recover. */
 export type AllDayCatalog = {
   events: AllDayEvent[];
   days: string[];
   incompleteDays: string[];
+  loading?: boolean;
+  pendingDays?: string[];
+  readError?: string;
 };
 /** Raw audio stays durable; only recognized speech belongs in the review event stream. */
 export function isReviewEvent(event: AllDayEvent): boolean {

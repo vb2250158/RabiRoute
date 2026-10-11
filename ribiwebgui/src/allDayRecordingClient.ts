@@ -1,6 +1,7 @@
 import { isReviewEvent, type AllDayEvent } from "../../src/shared/allDayRecording";
 
 const previews = new Map<string, { at: number; events: AllDayEvent[] }>();
+const persistedAt = new Map<string, number>();
 let previewDb: Promise<IDBDatabase | null> | undefined;
 function previewDatabase(): Promise<IDBDatabase | null> {
   if (typeof indexedDB === "undefined") return Promise.resolve(null);
@@ -53,11 +54,14 @@ export function rememberRecordingPreview(roleId: string, events: AllDayEvent[]):
   previews.delete(roleId); previews.set(roleId, snapshot);
   while (previews.size > 4) previews.delete(previews.keys().next().value!);
   try {
-    const serialized = JSON.stringify(snapshot);
     // A small synchronous preview complements the complete IndexedDB snapshot.
-    localStorage.setItem(`all-day-preview:${roleId}`, serialized.length <= 5_000_000 ? serialized : JSON.stringify({ at: snapshot.at, events: events.slice(-200) }));
+    localStorage.setItem(`all-day-preview:${roleId}`, JSON.stringify({ at: snapshot.at, events: events.length<=2000 ? events : events.slice(-200) }));
   } catch { /* Quota exhaustion only disables cross-reload preview storage. */ }
-  void previewTransaction(roleId, snapshot).catch(() => {});
+  if(snapshot.at-(persistedAt.get(roleId)??0)>=30_000) {
+    persistedAt.set(roleId,snapshot.at);
+    while(persistedAt.size>4) persistedAt.delete(persistedAt.keys().next().value!);
+    void previewTransaction(roleId, snapshot).catch(() => {});
+  }
 }
 
 /** Bound the complete read, including response bodies, without retrying capture mutations. */

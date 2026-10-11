@@ -6,6 +6,15 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.31 - 2026-10-11
+
+- Merge upstream 0.3.30 with local pet, all-day recording, speech and home-device changes. Preserve the public API contract for authenticated remote Agents and request checks after explicit user disable settings.
+- Add foreground-window companionship, pet bubbles and local recovery intent. Send current frames through existing Agent Routes; DSH recovery verifies the original session and workspace without replacement sessions or replaying uncertain deliveries.
+- Load recording catalogs and day indexes through bounded read workers; explicit reconstruction jobs do not block capture. Retain original events and merge concurrent writes. A single camera process owner uses expiring leases and releases capture on stop or source changes.
+- Reuse the existing speech dependency-installation job without repeated downloads after failure. Add session-scoped playback cancellation and deadlines, and per-Agent completion announcements.
+- Add filtered, paginated device directories and individual-device queries. Home Assistant recovery preserves existing virtual machines and disks. Move message diagnostics scans to asynchronous reads to keep the control plane responsive.
+- Source synchronization only. Installer updates, deployment and physical pet, camera and home-device acceptance remain separate.
+
 ## 0.3.30 - 2026-10-11
 
 - Merge upstream and local message, device-Agent and storage changes. Enabled authenticated Agents use public APIs; plan and Route bindings are not additional permission grants, while source sessions retain identity validation.

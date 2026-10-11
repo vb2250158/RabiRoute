@@ -1,5 +1,5 @@
 ﻿param(
-    [ValidateSet('Install', 'Start')][string]$Operation = 'Install',
+    [ValidateSet('Install', 'Start', 'Recover')][string]$Operation = 'Install',
     [Parameter(Mandatory = $true)][string]$Root,
     [ValidateSet('yes', 'no')][string]$AutoStart = 'no'
 )
@@ -11,7 +11,7 @@ if ($Root.StartsWith('\\') -or $Root.Contains('"')) { throw 'Installation requir
 $drive = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$([IO.Path]::GetPathRoot($Root).TrimEnd('\'))'"
 if (-not $drive -or $drive.DriveType -ne 3) { throw 'Installation requires a fixed local disk.' }
 for ($parent = $Root; $parent; $parent = [IO.Path]::GetDirectoryName($parent)) {
-    if ((Test-Path -LiteralPath $parent) -and ((Get-Item -LiteralPath $parent).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Installation paths cannot contain reparse points.' }
+    if ((Test-Path -LiteralPath $parent) -and ((Get-Item -LiteralPath $parent -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Installation paths cannot contain reparse points.' }
 }
 New-Item -ItemType Directory -Path $Root -Force | Out-Null
 $statusPath = Join-Path $Root 'status.json'
@@ -81,16 +81,62 @@ function Test-InstallationDisk([string]$AttachedPath, [string]$ExpectedPath) {
     return $false
 }
 
+function Test-RecoveryTaskUser([string]$UserId, [string]$ExpectedSid) {
+    try {
+        $sid = if ($UserId -match '^S-1-') { [Security.Principal.SecurityIdentifier]::new($UserId) }
+        else { [Security.Principal.NTAccount]::new($UserId).Translate([Security.Principal.SecurityIdentifier]) }
+        return $sid.Value -ceq $ExpectedSid
+    } catch { return $false }
+}
+
 $administrator = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+$recoveryOwner = 'RabiRoute Home Assistant OS recovery: ' + $Root
+$recoveryHash = [Security.Cryptography.SHA256]::Create()
+try { $recoveryId = ([BitConverter]::ToString($recoveryHash.ComputeHash([Text.Encoding]::UTF8.GetBytes($Root.ToLowerInvariant())))).Replace('-', '').Substring(0, 16) }
+finally { $recoveryHash.Dispose() }
+$recoveryTaskName = 'RabiRoute.HomeAssistantOs.Recovery.' + $recoveryId
+$recoveryDirectory = Join-Path $env:ProgramData ('RabiRouteHomeAssistantRecovery\' + $recoveryId)
+$recoveryScript = Join-Path $recoveryDirectory 'Recover-HomeAssistantOs.ps1'
+$recoveryLog = Join-Path $recoveryDirectory 'recovery-run.log'
+$powershellPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+$recoveryCommand = "try { & '" + $recoveryScript.Replace("'", "''") + "' -Operation 'Recover' -Root '" + $Root.Replace("'", "''") + "' -AutoStart 'yes'; exit " + '$LASTEXITCODE' + " } catch { [IO.File]::WriteAllText('" + $recoveryLog.Replace("'", "''") + "', " + '$_.Exception.ToString()' + "); exit 1 }"
+$recoveryArguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($recoveryCommand))
 if (-not $administrator) {
+    if ($Operation -eq 'Recover') {
+        # Only reuse the exact helper authorized by a foreground Start/Install. No UAC in background.
+        $task = Get-ScheduledTask -TaskName $recoveryTaskName -ErrorAction SilentlyContinue
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        if (-not $task -or $task.Description -cne $recoveryOwner -or $task.Actions.Count -ne 1 -or
+            $task.Actions[0].Execute -ine $powershellPath -or $task.Actions[0].Arguments -cne $recoveryArguments -or
+            $task.Actions[0].WorkingDirectory -ine $recoveryDirectory -or $task.Principal.LogonType -ne 'Interactive' -or
+            -not (Test-RecoveryTaskUser $task.Principal.UserId $identity.User.Value) -or $task.Principal.RunLevel -ne 'Highest') {
+            throw 'Background recovery needs one foreground Start with Windows administrator approval.'
+        }
+        $before = Get-ScheduledTaskInfo -TaskName $recoveryTaskName
+        $alreadyRunning = $task.State -eq 'Running'
+        $observedRunning = $alreadyRunning
+        if ($task.State -ne 'Running') { Start-ScheduledTask -TaskName $recoveryTaskName }
+        $deadline = [DateTime]::UtcNow.AddMinutes(5)
+        do {
+            Start-Sleep -Seconds 1
+            $task = Get-ScheduledTask -TaskName $recoveryTaskName
+            $info = Get-ScheduledTaskInfo -TaskName $recoveryTaskName
+            if ($task.State -eq 'Running') { $observedRunning = $true }
+            if ($task.State -ne 'Running' -and ($observedRunning -or $info.LastRunTime -gt $before.LastRunTime)) {
+                if ($info.LastTaskResult -ne 0) { throw 'Background recovery failed; inspect deployment status.' }
+                exit 0
+            }
+        } while ([DateTime]::UtcNow -lt $deadline)
+        throw 'Background recovery did not complete in time; the VM was preserved.'
+    }
     # Elevate only this fixed installer and its bounded arguments, never an HTTP-supplied command.
     $command = "& '" + $PSCommandPath.Replace("'", "''") + "' -Operation '" + $Operation + "' -Root '" + $Root.Replace("'", "''") + "' -AutoStart '" + $AutoStart + "'"
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
     Write-Status 'installing' '正在等待 Windows 管理员确认。' '' 'permission'
     try {
         $child = Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encoded) -Verb RunAs -WindowStyle Hidden -Wait -PassThru
-        if ($child.ExitCode -ne 0) { throw 'Elevated installer failed.' }
-    } catch { Write-Status 'error' '管理员授权未完成或安装器未能启动。请再次点击安装并确认 Windows 提示。' }
+        if ($child.ExitCode -ne 0) { exit $child.ExitCode }
+    } catch { Write-Status 'error' '管理员授权未完成或安装器未能启动。请再次点击启动或安装并确认 Windows 提示。'; exit 1 }
     exit
 }
 
@@ -186,6 +232,7 @@ try {
     $proxyKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\PortProxy\v4tov4\tcp'
     $existing = (Get-ItemProperty -LiteralPath $proxyKey -ErrorAction SilentlyContinue).'127.0.0.1/8123'
     $previous = if (Test-Path -LiteralPath $proxyReceipt) { Get-Content -LiteralPath $proxyReceipt -Raw | ConvertFrom-Json } else { $null }
+    if ($previous -and [string]$previous.vmId -cne [string]$vm.Id) { throw 'Loopback forwarding receipt belongs to another VM; it was not changed.' }
     $previousPort = if ($previous -and $previous.port) { [int]$previous.port } else { 8123 }
     if ($existing -and (-not $previous -or $existing -ne ($previous.address + '/' + $previousPort))) { throw 'Local port 8123 has another port-proxy owner; it was not changed.' }
     if (-not $existing -and (Get-NetTCPConnection -State Listen -LocalPort 8123 -ErrorAction SilentlyContinue)) { throw 'Local port 8123 is already occupied; it was not changed.' }
@@ -196,9 +243,43 @@ try {
     & netsh.exe interface portproxy add v4tov4 listenaddress=127.0.0.1 listenport=8123 connectaddress=$address connectport=80 | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not configure the loopback endpoint.' }
     [IO.File]::WriteAllText($proxyReceipt, (@{ address = $address; port = 80; vmId = [string]$vm.Id } | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+    if ($Operation -ne 'Recover' -and $AutoStart -eq 'yes') {
+        # On-demand only, bound to this user and installation. Recovery preserves the same VM/disk checks.
+        $existingTask = Get-ScheduledTask -TaskName $recoveryTaskName -ErrorAction SilentlyContinue
+        if ($existingTask -and $existingTask.Description -cne $recoveryOwner) { throw 'Recovery task has another owner; it was not changed.' }
+        # A highest-privilege task must never execute from a user-writable application directory.
+        for ($parent = $recoveryDirectory; $parent -and $parent -ne $env:ProgramData; $parent = [IO.Path]::GetDirectoryName($parent)) {
+            if ((Test-Path -LiteralPath $parent) -and ((Get-Item -LiteralPath $parent -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Recovery helper path cannot contain reparse points.' }
+        }
+        foreach ($directory in @((Join-Path $env:ProgramData 'RabiRouteHomeAssistantRecovery'), $recoveryDirectory)) {
+            New-Item -ItemType Directory -Path $directory -Force | Out-Null
+            $acl = New-Object Security.AccessControl.DirectorySecurity
+            $acl.SetAccessRuleProtection($true, $false)
+            $acl.SetOwner([Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
+            foreach ($sid in @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-32-545')) {
+                $rights = if ($sid -eq 'S-1-5-32-545') { 'ReadAndExecute' } else { 'FullControl' }
+                $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new($sid), $rights, 'ContainerInherit,ObjectInherit', 'None', 'Allow'))
+            }
+            Set-Acl -LiteralPath $directory -AclObject $acl
+        }
+        if ((Test-Path -LiteralPath $recoveryScript) -and ((Get-Item -LiteralPath $recoveryScript -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Recovery helper cannot be a reparse point.' }
+        $temporaryHelper = Join-Path $recoveryDirectory ('helper-' + [guid]::NewGuid().ToString('N') + '.partial')
+        Copy-Item -LiteralPath $PSCommandPath -Destination $temporaryHelper
+        if (Test-Path -LiteralPath $recoveryScript) { [IO.File]::Replace($temporaryHelper, $recoveryScript, ($recoveryScript + '.previous')) }
+        else { [IO.File]::Move($temporaryHelper, $recoveryScript) }
+        $fileAcl = New-Object Security.AccessControl.FileSecurity
+        $fileAcl.SetAccessRuleProtection($false, $false)
+        $fileAcl.SetOwner([Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
+        Set-Acl -LiteralPath $recoveryScript -AclObject $fileAcl
+        $action = New-ScheduledTaskAction -Execute $powershellPath -Argument $recoveryArguments -WorkingDirectory $recoveryDirectory
+        $principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value) -LogonType Interactive -RunLevel Highest
+        $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
+        Register-ScheduledTask -TaskName $recoveryTaskName -Action $action -Principal $principal -Settings $settings -Description $recoveryOwner -Force | Out-Null
+    }
     Write-Status 'installed' 'Home Assistant OS 已安装并启动。首次初始化仍可能需要几分钟，随后点击重新检测。' $version
 } catch {
     Write-Status 'error' ('安装未完成：' + $_.Exception.Message)
+    exit 1
 } finally {
     if ($locked) { $mutex.ReleaseMutex() }
     $mutex.Dispose()

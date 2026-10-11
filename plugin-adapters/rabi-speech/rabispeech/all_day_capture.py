@@ -15,6 +15,9 @@ from pathlib import Path
 
 from fastapi import HTTPException, Request
 
+if __package__:
+    from .all_day_camera import CameraOwner
+
 
 def capture_screen():
     # Release and source layouts expose the same desktop-owned, Qt-free module.
@@ -31,7 +34,7 @@ def capture_screen():
 
 def capture_sources(sources: dict, camera_index: int) -> list[dict]:
     samples = []
-    for source in ("screen", "window", "camera"):
+    for source in ("screen", "window"):
         if not sources.get(source):
             continue
         try:
@@ -47,21 +50,7 @@ def capture_sources(sources: dict, camera_index: int) -> list[dict]:
                 user.GetWindowTextW(handle, buffer, len(buffer))
                 samples.append({"source": source, "text": buffer.value})
                 continue
-            from PIL import Image
-            if source == "screen":
-                picture = capture_screen()
-            else:
-                import cv2
-                camera = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW if os.name == "nt" else cv2.CAP_ANY)
-                try:
-                    if not camera.isOpened():
-                        raise RuntimeError("Camera unavailable or permission denied")
-                    success, frame = camera.read()
-                    if not success:
-                        raise RuntimeError("Camera returned no frame")
-                    picture = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                finally:
-                    camera.release()
+            picture = capture_screen()
             picture.thumbnail((1920, 1080))
             output = io.BytesIO()
             picture.convert("RGB").save(output, format="JPEG", quality=82)
@@ -72,9 +61,12 @@ def capture_sources(sources: dict, camera_index: int) -> list[dict]:
 
 
 def bounded_capture(sources: dict, camera_index: int) -> list[dict]:
-    # Separate process: a blocked camera driver cannot accumulate capture threads.
+    # Screen/window snapshots use a bounded process; camera has its own lease owner.
+    # Embedded Python's ._pth ignores PYTHONPATH; restore the owner's verified
+    # module paths before loading imports in the snapshot worker.
+    bootstrap = "import json,runpy,sys; sys.path[:0]=json.loads(sys.argv[1]); runpy.run_path(sys.argv[2],run_name='__main__')"
     result = subprocess.run(
-        [sys.executable, os.path.abspath(__file__)],
+        [sys.executable, "-B", "-c", bootstrap, json.dumps(sys.path), os.path.abspath(__file__)],
         input=json.dumps({"sources": sources, "cameraIndex": camera_index}),
         capture_output=True, text=True, encoding="utf-8", timeout=15,
         creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
@@ -86,6 +78,7 @@ def bounded_capture(sources: dict, camera_index: int) -> list[dict]:
 
 
 def register_all_day_capture(api, microphone, require_loopback):
+    camera = CameraOwner()
     gate = asyncio.Lock()
     lease = {"id": "", "deadline": None, "config": None, "owned": False, "audio_session": ""}
 
@@ -151,6 +144,24 @@ def register_all_day_capture(api, microphone, require_loopback):
         await release(body.get("sessionId", ""))
         return {"ok": True}
 
+    @api.post("/v1/all-day/capture/renew")
+    async def renew_camera(request: Request, body: dict):
+        authorize(request)
+        session_id = body.get("sessionId", "")
+        if not isinstance(session_id, str) or not re.fullmatch(r"[a-f0-9-]{36}", session_id):
+            raise HTTPException(422, "Invalid recording session")
+        await asyncio.to_thread(camera.renew, session_id)
+        return {"ok": True}
+
+    @api.post("/v1/all-day/capture/stop")
+    async def stop_camera(request: Request, body: dict):
+        authorize(request)
+        session_id = body.get("sessionId", "")
+        if not isinstance(session_id, str) or not re.fullmatch(r"[a-f0-9-]{36}", session_id):
+            raise HTTPException(422, "Invalid recording session")
+        await asyncio.to_thread(camera.stop, session_id)
+        return {"ok": True}
+
     @api.post("/v1/all-day/capture")
     async def capture(request: Request, body: dict):
         authorize(request)
@@ -159,19 +170,28 @@ def register_all_day_capture(api, microphone, require_loopback):
         interval = body.get("intervalSeconds", 60)
         if not isinstance(sources, dict) or any(type(value) is not bool for value in sources.values()) or type(index) is not int or not 0 <= index <= 16 or type(interval) is not int or not 10 <= interval <= 3600:
             raise HTTPException(422, "Invalid capture settings")
+        session_id = body.get("sessionId", "")
+        if sources.get("camera") and (not isinstance(session_id, str) or not re.fullmatch(r"[a-f0-9-]{36}", session_id)):
+            raise HTTPException(422, "Invalid recording session")
         async with gate:
-            session_id = body.get("sessionId", "")
             if sources.get("microphone"):
                 if lease["id"] != session_id or microphone.config.session_id != lease["audio_session"] or not microphone.snapshot().get("running") or microphone.snapshot().get("audio_stream", {}).get("source") == "remote":
                     raise HTTPException(409, "麦克风监听已停止或输入来源已改变，请重新开始全天记录")
                 renew(session_id, interval + 45)
         async def one(source):
             try:
+                if source == "camera":
+                    return [await asyncio.to_thread(camera.snapshot, session_id, index)]
                 return await asyncio.to_thread(bounded_capture, {source: True}, index)
             except Exception as error:
                 return [{"source": source, "error": "Snapshot timed out" if isinstance(error, subprocess.TimeoutExpired) else str(error)[:500]}]
         groups = await asyncio.gather(*(one(source) for source in ("screen", "window", "camera") if sources.get(source)))
         return {"samples": [sample for group in groups for sample in group]}
+
+    async def shutdown():
+        await asyncio.to_thread(camera.stop)
+        await release(lease["id"])
+    return shutdown
 
 
 if __name__ == "__main__":

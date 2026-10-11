@@ -355,6 +355,7 @@ export class XiaomiHomeRuntimeController {
     const capture = new XiaomiHomeClipCaptureWorker(settings, this.artifacts);
     const monitor = new XiaomiHomeEventMonitor(settings, {
       credentialToken,
+      recoverConnection: () => this.deployment.recover(),
       deliverEvent: this.dependencies.deliverEvent,
       captureMotionClip: capture.isEnabled() ? candidate => capture.capture(candidate) : undefined
     });

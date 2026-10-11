@@ -1,7 +1,7 @@
 import { resolvePrimaryAgentTarget, type RouteAgentTargetsDefinition } from "../shared/routeAgentTargets.js";
 import { createHash } from "node:crypto";
 import { normalizeAgentAdapters, type AgentAdapterType } from "../agentAdapters/types.js";
-import { normalizeCodexHookSettings, resolvePrimaryAgentAdapter, type CodexHookSettings } from "../shared/gatewayConfigModel.js";
+import { agentHookSettingsFor, resolvePrimaryAgentAdapter, type CodexHookSettings } from "../shared/gatewayConfigModel.js";
 import type { CodexPlanAssistantSession } from "../shared/codexPlanAssistantSessions.js";
 import {
   type RolePanelAttachment,
@@ -123,7 +123,7 @@ export function createPlanTaskCompletionDelivery<TRuntime extends PlanTaskComple
 
   return async (delivery: PlanTaskCompletionDelivery): Promise<void> => {
     const runtime = runtimeForRoleDelivery(delivery.roleId, String(delivery.gatewayId || "").trim());
-    if (normalizeCodexHookSettings(runtime.definition.codexHooks).planTaskCompletionEnabled === false) {
+    if (agentHookSettingsFor(runtime.definition.codexHooks, delivery.sourceAgentType).planTaskCompletionEnabled === false) {
       throw new Error(`Gateway ${runtime.definition.id} has disabled plan task completion notifications.`);
     }
 

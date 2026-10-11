@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urljoin
@@ -40,6 +40,7 @@ class DesktopPetPack:
     states: dict[str, DesktopPetState]
     idle_behavior: DesktopPetIdleBehavior = DesktopPetIdleBehavior()
     source_facing: str = "right"
+    companion_states: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,7 @@ class DesktopPetBinding:
     locked: bool = False
     hide_on_fullscreen: bool = True
     bubble_enabled: bool = True
+    bubble_style: dict[str, object] = field(default_factory=dict)
     fps_cap: int = 15
     wander_enabled: bool = False
     wander_to_active_window: bool = False
@@ -97,6 +99,7 @@ def parse_desktop_pet_binding(value: object) -> DesktopPetBinding:
         locked=row.get("locked") is True,
         hide_on_fullscreen=row.get("hideOnFullscreen") is not False,
         bubble_enabled=row.get("bubbleEnabled") is not False,
+        bubble_style=dict(row["bubbleStyle"]) if isinstance(row.get("bubbleStyle"), dict) else {},
         fps_cap=int(_bounded_number(row.get("fpsCap"), 15, 6, 24)),
         wander_enabled=row.get("wanderEnabled") is True,
         wander_to_active_window=row.get("wanderToActiveWindow") is True,
@@ -231,6 +234,10 @@ def parse_desktop_pet_catalog(payload: object, persona_id: str) -> tuple[Desktop
                 states=states,
                 idle_behavior=idle_behavior,
                 source_facing="left" if row.get("sourceFacing") == "left" else "right",
+                companion_states={kind: state for kind, state in row.get("companionStates", {}).items()
+                                  if isinstance(kind, str) and isinstance(state, str)
+                                  and state in states and states[state].loop}
+                if isinstance(row.get("companionStates"), dict) else {},
             )
         )
     return tuple(packs)

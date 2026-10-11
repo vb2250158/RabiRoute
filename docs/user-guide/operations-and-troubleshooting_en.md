@@ -12,6 +12,10 @@ Do not treat “no reply” as one indivisible problem. Follow the message path 
 Message adapter -> event record -> rule match -> AgentPacket -> handler -> Outbox / platform
 ```
 
+## Adapter scans and shared storage
+
+Message adapter scans use background diagnostic snapshots for history evidence instead of reading shared message files on the Manager HTTP thread. History remains unconfirmed while the snapshot is warming or a read fails; refresh later. Historical records do not confirm a current login. Slow shared storage should not block Host health checks.
+
 ## Start with Diagnosis Summary
 
 Open **Log Diagnostics**. **Diagnosis Summary** places known connection and configuration breaks first.

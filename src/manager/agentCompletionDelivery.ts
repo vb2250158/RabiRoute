@@ -9,7 +9,7 @@ import { handleAgentSend, inspectAgentSendDelivery, type AgentSendRequest } from
 import type { AgentReplyOptions } from "../outbox.js";
 import type { PlanItem } from "../roleKnowledge.js";
 import { AGENT_HOOK_EVENTS, agentHookRuleErrors } from "../shared/agentHookAutomation.js";
-import { agentAdapterSupportsLifecycleHooks as supportsHooks } from "../shared/agentAdapterCapabilities.js";
+import { agentAdapterManifest, isAgentAdapterType, agentAdapterSupportsLifecycleHooks as supportsHooks } from "../shared/agentAdapterCapabilities.js";
 
 const execute = promisify(execFile);
 export type CompletionDeliveryResult = { ruleId: string; status: "sent" | "failed"; reason?: string };
@@ -51,7 +51,8 @@ export function completionTaskContextFromPlans(sessionId: string,
 export async function deliverCompletionToEndpoint(rule: AgentCompletionDeliveryRule, hook: CodexHookContextRequest,
   deliveryId: string, routeId: string, options: AgentReplyOptions, context: CompletionTaskContext = { plans: [] }): Promise<void> {
   const taskName = context.taskName?.trim() || "未命名任务";
-  const heading = ["Codex 本轮结果", `任务：${taskName}`].join("\n");
+  const agent = isAgentAdapterType(hook.agentType) ? agentAdapterManifest(hook.agentType).label : "Codex";
+  const heading = [`${agent} 本轮结果`, `任务：${taskName}`].join("\n");
   const { channel, params } = rule.destination;
   if (channel !== "napcat" && channel !== "speech") throw new Error("不支持的消息端。");
   const request: AgentSendRequest = {

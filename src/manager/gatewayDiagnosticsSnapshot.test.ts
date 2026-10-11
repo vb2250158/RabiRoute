@@ -148,3 +148,25 @@ test("warming and failed refreshes expose lifecycle state without publishing a p
   assert.equal(failed.records.length, 0);
   assert.match(failed.refreshError ?? "", /NAS diagnostics unavailable/);
 });
+
+
+test("message history evidence remains unknown until a snapshot is available and ignores read errors", async () => {
+  const service = new GatewayDiagnosticsSnapshotService({
+    capture: () => ({ runtimes: [], personaPresentations: [] }),
+    load: async () => ({
+      diagnostics: [{ id: "route-a", messageFiles: {
+        webhook: { entries: [] },
+        fennenote: { entries: [{ text: "transcript" }] },
+        wecom: { entries: [{ raw: { error: "storage unavailable" } }] }
+      } }], summary: [], refreshedAt: new Date().toISOString()
+    })
+  });
+  assert.equal(service.hasRecentMessages("route-a", "webhook"), undefined);
+  await service.refresh();
+  assert.equal(service.hasRecentMessages("route-a", "webhook"), false);
+  assert.equal(service.hasRecentMessages("route-a", "fennenote"), true);
+  assert.equal(service.hasRecentMessages("route-a", "wecom"), undefined);
+  assert.equal(service.hasRecentMessages("route-a", "weixin"), undefined);
+  assert.equal(service.hasRecentMessages("missing-route", "webhook"), undefined);
+  service.stop();
+});

@@ -8,6 +8,34 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+test("recovery task ownership accepts Windows-normalized account names and rejects other identities", { skip: process.platform !== "win32" }, () => {
+  const source = fileURLToPath(new URL("./Install-HomeAssistantOs.ps1", import.meta.url));
+  const script = `
+$ErrorActionPreference='Stop'; $tokens=$null; $errors=$null
+$ast=[System.Management.Automation.Language.Parser]::ParseFile('${source.replaceAll("'", "''")}',[ref]$tokens,[ref]$errors)
+if($errors.Count){throw 'Installer syntax errors'}
+$function=$ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Test-RecoveryTaskUser'},$true)
+Invoke-Expression $function.Extent.Text
+$identity=[Security.Principal.WindowsIdentity]::GetCurrent()
+if(-not(Test-RecoveryTaskUser $identity.User.Value $identity.User.Value)){throw 'SID rejected'}
+if(-not(Test-RecoveryTaskUser $identity.Name $identity.User.Value)){throw 'Normalized account rejected'}
+if(Test-RecoveryTaskUser 'S-1-1-0' $identity.User.Value){throw 'Other identity accepted'}
+if(Test-RecoveryTaskUser 'test-only-no-such-account' $identity.User.Value){throw 'Unresolvable account accepted'}
+`;
+  execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { windowsHide: true });
+});
+
+test("unapproved background recovery fails without changing status or requesting elevation", { skip: process.platform !== "win32" }, async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "haos-recovery-test-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const status = JSON.stringify({ state: "installed", message: "test-only-existing-state" });
+  fs.writeFileSync(path.join(root, "status.json"), status);
+  const source = fileURLToPath(new URL("./Install-HomeAssistantOs.ps1", import.meta.url));
+  await assert.rejects(promisify(execFile)("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", source,
+    "-Operation", "Recover", "-Root", root, "-AutoStart", "yes"], { windowsHide: true, timeout: 15000, cwd: process.env.SystemRoot }), /Background recovery needs one foreground Start/);
+  assert.equal(fs.readFileSync(path.join(root, "status.json"), "utf8"), status);
+});
+
 test("HA OS ownership accepts its checkpoint chain and rejects foreign or cyclic disks", { skip: process.platform !== "win32" }, () => {
   const source = fileURLToPath(new URL("./Install-HomeAssistantOs.ps1", import.meta.url));
   const script = `

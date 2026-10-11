@@ -1,6 +1,8 @@
 param(
   [string]$Python = "py -3.10",
-  [string]$DependencyRoot = ""
+  [string]$DependencyRoot = "",
+  [switch]$EnsureMissing,
+  [switch]$SkipHostBuild
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,10 +14,13 @@ $deps = if ([string]::IsNullOrWhiteSpace($DependencyRoot)) {
 }
 New-Item -ItemType Directory -Force -Path $deps | Out-Null
 
-$pythonArgs = $Python -split "\s+"
+$pythonArgs = @(if (Test-Path -LiteralPath $Python -PathType Leaf) { $Python } else { $Python -split "\s+" })
 $pythonExe = $pythonArgs[0]
 $prefixArgs = @($pythonArgs | Select-Object -Skip 1)
-& $pythonExe @prefixArgs -m pip install --upgrade --target $deps -r (Join-Path $root "requirements.txt")
+$env:PYTHONDONTWRITEBYTECODE = "1"
+$installArgs = @((Join-Path $PSScriptRoot "ensure_dependencies.py"), "--requirements", (Join-Path $root "requirements.txt"), "--target", $deps)
+if (-not $EnsureMissing) { $installArgs += "--upgrade" }
+& $pythonExe @prefixArgs @installArgs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $openJTalkPackage = Join-Path $deps "pyopenjtalk"
@@ -42,7 +47,7 @@ if ((Test-Path -LiteralPath $openJTalkPackage) -and -not (Test-Path -LiteralPath
   }
 }
 
-if ($env:OS -eq "Windows_NT") {
+if ($env:OS -eq "Windows_NT" -and -not $SkipHostBuild) {
   $previousDependenciesRoot = $env:RABISPEECH_DEPS_ROOT
   try {
     $env:RABISPEECH_DEPS_ROOT = $deps

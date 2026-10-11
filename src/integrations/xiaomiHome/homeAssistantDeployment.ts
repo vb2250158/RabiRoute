@@ -77,6 +77,9 @@ export class HomeAssistantDeployment {
   private readonly os: HomeAssistantOsDriver;
   private installing = false;
   private readonly changes = new EventEmitter();
+  private recovery?: Promise<void>;
+  private nextRecoveryAt = 0;
+  private recoveryController?: AbortController;
 
   constructor(runtimeDir: string, private readonly baseUrl: () => string, private readonly io = driver, os?: HomeAssistantOsDriver) {
     this.file = path.join(runtimeDir, "home-assistant-deployment.json");
@@ -148,7 +151,7 @@ export class HomeAssistantDeployment {
     if (saved.config.mode === "haos") {
       try {
         const status = await this.checked(() => this.os.inspect(authority), authority);
-        const installed = status.state === "installed";
+        const installed = status.state === "installed" || status.installed === true;
         const ready = installed && await this.ready("http://127.0.0.1:8123", authority);
         return { ...base, baseUrl: "http://127.0.0.1:8123", installation: installed ? "installed" : "not_found",
           state: this.failure ? "error" : this.installing || status.state === "installing" ? "installing" : ready ? "ready" : status.state === "reboot_required" ? "reboot_required" : status.state === "error" ? "error" : installed ? "starting" : "stopped",
@@ -267,18 +270,20 @@ export class HomeAssistantDeployment {
     return () => { closed = true; this.changes.off("changed", changed); unsubscribe?.(); };
   }
 
-  private async runOs(operation: "Install" | "Start", authority?: XiaomiHomeRequestAuthority): Promise<HomeAssistantDeploymentSnapshot> {
+  private async runOs(operation: "Install" | "Start" | "Recover", authority?: XiaomiHomeRequestAuthority, signal?: AbortSignal): Promise<HomeAssistantDeploymentSnapshot> {
     this.installing = true;
     this.failure = "";
     this.audit(operation.toLowerCase(), "started");
     try {
-      const result = await this.checked(() => this.os.run(operation, this.read().config.autoStart, authority), authority, true);
+      const result = await this.checked(() => this.os.run(operation, this.read().config.autoStart, authority, signal), authority, true);
       if (result.state === "reboot_required") this.audit("enable-hyper-v", "committed");
       else this.audit(operation.toLowerCase(), result.state === "installed" ? "committed" : "failed");
     } catch (error) {
       authority?.assert();
       rethrowXiaomiHomeAuthorityError(error);
-      this.failure = "安装操作未能完成，请重新检测进度；不要删除已有虚拟机或磁盘。";
+      this.failure = this.stopped ? "恢复等待已取消。" : operation === "Recover"
+        ? "自动恢复未完成，请点击启动并确认一次 Windows 管理员提示，以配置后台恢复。已有虚拟机和磁盘已保留。"
+        : "安装操作未能完成，请重新检测进度；不要删除已有虚拟机或磁盘。";
       this.audit(operation.toLowerCase(), "failed");
     } finally {
       this.installing = false;
@@ -289,18 +294,47 @@ export class HomeAssistantDeployment {
 
   start(): void {
     this.stopped = false;
+    this.nextRecoveryAt = 0;
+    this.flight = this.recover();
+  }
+
+  /** Startup and transport failures share one bounded recovery; never replay device commands. */
+  recover(): Promise<void> {
+    if (this.stopped) return Promise.resolve();
+    if (this.recovery) return this.recovery;
     const saved = this.read();
-    if (saved.config.mode !== "docker" || !saved.config.autoStart) return;
-    this.flight = this.ensureReady(saved.revision).then(() => undefined).catch(() => {
-      this.failure = "自动启动失败，请检查部署状态后重试。";
-      this.audit("auto-start", "failed");
-    });
+    if (!saved.config.autoStart || saved.config.mode === "external" || Date.now() < this.nextRecoveryAt) return Promise.resolve();
+    this.nextRecoveryAt = Date.now() + 300000;
+    const controller = new AbortController();
+    this.recoveryController = controller;
+    this.recovery = (async () => {
+      try {
+        const endpoint = saved.config.mode === "haos" ? "http://127.0.0.1:8123" : this.baseUrl();
+        if (await this.io.ready(endpoint)) { this.failure = ""; return; }
+        if (saved.config.mode === "haos") {
+          // Installation is never implicit, and background recovery never opens UAC.
+          const status = await this.os.inspect();
+          if (status.state !== "installed" && status.installed !== true) return;
+          await this.operations.run("deployment", async () => {
+            if (this.stopped) return;
+            this.requireRevision(saved.revision);
+            await this.runOs("Recover", undefined, controller.signal);
+          });
+        } else await this.ensureReady(saved.revision);
+      } catch {
+        this.failure = "自动恢复失败，请检查部署状态后重试。";
+        this.audit("recover", "failed");
+      }
+    })().finally(() => { this.recovery = undefined; this.recoveryController = undefined; });
+    return this.recovery;
   }
 
   async stop(): Promise<void> {
     this.stopped = true;
+    this.recoveryController?.abort();
     await this.operations.run("deployment", async () => undefined);
     await this.flight;
+    await this.recovery;
   }
 
   private async checked<T>(operation: () => Promise<T>, authority?: XiaomiHomeRequestAuthority, mutation = false): Promise<T> {

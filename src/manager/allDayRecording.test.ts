@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { AllDayRecordingStore, AllDayRecordingService } from "./allDayRecording.js";
-import { DEFAULT_ALL_DAY_SETTINGS, normalizeAllDaySettings, type AllDayEvent } from "../shared/allDayRecording.js";
+import { DEFAULT_ALL_DAY_SETTINGS, allDayRecordingHealth, normalizeAllDaySettings, type AllDayEvent, type AllDaySnapshot } from "../shared/allDayRecording.js";
 import type { HomeAssistantActivityRecord } from "../shared/homeAssistantActivity.js";
 
 async function fixture(t: import("node:test").TestContext) {
@@ -14,6 +14,121 @@ async function fixture(t: import("node:test").TestContext) {
   return new AllDayRecordingStore(role => path.join(root, role), "computer-a", path.join(root, "mobile"));
 }
 const event = (id: string, time: number): AllDayEvent => ({ id, startedAt: time, endedAt: time + 1000, source: "window", deviceId: "computer-a", kind: "window", state: "saved", text: "Editor" });
+
+test("blocked reconstruction permits capture commits and fences newer versions of the same event", async t => {
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),"rabi-recording-rebuild-"));
+  t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  let release!:(rows:AllDayEvent[])=>void, entered!:()=>void;
+  const blocked=new Promise<AllDayEvent[]>(resolve=>{release=resolve;});
+  const started=new Promise<void>(resolve=>{entered=resolve;});
+  const store=new AllDayRecordingStore(role=>path.join(root,role),"computer-a",path.join(root,"mobile"),{scan:async()=>{entered();return blocked;}});
+  const time=Date.parse("2026-10-11"),old=event("same",time);
+  await store.append("one",old);
+  const repairing=store.repairIndex("one","2026-10-11"); await started;
+  // A regression holding the write queue cannot complete before scan release.
+  await Promise.race([store.append("one",{...old,text:"updated"}),new Promise((_,reject)=>{const timer=setTimeout(()=>reject(new Error("capture blocked by scan")),1000);timer.unref();})]);
+  await store.append("one",event("new",time+1)); release([old]);await repairing;
+  const catalog=await store.catalog("one","2026-10-11");
+  assert.equal(catalog.incompleteDays.length,0);
+  assert.deepEqual(catalog.events.map(row=>row.id).sort(),["new","same"]);
+  assert.equal(catalog.events.find(row=>row.id==="same")?.text,"updated");
+});
+
+test("camera-only recording renews during a blocked sample and releases without microphone ownership", async t => {
+  const store = await fixture(t);
+  await store.configure("one", {...DEFAULT_ALL_DAY_SETTINGS,sources:{...DEFAULT_ALL_DAY_SETTINGS.sources,camera:true}});
+  let captured!: () => void, finish!: () => void;
+  const entered = new Promise<void>(resolve=>{captured=resolve;});
+  const pending = new Promise<void>(resolve=>{finish=resolve;});
+  const renewed: string[] = [], released: string[] = [];
+  const service = new AllDayRecordingService(store, {
+    changed:()=>{},capture:async()=>{captured();await pending;return [];},
+    startMicrophone:async()=>{assert.fail("camera must not open microphone");},stopMicrophone:async()=>{assert.fail("no microphone lease");},
+    renewCapture:async id=>{renewed.push(id);},stopCapture:async id=>{released.push(id);},audio:async()=>[],audioFile:async()=>Buffer.alloc(0)
+  });
+  t.mock.timers.enable({apis:["setTimeout"]});
+  await service.start("one"); t.mock.timers.tick(0); await entered;
+  t.mock.timers.tick(30_000); await Promise.resolve();
+  assert.equal(renewed.length,1);
+  const stopping=service.stop("one"); finish(); await stopping;
+  assert.deepEqual(released,renewed);
+  t.mock.timers.tick(60_000); await Promise.resolve();
+  assert.equal(renewed.length,1);
+});
+
+test("camera index changes and disabling the source release the current device", async t => {
+  const store = await fixture(t);
+  const settings={...DEFAULT_ALL_DAY_SETTINGS,sources:{...DEFAULT_ALL_DAY_SETTINGS.sources,camera:true}};
+  let releases=0;
+  const service=new AllDayRecordingService(store,{changed:()=>{},capture:async()=>[],startMicrophone:async()=>{},stopMicrophone:async()=>{},stopCapture:async()=>{releases++;},audio:async()=>[],audioFile:async()=>Buffer.alloc(0)});
+  t.after(()=>service.dispose());
+  await service.configure("one",settings); await service.start("one");
+  await new Promise(resolve=>setTimeout(resolve,30));
+  await service.configure("one",{...settings,cameraIndex:1});
+  assert.equal(releases,1);
+  await new Promise(resolve=>setTimeout(resolve,30));
+  await service.configure("one",{...settings,sources:{...settings.sources,camera:false}});
+  assert.equal(releases,2);
+  await service.stop("one"); assert.equal(releases,2);
+});
+
+test("camera release still runs when microphone stop fails", async t => {
+  const store=await fixture(t);
+  let released=false;
+  await store.configure("one",{...DEFAULT_ALL_DAY_SETTINGS,sources:{...DEFAULT_ALL_DAY_SETTINGS.sources,camera:true,microphone:true}});
+  const service=new AllDayRecordingService(store,{changed:()=>{},capture:async()=>[],startMicrophone:async()=>"audio",stopMicrophone:async()=>{throw new Error("microphone stopped responding");},stopCapture:async()=>{released=true;},audio:async()=>[],audioFile:async()=>Buffer.alloc(0)});
+  await service.start("one"); await new Promise(resolve=>setTimeout(resolve,30));
+  await assert.rejects(service.stop("one"),/microphone stopped responding/);
+  assert.equal(released,true); assert.equal((await service.snapshot("one")).running,false);
+});
+
+test("recording health distinguishes preparation, total failure, partial capture and stale evidence", () => {
+  const state: AllDaySnapshot = { settings: { ...DEFAULT_ALL_DAY_SETTINGS, sources: { ...DEFAULT_ALL_DAY_SETTINGS.sources, screen: true, camera: true } },
+    enabled: true, running: true, activeRoleId: "one", startedAt: 1000, lastSampleAt: null, error: "" };
+  assert.equal(allDayRecordingHealth({ ...state, preparing: true }, 5000), "preparing");
+  assert.equal(allDayRecordingHealth(state, 5000), "starting");
+  assert.equal(allDayRecordingHealth({ ...state, error: "fetch failed", sourceErrors: { screen: "offline", camera: "offline" } }, 5000), "failed");
+  assert.equal(allDayRecordingHealth({ ...state, lastSampleAt: 4000, error: "camera unavailable", sourceErrors: { camera: "unavailable" } }, 5000), "degraded");
+  assert.equal(allDayRecordingHealth({ ...state, lastSampleAt: 4000 }, 5000), "recording");
+  assert.equal(allDayRecordingHealth({ ...state, lastSampleAt: 4000 }, 150000), "stale");
+  assert.equal(allDayRecordingHealth({ ...state, settings: { ...DEFAULT_ALL_DAY_SETTINGS, sources: { ...DEFAULT_ALL_DAY_SETTINGS.sources, homeAssistant: true } } }, 150000), "waiting");
+});
+
+test("preparation is visible without blocking start and capture waits for readiness", async t => {
+  const store = await fixture(t);
+  let ready!: () => void, entered!: () => void, done!: () => void, captured = false;
+  const preparation = new Promise<void>(resolve => { ready = resolve; });
+  const preparing = new Promise<void>(resolve => { entered = resolve; });
+  const completed = new Promise<void>(resolve => { done = resolve; });
+  const service = new AllDayRecordingService(store, {
+    prepare: async () => { entered(); await preparation; },
+    changed: () => { if (captured) done(); },
+    capture: async () => { captured = true; return [{ source: "screen", jpeg: Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString("base64") }]; },
+    startMicrophone: async () => {}, stopMicrophone: async () => {}, audio: async () => [], audioFile: async () => Buffer.alloc(0)
+  });
+  t.after(() => service.dispose());
+  await service.configure("one", { ...DEFAULT_ALL_DAY_SETTINGS, sources: { ...DEFAULT_ALL_DAY_SETTINGS.sources, screen: true } });
+  await service.start("one"); await preparing;
+  assert.equal(captured, false);
+  assert.equal((await service.snapshot("one")).preparing, true);
+  ready(); await completed;
+  assert.equal((await service.snapshot("one")).preparing, false);
+  assert.ok((await service.snapshot("one")).lastSampleAt);
+});
+
+test("failed sources leave the last successful sample empty and failed preparation permits a clean stop", async t => {
+  const store = await fixture(t);
+  const service = new AllDayRecordingService(store, { changed: () => {}, prepare: async () => { throw new Error("dependency install failed"); },
+    capture: async () => { assert.fail("must wait for dependencies"); }, startMicrophone: async () => {},
+    stopMicrophone: async () => { assert.fail("no microphone session exists"); }, audio: async () => [], audioFile: async () => Buffer.alloc(0)
+  });
+  await service.configure("one", { ...DEFAULT_ALL_DAY_SETTINGS, sources: { ...DEFAULT_ALL_DAY_SETTINGS.sources, microphone: true, screen: true } });
+  await service.start("one"); await new Promise(resolve => setTimeout(resolve, 30));
+  const state = await service.snapshot("one");
+  assert.equal(state.lastSampleAt, null); assert.equal(state.preparing, false);
+  assert.match(state.error, /dependency install failed/); assert.equal(allDayRecordingHealth(state, Date.now()), "failed");
+  await service.stop("one");
+});
 
 test("old recording settings migrate with Home Assistant off and reject invalid source values", () => {
   const legacy = { ...DEFAULT_ALL_DAY_SETTINGS, sources: { microphone: false, screen: true, window: false, camera: false } };

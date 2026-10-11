@@ -96,7 +96,7 @@ test("all-device action discovery validates query shape and forwards one-resourc
   const calls: unknown[] = [];
   const ctx = context(() => undefined, () => undefined, responses);
   ctx.runtime = {client: {
-    listResources: async (includeActions:boolean) => {calls.push(includeActions);return [];},
+    queryResources: async (query:{includeActions:boolean}) => {calls.push(query.includeActions);return {items:[]};},
     getResourceActions: async (id:string) => {calls.push(id);return {resourceId:id,actions:[]};}
   }} as unknown as XiaomiHomeRuntimeController;
   for (const suffix of ["/resources?includeActions=1", "/entity-actions?resourceId=home%3Aha%3Anumber.example", "/resources?includeActions=true", "/resources?extra=x",
@@ -404,7 +404,7 @@ test("Xiaomi Home action route forwards Idempotency-Key and presents stable conf
 test("device directory is authenticated read-only and refuses caller template/query input", async () => {
  const responses: Array<{status:number;body:any}>=[];let reads=0;
  const ctx=context(()=>undefined,()=>undefined,responses);
- ctx.runtime={client:{listDevices:async()=>{reads++;return{schemaVersion:1,devices:[],unassignedResources:[]};}}} as unknown as XiaomiHomeRuntimeController;
+ ctx.runtime={client:{queryDevices:async()=>{reads++;return{schemaVersion:1,items:[],total:0,nextOffset:null};}}} as unknown as XiaomiHomeRuntimeController;
  for(const suffix of ["/devices","/devices?template=bad"]){handleXiaomiHomeManagerApi(request({},"GET"),new URL("http://localhost/api/agent/xiaomi-home"+suffix),{} as http.ServerResponse,ctx);await new Promise(resolve=>setImmediate(resolve));}
  assert.equal(reads,1);assert.deepEqual(responses.map(r=>r.status),[200,400]);
 });

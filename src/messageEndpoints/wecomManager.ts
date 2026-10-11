@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { MessageEndpointType } from "../adapters/messageAdapter.js";
-import type { MessageAdapterScanResult } from "./webhookLikeScans.js";
+import { recentMessageEvidence, type MessageAdapterScanResult } from "./webhookLikeScans.js";
 
 export type WeComScanRuntime = {
   definition: {
@@ -17,7 +17,7 @@ export type WeComScanRuntime = {
 export type WeComScanContext<Runtime extends WeComScanRuntime = WeComScanRuntime> = {
   rootDir: string;
   adapterRuntimes(type: MessageEndpointType): Runtime[];
-  routeHasRecentMessages(runtime: Runtime, type: MessageEndpointType): boolean;
+  routeHasRecentMessages(runtime: Runtime, type: MessageEndpointType): boolean | undefined;
 };
 
 function packageInstalled(rootDir: string): boolean {
@@ -49,7 +49,7 @@ export async function scanWeComEndpoint<Runtime extends WeComScanRuntime>(ctx: W
   const status = configuredRuntime ? statusFor(configuredRuntime) : undefined;
   const connected = status?.connected === true;
   const authenticated = status?.authenticated === true;
-  const hasRecent = runtimes.some((runtime) => ctx.routeHasRecentMessages(runtime, "wecom"));
+  const hasRecent = recentMessageEvidence(runtimes, (runtime) => ctx.routeHasRecentMessages(runtime, "wecom"));
   const installed = packageInstalled(ctx.rootDir);
   return {
     type: "wecom",
@@ -70,7 +70,7 @@ export async function scanWeComEndpoint<Runtime extends WeComScanRuntime>(ctx: W
       { id: "bot-id", label: "Bot ID", required: true, ok: Boolean(configuredRuntime?.definition.wecomBotId || process.env.WECOM_BOT_ID), detail: configuredRuntime?.definition.wecomBotId ? "已在路由配置中填写。" : process.env.WECOM_BOT_ID ? "已从环境变量读取。" : "填写 wecomBotId 或设置 WECOM_BOT_ID。" },
       { id: "secret", label: "Bot Secret", required: true, ok: Boolean(configuredRuntime?.definition.wecomBotSecret || process.env.WECOM_BOT_SECRET), detail: configuredRuntime?.definition.wecomBotSecret ? "已在路由配置中填写。" : process.env.WECOM_BOT_SECRET ? "已从环境变量读取。" : "填写 wecomBotSecret 或设置 WECOM_BOT_SECRET。" },
       { id: "connected", label: "WebSocket 已连接并认证", required: true, ok: connected && authenticated, detail: connected && authenticated ? "企业微信智能机器人长连接已认证。" : String(status?.lastError || status?.message || "启动 route 后查看连接状态。") },
-      { id: "recent-message", label: "最近收到企业微信消息", required: false, ok: hasRecent, detail: hasRecent ? "已收到过企业微信消息。" : "尚未收到企业微信消息；请在企业微信群里向智能机器人发消息验证。" }
+      { id: "recent-message", label: "最近收到企业微信消息", required: false, ok: hasRecent, detail: hasRecent === undefined ? "历史消息尚未确认，请稍后刷新。" : hasRecent ? "已收到过企业微信消息。" : "尚未收到企业微信消息；请在企业微信群里向智能机器人发消息验证。" }
     ],
     warnings: [
       "企业微信接入使用智能机器人 WebSocket 长连接，不使用通用 Webhook。",

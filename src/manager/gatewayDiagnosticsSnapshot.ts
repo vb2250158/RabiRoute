@@ -216,6 +216,20 @@ export class GatewayDiagnosticsSnapshotService {
     });
   }
 
+  hasRecentMessages(gatewayId: string, type: string): boolean | undefined {
+    const record = this.snapshot?.diagnostics.find(item => item.id === gatewayId);
+    const files = record?.messageFiles as Record<string, { entries?: unknown[] }> | undefined;
+    const entries = files?.[type]?.entries;
+    if (!Array.isArray(entries)) return undefined;
+    if (entries.some(entry => {
+      if (!entry || typeof entry !== "object" || "error" in entry) return false;
+      const raw = "raw" in entry ? entry.raw : undefined;
+      return !raw || typeof raw !== "object" || !("error" in raw);
+    })) return true;
+    if (entries.length > 0) return undefined;
+    return false;
+  }
+
   requestRefresh(options: Readonly<{ force?: boolean }> = {}): void {
     void this.refresh(options).catch(() => {
       // refresh() records failures and preserves the last committed snapshot.

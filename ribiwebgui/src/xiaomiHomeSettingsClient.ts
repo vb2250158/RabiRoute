@@ -2,6 +2,7 @@ import type {
   XiaomiHomeRuntimeSettings,
   XiaomiHomeSettingsSnapshot
 } from "@shared/xiaomiHomeSettingsContract";
+import { readHomeDirectory } from "./homeDirectoryClient";
 
 type ApiEnvelope<T> = Readonly<{
   code?: number;
@@ -73,9 +74,9 @@ export type XiaomiHomeResource = Readonly<{
 }>;
 
 async function listResources(): Promise<readonly XiaomiHomeResource[]> {
-  return json(await fetch("/api/agent/xiaomi-home/resources", {
+  return readHomeDirectory<XiaomiHomeResource>("/api/agent/xiaomi-home/resources?view=detail&limit=50", async url => json(await fetch(url, {
     headers: { accept: "application/json" }
-  }));
+  })));
 }
 
 export const xiaomiHomeSettingsClient = { read, update, listResources };

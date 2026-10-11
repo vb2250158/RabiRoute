@@ -4,13 +4,14 @@ import { startManagerStallDiagnostics, summarizeCpuProfile } from "./managerStal
 
 test("startup CPU summaries count samples without exposing absolute paths or values", () => {
   const result = summarizeCpuProfile({ startTime: 0, endTime: 30_000,
-    nodes: [{ id: 1, callFrame: { functionName: "load", scriptId: "1", url: "file:///private/install/dist/worker.js", lineNumber: 4, columnNumber: 0 } },
+    nodes: [{ id: 1, children: [2], callFrame: { functionName: "load", scriptId: "1", url: "file:///private/install/dist/worker.js", lineNumber: 4, columnNumber: 0 } },
       { id: 2, callFrame: { functionName: "external", scriptId: "2", url: "file:///private/secret.js", lineNumber: 1, columnNumber: 0 } }],
     samples: [1, 2, 1], timeDeltas: [10_000, 5000, 15_000] });
   assert.equal(result[0].selfMs, 25);
   assert.equal(result[0].file, "dist/worker.js");
   assert.equal(result[0].line, 5);
   assert.equal(result[1].file, "<external>");
+  assert.equal(result[1].callers[0].file, "dist/worker.js");
   assert.equal(JSON.stringify(result).includes("private"), false);
 });
 

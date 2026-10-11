@@ -15,6 +15,11 @@ import { RabiLinkDeviceConnections } from "./rabiLinkDeviceConnections.js";
 import { rabiLinkAgentDevicePrincipal, rabiLinkConnectionScope, rabiLinkTrustedTransport, rabiLinkTransportAssertionPresent } from "./rabiLinkAgentDeviceConnection.js";
 import { recordingManifestHash } from "./recordingArchiveContract.js";
 import { createAllDayRecording, allDayRecordingHandler } from "./allDayRecordingRoutes.js";
+import { CompanionActivity, companionSpeechScope, readCompanionPresets, saveCompanionSummary, lastCompanionSummary } from "./companionActivity.js";
+import { readCompanionSceneRules } from "./companionScene.js";
+import { companionActivityHandler } from "./companionActivityRoutes.js";
+import { CompanionContinuationStore } from "./companionContinuation.js";
+import { requestLocalSpeech, requestLocalSpeechJson } from "../speech/localSpeechClient.js";
 import { normalizeRouteAgentTargets, resolvePrimaryAgentTarget, primaryAgentInstanceBindings } from "../shared/routeAgentTargets.js";
 import { PeerTunnelRuntime } from "../peerTunnel/runtime.js";
 import { PLAN_ACTIVATION_STATUSES } from "../planState.js";
@@ -63,7 +68,9 @@ import { agentRequestStatePath } from "../agentRequests/persistence.js";
 import { projectDirectoryLayout } from "../shared/projectDirectoryLayout.js";
 import { resolveRuntimeLayout } from "../shared/runtimeLayout.js";
 import { listCodexDesktopWorkspaces, readCodexDesktopThread } from "../codexDesktopBridge.js";
-import { isDshSessionId } from "../dshSessionBridge.js";
+import { isDshSessionId, readDshPrimaryBindingAsync } from "../dshSessionBridge.js";
+import { DshOwnerRecovery } from "../dshOwnerRecovery.js";
+import { CompanionFrameDelivery } from "./companionFrameDelivery.js";
 import { bindDshSessionForSave } from "../shared/codexSessionBinding.js";
 import { sameCodexWorkspace } from "../codexTaskIdentity.js";
 import { selectAgentThreadRouteId } from "./agentThreadRouteSelection.js";
@@ -202,6 +209,7 @@ import {
   sanitizeInstanceId,
   gatewayAdapterTypes as sharedGatewayAdapterTypes,
   normalizeCodexHookSettings,
+  agentHookSettingsFor,
   normalizeGatewayDefinition as sharedNormalizeGatewayDefinition,
   validateGatewayPortConflicts as sharedValidateGatewayPortConflicts,
   validateNapcatRouteCardinality,
@@ -1103,12 +1111,88 @@ const allDayRecording = createAllDayRecording({
     return Buffer.concat(parts);
   },
   speechUrl: () => speechServiceUrl(),
-  changed: roleId => publishManagerEvent("all_day_recording", { roleId })
+  ensureSpeech: async () => { await speechRuntimeControl.start(); },
+  changed: roleId => publishManagerEvent("all_day_recording", { roleId }),
+  indexChanged: (roleId, indexDay, indexFailed) => publishManagerEvent("all_day_recording", { roleId, indexDay, indexFailed }),
+  readChanged: (roleId, event) => publishManagerEvent("all_day_recording", { roleId, ...event })
 });
 const handleAllDayRecordingApi = allDayRecordingHandler(allDayRecording, {
   local: request => isLocalMachineRemoteAddress(request.socket.remoteAddress, []),
   readOnly: () => managerReadOnly,
   readBody: request => readJsonBody(request)
+});
+const companionDshOwnerRecovery = new DshOwnerRecovery();
+const companionFrameDelivery = new CompanionFrameDelivery(rootDir);
+const companionActivity = new CompanionActivity({
+  presets: readCompanionPresets(JSON.parse(fs.readFileSync(path.join(packageRoot, "packages", "rabi-companion", "presets.json"), "utf8"))),
+  sceneRules: readCompanionSceneRules(JSON.parse(fs.readFileSync(path.join(packageRoot, "packages", "rabi-companion", "scene-rules.json"), "utf8"))),
+  changed: (roleId, session) => {
+    publishManagerEvent("companion_changed", { roleId, session });
+    void companionFrameDelivery.retain(session?.status === "active" ? session.review?.id : undefined).catch(() => undefined);
+  },
+  reaction: event => publishManagerEvent("companion_reaction", event),
+  deliver: async (session, review) => {
+    const runtime = runtimes.get(session.gatewayId);
+    if (!runtime || roleIdForDefinition(runtime.definition) !== session.roleId) throw new Error("Activity Route no longer belongs to this persona");
+    assertLocalPersonaOwner(runtime.definition, "Companion activity");
+    let recoveredOwnerUrl: string | undefined;
+    if (runtime.definition.primaryAgentAdapter === "dsh") {
+      const binding = await readDshPrimaryBindingAsync(adapterConfigPath(runtime.definition.configName || runtime.definition.id));
+      if (!binding) throw new Error("当前人格没有绑定 DSH 会话");
+      recoveredOwnerUrl = await companionDshOwnerRecovery.ensure(binding);
+      appendLog(runtime, `companion Agent owner ready: ${review.id}`);
+    }
+    const current = companionActivity.snapshot(session.roleId).session;
+    if (!current || current.id !== session.id || current.revision !== review.revision || current.review?.id !== review.id || current.status !== "active") {
+      throw new Error("陪伴场景已改变，已取消旧画面投递");
+    }
+    const imagePath = review.frame ? await companionFrameDelivery.stage(review.id, review.frame, review.expiresAt) : undefined;
+    const afterStage = companionActivity.snapshot(session.roleId).session;
+    if (afterStage?.review?.id !== review.id || afterStage.revision !== review.revision || afterStage.status !== "active") {
+      await companionFrameDelivery.retain(afterStage?.status === "active" ? afterStage.review?.id : undefined);
+      throw new Error("陪伴场景已改变，已取消旧画面投递");
+    }
+    await triggerGatewayRolePanelMessage(runtime, `companion-${review.id}`, review.text,
+      imagePath ? [{ kind: "image", name: "current-activity.jpg", path: imagePath,
+        url: `${managerBaseUrl}/api/roles/${encodeURIComponent(session.roleId)}/companion/frame?reviewId=${review.id}` }] : [],
+      { companion: { sessionId: session.id, revision: review.revision, reviewId: review.id }, suppressTaskAnnouncement: true },
+      recoveredOwnerUrl ? { RABI_DSH_LOCAL_OWNER_URL: recoveredOwnerUrl } : undefined);
+  },
+  speak: async (session, text, expiresAt) => {
+    const response = await requestLocalSpeech(speechServiceUrl(), "/v1/audio/speech", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ input: text, voice: session.roleId, play: true,
+        session_id: companionSpeechScope(session), playback_deadline: expiresAt / 1000 })
+    }, { timeoutMs: 120_000 });
+    if (response.status !== 200) throw new Error(`RabiSpeech HTTP ${response.status}`);
+  },
+  cancelSpeech: async scope => {
+    const result = await requestLocalSpeechJson(speechServiceUrl(), "/v1/playback/cancel-session", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sessionId: scope })
+    }, { timeoutMs: 5000 });
+    if (result.status !== 200) throw new Error(`RabiSpeech HTTP ${result.status}`);
+  },
+  save: async session => {
+    if (session.observationOwner === "desktop" && !(await allDayRecording.service.snapshot(session.roleId)).enabled) return;
+    await saveCompanionSummary(roleDirForApi(session.roleId), session);
+    await allDayRecording.store.append(session.roleId, { id: `companion:${session.id}`, deviceId: os.hostname(),
+      startedAt: session.startedAt, endedAt: session.endedAt || session.startedAt, source: "session", kind: "status", state: "saved",
+      text: `${session.title || session.presetId} · ${session.positionSeconds === null ? "" : `${Math.floor(session.positionSeconds)}s`} · ${session.notes.length} 条讨论` });
+    publishManagerEvent("all_day_recording", { roleId: session.roleId });
+  }
+});
+const handleCompanionActivityApi = companionActivityHandler(companionActivity, {
+  continuation: new CompanionContinuationStore(),
+  local: request => isLocalMachineRemoteAddress(request.socket.remoteAddress, []), readOnly: () => managerReadOnly,
+  verifyGateway: (roleId, gatewayId) => {
+    const candidates = [...runtimes.values()].filter(item => roleIdForDefinition(item.definition) === roleId && !item.definition.agentRoleDeviceId && item.definition.enabled);
+    const runtime = gatewayId ? runtimes.get(gatewayId) : candidates.length === 1 ? candidates[0] : undefined;
+    if (!runtime || !runtime.definition.enabled || roleIdForDefinition(runtime.definition) !== roleId) throw new Error("Select an enabled Route for this persona");
+    assertLocalPersonaOwner(runtime.definition, "Companion activity");
+    return runtime.definition.id;
+  },
+  saveSummaryDefault: async roleId => (await allDayRecording.service.snapshot(roleId)).enabled === true,
+  last: roleId => lastCompanionSummary(roleDirForApi(roleId))
 });
 const resourceCache = new ResourceCache(path.join(rootDir, "data"));
 const handleLegacyResourceCacheApi = resourceCacheHandler(resourceCache, {
@@ -1548,7 +1632,7 @@ const agentCompletionDelivery = new AgentCompletionDeliveryService({
       if (!roleId || roles.has(roleId) || runtime.definition.enabled === false || runtime.definition.agentRoleDeviceId) return [];
       roles.add(roleId);
       return [
-        ...(runtime.definition.codexHooks?.completionDeliveries ?? []).map(rule => ({ roleId, rule })),
+        ...(agentHookSettingsFor(runtime.definition.codexHooks, request.agentType).completionDeliveries ?? []).map(rule => ({ roleId, rule })),
         ...planCompletionDeliveryRules(roleId, listPlans(roleDirForApi(roleId)), request.sessionId)
       ];
     });
@@ -1771,7 +1855,8 @@ const speechControl = new ManagerSpeechControl({
 const speechRuntimeControl = new SpeechRuntimeControl({
   rootDir,
   packageRoot,
-  serviceUrl: () => speechServiceUrl()
+  serviceUrl: () => speechServiceUrl(),
+  ensureDependencies: allowFirstInstall => speechModelManager.ensureRuntime(allowFirstInstall)
 });
 const agentStateByGateway = new Map<string, Partial<Record<AgentAdapterType, AgentRuntimeState>>>();
 const remoteAgentToken = process.env.REMOTE_AGENT_TOKEN?.trim() || "";
@@ -2824,7 +2909,7 @@ function childCommand(extraArgs: string[] = []) {
 }
 
 function reconcileSpeechMicrophone(reason: string, isActive: () => boolean = () => true): void {
-  void speechRuntimeControl.start()
+  void speechRuntimeControl.start(undefined, false)
     .then(() => isActive() ? speechControl.reconcileMicrophone() : undefined)
     .catch(error => {
       if (!isActive()) return;
@@ -3350,13 +3435,10 @@ function routeCallbackEndpoint(runtime: GatewayRuntime, type: MessageAdapterType
   };
 }
 
-function routeHasRecentMessages(runtime: GatewayRuntime, type: MessageAdapterType): boolean {
-  try {
-    const files = readMessageFiles(runtime.definition) as Record<string, { entries?: unknown[] }>;
-    return Boolean(files[type]?.entries?.length);
-  } catch {
-    return false;
-  }
+function routeHasRecentMessages(runtime: GatewayRuntime, type: MessageAdapterType): boolean | undefined {
+  const service = activeGatewayDiagnosticsSnapshotService();
+  service.requestRefresh();
+  return service.hasRecentMessages(runtime.definition.id, type);
 }
 
 function napcatManagerCtx(beforeLaunch?: () => void) {
@@ -5146,14 +5228,14 @@ function instanceHookSessionId(instanceId: string, agentId: string, sessionId: s
   return `instance-${createHash("sha256").update(JSON.stringify([instanceId, agentId, sessionId])).digest("hex")}`;
 }
 
-function codexHookSettingsForSession(sessionId: string, cwd?: string): CodexHookSettings {
+function codexHookSettingsForSession(sessionId: string, cwd?: string, agentType = "codex"): CodexHookSettings {
   const exactSessionId = String(sessionId || "").trim();
   const managedGatewayIds = gatewayIdsForManagedSession(exactSessionId, cwd);
   const matches = [...runtimes.values()].filter((runtime) => (
     managedGatewayIds.has(runtime.definition.id)
   ));
   if (matches.length === 0) return { ...DEFAULT_CODEX_HOOK_SETTINGS };
-  const settings = matches.map((runtime) => normalizeCodexHookSettings(runtime.definition.codexHooks));
+  const settings = matches.map((runtime) => agentHookSettingsFor(runtime.definition.codexHooks, agentType));
   return {
     sessionContextEnabled: settings.every((item) => item.sessionContextEnabled),
     reasoningContextEnabled: settings.every((item) => item.reasoningContextEnabled),
@@ -5164,7 +5246,7 @@ function codexHookSettingsForSession(sessionId: string, cwd?: string): CodexHook
 }
 
 function codexHookEnabled(request: CodexHookContextRequest): boolean {
-  const settings = codexHookSettingsForSession(request.sessionId, request.cwd);
+  const settings = codexHookSettingsForSession(request.sessionId, request.cwd, request.agentType);
   if (request.eventName === "SessionStart" || request.eventName === "UserPromptSubmit") {
     return settings.sessionContextEnabled;
   }
@@ -5185,7 +5267,7 @@ function isManagedAgentSession(request: CodexHookContextRequest): boolean {
   const managed = agentRequests.hasManagedSession(sessionId, request.cwd)
     || gatewayIdsForManagedSession(sessionId, request.cwd).size > 0;
   if (!managed) return false;
-  return codexHookSettingsForSession(sessionId, request.cwd).agentCommunicationEnforcementEnabled;
+  return codexHookSettingsForSession(sessionId, request.cwd, request.agentType).agentCommunicationEnforcementEnabled;
 }
 
 function recordAgentRequestStop(request: CodexHookContextRequest): AgentRequestStopResult {
@@ -6830,9 +6912,10 @@ function triggerGatewayRolePanelMessage(
   messageId: string,
   text: string,
   attachments: RolePanelAttachment[],
-  replyContext?: Record<string, unknown>
+  replyContext?: Record<string, unknown>,
+  deliveryEnv?: NodeJS.ProcessEnv
 ): Promise<void> {
-  return triggerGatewayLocalAgentMessage(runtime, "role-panel", messageId, text, attachments, replyContext);
+  return triggerGatewayLocalAgentMessage(runtime, "role-panel", messageId, text, attachments, replyContext, deliveryEnv);
 }
 
 function triggerGatewayPlanFeedback(
@@ -6851,7 +6934,8 @@ function triggerGatewayLocalAgentMessage(
   messageId: string,
   text: string,
   attachments: RolePanelAttachment[],
-  replyContext?: Record<string, unknown>
+  replyContext?: Record<string, unknown>,
+  deliveryEnv?: NodeJS.ProcessEnv
 ): Promise<void> {
   const roleId = roleIdForDefinition(runtime.definition);
   const routeProfileId = runtime.definition.routeProfiles?.[0]?.id ?? runtime.definition.id;
@@ -6870,7 +6954,7 @@ function triggerGatewayLocalAgentMessage(
     let settled = false;
     const child = spawn(command.command, command.args, {
       cwd: rootDir,
-      env: envFor(runtime.definition),
+      env: { ...envFor(runtime.definition), ...deliveryEnv },
       shell: command.shell,
       windowsHide: true
     });
@@ -8008,6 +8092,7 @@ function handleRoleKnowledgeApi(
   resolveRoleDir: (roleId: string) => string = roleDirForApi,
   resolveRoleStorageApplication: () => RoleStorageApplication = currentRoleStorageApplication
 ): boolean {
+  if (handleCompanionActivityApi(request, new URL(request.url || pathname, "http://127.0.0.1"), response)) return true;
   if (handleAllDayRecordingApi(request, new URL(request.url || pathname, "http://127.0.0.1"), response)) return true;
   if (handleMessageEndpointHistoryApi(request, new URL(request.url || pathname, "http://127.0.0.1"), response, {
     roleDirectory: resolveRoleDir,
@@ -10469,7 +10554,8 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       console.error(JSON.stringify({ event: "recording_archive_restore_failed", code: "archive_unavailable" }));
     });
   }
-  managerRuntimeOwner.register("all_day_recording", () => allDayRecording.service.dispose());
+  managerRuntimeOwner.register("all_day_recording", () => allDayRecording.dispose());
+  managerRuntimeOwner.register("companion_activity", async () => { await companionActivity.dispose(); await companionFrameDelivery.dispose(); });
   if (!managerReadOnly) {
     try { await allDayRecording.service.restore(); }
     catch (error) { console.error("All-day recording could not restore its saved intent:", error); }

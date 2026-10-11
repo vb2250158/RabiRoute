@@ -570,6 +570,7 @@ function normalizePlaybackJob(value: Record<string, unknown>): SpeechPlaybackJob
     provider: optionalString(value.provider),
     model: optionalString(value.model),
     voice: optionalString(value.voice),
+    text: optionalString(value.text),
     sessionId: value.session_id == null && value.sessionId == null ? null : stringValue(value.session_id ?? value.sessionId),
     routeId: value.route_id == null && value.routeId == null ? null : stringValue(value.route_id ?? value.routeId),
     createdAt: value.created_at == null && value.createdAt == null ? undefined : numberValue(value.created_at ?? value.createdAt),

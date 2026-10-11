@@ -49,6 +49,7 @@ import type { GatewayDiagnosticsWorkerInput } from "./gatewayDiagnosticsSnapshot
 import { readGatewayStatusInWorker } from "./gatewayStatusSnapshot.js";
 
 export type ManagerReadWorkerTask =
+  | { type: "all_day_recording_read"; input: import("./allDayRecordingReadStorage.js").AllDayReadJob }
   | { type: "gateway_status_snapshot"; statusPath: string }
   | { type: "desktop_pet_catalog"; roleId: string; roleDir: string; cacheRoot: string; options: import("./desktopPetRoutes.js").DesktopPetPackCatalogOptions }
   | { type: "role_message_endpoint_history"; roleDir: string; query: RecentMessageContextQuery }
@@ -264,6 +265,10 @@ async function readRecentPerformanceSamples(logDirectory: string, limit: number)
 
 async function execute(task: ManagerReadWorkerTask): Promise<unknown> {
   switch (task.type) {
+    case "all_day_recording_read": {
+      const { readAllDayStorage } = await import("./allDayRecordingReadStorage.js");
+      return readAllDayStorage(task.input);
+    }
     case "gateway_status_snapshot":
       return readGatewayStatusInWorker(task.statusPath);
     case "desktop_pet_catalog": {

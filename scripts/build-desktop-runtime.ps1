@@ -60,7 +60,7 @@ if (-not $pthFile) { throw "The embeddable Python path configuration is missing.
 @("python310.zip", ".", "..", "Lib\site-packages", "import site") |
     Set-Content -LiteralPath $pthFile.FullName -Encoding ASCII
 & $Python -3.10 -m pip install --disable-pip-version-check --ignore-installed --no-warn-conflicts --target $sitePackages `
-    -r (Join-Path $hostSource "requirements.txt")
+    -r (Join-Path $hostSource "requirements.txt") "pip>=24,<27"
 if ($LASTEXITCODE -ne 0) { throw "Installing RabiRoute Desktop Qt dependencies failed." }
 
 # pip --target can leave build-time command wrappers and bytecode caches. The
@@ -95,7 +95,7 @@ Get-ChildItem -LiteralPath $pysideRoot -Recurse -Force -File | Where-Object {
 
 $qtSmoke = @'
 from PySide6 import QtCore, QtGui, QtNetwork, QtWidgets
-import PIL, uiautomation
+import PIL, uiautomation, pip
 from rabiroute_tray import desktop_diagnostics
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 icon = QtWidgets.QSystemTrayIcon(QtGui.QIcon())

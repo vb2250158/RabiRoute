@@ -12,6 +12,8 @@
 
 ## 先看这里
 
+- [桌宠陪伴模式](companion-mode.md) — **实验功能**。桌宠右键开启，跟随前台窗口，自适应陪玩与陪看。
+
 - [查看设备并测试动作](user-guide/home-devices.md) — 查看设备卡片、能力和状态，并测试已接通的设备动作。
 - [工作区计划查询](workspace-plan-query.md) — 按宿主会话与工作区过滤的分页搜索接口。
 
@@ -51,6 +53,7 @@
 - [本机路由使用远端人格](remote-persona-reference.md) — **0.3.19 实验实现**。选择同一 RabiLink 应用中的来源 PC 和人格，自动握手并只读资料，沿用本机消息端与处理 Agent；真实双 PC 投递仍待验收。
 - [Agent 上下文注入](agent-context-injection.md) — **现行指南**。人格级统一双向账本、分消息端/会话的最近消息额度、归档边界，以及 `AgentPacket` 中的人格目录、跨人格投递凭据、路径和回复上下文。
 - [桌宠移动接口](desktop-pet-agent-motion.md) — 移动桌宠并查询实际抵达、打断与不确定回执。
+- [桌宠气泡与语音](desktop-pet-bubbles.md) — 显示角色说话文字，自定义猫爪气泡、字体、配色与停留时间。
 - [Rabi Agent 接口](rabi-agent-interfaces.md) — **当前合同**。处理端如何回复、查询可联系人格、进行带幂等回执的单向跨人格投递，以及使用 thread bridge、计划、记忆、Remote Agent 和多实例 API。
 - [计划和记忆机制](plan-and-memory-model.md) — **现行指南**。Role Knowledge 的文件真源、召回和整理副作用。
 - [动态整理记录统一规范](dynamic-record-lifecycle.md) — **现行指南**。统一归档、记忆沉淀、物理分卷、保留策略和 24/72 小时动态窗口的边界与验收。

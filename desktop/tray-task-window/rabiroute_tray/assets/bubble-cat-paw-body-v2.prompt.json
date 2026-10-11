@@ -1,0 +1,6 @@
+{
+  "tool": "imagegen",
+  "editSource": "bubble-cat-paw-v1.png",
+  "transparentBackground": true,
+  "prompt": "Edit target: the supplied empty cat-paw UI dialogue texture. Change ONLY the bottom-left speech pointer: remove that pointer completely and replace it with a smooth continuous horizontal lower outline. This asset must now be a normal rounded rectangle with NO tail, NO pointer anywhere, NO protrusions. Preserve the warm ivory blank center, mauve-gray thin outline, original two small pink paw motifs in the bottom-right corner, overall dimensions, corner rounding, material and genuine transparent background. Keep everything else unchanged. It will be nine-slice rendered; the triangle will be drawn independently in code at a dynamic anchor. No text, labels, checkerboard or grid."
+}

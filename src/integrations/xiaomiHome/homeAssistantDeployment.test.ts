@@ -33,6 +33,138 @@ function fixture(t: test.TestContext) {
     setAvailable: (value: boolean) => { available = value; }, setImage: (value: string) => { image = value; } };
 }
 
+test("HA OS startup and disconnect recovery coalesce, respect cooldown and preserve foreground approval", async t => {
+  const f = fixture(t);
+  const operations: string[] = [];
+  let release: (() => void) | undefined;
+  const owner = new HomeAssistantDeployment(f.root, () => "http://127.0.0.1:8123", f.io, {
+    inspect: async () => ({ state: "installed", message: "installed" }),
+    async run(operation) {
+      operations.push(operation);
+      if (operation === "Recover") await new Promise<void>(resolve => { release = resolve; });
+      f.setRunning(true);
+      return { state: "installed", message: "installed" };
+    }
+  });
+  const saved = await owner.save({ mode: "haos", containerName: "homeassistant", autoStart: true }, (await owner.inspect()).revision);
+  owner.start();
+  const sameFailure = owner.recover();
+  assert.equal(sameFailure, owner.recover());
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(operations, ["Recover"]);
+  release?.();
+  await sameFailure;
+  assert.equal((await owner.inspect()).state, "ready");
+  f.setRunning(false);
+  await owner.recover();
+  assert.deepEqual(operations, ["Recover"], "repeated failures are throttled");
+  await owner.ensureReady(saved.revision);
+  assert.deepEqual(operations, ["Recover", "Start"], "foreground start can authorize the protected helper");
+  await owner.stop();
+  f.setRunning(false);
+  await owner.recover();
+  assert.equal(operations.length, 2, "shutdown cannot restart the VM");
+});
+
+test("automatic recovery does not install, take over external services or prompt for missing approval", async t => {
+  for (const mode of ["external", "haos"] as const) {
+    for (const autoStart of [false, true]) {
+      const f = fixture(t);
+      let runs = 0;
+      const owner = new HomeAssistantDeployment(f.root, () => "http://127.0.0.1:8123", f.io, {
+        inspect: async () => ({ state: "not_installed", message: "absent" }),
+        run: async () => { runs++; throw new Error("must not run"); }
+      });
+      await owner.save({ mode, containerName: "homeassistant", autoStart }, (await owner.inspect()).revision);
+      owner.start();
+      await owner.recover();
+      await owner.stop();
+      assert.equal(runs, 0);
+    }
+  }
+  const f = fixture(t);
+  const owner = new HomeAssistantDeployment(f.root, () => "http://127.0.0.1:8123", f.io, {
+    inspect: async () => ({ state: "installed", message: "installed" }),
+    run: async operation => { assert.equal(operation, "Recover"); throw new Error("approval absent"); }
+  });
+  await owner.save({ mode: "haos", containerName: "homeassistant", autoStart: true }, (await owner.inspect()).revision);
+  owner.start();
+  await owner.recover();
+  assert.match((await owner.inspect()).message, /Windows 管理员/);
+  assert.equal((await owner.inspect()).installation, "installed");
+  await owner.stop();
+});
+
+test("recovery checks current configuration after an in-flight health probe", async t => {
+  const f = fixture(t);
+  let finish: ((ready: boolean) => void) | undefined;
+  let pause = false;
+  let runs = 0;
+  const owner = new HomeAssistantDeployment(f.root, () => "http://127.0.0.1:8123", {
+    ...f.io, ready: async () => pause ? new Promise<boolean>(resolve => { finish = resolve; }) : false
+  }, {
+    inspect: async () => ({ state: "installed", message: "installed" }),
+    run: async () => { runs++; return { state: "installed", message: "installed" }; }
+  });
+  const saved = await owner.save({ mode: "haos", containerName: "homeassistant", autoStart: true }, (await f.owner.inspect()).revision);
+  pause = true;
+  owner.start();
+  const flight = owner.recover();
+  pause = false;
+  await owner.save({ mode: "haos", containerName: "homeassistant", autoStart: false }, saved.revision);
+  finish?.(false);
+  await flight;
+  assert.equal(runs, 0);
+  await owner.stop();
+});
+
+test("transient recovery failure can retry after cooldown without losing installed state", async t => {
+  const f = fixture(t);
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  let attempts = 0;
+  const owner = new HomeAssistantDeployment(f.root, () => "http://127.0.0.1:8123", f.io, {
+    inspect: async () => ({ state: "error", installed: true, message: "network not ready" }),
+    run: async () => {
+      attempts++;
+      if (attempts === 1) throw new Error("network not ready");
+      f.setRunning(true);
+      return { state: "installed", message: "installed" };
+    }
+  });
+  await owner.save({ mode: "haos", containerName: "homeassistant", autoStart: true }, (await owner.inspect()).revision);
+  owner.start();
+  await owner.recover();
+  assert.equal(attempts, 1);
+  now += 300001;
+  await owner.recover();
+  assert.equal(attempts, 2);
+  assert.equal((await owner.inspect()).state, "ready");
+  await owner.stop();
+});
+
+test("shutdown cancels its pending recovery wait without restarting or resetting the VM", async t => {
+  const f = fixture(t);
+  let cancelled = false;
+  const owner = new HomeAssistantDeployment(f.root, () => "http://127.0.0.1:8123", f.io, {
+    inspect: async () => ({ state: "installed", message: "installed" }),
+    run: async (operation, _autoStart, _authority, signal) => {
+      assert.equal(operation, "Recover");
+      return new Promise((_resolve, reject) => signal?.addEventListener("abort", () => {
+        cancelled = true;
+        reject(new Error("cancelled"));
+      }, { once: true }));
+    }
+  });
+  await owner.save({ mode: "haos", containerName: "homeassistant", autoStart: true }, (await owner.inspect()).revision);
+  owner.start();
+  await new Promise(resolve => setImmediate(resolve));
+  await owner.stop();
+  assert.equal(cancelled, true);
+  await owner.recover();
+  assert.match((await owner.inspect()).message, /取消/);
+});
+
 test("deployment detection distinguishes unavailable engine, absent container and installed path", async t => {
   const f = fixture(t);
   const original = await f.owner.inspect();

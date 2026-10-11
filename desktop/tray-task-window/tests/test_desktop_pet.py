@@ -624,6 +624,7 @@ class DesktopPetManagerTest(unittest.TestCase):
             patch("rabiroute_tray.desktop_pet_manager.DesktopPetController") as controller_type,
             patch.object(DesktopPetManager, "refresh"),
         ):
+            event_stream.side_effect = [MagicMock(), MagicMock()]
             controllers = [MagicMock(), MagicMock()]
             controller_type.side_effect = controllers
             manager = DesktopPetManager("http://127.0.0.1:8790", fake_menu, lambda _persona_id: None)
@@ -642,7 +643,8 @@ class DesktopPetManagerTest(unittest.TestCase):
             controllers[0].close.assert_called_once()
             self.assertEqual(set(manager.controllers), {"XinghaiBuilder"})
             manager.close()
-            event_stream.return_value.stop.assert_called_once()
+            manager._events.stop.assert_called_once()
+            manager._speech_events.stop.assert_called_once()
 
     def test_close_ignores_a_late_roster_refresh(self) -> None:
         fake_menu = MagicMock()

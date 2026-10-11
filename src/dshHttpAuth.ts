@@ -92,7 +92,15 @@ async function exchangeLaunchUrl(launch: URL, strict = false, signal?: AbortSign
     throw new Error('DSH authentication exchange failed; no RPC was sent.');
   }
   await assertAuthorized?.();
-  if (response.status !== 303 || response.headers.get('location') !== '/') throw new Error('DSH authentication exchange rejected; reopen the current owner launch URL.');
+  const location = response.headers.get('location');
+  let rootRedirect = false;
+  if (location) {
+    try {
+      const target = new URL(location, launch);
+      rootRedirect = target.origin === launch.origin && target.pathname === '/' && !target.search && !target.hash && !target.username && !target.password;
+    } catch { /* malformed redirect is rejected */ }
+  }
+  if (response.status !== 303 || !rootRedirect) throw new Error('DSH authentication exchange rejected; reopen the current owner launch URL.');
   const values = response.headers.getSetCookie();
   const valid = values.filter(value => /^dsh-auth-[A-Za-z0-9_-]+=[A-Za-z0-9_.-]+;/.test(value) && /;\s*HttpOnly(?:;|$)/i.test(value) && /;\s*Path=\/(?:;|$)/i.test(value));
   if (valid.length !== 1) throw new Error('DSH authentication exchange did not issue one supported session cookie.');
@@ -232,7 +240,7 @@ async function verifyDshCredential(origin: string, cookie: string, signal?: Abor
 }
 
 /** Authenticate before dispatch. Never retry an RPC, including after a 401. */
-export async function dshAuthenticatedFetch(baseUrl: string, method: string, body: string, assertAuthorized?: () => void | Promise<void>): Promise<Response> {
+export async function dshAuthenticatedFetch(baseUrl: string, method: string, body: string, assertAuthorized?: () => void | Promise<void>, signal?: AbortSignal): Promise<Response> {
   await assertAuthorized?.();
   const origin = originOf(baseUrl);
   if (!/^[A-Za-z][A-Za-z0-9]*(?:[./][A-Za-z][A-Za-z0-9]*)+$/.test(method)) throw new Error('DSH RPC method is invalid.');
@@ -249,7 +257,7 @@ export async function dshAuthenticatedFetch(baseUrl: string, method: string, bod
     if (cached && cached.expires > Date.now()) cookie = cached.value;
     else if (assertAuthorized) {
       // A revoked caller must neither populate a shared exchange nor poison another caller.
-      cookie = (await exchange(origin, logPath, false, undefined, assertAuthorized)).cookie;
+      cookie = (await exchange(origin, logPath, false, signal, assertAuthorized)).cookie;
       await assertAuthorized();
     } else {
       let work = pending.get(cacheKey);
@@ -271,7 +279,7 @@ export async function dshAuthenticatedFetch(baseUrl: string, method: string, bod
   let response: Response;
   try {
     response = await fetch(`${origin}/api/${method}`, {
-      method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(30000),
+      method: 'POST', redirect: 'manual', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000),
       headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) }, body
     });
   } catch {

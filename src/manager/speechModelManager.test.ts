@@ -7,6 +7,7 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 import type { spawn } from "node:child_process";
 import { SpeechModelManager, SpeechModelManagerError } from "./speechModelManager.js";
+import { speechRequirementsDigest } from "./speechDependencies.js";
 
 type FakeChild = EventEmitter & {
   stdout: PassThrough;
@@ -27,6 +28,7 @@ function makeFixture(): {
   const modelRoot = path.join(root, "private-models");
   fs.mkdirSync(path.join(pluginRoot, "scripts"), { recursive: true });
   fs.writeFileSync(path.join(pluginRoot, "scripts", "install.ps1"), "# fixture\n");
+  fs.writeFileSync(path.join(pluginRoot, "requirements.txt"), "scipy>=1.10,<2\n");
   fs.writeFileSync(path.join(pluginRoot, "scripts", "install_models.ps1"), "# fixture\n");
   fs.writeFileSync(path.join(pluginRoot, "model-catalog.json"), JSON.stringify({
     schema_version: 1,
@@ -108,6 +110,57 @@ function putDependencies(root: string): void {
   ]) putFile(path.join(root, relative));
 }
 
+test("first use prepares once, concurrent starts wait, and changed requirements repair the stable environment", async t => {
+  const fixture = makeFixture(); t.after(fixture.cleanup);
+  const calls: InstallerCall[] = [], fake = fakeInstaller(calls);
+  const manager = new SpeechModelManager({ rootDir: fixture.root, platform: "win32", spawnInstaller: fake.spawnInstaller });
+  await assert.rejects(manager.ensureRuntime(false), /首次使用/);
+  assert.equal(calls.length, 0);
+  const first = manager.ensureRuntime(), concurrent = manager.ensureRuntime();
+  assert.equal(first, concurrent); assert.equal(calls.length, 1);
+  assert.ok(calls[0].args.includes("-EnsureMissing"));
+  const deps = path.join(fixture.pluginRoot, ".deps");
+  putDependencies(deps);
+  putFile(path.join(deps, ".runtime-requirements.sha256"), speechRequirementsDigest(fixture.pluginRoot));
+  fake.children[0].emit("close", 0); await first;
+  await manager.ensureRuntime(); assert.equal(calls.length, 1);
+  putFile(path.join(fixture.pluginRoot, "requirements.txt"), "scipy>=1.11,<2\n");
+  const upgraded = manager.ensureRuntime(false); assert.equal(calls.length, 2);
+  putFile(path.join(deps, ".runtime-requirements.sha256"), speechRequirementsDigest(fixture.pluginRoot));
+  fake.children[1].emit("close", 0); await upgraded;
+  fs.unlinkSync(path.join(deps, "scipy/__init__.py"));
+  const repaired = manager.ensureRuntime(); assert.equal(calls.length, 3);
+  putDependencies(deps); fake.children[2].emit("close", 0); await repaired;
+});
+
+test("failed preparation is not downloaded every interval; explicit retry clears it and ignores stale child callbacks", async t => {
+  const fixture = makeFixture(); t.after(fixture.cleanup);
+  const calls: InstallerCall[] = [], fake = fakeInstaller(calls);
+  const manager = new SpeechModelManager({ rootDir: fixture.root, platform: "win32", spawnInstaller: fake.spawnInstaller });
+  const failed = manager.ensureRuntime();
+  fake.children[0].emit("error", new Error("network unavailable"));
+  await assert.rejects(failed, /network unavailable/);
+  await assert.rejects(manager.ensureRuntime(), /模型管理/); assert.equal(calls.length, 1);
+  manager.installRuntime();
+  const retry = manager.ensureRuntime();
+  fake.children[0].emit("close", 0);
+  assert.equal(manager.snapshot().activeJob?.state, "running");
+  const deps = path.join(fixture.pluginRoot, ".deps");
+  putDependencies(deps); putFile(path.join(deps, ".runtime-requirements.sha256"), speechRequirementsDigest(fixture.pluginRoot));
+  fake.children[1].emit("close", 0); await retry;
+  assert.equal(manager.snapshot().lastJob?.state, "completed");
+});
+
+test("successful installer exit without a validated receipt cannot start capture", async t => {
+  const fixture = makeFixture(); t.after(fixture.cleanup);
+  const fake = fakeInstaller([]);
+  const manager = new SpeechModelManager({ rootDir: fixture.root, platform: "win32", spawnInstaller: fake.spawnInstaller });
+  const pending = manager.ensureRuntime();
+  putDependencies(path.join(fixture.pluginRoot, ".deps"));
+  fake.children[0].emit("close", 0);
+  await assert.rejects(pending, /校验未通过/);
+});
+
 test("model files without an installation manifest are recognized; empty and zero-byte targets are not", () => {
   const fixture = makeFixture();
   try {
@@ -156,7 +209,7 @@ test("stable dependencies use the current package host and installers rather tha
     fake.children[0]?.emit("close", 0);
     manager.installRuntime();
     assert.equal(calls[1]?.args[5], path.join(fixture.pluginRoot, "scripts/install.ps1"));
-    assert.deepEqual(calls[1]?.args.slice(6), ["-DependencyRoot", dependenciesRoot]);
+    assert.deepEqual(calls[1]?.args.slice(6), ["-DependencyRoot", dependenciesRoot, "-SkipHostBuild"]);
     assert.equal(calls[1]?.options?.cwd, fixture.pluginRoot);
     assert.equal(calls[1]?.options?.env?.RABISPEECH_DEPS_ROOT, dependenciesRoot);
     fake.children[1]?.emit("close", 0);

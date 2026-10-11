@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import http, { type IncomingMessage, type ServerResponse } from "node:http";
+import { readAllDayStorage } from "./allDayRecordingReadStorage.js";
 import test, { type TestContext } from "node:test";
 import { DEFAULT_ALL_DAY_SETTINGS } from "../shared/allDayRecording.js";
+import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { AllDayRecordingService, atomicRecordingJson } from "./allDayRecording.js";
 import { allDayRecordingHandler, createAllDayRecording } from "./allDayRecordingRoutes.js";
@@ -25,7 +27,9 @@ async function fixture(t: TestContext) {
   config.patch({ webguiLan: { enabled: true } });
   const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "node-fixture");
   authority.registerAgentCatalog(credential.token, [{ agentId: "worker", provider: "custom-provider" }]);
-  const runtime = createAllDayRecording({ roleDirectory: id => path.join(root, id), hostId: "host-fixture", mobileRoot: path.join(root, "mobile"), speechUrl: () => { throw new Error("Unexpected speech call"); }, changed: () => {}, mobileAudio: async () => Buffer.from("RIFFphone") });
+  const runtime = createAllDayRecording({ roleDirectory: id => path.join(root, id), hostId: "host-fixture", mobileRoot: path.join(root, "mobile"), speechUrl: () => { throw new Error("Unexpected speech call"); }, changed: () => {}, mobileAudio: async () => Buffer.from("RIFFphone"), runRead: async job => readAllDayStorage(job) });
+  t.after(() => runtime.dispose());
+  runtime.reads.timeline = async (role, since, until) => ({ events: await runtime.store.timeline(role, since, until), loading: false, pendingDays: [], readError: undefined });
   const request = (remote = true, method = "GET", action = "") => {
     const value = { method, url: `/api/roles/persona/all-day-recording${action ? `/${action}` : ""}`, headers: { host: "localhost", "content-type": "application/json", ...(remote ? { authorization: `Bearer ${credential.token}`, "x-rabiroute-agent-id": "worker" } : {}) }, socket: { remoteAddress: remote ? "192.0.2.10" : "127.0.0.1" } } as unknown as IncomingMessage;
     if (remote) assert.equal(evaluateLanAgentRequest(value, authority, true, () => config.getLanAgentAdmissionPolicy()).kind, "agent");
@@ -36,7 +40,7 @@ async function fixture(t: TestContext) {
   const invoke = (req: IncomingMessage, readBody: (request: IncomingMessage) => Promise<unknown> = async () => ({})) => {
     const completed = deferred<{ status: number; body: string | Buffer }>();
     let status = 0;
-    const response = { writableEnded: false, destroyed: false, headersSent: false, writeHead(code: number) { status = code; this.headersSent = true; return this; }, end(body: string | Buffer) { this.writableEnded = true; completed.resolve({ status, body }); }, destroy() { this.destroyed = true; completed.resolve({ status, body: "" }); } };
+    const response = Object.assign(new EventEmitter(), { writableEnded: false, destroyed: false, headersSent: false, writeHead(code: number) { status = code; this.headersSent = true; return this; }, end(body: string | Buffer) { this.writableEnded = true; completed.resolve({ status, body }); }, destroy() { this.destroyed = true; completed.resolve({ status, body: "" }); } });
     const handler = allDayRecordingHandler(runtime, { local: req => req.socket.remoteAddress === "127.0.0.1", readOnly: () => readOnly, readBody });
     assert.equal(handler(req, new URL(req.url!, "http://localhost"), response as unknown as ServerResponse), true);
     return completed.promise;
@@ -125,6 +129,24 @@ test("revocation after filesystem await or before rename suppresses publication 
   }
 });
 
+test("revocation during a contended rename stops the next replacement attempt", async t => {
+  const f = await fixture(t);
+  const file = path.join(f.root, "contended.json");
+  await fs.writeFile(file, "original");
+  let revoked = false, attempts = 0;
+  t.mock.method(fs, "rename", async () => {
+    attempts++;
+    setTimeout(() => { revoked = true; }, 0);
+    throw Object.assign(new Error("busy"), { code: "EBUSY" });
+  });
+  await assert.rejects(atomicRecordingJson(file, { next: true }, () => {
+    if (revoked) throw new Error("revoked");
+  }), /revoked/);
+  assert.equal(attempts, 1);
+  assert.equal(await fs.readFile(file, "utf8"), "original");
+  assert.equal((await fs.readdir(f.root)).some(name => name.endsWith(".partial")), false);
+});
+
 test("private mobile audio keeps phone owner and fences fetched raw bytes", async t => {
   const f = await fixture(t);
   const owner = "authenticated-phone-owner";
@@ -157,11 +179,41 @@ test("media and speech audio are withheld after revocation at fetch settlement",
       f.runtime.audio = async () => { entered.resolve(); const body = await fetched.promise; return { status: 200, contentType: "audio/wav", headers: {}, body }; };
       action = `audio?since=${time - 1}&until=${time + 1}&id=audio`;
     } else {
-      f.runtime.store.media = async () => { entered.resolve(); return fetched.promise; };
+      f.runtime.reads.media = async () => { entered.resolve(); return fetched.promise; };
       action = `media/2026-01-01/${"b".repeat(64)}.jpg`;
     }
     const pending = f.invoke(f.request(true, "GET", action));
     await entered.promise; f.revoke(); fetched.resolve(Buffer.from("PRIVATE_BYTES"));
     assert.equal((await pending).status, 403);
   }
+});
+
+test("index repair acknowledges a bounded job immediately, retains local authorization and publishes completion", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(),"rabi-recording-repair-http-"));
+  let finished!: () => void;
+  const completed = new Promise<void>(resolve => { finished = resolve; });
+  let release!: () => void, entered!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const runtime = createAllDayRecording({ roleDirectory: role => path.join(root,role), hostId:"computer",mobileRoot:path.join(root,"mobile"),
+    speechUrl: () => "http://127.0.0.1:1", changed: () => {}, mobileAudio: async () => Buffer.alloc(0),
+    runRead: async job => {if(job.kind==="scan") {entered();await blocked;}return readAllDayStorage(job);},
+    indexChanged: (role,day,failed) => { assert.equal(role,"one"); assert.equal(day,"2026-10-11"); assert.equal(failed,false); finished(); }
+  });
+  await runtime.store.append("one",{id:"saved",startedAt:Date.parse("2026-10-11"),endedAt:Date.parse("2026-10-11"),source:"window",deviceId:"computer",kind:"window",text:"Editor",state:"saved"});
+  let local = true, readOnly = false;
+  const handler = allDayRecordingHandler(runtime,{local: () => local,readOnly: () => readOnly,readBody: async () => ({})});
+  const server = http.createServer((request,response) => { if(!handler(request,new URL(request.url!,"http://fixture"),response)) { response.writeHead(404); response.end(); } });
+  await new Promise<void>(resolve => server.listen(0,"127.0.0.1",resolve));
+  t.after(async () => { release();await runtime.dispose(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); await fs.rm(root,{recursive:true,force:true}); });
+  const url = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}/api/roles/one/all-day-recording/index-repair/2026-10-11`;
+  const submit = () => fetch(url,{method:"POST",headers:{"content-type":"application/json"},body:"{}",signal:AbortSignal.timeout(2000)});
+  assert.deepEqual(await (await submit()).json(),{code:0,data:{queued:true}});
+  await started;
+  local = false; assert.equal((await submit()).status,403);
+  local = true; readOnly = true; assert.equal((await submit()).status,403);
+  readOnly = false;
+  const catalog = await (await fetch(url.replace("/index-repair/2026-10-11","/catalog?day=2026-10-11"))).json() as {data:{incompleteDays:string[]}};
+  assert.deepEqual(catalog.data.incompleteDays,["2026-10-11"]);
+  release(); await completed;
 });

@@ -23,6 +23,24 @@ function status(state: SpeechRuntimeStatus["state"]): SpeechRuntimeStatus {
 
 const installed = () => true;
 
+test("runtime waits for dependency preparation before launching and reports failure without a spawn", async () => {
+  let ready!: () => void, launched = false;
+  const preparation = new Promise<void>(resolve => { ready = resolve; });
+  const control = new SpeechRuntimeControl({
+    rootDir: "C:/RabiRoute", platform: "win32", serviceUrl: () => "http://127.0.0.1:8781", existsSync: installed,
+    inspect: async () => status(launched ? "online" : "offline"),
+    ensureDependencies: async allowFirstInstall => { assert.equal(allowFirstInstall, true); await preparation; },
+    spawnRuntime: () => { launched = true; return { pid: 123, exitCode: null, unref() {} }; }
+  });
+  const pending = control.start(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(launched, false); ready(); await pending; assert.equal(launched, true);
+  const broken = new SpeechRuntimeControl({ rootDir: "C:/RabiRoute", serviceUrl: () => "http://127.0.0.1:8781",
+    inspect: async () => status("offline"), ensureDependencies: async () => { throw new Error("dependency validation failed"); },
+    spawnRuntime: () => { assert.fail("must not launch"); }
+  });
+  await assert.rejects(broken.start(), /dependency validation failed/);
+});
+
 function fixtureFile(root: string, relative: string): void {
   const filename = path.join(root, relative);
   fs.mkdirSync(path.dirname(filename), { recursive: true });
@@ -52,6 +70,25 @@ function runtimeFixture(t: TestContext) {
     bundledDependencies: path.join(serviceRoot, ".deps")
   };
 }
+
+test("standard package without an optional speech EXE uses its portable Python and never creates a host in the release", async t => {
+  const fixture = runtimeFixture(t);
+  dependencyFixture(path.join(fixture.stateRoot, "plugin-adapters/rabi-speech/.deps"));
+  fs.unlinkSync(path.join(fixture.serviceRoot, "runtime/RabiSpeech.exe"));
+  fixtureFile(fixture.packageRoot, "desktop-runtime/python/python.exe");
+  let launched = false;
+  const control = new SpeechRuntimeControl({ rootDir: fixture.stateRoot, packageRoot: fixture.packageRoot, platform: "win32",
+    serviceUrl: () => "http://127.0.0.1:8781", inspect: async () => status(launched ? "online" : "offline"),
+    spawnRuntime: (_command, args, options) => {
+      assert.deepEqual(args.slice(-2), ["-Python", path.join(fixture.packageRoot, "desktop-runtime/python/python.exe")]);
+      assert.equal(options?.env?.RABISPEECH_HOST_EXECUTABLE, path.join(fixture.stateRoot, "runtime/speech/RabiSpeech.exe"));
+      launched = true; return { pid: 123, exitCode: null, unref() {} };
+    }
+  });
+  assert.equal((await control.start()).action, "started");
+  assert.equal(fs.existsSync(path.join(fixture.serviceRoot, "runtime/RabiSpeech.exe")), false);
+  assert.equal(fs.existsSync(path.join(fixture.stateRoot, "runtime/speech/RabiSpeech.exe")), true);
+});
 
 async function launchFixture(stateRoot: string, packageRoot: string): Promise<NodeJS.ProcessEnv> {
   let launched = false;

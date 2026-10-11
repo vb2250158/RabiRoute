@@ -8,11 +8,17 @@ English | <a href="./personas-and-rules.md">简体中文</a>
 
 A Route decides how messages enter and which handler receives them. A persona supplies identity, background, and decision guidance. They are stored separately and can be reused independently.
 
+## Choose an Agent end for Hooks
+
+In Persona → Automation → Agent Hook, select the end to configure. Choices come from the ends added to enabled local Routes bound to this persona, filtered by lifecycle-hook capability. Add a missing end in Agent settings; installing or discovering software alone does not add a choice.
+
+Session context, tool context refresh, completion notifications, follow-ups and event deliveries are saved per selected end. Click Save after changes. Switching ends does not overwrite another end. Existing persona settings remain the default for ends without an override. Project and session conditions read only the selected end. Failed plan-status reads offer an explicit retry without replaying a save or delivery.
+
 ## Configure follow-ups when a task ends
 
 Open Persona → Automation → Agent Hook → Plan task follow-up. This is off by default. Add rules, select statuses from this persona's catalog, enter the follow-up text, and save. The first matching enabled rule wins; empty status selections or prompts never trigger.
 
-Only the uniquely bound Codex plan task receives the follow-up. It does not contact anyone else or change plan status. Configure a cooldown between follow-ups; each turn receives at most one, and unchanged steps, next actions, waiting details and rules do not trigger again. The cooldown does not schedule a wake-up. Terminal or archived plans are excluded. When Manager is unavailable, report diagnostics without inventing follow-ups from cached configuration.
+Only the uniquely bound plan task on the selected Agent end receives the follow-up. It does not contact anyone else or change plan status. Configure a cooldown between follow-ups; each turn receives at most one, and unchanged steps, next actions, waiting details and rules do not trigger again. The cooldown does not schedule a wake-up. Terminal or archived plans are excluded. When Manager is unavailable, report diagnostics without inventing follow-ups from cached configuration.
 
 Install or update the Hook from the Agent page when first using this feature. Subsequent rule changes only require saving the persona. Independently installed local execution guards must use advisory output instead of fixed Stop blocks so they cannot override the persona switch.
 

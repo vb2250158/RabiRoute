@@ -52,6 +52,7 @@ export type DesktopPetPackPresentation = {
   sourceFacing: "left" | "right";
   states: Record<string, DesktopPetStateAsset>;
   idleBehavior?: DesktopPetIdleBehavior;
+  companionStates?: Record<string, string>;
 };
 
 export type DesktopPetPackCatalog = {
@@ -243,6 +244,9 @@ function readPack(roleId: string, packDir: string): DesktopPetPackPresentation {
   }
   if (!states.idle) throw new Error("A runnable desktop pet pack must contain a valid idle state.");
   const idleBehavior = idleBehaviorPresentation(manifest.idleBehavior, states);
+  const companionStates = Object.fromEntries(Object.entries(objectValue(manifest.companionStates))
+    .filter(([kind, state]) => /^[a-z][a-z0-9-]{0,39}$/.test(kind) && typeof state === "string"
+      && states[state]?.loop === true).slice(0, 16)) as Record<string, string>;
 
   return {
     id: packId,
@@ -257,7 +261,8 @@ function readPack(roleId: string, packDir: string): DesktopPetPackPresentation {
     scale: finiteNumber(defaults.scale, 0.5, 0.1, 2),
     sourceFacing: manifest.sourceFacing === "left" ? "left" : "right",
     states,
-    ...(idleBehavior ? { idleBehavior } : {})
+    ...(idleBehavior ? { idleBehavior } : {}),
+    ...(Object.keys(companionStates).length ? { companionStates } : {})
   };
 }
 
@@ -300,6 +305,7 @@ export function listDesktopPetPacks(
 }
 
 function jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void {
+  if (response.destroyed || response.writableEnded) return;
   body = errorResponsePresentation(body, statusCode);
   response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
   response.end(JSON.stringify(body, null, 2));
@@ -358,26 +364,33 @@ async function updateBinding(
   return settings.write({ ...latest, pets: { ...latest.pets, [roleId]: updated } }).pets[roleId]!;
 }
 
-function serveAsset(
+async function serveAsset(
   response: http.ServerResponse,
   roleDir: string,
   roleId: string,
   packId: string,
   relativePath: string,
   cacheRoot: string
-): void {
+): Promise<void> {
   if (!PACK_ID_PATTERN.test(packId)) throw new Error("Invalid desktop pet pack id.");
   const cachedPackRoot = path.resolve(cacheRoot, roleId, "desktop-pet", "packs", packId);
   const sourcePackRoot = path.resolve(roleDir, "desktop-pet", "packs", packId);
-  const packRoot = fs.existsSync(path.join(cachedPackRoot, "pet-pack.json")) ? cachedPackRoot : sourcePackRoot;
+  let packRoot = cachedPackRoot;
+  try { await fs.promises.access(path.join(cachedPackRoot, "pet-pack.json")); }
+  catch (error) {
+    if (!["ENOENT", "ENOTDIR"].includes(assetReadErrorCode(error) ?? "")) throw error;
+    packRoot = sourcePackRoot;
+  }
   const candidate = resolveInside(packRoot, relativePath);
   if (!candidate || !IMAGE_EXTENSIONS.has(path.extname(candidate).toLowerCase())) throw new Error("Invalid desktop pet asset path.");
-  const realPackRoot = fs.realpathSync(packRoot);
-  const realCandidate = fs.realpathSync(candidate);
+  const realPackRoot = await fs.promises.realpath(packRoot);
+  const realCandidate = await fs.promises.realpath(candidate);
   if (!inside(realPackRoot, realCandidate)) throw new Error("Desktop pet asset escapes its pack directory.");
-  const stat = fs.statSync(realCandidate);
+  const stat = await fs.promises.stat(realCandidate);
   if (!stat.isFile() || stat.size > MAX_ASSET_BYTES) throw new Error("Desktop pet asset is unavailable or too large.");
-  const payload = fs.readFileSync(realCandidate);
+  const payload = await fs.promises.readFile(realCandidate);
+  if (payload.length > MAX_ASSET_BYTES) throw new Error("Desktop pet asset is too large.");
+  if (response.destroyed || response.writableEnded) return;
   response.writeHead(200, {
     "content-type": path.extname(realCandidate).toLowerCase() === ".gif" ? "image/gif" : "image/png",
     "content-length": String(payload.length),
@@ -531,20 +544,27 @@ export function handleDesktopPetApi(
     jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
     return true;
   }
+  const assetError = (error: unknown) => {
+    if (response.destroyed || response.writableEnded) return;
+    if (assetMatch && isTransientAssetReadError(error)) {
+      response.setHeader("retry-after", "1");
+      jsonResponse(response, 503, { code: -1, message: "Desktop pet asset is temporarily unavailable." });
+    } else jsonResponse(response, 404, { code: -1, message: error instanceof Error ? error.message : String(error) });
+  };
   try {
     const match = assetMatch ?? catalogMatch;
     const roleId = sanitizeRoleId(decodeURIComponent(match![1]));
     if (!roleId) throw new Error("Invalid role id.");
     const roleDir = resolveRoleDir(roleId);
     if (assetMatch) {
-      serveAsset(
+      void serveAsset(
         response,
         roleDir,
         roleId,
         decodeURIComponent(assetMatch[2]),
         decodeURIComponent(assetMatch[3]),
         cacheRoot
-      );
+      ).catch(assetError);
     } else {
       const options: DesktopPetPackCatalogOptions = {
         includeSharedSource: requestUrl.searchParams.get("scope") !== "runtime"
@@ -554,12 +574,7 @@ export function handleDesktopPetApi(
         .catch(error => jsonResponse(response, 503, { code: -1, message: error instanceof Error ? error.message : String(error) }));
     }
   } catch (error) {
-    if (assetMatch && isTransientAssetReadError(error)) {
-      response.setHeader("retry-after", "1");
-      jsonResponse(response, 503, { code: -1, message: "Desktop pet asset is temporarily unavailable." });
-      return true;
-    }
-    jsonResponse(response, 404, { code: -1, message: error instanceof Error ? error.message : String(error) });
+    assetError(error);
   }
   return true;
 }

@@ -10,8 +10,12 @@
 
 `GET /api/agent/xiaomi-home/health` 单独报告 HA 连接、事件监听和录像状态；Manager 就绪不等于 HA 连接成功，也不等于所有设备在线。连接成功后即可使用设备支持的动作。
 
+已配置本机部署且开启 `autoStart` 时，Manager 启动和事件连接断开会合并触发恢复，失败后的重复触发至少间隔 5 分钟。Docker 复用指定容器；HA OS 只启动已安装、归属已验证的虚拟机并按当前 IP 修复本机转发，不重新安装、不强制重置运行中的虚拟机、不重放设备动作。外部部署和关闭自动启动的部署不自动接管。
+
+HA OS 首次需在部署页点击“启动”并确认 Windows 管理员提示，配置按需执行的后台恢复任务。任务只运行管理员保护目录中的固定恢复脚本，绑定当前用户与安装；后续后台恢复不弹 UAC。尚未配置任务、管理员确认被取消或任务失败时，部署状态保留明确错误，已有磁盘和虚拟机不删除。令牌失效仍须重新登录，不能靠服务恢复解决。
+
 1. `GET /api/agent/help` 可发现以下业务接口。`GET /api/agent/xiaomi-home/capabilities` 返回 `schemaVersion=1`、动作及 `argumentsSchema`、当前播报绑定和确认方式。这是动作参数目录，无需再次申请功能许可。
-2. `GET /api/agent/xiaomi-home/resources` 列出全部已接入实体、状态、`available`、`capabilities`、`stateVersion`。实体不是物理设备数量：一台扫地机可以有多个传感器、按钮和设置。使用 `?includeActions=1` 一次发现所有实体的实时动作；单项 `GET /api/agent/xiaomi-home/entity-actions?resourceId=<URL 编码 resourceId>` 返回同一资源和 `actions`。普通单项状态仍通过 `/resources/<URL 编码 resourceId>` 读取。
+2. `GET /api/agent/xiaomi-home/devices` 和 `/resources` 默认返回分页摘要，先筛选再读详情。实体不是物理设备数量：一台扫地机可以有多个传感器、按钮和设置。单项 `/resources/<URL 编码 resourceId>` 读取完整实时状态、属性和 `stateVersion`；`/entity-actions?resourceId=<URL 编码 resourceId>` 读取该实体动作和参数，不默认批量读取所有动作。
 3. 向 `POST /api/agent/xiaomi-home/action-requests` 提交下例。必须携带稳定 `Idempotency-Key`，以及从当前 `/meta` 取得的 `x-rabiroute-expected-application-generation-id`、`x-rabiroute-expected-manager-instance-id`。接口不接受任意 HA 服务名或额外字段。
 
 ```json
@@ -99,7 +103,13 @@ POST 正常返回 HTTP 202、`code=0` 与动作回执。`planned` 是未执行�
 
 ## 设备目录与界面
 
-GET `/api/agent/xiaomi-home/devices` 不接受参数，返回 schemaVersion=1、observedAt、devices 和 unassignedResources。devices 以 HA device registry ID 归组已有 resources，包含 deviceId、displayName、model、manufacturer、areaName 和 resources；同名设备不合并，无归属实体不伪装为物理设备。组件使用固定只读模板读取登记元数据，不开放模板执行入口，也不返回设备标识全集或凭据。单项动作和参数仍从 entity-actions 实时发现，未新增动作写入者。WebGUI 的[设备列表](user-guide/home-devices.md)复用同一动作接口、版本和幂等回执；最近浏览器回执仅用于恢复查询。
+GET `/api/agent/xiaomi-home/devices` 和 `/resources` 返回 `{schemaVersion:1,view,observedAt,items,total,offset,limit,nextOffset}`。默认 view=summary、limit=20，范围1–50；摘要条目另有6000字节预算，可能少于limit，以nextOffset续读，null表示结束。offset默认0，最大1000000。按稳定ID排序，但各页读取当前状态，不是冻结快照；成员变化时调用者按ID去重或重新查询。旧整表数组和嵌套正文默认输出已替换，调用者须读取items并续页，WebGUI已同步适配。
+
+两条目录支持q（最多256字符，URL编码、空格分隔多词全部匹配）、kind（如climate）、available=0|1、view=summary|detail、offset和limit。搜索覆盖名称、ID、型号、厂商、房间、实体状态和完整属性的键和值，包括description和嵌套信息；搜索信息不必全部返回。使用Unicode NFKC和大小写归一，不提供正则或模板执行。无结果total=0，未知或重复参数及非法范围返回400，未知deviceId返回404。
+
+设备摘要只有deviceId、displayName、model、manufacturer、areaName、resourceCount、availableResourceCount、kinds、resourcesPath，不带实体属性。GET `/devices/<编码deviceId>` 读取完整登记字段和实体查询路径；同名设备按ID分开。目录另有unassignedResourceCount和unassignedResourcesPath，无归属实体不伪装为物理设备。实体摘要只有resourceId、entityId、displayName、kind、available；摘要显示文字最多128字符，完整文字和属性按单项读取。实体查询还支持deviceId=<登记ID>或deviceId=unassigned。先查 `/resources?kind=climate&limit=5` 或 `/devices?q=书房&limit=5`，再按resourcesPath筛所属实体，最后读单项实时状态和动作。
+
+显式view=detail仍分页，设备条目保留资源归组，实体条目保留属性。`/resources?includeActions=1` 要求所选页详情和动作，不能与view=summary同用；动作只为该页解析，Agent优先单项entity-actions，避免详情页过大再次截断。固定只读模板仅读取登记元数据，不开放调用者模板或凭据。WebGUI的[设备列表](user-guide/home-devices.md)分批读详情，复用原动作接口、版本和幂等回执；浏览器保留回执仅用于恢复查询。
 
 
 ## 手动遥控（WebGUI 与 Agent 共用）

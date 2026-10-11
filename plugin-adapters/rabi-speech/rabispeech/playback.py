@@ -97,6 +97,7 @@ class PlaybackCoordinator:
         self._current: str | None = None
         self._current_cancel: threading.Event | None = None
         self._stop_generation = 0
+        self._cancelled_sessions: dict[str, float] = {}
         threading.Thread(target=self._run, name="rabispeech-playback", daemon=True).start()
 
     def enqueue(
@@ -108,6 +109,8 @@ class PlaybackCoordinator:
         voice: str,
         session_id: str | None = None,
         route_id: str | None = None,
+        deadline: float | None = None,
+        text: str = "",
     ) -> dict[str, Any]:
         source = source.expanduser().resolve()
         if source.suffix.lower() != ".wav" or not source.is_file():
@@ -123,15 +126,25 @@ class PlaybackCoordinator:
                 "provider": provider,
                 "model": model,
                 "voice": voice,
+                "text": str(text or "")[:4000],
                 "session_id": session_id or None,
                 "route_id": route_id or None,
                 "created_at": now,
                 "updated_at": now,
                 "path": str(snapshot),
                 "_stop_generation": self._stop_generation,
+                "_deadline": deadline,
             }
+            if self._cancelled_sessions.get(session_id or "", 0) > now or deadline is not None and deadline <= now:
+                job.update(status="cancelled", completed_at=now)
             self._jobs[job_id] = job
-        self._queue.put(job_id)
+        if job["status"] == "cancelled":
+            self._cleanup(job_id)
+            with self._lock:
+                job["_settled"] = True
+                self._prune_settled_jobs()
+        else:
+            self._queue.put(job_id)
         result = self._public(job)
         self._emit("playback_changed", self.snapshot())
         return result
@@ -182,6 +195,29 @@ class PlaybackCoordinator:
         self._emit("playback_changed", result)
         return result
 
+    def cancel_session(self, session_id: str) -> dict[str, Any]:
+        """Fence pending synthesis and cancel only this session's FIFO jobs."""
+        if not isinstance(session_id, str) or not session_id or len(session_id) > 200:
+            raise ValueError("Invalid playback session.")
+        now = time.time()
+        with self._lock:
+            self._cancelled_sessions = {key: expiry for key, expiry in self._cancelled_sessions.items() if expiry > now}
+            if session_id not in self._cancelled_sessions and len(self._cancelled_sessions) >= 1024:
+                raise ValueError("Playback cancellation capacity exceeded.")
+            self._cancelled_sessions[session_id] = now + 600
+            for job in self._jobs.values():
+                if job.get("session_id") == session_id and job["status"] in ("queued", "playing"):
+                    job.update(status="cancelled", completed_at=now, updated_at=now)
+            current = self._jobs.get(self._current or "")
+            if current and current.get("session_id") == session_id and self._current_cancel is not None:
+                self._current_cancel.set()
+                # Keep the owner lock while stopping: a different job cannot start
+                # between checking the current session and invoking the stopper.
+                self._stopper()
+        result = self.snapshot()
+        self._emit("playback_changed", result)
+        return result
+
     def _run(self) -> None:
         while True:
             job_id = self._queue.get()
@@ -189,7 +225,9 @@ class PlaybackCoordinator:
             volume = self.settings.volume
             with self._lock:
                 job = self._jobs[job_id]
-                cancelled_before_start = int(job.get("_stop_generation") or 0) < self._stop_generation
+                cancelled_before_start = (int(job.get("_stop_generation") or 0) < self._stop_generation
+                    or job["status"] == "cancelled"
+                    or job.get("_deadline") is not None and float(job["_deadline"]) <= time.time())
                 if cancelled_before_start:
                     job.update(status="cancelled", completed_at=time.time(), updated_at=time.time())
                     job_snapshot = dict(job)
@@ -202,6 +240,9 @@ class PlaybackCoordinator:
                 self._emit("playback_changed", self.snapshot())
                 self._cleanup(job_id)
                 self._queue.task_done()
+                with self._lock:
+                    job["_settled"] = True
+                    self._prune_settled_jobs()
                 continue
             self._emit("playback_changed", self.snapshot())
             try:
@@ -223,8 +264,17 @@ class PlaybackCoordinator:
                     if self._current == job_id:
                         self._current = None
                     self._current_cancel = None
+                    job["_settled"] = True
+                    self._prune_settled_jobs()
                 self._queue.task_done()
                 self._emit("playback_changed", self.snapshot())
+
+    def _prune_settled_jobs(self) -> None:
+        # The owner lock is held. Queued cancellations are retained until their
+        # FIFO entries have been consumed, so pruning cannot break the worker.
+        settled = [key for key, job in self._jobs.items() if job.get("_settled")]
+        for key in settled[:-50]:
+            del self._jobs[key]
 
     def _update(self, job_id: str, **updates: Any) -> dict[str, Any]:
         with self._lock:

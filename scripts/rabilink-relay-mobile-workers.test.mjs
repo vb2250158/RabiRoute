@@ -80,8 +80,8 @@ test("mobile PC picker exposes only processing workers", async () => {
     const avatarWithoutWorker = await fetch(`${baseUrl}/api/rabilink/mobile/personas/YeYu/avatar?v=test-version`, {
       headers: { "x-rabilink-token": token }
     });
-    assert.equal(avatarWithoutWorker.status, 409);
-    assert.match(String((await avatarWithoutWorker.json()).message || ""), /No Rabi PC is selected/);
+    assert.equal(avatarWithoutWorker.status, 410);
+    assert.equal((await avatarWithoutWorker.json()).code, "PUBLIC_MANAGER_API_REQUIRED");
     subscriptions.push(await subscribe(baseUrl, token, {
       deviceId: "elysia-pc",
       deviceGuid: "guid-elysia",
@@ -146,12 +146,12 @@ test("mobile PC picker exposes only processing workers", async () => {
     const asrUrl = `${baseUrl}/api/rabilink/mobile/asr-settings`;
     assert.equal((await fetch(asrUrl)).status, 401);
     const asrHeaders = { "content-type": "application/json", "x-rabilink-token": token };
-    const asr = await (await fetch(asrUrl, { headers: asrHeaders })).json();
-    assert.deepEqual(asr.workers.map(worker => worker.id), ["company-pc"]);
-    assert.equal(asr.selectedWorkerId, "company-pc");
-    assert.equal((await fetch(asrUrl, { method: "PATCH", headers: asrHeaders, body: JSON.stringify({ priority: ["legacy-pc"] }) })).status, 400);
-    assert.equal((await fetch(asrUrl, { method: "PATCH", headers: asrHeaders, body: JSON.stringify({ priority: ["company-pc"] }) })).status, 200);
-    assert.deepEqual((await (await fetch(asrUrl, { headers: asrHeaders })).json()).priority, ["company-pc"]);
+    for (const method of ["GET", "PATCH"]) {
+      const retired = await fetch(asrUrl, { method, headers: asrHeaders,
+        ...(method === "PATCH" ? { body: JSON.stringify({ priority: ["company-pc"] }) } : {}) });
+      assert.equal(retired.status, 410);
+      assert.equal((await retired.json()).code, "PUBLIC_MANAGER_API_REQUIRED");
+    }
     assert.equal((await (await fetch(`${baseUrl}/api/rabilink/mobile/state`, { headers: asrHeaders })).json()).selectedWorker.id, "company-pc");
   } finally {
     await Promise.allSettled(subscriptions.map(response => response.body?.cancel()));

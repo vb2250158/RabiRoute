@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 const lockWaitBuffer = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
@@ -120,6 +121,32 @@ function transientRenameError(error: unknown): boolean {
   return new Set(["EACCES", "EBUSY", "ENOTEMPTY", "EPERM"]).has(
     String((error as NodeJS.ErrnoException).code || "")
   );
+}
+
+/** Retry only the atomic filesystem replacement, never the surrounding business write. */
+export async function renameFileWithRetry(
+  source: string,
+  destination: string,
+  options: {
+    maxRenameAttempts?: number;
+    retryDelayMs?: number;
+    rename?: (source: string, destination: string) => Promise<void>;
+  } = {}
+): Promise<void> {
+  const maxAttempts = Math.max(1, Math.floor(options.maxRenameAttempts ?? 24));
+  const retryDelayMs = Math.max(1, Math.floor(options.retryDelayMs ?? 25));
+  const rename = options.rename ?? fs.promises.rename;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await rename(source, destination);
+      return;
+    } catch (error) {
+      if (attempt >= maxAttempts || !transientRenameError(error)) throw error;
+      // Windows/SMB readers can briefly deny replacement. Keep the destination
+      // intact and yield the event loop; never unlink it to bypass the failure.
+      await delay(Math.min(250, retryDelayMs * (2 ** Math.min(6, attempt - 1))));
+    }
+  }
 }
 
 export function atomicWriteFileSync(

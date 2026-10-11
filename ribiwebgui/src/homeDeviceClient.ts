@@ -1,6 +1,7 @@
 import type { HomeDeviceDirectory } from "@shared/homeDeviceDirectoryContract";
 import type { HomeEntityAction } from "../../src/integrations/xiaomiHome/entityActions";
 import type { XiaomiHomeResource } from "./xiaomiHomeSettingsClient";
+import { readHomeDirectory } from "./homeDirectoryClient";
 
 export type DeviceResource = XiaomiHomeResource & { actions?: HomeEntityAction[] };
 export type DeviceDirectory = HomeDeviceDirectory<DeviceResource>;
@@ -51,7 +52,12 @@ async function execute(resourceId: string, choice: DeviceActionChoice, parameter
  catch { result.state = "uncertain"; }
  return result;
 }
-export const homeDeviceClient = { directory: () => request<DeviceDirectory>(root + "/devices"),
+async function directory(): Promise<DeviceDirectory> {
+ const devices = await readHomeDirectory<DeviceDirectory["devices"][number]>(root + "/devices?view=detail&limit=5", request);
+ const unassignedResources = await readHomeDirectory<DeviceResource>(root + "/resources?view=detail&deviceId=unassigned&limit=50", request);
+ return { schemaVersion: 1, observedAt: new Date().toISOString(), devices, unassignedResources };
+}
+export const homeDeviceClient = { directory,
  capabilities: () => request<{ actions: Array<{ capability: string; argumentsSchema?: Record<string, unknown> }> }>(root + "/capabilities"), inspect, execute, receipt };
 
 export type VacuumVideoSession = { sessionId?: string; deviceId?: string; region?: string; state: "idle" | "connecting" | "streaming" | "failed" | "stopped"; error?: string; firstFrameAt?: string; frameBytes?: number; expiresAt?: string; connectionMode?: "local" | "relay"; audio: false };

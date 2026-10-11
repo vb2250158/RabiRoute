@@ -73,6 +73,7 @@ class SpeechBody(BaseModel):
     play: bool = False
     session_id: str | None = Field(default=None, max_length=200)
     route_id: str | None = Field(default=None, max_length=200)
+    playback_deadline: float | None = Field(default=None, gt=0, allow_inf_nan=False)
 
 
 class DashScopeBody(BaseModel):
@@ -526,6 +527,7 @@ def create_app(
         try:
             yield
         finally:
+            await close_all_day_capture()
             tts_cleanup_closed = True
             fallback_warmup.cancel()
             cancel_virtual_audio_expiry()
@@ -548,7 +550,7 @@ def create_app(
         lifespan=lifespan,
     )
 
-    register_all_day_capture(api, microphone, _require_loopback)
+    close_all_day_capture = register_all_day_capture(api, microphone, _require_loopback)
 
     @api.get("/health")
     async def health() -> dict[str, object]:
@@ -790,6 +792,7 @@ def create_app(
         file: Annotated[UploadFile, File()],
         model: Annotated[str, Form()] = "remote",
         voice: Annotated[str, Form()] = "default",
+        text: Annotated[str, Form()] = "",
     ) -> dict[str, Any]:
         """Queue completed remote WAV in the existing local host FIFO."""
         audio = await file.read(32 * 1024 * 1024 + 1)
@@ -808,13 +811,23 @@ def create_app(
                         raise ValueError("Unsupported PCM format.")
             except (wave.Error, EOFError, ValueError) as error:
                 raise HTTPException(415, "Expected a completed PCM WAV.") from error
-            return playback_queue.enqueue(source, provider="peer", model=model[:200], voice=voice[:200])
+            return playback_queue.enqueue(source, provider="peer", model=model[:200], voice=voice[:200], text=text)
         finally:
             source.unlink(missing_ok=True)
 
     @api.post("/v1/playback/stop")
     async def playback_stop() -> dict[str, object]:
         return playback_queue.stop(clear_pending=True)
+
+    @api.post("/v1/playback/cancel-session")
+    async def playback_cancel_session(request: Request, body: dict[str, Any]) -> dict[str, object]:
+        _require_loopback(request)
+        if request.headers.get("x-rabilink-tunnel-local"):
+            raise HTTPException(403, "Local playback cancellation only")
+        try:
+            return playback_queue.cancel_session(body.get("sessionId"))
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
 
     @api.get("/v1/records")
     async def speech_records(
@@ -1061,6 +1074,8 @@ def create_app(
                     voice=body.voice,
                     session_id=body.session_id,
                     route_id=body.route_id,
+                    deadline=body.playback_deadline,
+                    text=body.input,
                 )
             except Exception as exc:
                 logger.exception("Playback enqueue failed")

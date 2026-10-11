@@ -80,6 +80,7 @@ export const activate = definePlugin({
             { routeId: "settings", kind: "exact", path: "/api/agent/xiaomi-home/settings", methods: ["GET", "PUT"] },
             { routeId: "resources", kind: "exact", path: "/api/agent/xiaomi-home/resources", methods: ["GET"] },
             { routeId: "devices", kind: "exact", path: "/api/agent/xiaomi-home/devices", methods: ["GET"] },
+            { routeId: "device", kind: "prefix", pathPrefix: "/api/agent/xiaomi-home/devices/", methods: ["GET"] },
             { routeId: "entity-actions", kind: "exact", path: "/api/agent/xiaomi-home/entity-actions", methods: ["GET"] },
             { routeId: "resource", kind: "prefix", pathPrefix: "/api/agent/xiaomi-home/resources/", methods: ["GET"] },
             { routeId: "capabilities", kind: "exact", path: "/api/agent/xiaomi-home/capabilities", methods: ["GET"] },

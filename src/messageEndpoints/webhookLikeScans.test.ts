@@ -50,3 +50,17 @@ test("FenneNote scan probes only the explicitly configured endpoint", async () =
     healthy: true
   }]);
 });
+
+
+test("FenneNote scan preserves unknown history across routes until any route has evidence", async () => {
+  const first = {}, second = {};
+  for (const [known, expected] of [[false, undefined], [true, true]] as const) {
+    const result = await scanFenneNoteEndpoint(context({
+      adapterRuntimes: () => [first, second],
+      routeHasRecentMessages: runtime => runtime === first ? undefined : known
+    }));
+    const evidence = result.requirements?.find(item => item.id === "webhook-config");
+    assert.equal(evidence?.ok, expected);
+    if (expected === undefined) assert.match(evidence?.detail ?? "", /尚未确认/);
+  }
+});

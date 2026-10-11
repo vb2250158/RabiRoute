@@ -1,0 +1,139 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { readCompanionSceneRules } from "./companionScene.js";
+import { CompanionActivity, lastCompanionSummary, readCompanionPresets, saveCompanionSummary, type CompanionPorts } from "./companionActivity.js";
+const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString("base64");
+const start = { requestId: "request-first", gatewayId: "route", presetId: "adaptive", title: "", autoReview: false, voice: true, saveSummary: false, observationOwner: "desktop" as const };
+function fixture(t: import("node:test").TestContext, overrides: Partial<CompanionPorts> = {}) {
+  let now = 1_000_000;
+  const cancelled: string[] = [], spoken: string[] = [], delivered: string[] = [];
+  const service = new CompanionActivity({ presets: readCompanionPresets({ presets: [{ id: "adaptive", label: "自适应", labelEn: "Adaptive", reviewSeconds: 25, replyAgeSeconds: 30, guidance: "observe" }] }),
+    now: () => now, changed: () => {}, reaction: () => {}, save: async () => {}, cancelSpeech: async scope => { cancelled.push(scope); },
+    speak: async (_s, text) => { spoken.push(text); }, deliver: async (_s, review) => { delivered.push(review.text); }, ...overrides });
+  t.after(() => service.dispose());
+  const observe = (sequence = 1) => { const s = service.snapshot("one").session!; return service.observe("one", s.id, s.revision,
+    { sequence, capturedAt: now, source: "window", jpeg, window: { id: "123:45", title: "Episode 1", processName: "player.exe" } }); };
+  const command = (action: "stop" | "pause" | "resume" | "interrupt" | "seek", positionSeconds?: number) => { const s = service.snapshot("one").session!; return service.command("one", { sessionId: s.id, revision: s.revision, action, positionSeconds }); };
+  return { service, observe, command, cancelled, spoken, delivered, advance: (ms: number) => { now += ms; } };
+}
+test("menu start is explicit, idempotent, role isolated and owns no saved recording", async t => {
+  const f = fixture(t); const first = await f.service.start("one", start);
+  assert.deepEqual(await f.service.start("one", start), first);
+  assert.equal(first.session?.observationOwner, "desktop"); assert.equal(first.session?.saveSummary, false);
+  assert.equal(f.service.snapshot("two").session, null);
+  await assert.rejects(f.service.start("two", { ...start, requestId: "another-request" }), /结束/);
+});
+
+test("local scene evidence immediately updates animation context and survives an uncertain reply", async t => {
+  const f = fixture(t, { sceneRules: readCompanionSceneRules({ rules: [{ kind: "watch", processPattern: "^player[.]exe$" }] }) });
+  const s = (await f.service.start("one", start)).session!;
+  assert.equal(f.observe().session!.activityKind, "watch");
+  await f.service.review("one", s.id, s.revision, "");
+  const reviewId = f.service.snapshot("one").session!.review!.id;
+  await f.service.reply("one", { sessionId: s.id, revision: s.revision, reviewId, text: "", activityKind: "uncertain" });
+  assert.equal(f.service.snapshot("one").session!.activityKind, "watch");
+  await f.command("interrupt");
+  assert.equal(f.service.snapshot("one").session!.activityKind, "uncertain");
+});
+test("switching browser pages atomically fences the old review without waiting for speech cancellation", async t => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const f = fixture(t, { sceneRules: readCompanionSceneRules({ rules: [{ kind: "watch", titlePattern: "bilibili" }] }),
+    cancelSpeech: async () => gate });
+  const s = (await f.service.start("one", start)).session!;
+  const sample = (title: string, sequence: number) => {
+    const current = f.service.snapshot("one").session!;
+    return f.service.observe("one", current.id, current.revision, { sequence, capturedAt: 1_000_000,
+      source: "window", jpeg, window: { id: "browser", processName: "chrome.exe", title } });
+  };
+  sample("Episode 1 bilibili", 1);
+  await f.service.review("one", s.id, s.revision, "");
+  const oldReview = f.service.snapshot("one").session!.review!;
+  const second = sample("Episode 2 bilibili", 2).session!;
+  release(); // Cancellation completion must not be required by observe().
+  assert.equal(second.activityKind, "watch"); assert.equal(second.revision, 2);
+  assert.equal(second.review, null); assert.equal(second.lastObservationAt, 1_000_000);
+  await assert.rejects(f.service.reply("one", { sessionId: s.id, revision: s.revision,
+    reviewId: oldReview.id, text: "old" }), /版本/);
+  assert.equal(sample("Search page", 3).session!.activityKind, "uncertain");
+  release();
+});
+test("window switch fences the old frame, Agent reply and only its speech scope", async t => {
+  const f = fixture(t); const s = (await f.service.start("one", start)).session!; f.observe();
+  await f.service.review("one", s.id, s.revision, ""); const review = f.service.snapshot("one").session!.review!;
+  assert.equal(f.service.frameFor("one", review.id).length, 4);
+  await f.command("interrupt");
+  assert.throws(() => f.service.frameFor("one", review.id), /expired/);
+  await assert.rejects(f.service.reply("one", { sessionId: s.id, revision: s.revision, reviewId: review.id, text: "old" }), /版本/);
+  assert.deepEqual(f.cancelled, [`companion.${s.id}.1`]); assert.deepEqual(f.spoken, []);
+});
+test("out-of-order and stale observations cannot replace a newer frame", async t => {
+  const f = fixture(t); await f.service.start("one", start); const newer = f.observe(5);
+  assert.deepEqual(f.observe(1), newer);
+  const s = newer.session!;
+  assert.throws(() => f.service.observe("one", s.id, s.revision, { sequence: 6, capturedAt: 1, source: "window", jpeg }), /stale/);
+  await f.command("pause"); f.observe();
+  assert.equal(f.service.snapshot("one").session!.status, "paused");
+});
+test("invalid seek does not invalidate the current session", async t => {
+  const f = fixture(t); await f.service.start("one", start); f.observe(); const before = f.service.snapshot("one");
+  await assert.rejects(f.command("seek", -1), /position/); assert.deepEqual(f.service.snapshot("one"), before);
+});
+test("adaptation accepts a silent classification and suppresses stale or duplicate speech", async t => {
+  const f = fixture(t); const s = (await f.service.start("one", start)).session!; f.observe();
+  await f.service.review("one", s.id, s.revision, ""); const id = f.service.snapshot("one").session!.review!.id;
+  await f.service.reply("one", { sessionId: s.id, revision: s.revision, reviewId: id, text: "", activityKind: "watch" });
+  assert.equal(f.service.snapshot("one").session!.activityKind, "watch"); assert.deepEqual(f.spoken, []);
+  await f.service.reply("one", { sessionId: s.id, revision: s.revision, reviewId: id, text: "duplicate" }); assert.deepEqual(f.spoken, []);
+  await f.service.review("one", s.id, s.revision, ""); const expired = f.service.snapshot("one").session!.review!.id; f.advance(31_000);
+  await assert.rejects(f.service.reply("one", { sessionId: s.id, revision: s.revision, reviewId: expired, text: "late" }), /过期/);
+});
+test("explicit discussion retains a fresh desktop frame while cancelling an earlier scope", async t => {
+  const f = fixture(t); const s = (await f.service.start("one", start)).session!; f.observe(20);
+  const after = await f.service.review("one", s.id, s.revision, "刚才发生了什么");
+  assert.equal(after.session!.revision, 2); assert.equal(f.service.frameFor("one", after.session!.review!.id).length, 4);
+  assert.equal(f.observe(1).session!.lastObservationAt, 1_000_000);
+});
+test("delivery backpressure is bounded and stop discards a late delivery completion", async t => {
+  let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+  const f = fixture(t, { deliver: async () => gate }); const s = (await f.service.start("one", start)).session!; f.observe();
+  const pending = f.service.review("one", s.id, s.revision, "");
+  await assert.rejects(f.service.review("one", s.id, s.revision, "hello"), /上一段/);
+  await f.command("stop"); release(); await pending; assert.equal(f.service.snapshot("one").session!.review, null);
+});
+test("opt-in summary survives restart without raw frame persistence", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "companion-")); t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const f = fixture(t, { save: s => saveCompanionSummary(root, s) }); await f.service.start("one", { ...start, saveSummary: true }); f.observe();
+  await f.command("stop"); const last = await lastCompanionSummary(root);
+  assert.equal(last!.status, "ended"); assert.equal("jpeg" in last!, false);
+  assert.equal((await fs.readdir(path.join(root, "companion", "sessions"))).length, 1);
+  assert.equal((await fs.readFile(path.join(root, "companion", "sessions", `${last!.id}.json`), "utf8")).includes(jpeg), false);
+});
+
+test("a slow Agent still classifies the current window without playing an old comment", async t => {
+  const f = fixture(t, { presets: [{ id: "adaptive", label: "Auto", labelEn: "Auto", reviewSeconds: 25, replyAgeSeconds: 180, reactionAgeSeconds: 30, guidance: "observe" }] });
+  const s = (await f.service.start("one", start)).session!; f.observe();
+  await f.service.review("one", s.id, s.revision, ""); const id = f.service.snapshot("one").session!.review!.id;
+  f.advance(65_000);
+  assert.equal(f.service.frameFor("one", id).length, 4);
+  await f.service.reply("one", { sessionId: s.id, revision: s.revision, reviewId: id, text: "old scene comment", activityKind: "watch" });
+  assert.equal(f.service.snapshot("one").session!.activityKind, "watch");
+  assert.deepEqual(f.spoken, []);
+  assert.match(f.delivered[0], /每次.*回传/);
+});
+
+test("failed dispatch backs off and a later fresh observation recovers", async t => {
+  let attempts = 0;
+  const f = fixture(t, { deliver: async () => { if (++attempts === 1) throw new Error("offline"); } });
+  await f.service.start("one", { ...start, autoReview: true }); f.observe();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.service.snapshot("one").session!.review!.status, "failed");
+  f.advance(26_000); f.observe(2); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(attempts, 1);
+  f.advance(35_000); f.observe(3); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(attempts, 2);
+  assert.equal(f.service.snapshot("one").session!.review!.status, "delivered");
+});

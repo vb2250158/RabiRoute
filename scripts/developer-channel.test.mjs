@@ -28,6 +28,8 @@ const knowledgeRuntimeFiles = [
   "apps/rabi-mcp/lib/knowledge-receipt.mjs"
 ];
 function writeKnowledgeRuntime(build) {
+  write(build, "packages/rabi-companion/presets.json", '{"version":1,"presets":[]}');
+  write(build, "packages/rabi-companion/scene-rules.json", '{"schemaVersion":1,"rules":[]}');
   for (const relative of knowledgeRuntimeFiles) {
     write(build, relative, fs.readFileSync(new URL(`../${relative}`, import.meta.url), "utf8"));
   }
@@ -112,6 +114,9 @@ test("developer candidate overlays only built runtime layers and leaves the immu
     });
 
     assert.equal(fs.existsSync(path.join(result.packageRoot, "apps/rabi-agent/data")), false);
+    assert.equal(fs.readFileSync(path.join(result.packageRoot, "packages/rabi-companion/presets.json"), "utf8"), fs.readFileSync(path.join(build, "packages/rabi-companion/presets.json"), "utf8"));
+    assert.ok(result.manifest.files.some(entry => entry.path === "packages/rabi-companion/presets.json"));
+    assert.ok(result.manifest.files.some(entry => entry.path === "packages/rabi-companion/scene-rules.json"));
     for (const relative of knowledgeRuntimeFiles) {
       assert.equal(fs.readFileSync(path.join(result.packageRoot, relative), "utf8"), fs.readFileSync(path.join(build, relative), "utf8"));
       assert.ok(result.manifest.files.some(entry => entry.path === relative));

@@ -13,6 +13,7 @@ import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 import { appendPersonaChatReply } from "../personaChatHistory.js";
 import { readPersonaConfigFragment } from "./configMigration.js";
 import { decidePlanFollowup, type PlanFollowupReceipt } from "./planFollowup.js";
+import { agentHookSettingsFor } from "../shared/gatewayConfigModel.js";
 
 const STORE_VERSION = 8;
 const MAX_CONTEXT_CHARS = 6200;
@@ -30,6 +31,7 @@ export type PlanTaskCompletionDelivery = {
   roleDir: string;
   plan: PlanItem;
   sourceSessionId: string;
+  sourceAgentType?: string;
   sourceTurnId: string;
   sourceCwd?: string;
   finalMessage: string;
@@ -909,7 +911,7 @@ export class CodexHookContextService {
     });
     if (matches.length !== 1) return undefined;
     const { roleId, roleDir, plan } = matches[0];
-    const config = readPersonaConfigFragment(path.join(roleDir, "personaConfig.json")).codexHooks?.planFollowup;
+    const config = agentHookSettingsFor(readPersonaConfigFragment(path.join(roleDir, "personaConfig.json")).codexHooks, request.agentType).planFollowup;
     if (!config?.enabled) return undefined;
     const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
     const store = this.readStore();
@@ -1040,6 +1042,7 @@ export class CodexHookContextService {
         roleDir,
         plan,
         sourceSessionId: sessionId,
+        sourceAgentType: request.agentType,
         sourceTurnId: turnId,
         sourceCwd: request.cwd,
         finalMessage: excerpt(finalMessage, 12_000, 4_000),

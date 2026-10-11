@@ -50,9 +50,19 @@ $env:RABISPEECH_DATA_ROOT = (Split-Path -Parent $config)
 $env:RABISPEECH_CONFIG = $config
 $env:RABISPEECH_ROOT = $root
 $env:RABISPEECH_MODEL_ROOT = if ($env:RABISPEECH_MODEL_ROOT) { $env:RABISPEECH_MODEL_ROOT } else { Join-Path (Split-Path -Parent $env:RABISPEECH_DATA_ROOT) "models\rabispeech" }
-$env:RABISPEECH_WHISPER_MODEL_ROOT = if ($env:RABISPEECH_WHISPER_MODEL_ROOT) { $env:RABISPEECH_WHISPER_MODEL_ROOT } else { Join-Path $env:RABISPEECH_MODEL_ROOT "asr\faster-whisper-cache" }
+$speechSettings = Get-Content -LiteralPath $config -Raw -Encoding UTF8 | ConvertFrom-Json
+$configuredWhisperRoot = [string]$speechSettings.providers.asr.faster_whisper.model_root
+$env:RABISPEECH_WHISPER_MODEL_ROOT = if ($env:RABISPEECH_WHISPER_MODEL_ROOT) {
+  $env:RABISPEECH_WHISPER_MODEL_ROOT
+} elseif ($configuredWhisperRoot) {
+  # Keep the model directory the user selected; relative paths belong to config.
+  if ([IO.Path]::IsPathRooted($configuredWhisperRoot)) { [IO.Path]::GetFullPath($configuredWhisperRoot) }
+  else { [IO.Path]::GetFullPath((Join-Path $env:RABISPEECH_DATA_ROOT $configuredWhisperRoot)) }
+} else {
+  Join-Path $env:RABISPEECH_MODEL_ROOT "asr\faster-whisper-cache"
+}
 $env:RABISPEECH_SPEAKER_MODEL_PATH = if ($env:RABISPEECH_SPEAKER_MODEL_PATH) { $env:RABISPEECH_SPEAKER_MODEL_PATH } else { Join-Path $env:RABISPEECH_MODEL_ROOT "speaker\3dspeaker_speech_eres2netv2_sv_zh-cn_16k-common.onnx" }
-$pythonArgs = $Python -split "\s+"
+$pythonArgs = @(if (Test-Path -LiteralPath $Python -PathType Leaf) { $Python } else { $Python -split "\s+" })
 $pythonExe = $pythonArgs[0]
 $prefixArgs = @($pythonArgs | Select-Object -Skip 1)
 $pythonHome = (& $pythonExe @prefixArgs -c "import sys; print(sys.base_prefix)").Trim()

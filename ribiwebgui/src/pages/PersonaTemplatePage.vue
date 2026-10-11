@@ -2,14 +2,13 @@
 import { userFacingError } from "../userFacingError";
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import SpeechParameterSlider from "../components/SpeechParameterSlider.vue";
-import PlanFollowupSettings from "../components/PlanFollowupSettings.vue";
-import type { PlanFollowupSettings as PlanFollowupConfig } from "@shared/planFollowup";
+import PersonaAgentHooks from "../components/PersonaAgentHooks.vue";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
 import PersonaDesktopPetPanel from "../components/PersonaDesktopPetPanel.vue";
 import PersonaIdentityRelationsCard from "../components/PersonaIdentityRelationsCard.vue";
 import PersonaChatHistory from "../components/PersonaChatHistory.vue";
 import PersonaAllDayRecording from "../components/PersonaAllDayRecording.vue";
-import AgentCompletionDeliveryRules from "../components/AgentCompletionDeliveryRules.vue";
+import PersonaCompanionActivity from "../components/PersonaCompanionActivity.vue";
 import { managerEventSource } from "../managerApi";
 import { useI18n } from "../i18n";
 import { pluginCatalogStore } from "../pluginCatalogStore";
@@ -40,8 +39,6 @@ import {
   RECENT_MESSAGE_ENDPOINTS,
   normalizeRecentMessageLimit,
   normalizeSpeechTriggerKeywords,
-  normalizeCodexHookSettings,
-  type AgentCompletionDeliveryRule,
   type RecentMessageEndpoint
 } from "@shared/gatewayConfigModel";
 import { isSpeechRouteVariableKey } from "@shared/speechControlContract";
@@ -77,7 +74,7 @@ const ruleDialog = ref(false);
 const automationDialog = ref(false);
 const automationWorkspaceTab = ref<"messages" | "schedule" | "hooks">("messages");
 const templateVariablesDialog = ref(false);
-type PersonaPageTab = "profile" | "expression" | "avatar" | "identity" | "context" | "automation" | "chat-history" | "all-day-recording";
+type PersonaPageTab = "profile" | "expression" | "avatar" | "identity" | "context" | "automation" | "chat-history" | "all-day-recording" | "companion";
 const activePersonaPageTab = ref<PersonaPageTab>("profile");
 const chatHistoryVersion = ref(0);
 const activeAutomationId = ref("");
@@ -1053,41 +1050,10 @@ function setLanguageStyleSkillUrl(value: unknown): void {
   store.touch();
 }
 
-function codexHookEnabled(key: Exclude<keyof CodexHookSettings, "completionDeliveries" | "planFollowup">): boolean {
-  return gateway.value?.codexHooks?.[key] !== false;
-}
-
-function setCodexHookSetting(key: Exclude<keyof CodexHookSettings, "completionDeliveries" | "planFollowup">, enabled: boolean | null): void {
+function setAgentHooks(hooks: CodexHookSettings): void {
   if (!gateway.value) return;
-  gateway.value.codexHooks = {
-    ...gateway.value.codexHooks,
-    sessionContextEnabled: gateway.value.codexHooks?.sessionContextEnabled !== false,
-    reasoningContextEnabled: gateway.value.codexHooks?.reasoningContextEnabled !== false,
-    planTaskCompletionEnabled: gateway.value.codexHooks?.planTaskCompletionEnabled !== false,
-    agentCommunicationEnforcementEnabled: gateway.value.codexHooks?.agentCommunicationEnforcementEnabled !== false,
-    onlyPrimaryPersonaCanSendMessages: false,
-    [key]: enabled === true
-  };
   for (const other of store.gateways) {
-    if (other.agentRoleId === gateway.value.agentRoleId) other.codexHooks = { ...gateway.value.codexHooks };
-  }
-  store.touch();
-}
-
-function setPlanFollowup(planFollowup: PlanFollowupConfig): void {
-  if (!gateway.value) return;
-  const hooks = { ...normalizeCodexHookSettings(gateway.value.codexHooks), planFollowup };
-  for (const other of store.gateways) {
-    if (other.agentRoleId === gateway.value.agentRoleId) other.codexHooks = { ...hooks };
-  }
-  store.touch();
-}
-
-function setCompletionDeliveries(rules: AgentCompletionDeliveryRule[]): void {
-  if (!gateway.value) return;
-  const hooks = { ...normalizeCodexHookSettings(gateway.value.codexHooks), completionDeliveries: rules };
-  for (const other of store.gateways) {
-    if (other.agentRoleId === gateway.value.agentRoleId) other.codexHooks = { ...hooks };
+    if (!other.agentRoleDeviceId && other.agentRoleId === gateway.value.agentRoleId) other.codexHooks = JSON.parse(JSON.stringify(hooks));
   }
   store.touch();
 }
@@ -1545,6 +1511,7 @@ onBeforeUnmount(() => {
           <v-tab value="automation" prepend-icon="mdi-robot-outline">自动化</v-tab>
           <v-tab value="chat-history" prepend-icon="mdi-message-text-outline" :disabled="!hasPersona">聊天记录</v-tab>
           <v-tab value="all-day-recording" prepend-icon="mdi-timeline-clock-outline" :disabled="!hasPersona">{{ t('全天记录') }}</v-tab>
+          <v-tab value="companion" prepend-icon="mdi-account-heart-outline" :disabled="!hasPersona">共同活动</v-tab>
         </v-tabs>
       </v-card>
 
@@ -1582,6 +1549,11 @@ onBeforeUnmount(() => {
       </div>
 
       <v-window v-if="!isRemotePersona" v-model="activePersonaPageTab" class="persona-page-window" :touch="false">
+        <v-window-item value="companion">
+          <div class="persona-tab-panel">
+            <PersonaCompanionActivity v-if="hasPersona && activePersonaPageTab === 'companion'" :role-id="gateway.agentRoleId || ''" :gateway-id="gateway.id" />
+          </div>
+        </v-window-item>
         <v-window-item value="all-day-recording">
           <div class="persona-tab-panel">
             <PersonaAllDayRecording v-if="hasPersona && activePersonaPageTab === 'all-day-recording'" :role-id="gateway.agentRoleId || ''" />
@@ -2200,64 +2172,8 @@ onBeforeUnmount(() => {
             </div>
           </v-window-item>
           <v-window-item value="hooks">
-                  <div class="dependency-panel mt-3">
-                    <div class="section-title-row compact-row">
-                      <div>
-                        <div class="section-title small-title">Agent Hook</div>
-                        <div class="section-note">统一管理当前人格的 Hook。首次使用时，在 Agent 端点击“更新 Hook 到 Agent”安装事件埋点。</div>
-                      </div>
-                    </div>
-                    <div class="catalog-param-grid mt-2">
-                      <div class="full-span">
-                        <v-switch
-                          :model-value="codexHookEnabled('sessionContextEnabled')"
-                          color="primary"
-                          density="compact"
-                          hide-details
-                          label="会话入口上下文"
-                          @update:model-value="value => setCodexHookSetting('sessionContextEnabled', value)"
-                        />
-                        <div class="section-note">打开、恢复、清空或压缩 Agent 会话，以及用户提交新消息时触发。Hook：<code>SessionStart</code> / <code>UserPromptSubmit</code>。</div>
-                      </div>
-                      <div class="full-span">
-                        <v-switch
-                          :model-value="codexHookEnabled('reasoningContextEnabled')"
-                          color="primary"
-                          density="compact"
-                          hide-details
-                          label="推理期上下文刷新"
-                          @update:model-value="value => setCodexHookSetting('reasoningContextEnabled', value)"
-                        />
-                        <div class="section-note">Agent 调用工具前后触发，只注入本轮新命中的计划、记忆或技能上下文。Hook：<code>PreToolUse</code> / <code>PostToolUse</code>。</div>
-                      </div>
-                      <div class="full-span">
-                        <v-switch
-                          :model-value="codexHookEnabled('planTaskCompletionEnabled')"
-                          color="primary"
-                          density="compact"
-                          hide-details
-                          label="计划任务会话完成通知"
-                          @update:model-value="value => setCodexHookSetting('planTaskCompletionEnabled', value)"
-                        />
-                        <div class="section-note">绑定计划的执行任务输出本轮最终回答后触发，经 Rabi 投递到该人格 Route 绑定的会话。Hook：<code>Stop</code>；默认开启。</div>
-                      </div>
-                      <div class="full-span">
-                        <v-switch
-                          :model-value="codexHookEnabled('agentCommunicationEnforcementEnabled')"
-                          color="primary"
-                          density="compact"
-                          hide-details
-                          label="强制使用 RabiAgent 消息投递接口"
-                          @update:model-value="value => setCodexHookSetting('agentCommunicationEnforcementEnabled', value)"
-                        />
-                        <div class="section-note">开启后，本 Route 的主人格、计划 Agent、计划秘书和消息处理 Agent 不能绕过 Rabi 直接操作其它持久 Agent 会话。通过 Rabi 投递时，发送方必须明确是否要求回复；要求回复后，目标 Agent 每轮结束仍未正式回复，Manager 会在五分钟后提醒。Hook：<code>PreToolUse</code> / <code>Stop</code>；默认开启。</div>
-                      </div>
-                    </div>
-                  </div>
-            <PlanFollowupSettings :model-value="gateway.codexHooks?.planFollowup" :role-id="gateway.agentRoleId || ''"
-              @update:model-value="setPlanFollowup" />
-            <AgentCompletionDeliveryRules :model-value="gateway.codexHooks?.completionDeliveries ?? []"
-              :gateways="store.gateways" :gateway-id="gateway.id" @update:model-value="setCompletionDeliveries" />
+            <PersonaAgentHooks :model-value="gateway.codexHooks" :gateways="store.gateways" :gateway="gateway"
+              @update:model-value="setAgentHooks" />
           </v-window-item>
         </v-window>
       </v-card>

@@ -9,6 +9,7 @@ from dataclasses import replace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QPoint
+from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication
 
@@ -152,6 +153,44 @@ class DesktopPetMotionTest(unittest.TestCase):
         self.assertAlmostEqual(window._gait.cycle_distance, small * 2)
         self.assertEqual(window._png_timer.interval(), 167)
         window.close()
+
+    def test_stride_scales_linearly_at_small_and_large_sizes(self):
+        window = DesktopPetWindow()
+        pack, animation = walking_animation()
+        window.play(pack, animation)
+        reference = window._gait.cycle_distance
+        for scale in (0.1, 0.25, 0.5, 1, 2):
+            window.apply_presentation_settings(scale=scale, opacity=1, always_on_top=True,
+                                              locked=False, bubble_enabled=True, fps_cap=15)
+            self.assertAlmostEqual(window._gait.cycle_distance, reference * window.width() / 256)
+        window.close()
+
+    def test_soles_follow_occupied_pixels_instead_of_canvas_midpoint(self):
+        pixmap = QPixmap(256, 256)
+        pixmap.fill(QColor(0, 0, 0, 0))
+        painter = QPainter(pixmap)
+        painter.fillRect(30, 30, 60, 100, QColor('blue'))
+        painter.fillRect(40, 140, 10, 10, QColor('blue'))
+        painter.fillRect(70, 140, 10, 10, QColor('blue'))
+        painter.fillRect(0, 250, 256, 6, QColor(0, 0, 0, 60))
+        painter.end()
+        soles = DesktopPetWindow._measure_soles(pixmap)
+        self.assertEqual(soles.left, (44.5, 149))
+        self.assertEqual(soles.right, (74.5, 149))
+        self.assertEqual(soles.occupied_height, 120)
+
+    def test_empty_sprite_has_no_calibratable_stride(self):
+        pixmap = QPixmap(256, 256)
+        pixmap.fill(QColor(0, 0, 0, 0))
+        soles = DesktopPetWindow._measure_soles(pixmap)
+        self.assertIsNone(walking_gait((soles, soles)))
+
+    def test_crossed_feet_do_not_shrink_the_valid_stride_threshold(self):
+        frames = (SoleFrame((10, 90), (70, 90)), SoleFrame((-2, 90), (18, 90)),
+                  SoleFrame((4, 90), (14, 90)), SoleFrame((4, 90), (24, 90)))
+        gait = walking_gait(frames)
+        self.assertIsNotNone(gait)
+        self.assertEqual(gait.advances[1], 12)
 
     def test_left_facing_source_is_not_mirrored_when_walking_left(self):
         window = DesktopPetWindow()

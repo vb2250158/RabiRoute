@@ -420,6 +420,7 @@ export type SpeechPlaybackJob = {
   provider?: string;
   model?: string;
   voice?: string;
+  text?: string;
   sessionId?: string | null;
   routeId?: string | null;
   createdAt?: number;

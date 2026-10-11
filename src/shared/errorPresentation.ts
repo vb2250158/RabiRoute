@@ -18,6 +18,7 @@ const reasons: Record<string, [string, string]> = {
   dsh_transport_failed: ["DSH 连接传输未完成，不等于请求参数错误或 Agent 业务权限不足。", "The DSH connection transport did not complete; this does not imply invalid request parameters or an Agent business-permission denial."],
   unauthorized: ["访问凭据缺失或已失效，请重新认证。", "Access credentials are missing or expired. Authenticate again."],
   forbidden: ["当前身份没有执行此操作的权限。", "The current identity is not permitted to perform this operation."],
+  filesystem_failure: ["文件系统操作失败，请检查文件占用或共享目录访问。", "The file system operation failed. Check file contention or shared-directory access."],
   service_failure: ["服务处理失败，服务器未能完成请求。", "The service failed while processing the request."],
   request_failed: ["请求未完成，服务器未提供更具体原因。", "The request did not complete and no more specific cause was provided."],
 };
@@ -72,11 +73,12 @@ const exact: Record<string, string> = {
   "role must be task or secretary.": "role 必须为 task 或 secretary。",
 };
 function inferReason(message: string, status: number): string {
+  if (/^(?:EACCES|EBUSY|ENOTEMPTY|EPERM|EROFS|ENOSPC|EIO|EXDEV):.*\b(?:open|read|write|rename|unlink|mkdir|rmdir|scandir|stat|access|copyfile)\b/i.test(message)) return "filesystem_failure";
   if (/^DSH RPC transport failed;/.test(message)) return "dsh_transport_failed";
   if (/DSH authentication (?:configuration|has duplicate endpoint)|DSH (?:launch log is unreadable|current launch URL is absent)/.test(message)) return "dsh_connection_configuration";
   if (/DSH (?:authentication (?:required or expired|exchange)|authorization is expired or disconnected)/.test(message)) return "dsh_connection_required";
   if (status === 401 || /unauthorized|authentication|credentials? missing|token expired/i.test(message)) return "unauthorized";
-  if (status === 403 || /permission|forbidden|access denied|EACCES|EPERM/i.test(message)) return "forbidden";
+  if (status === 403 || /permission|forbidden|access denied/i.test(message)) return "forbidden";
   if (status === 412 || /revision|etag|version conflict/i.test(message)) return "revision_conflict";
   if (status === 408 || status === 504 || /timed out|timeout/i.test(message)) return "timeout";
   if (status === 400 || status === 405 || status === 416 || /required|invalid|must be|exceeds|duplicat|byte range|method not allowed/i.test(message)) return "invalid_request";

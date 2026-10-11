@@ -25,6 +25,40 @@ export type DesktopPetPlacement = {
   yRatio: number;
 };
 
+export type DesktopPetBubbleStyle = {
+  skin: "cat-paw" | "plain";
+  fontFamily: string;
+  fontSize: number;
+  textColor: string;
+  backgroundColor: string;
+  borderColor: string;
+  maxWidth: number;
+  opacity: number;
+  displaySeconds: number;
+};
+
+export const DEFAULT_DESKTOP_PET_BUBBLE_STYLE: DesktopPetBubbleStyle = {
+  skin: "cat-paw", fontFamily: "", fontSize: 14, textColor: "#504650",
+  backgroundColor: "#fffaf3", borderColor: "#a58b98", maxWidth: 320,
+  opacity: 1, displaySeconds: 8
+};
+
+export function normalizeDesktopPetBubbleStyle(value: unknown): DesktopPetBubbleStyle {
+  const row = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const defaults = DEFAULT_DESKTOP_PET_BUBBLE_STYLE;
+  const color = (key: "textColor" | "backgroundColor" | "borderColor") =>
+    typeof row[key] === "string" && /^#[0-9a-fA-F]{6}$/.test(row[key]) ? row[key].toLowerCase() : defaults[key];
+  return {
+    skin: row.skin === "plain" ? "plain" : "cat-paw",
+    fontFamily: typeof row.fontFamily === "string" ? row.fontFamily.replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, 80) : "",
+    fontSize: Math.round(boundedNumber(row.fontSize, defaults.fontSize, 12, 24)),
+    textColor: color("textColor"), backgroundColor: color("backgroundColor"), borderColor: color("borderColor"),
+    maxWidth: Math.round(boundedNumber(row.maxWidth, defaults.maxWidth, 220, 480)),
+    opacity: boundedNumber(row.opacity, defaults.opacity, 0.5, 1),
+    displaySeconds: boundedNumber(row.displaySeconds, defaults.displaySeconds, 2, 30)
+  };
+}
+
 export type DesktopPetBinding = {
   enabled: boolean;
   packId: string;
@@ -36,6 +70,7 @@ export type DesktopPetBinding = {
   locked: boolean;
   hideOnFullscreen: boolean;
   bubbleEnabled: boolean;
+  bubbleStyle: DesktopPetBubbleStyle;
   fpsCap: 6 | 12 | 15 | 24;
   wanderEnabled: boolean;
   wanderToActiveWindow: boolean;
@@ -72,6 +107,7 @@ export const DEFAULT_DESKTOP_PET_BINDING: DesktopPetBinding = {
   locked: false,
   hideOnFullscreen: true,
   bubbleEnabled: true,
+  bubbleStyle: { ...DEFAULT_DESKTOP_PET_BUBBLE_STYLE },
   fpsCap: 15,
   wanderEnabled: false,
   wanderToActiveWindow: false,
@@ -140,6 +176,7 @@ export function normalizeDesktopPetBinding(value: unknown): DesktopPetBinding {
     locked: row.locked === true,
     hideOnFullscreen: row.hideOnFullscreen !== false,
     bubbleEnabled: row.bubbleEnabled !== false,
+    bubbleStyle: normalizeDesktopPetBubbleStyle(row.bubbleStyle),
     fpsCap: fps,
     wanderEnabled: row.wanderEnabled === true,
     wanderToActiveWindow: row.wanderToActiveWindow === true,

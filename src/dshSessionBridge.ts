@@ -72,12 +72,28 @@ export function dshRouteConfigPath(): string {
  */
 export function readDshPrimaryBinding(routeConfigPath: string = dshRouteConfigPath()): DshPrimaryBinding | null {
   try {
-    const parsed = JSON.parse(fs.readFileSync(routeConfigPath, "utf8")) as Record<string, unknown>;
+    return parseDshPrimaryBinding(JSON.parse(fs.readFileSync(routeConfigPath, "utf8")) as Record<string, unknown>);
+  } catch { return null; }
+}
+
+/** Shared configuration reads must not block the Manager event loop. */
+export async function readDshPrimaryBindingAsync(routeConfigPath: string = dshRouteConfigPath()): Promise<DshPrimaryBinding | null> {
+  let content: string;
+  try { content = await fs.promises.readFile(routeConfigPath, "utf8"); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw new Error("Agent binding configuration is temporarily unreadable.");
+  }
+  try { return parseDshPrimaryBinding(JSON.parse(content) as Record<string, unknown>); }
+  catch { throw new Error("Agent binding configuration is invalid."); }
+}
+
+function parseDshPrimaryBinding(parsed: Record<string, unknown>): DshPrimaryBinding | null {
     const sessionId = typeof parsed.dshSessionId === "string" ? parsed.dshSessionId.trim() : "";
     const cwd = typeof parsed.dshCwd === "string" ? parsed.dshCwd.trim() : "";
     if (!sessionId || !isDshSessionId(sessionId) || !cwd) return null;
     const baseUrl = resolveDshBaseUrl(
-      typeof parsed.dshBaseUrl === "string" ? parsed.dshBaseUrl : undefined
+      process.env.RABI_DSH_LOCAL_OWNER_URL?.trim() || (typeof parsed.dshBaseUrl === "string" ? parsed.dshBaseUrl : undefined)
     );
     const sessionName = typeof parsed.dshSessionName === "string" && parsed.dshSessionName.trim()
       ? parsed.dshSessionName.trim()
@@ -107,9 +123,6 @@ export function readDshPrimaryBinding(routeConfigPath: string = dshRouteConfigPa
         }
       } : {})
     };
-  } catch {
-    return null;
-  }
 }
 
 type DshRpcOk<T> = { ok: true; value: T };
@@ -138,10 +151,10 @@ export async function ensureDshSessionPreset(baseUrl: string, session: DshSessio
   session.agentPreset = wanted;
 }
 
-async function dshRpc<T>(baseUrl: string, method: string, payload: unknown, assertAuthorized?: () => void | Promise<void>): Promise<DshRpcOk<T> | DshRpcError> {
+async function dshRpc<T>(baseUrl: string, method: string, payload: unknown, assertAuthorized?: () => void | Promise<void>, signal?: AbortSignal): Promise<DshRpcOk<T> | DshRpcError> {
   const rpcId = randomUUID();
   const response = await dshAuthenticatedFetch(baseUrl, method,
-    JSON.stringify({ type: "client-request", rpcId, method, payload: { args: payload } }), assertAuthorized);
+    JSON.stringify({ type: "client-request", rpcId, method, payload: { args: payload } }), assertAuthorized, signal);
   if (!response.ok) {
     throw new Error(`DSH ${method} transport failed with HTTP ${response.status}.`);
   }
@@ -359,10 +372,10 @@ function dshSessionSummary(item: DshSessionListItem): DshSessionSummary | null {
   };
 }
 
-async function readDshSessionRows(baseUrl: string, assertAuthorized?: () => void | Promise<void>): Promise<DshSessionListItem[]> {
+async function readDshSessionRows(baseUrl: string, assertAuthorized?: () => void | Promise<void>, signal?: AbortSignal): Promise<DshSessionListItem[]> {
   // Current owner list ignores cursor and returns ALL visible rows (no continuation).
   // Never cap this read: ID resolution and workspace/query filtering need the full catalog.
-  const result = await dshRpc<{ items: DshSessionListItem[] }>(normalizedDshBaseUrl(baseUrl), "session/list", { _request: {} }, assertAuthorized);
+  const result = await dshRpc<{ items: DshSessionListItem[] }>(normalizedDshBaseUrl(baseUrl), "session/list", { _request: {} }, assertAuthorized, signal);
   if (!result.ok) {
     throw new Error(`DSH session list failed: ${result.error.message || result.error.code || "unknown error"}`);
   }
@@ -370,8 +383,8 @@ async function readDshSessionRows(baseUrl: string, assertAuthorized?: () => void
   return result.value.items;
 }
 
-async function readDshSessionCatalog(baseUrl: string, assertAuthorized?: () => void | Promise<void>): Promise<DshSessionSummary[]> {
-  return (await readDshSessionRows(baseUrl, assertAuthorized))
+async function readDshSessionCatalog(baseUrl: string, assertAuthorized?: () => void | Promise<void>, signal?: AbortSignal): Promise<DshSessionSummary[]> {
+  return (await readDshSessionRows(baseUrl, assertAuthorized, signal))
     .map(dshSessionSummary)
     .filter((item): item is DshSessionSummary => item !== null);
 }
@@ -383,6 +396,7 @@ export async function listDshSessions(options: {
   offset?: number;
   allowedWorkspaces?: string[];
   assertAuthorized?: () => void | Promise<void>;
+  signal?: AbortSignal;
 } = {}): Promise<DshSessionSummary[]> {
   await options.assertAuthorized?.();
   const query = String(options.query || "").trim().toLocaleLowerCase();
@@ -391,7 +405,7 @@ export async function listDshSessions(options: {
   );
   const offset = Math.max(0, Math.trunc(options.offset ?? 0));
   const limit = Math.max(0, Math.trunc(options.limit ?? 100));
-  const rows = await readDshSessionCatalog(normalizedDshBaseUrl(options.baseUrl), options.assertAuthorized);
+  const rows = await readDshSessionCatalog(normalizedDshBaseUrl(options.baseUrl), options.assertAuthorized, options.signal);
   await options.assertAuthorized?.();
   return rows
     .filter((item) => workspaceKeys.size === 0 || (item.cwd && workspaceKeys.has(canonicalDshWorkspace(item.cwd))))

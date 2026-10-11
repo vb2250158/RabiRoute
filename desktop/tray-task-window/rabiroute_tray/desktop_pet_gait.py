@@ -10,6 +10,7 @@ from statistics import median
 class SoleFrame:
     left: tuple[float, float] | None
     right: tuple[float, float] | None
+    occupied_height: float = 0.0
 
     @property
     def floor(self) -> float:
@@ -26,6 +27,10 @@ class WalkingGait:
     def cycle_distance(self) -> float:
         return sum(self.advances)
 
+    def scaled(self, horizontal: float, vertical: float) -> WalkingGait:
+        return WalkingGait(tuple(value * horizontal for value in self.advances),
+                           tuple(value * vertical for value in self.floor_offsets))
+
 
 def walking_gait(soles: tuple[SoleFrame, ...], source_facing: str = "right") -> WalkingGait | None:
     """Use only a sole that stays in contact across both displayed frames.
@@ -33,7 +38,8 @@ def walking_gait(soles: tuple[SoleFrame, ...], source_facing: str = "right") -> 
     Its backward horizontal sweep gives forward root distance. A support change
     contributes no jump, and an unchanged pose contributes no movement. Front
     view art is a cadence approximation, not directional foot-locking geometry.
-    All measurements are in rendered logical pixels, so resizing scales stride.
+    Measurements use a stable reference raster; the renderer scales the result
+    into logical desktop pixels instead of measuring resampling noise again.
     """
     if len(soles) < 2 or any(frame.left is None and frame.right is None for frame in soles):
         return None
@@ -46,7 +52,11 @@ def walking_gait(soles: tuple[SoleFrame, ...], source_facing: str = "right") -> 
     foot_span = median(spreads)
     if foot_span <= 1:
         return None
-    contact_tolerance = max(0.5, foot_span * 0.04)
+    heights = [frame.occupied_height for frame in soles if frame.occupied_height > 0]
+    contact_tolerance = max(0.5, foot_span * 0.04, median(heights) * 0.015 if heights else 0)
+    # Close/crossed feet shrink the median separation. That must not reject the
+    # actual stride of the planted shoe when the feet are farther apart.
+    maximum_sweep = max(spreads) / 2
     advances: list[float] = []
     for index, current in enumerate(soles):
         previous = soles[index - 1]
@@ -59,7 +69,7 @@ def walking_gait(soles: tuple[SoleFrame, ...], source_facing: str = "right") -> 
                 if source_facing == "left":
                     sweep = -sweep
                 # Reject segmentation switches and subpixel anti-aliasing jitter.
-                if 0.5 <= sweep <= foot_span / 2:
+                if 0.5 <= sweep <= maximum_sweep:
                     sweeps.append(sweep)
         advances.append(max(sweeps, default=0.0))
     if sum(advances) <= 1 or not all(math.isfinite(value) for value in advances):

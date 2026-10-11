@@ -11,6 +11,7 @@ import {
 import { HOME_DEVICE_ARGUMENT_SCHEMAS, HOME_MEDIA_ACTIONS, HOME_SPEECH_CAPABILITY, HOME_SPEECH_ARGUMENT_SCHEMA, mediaCapability, normalizeHomeSpeechBindings, validateHomeMediaArguments, type HomeSpeechBinding } from "../../shared/homeMediaContract.js";
 import { discoverHomeEntityActions, HOME_ENTITY_ACTION_CAPABILITY, mapHomeEntityAction, validateHomeActionValue, type HomeEntityAction, type HomeServiceDomain } from "./entityActions.js";
 import { deviceDirectory, HOME_DEVICE_DIRECTORY_TEMPLATE } from "./deviceDirectory.js";
+import { filterHomeResources, homeDeviceSummary, homeDirectoryPage, homeResourceSummary, queryHomeDevices, type HomeDirectoryQuery } from "./directoryQuery.js";
 
 export type XiaomiHomeManagerConfigInput = {
   baseUrl?: string;
@@ -484,6 +485,30 @@ export class XiaomiHomeManagerApiClient {
     catch { throw new XiaomiHomeManagerApiError(502, "xiaomi_home_device_registry_invalid", "Home Assistant returned an invalid device directory."); }
   }
 
+  async queryDevices(query: HomeDirectoryQuery, authority?: XiaomiHomeRequestAuthority) {
+    return queryHomeDevices(await this.listDevices(authority), query);
+  }
+
+  async getDevice(deviceId: string, authority?: XiaomiHomeRequestAuthority) {
+    if (!/^[a-z0-9_.:-]{1,128}$/i.test(deviceId)) throw new XiaomiHomeManagerApiError(400, "xiaomi_home_device_invalid", "Supply a device registry ID.");
+    const directory = await this.listDevices(authority);
+    const device = directory.devices.find(item => item.deviceId === deviceId);
+    if (!device) throw new XiaomiHomeManagerApiError(404, "xiaomi_home_device_not_found", "Device was not found in the current registry.");
+    return { ...homeDeviceSummary(device), displayName: device.displayName, model: device.model, manufacturer: device.manufacturer, areaName: device.areaName };
+  }
+
+  async queryResources(query: HomeDirectoryQuery, authority?: XiaomiHomeRequestAuthority) {
+    const directory = query.deviceId || query.q ? await this.listDevices(authority) : undefined;
+    const resources = directory ? [...directory.devices.flatMap(device => device.resources), ...directory.unassignedResources] : await this.listResources(false, authority);
+    const matches = filterHomeResources(resources, query, directory);
+    const page = homeDirectoryPage(matches.map(resource => query.view === "summary" ? homeResourceSummary(resource) : resource), query);
+    if (query.includeActions) {
+      const services = await this.entityServices(authority);
+      return { ...page, items: matches.slice(query.offset, query.offset + query.limit).map(resource => this.attachActions(resource, services)) };
+    }
+    return page;
+  }
+
   private async entityServices(authority?: XiaomiHomeRequestAuthority): Promise<HomeServiceDomain[]> {
     const services = await this.request<HomeServiceDomain[]>("/api/services", {}, authority);
     if (!Array.isArray(services) || services.some(item => !item || typeof item.domain !== "string"
@@ -520,6 +545,7 @@ export class XiaomiHomeManagerApiClient {
     return { schemaVersion: 1, provider: "home_assistant", writeEnabled: this.config.writeEnabled,
       resourceDiscovery: "/api/agent/xiaomi-home/resources", actionEndpoint: "/api/agent/xiaomi-home/action-requests",
       deviceDiscovery: "/api/agent/xiaomi-home/devices",
+      directoryQuery: { defaultView: "summary", defaultLimit: 20, maxLimit: 50, parameters: ["q", "kind", "available", "view", "offset", "limit"], resourceParameters: ["deviceId", "includeActions"], resourceDetail: "/api/agent/xiaomi-home/resources/{resourceId}" },
       receiptEndpoint: "/api/agent/xiaomi-home/action-requests?idempotencyKey={key}",
       entityActionDiscovery: "/api/agent/xiaomi-home/entity-actions?resourceId={resourceId}",
       allEntityActionDiscovery: "/api/agent/xiaomi-home/resources?includeActions=1",

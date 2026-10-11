@@ -164,6 +164,7 @@ class DesktopPetAgentMotion(QObject):
             controller._state_before_travel = "idle" if controller._requested_state == "sleep" else controller._requested_state
             if math.dist((window.x(), window.y()), destination) < 8:
                 self._report("succeeded", "Already at destination.")
+                controller._face_current_window()
                 controller._arm_wander()
                 return
             self.started = True

@@ -21,6 +21,51 @@ def wav(path: Path) -> Path:
     return path
 
 
+def test_text_metadata_is_bounded_and_completed_jobs_are_pruned(tmp_path: Path) -> None:
+    coordinator = PlaybackCoordinator(tmp_path / "queue", player=lambda *_: None, stopper=lambda: None)
+    source = wav(tmp_path / "speech.wav")
+    for _ in range(60):
+        coordinator.enqueue(source, provider="test", model="test", voice="sample", text="x" * 5000)
+    wait_until(lambda: coordinator.snapshot()["current"] is None and coordinator._queue.unfinished_tasks == 0)
+    jobs = coordinator.snapshot()["jobs"]
+    assert len(jobs) == 50
+    assert len(jobs[-1]["text"]) == 4000
+    assert "path" not in jobs[-1] and "_settled" not in jobs[-1]
+
+
+def test_session_cancel_preserves_unrelated_fifo_and_fences_late_synthesis(tmp_path: Path) -> None:
+    started, released = threading.Event(), threading.Event()
+    played = []
+    def player(path, _volume, cancel):
+        played.append(path.name)
+        if len(played) == 1:
+            started.set()
+            assert cancel.wait(2)
+            released.set()
+    coordinator = PlaybackCoordinator(tmp_path / "queue", player=player, stopper=lambda: None)
+    source = wav(tmp_path / "speech.wav")
+    args = {"provider": "test", "model": "test", "voice": "default"}
+    one = coordinator.enqueue(source, session_id="companion.one.1", **args)
+    assert started.wait(2)
+    two = coordinator.enqueue(source, session_id="companion.one.1", **args)
+    other = coordinator.enqueue(source, session_id="other-task", **args)
+    coordinator.cancel_session("companion.one.1")
+    late = coordinator.enqueue(source, session_id="companion.one.1", **args)
+    assert released.wait(2)
+    wait_until(lambda: next(j for j in coordinator.snapshot()["jobs"] if j["id"] == other["id"])["status"] == "done")
+    states = {j["id"]: j["status"] for j in coordinator.snapshot()["jobs"]}
+    assert states[one["id"]] == states[two["id"]] == states[late["id"]] == "cancelled"
+    assert len(played) == 2
+
+
+def test_expired_companion_deadline_never_starts_playback(tmp_path: Path) -> None:
+    played = []
+    coordinator = PlaybackCoordinator(tmp_path / "queue", player=lambda *_args: played.append(True))
+    job = coordinator.enqueue(wav(tmp_path / "speech.wav"), provider="test", model="test", voice="default", deadline=time.time()-1)
+    assert job["status"] == "cancelled"
+    assert played == []
+
+
 @pytest.mark.parametrize("failure, expected", [
     (PlaybackUnavailableError("所选音频设备已离线，请重新连接设备或切换到本机。"), "所选音频设备已离线，请重新连接设备或切换到本机。"),
     (RuntimeError("private-path-or-device-detail"), "播放失败，请查看 RabiSpeech 日志。"),

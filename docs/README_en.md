@@ -12,6 +12,8 @@ This directory contains current guides, experimental integrations, designs, rese
 
 ## Start here
 
+- [Desktop-pet companion mode](companion-mode_en.md) — **Experimental**. Start from the pet's context menu and adapt to the foreground game or player.
+
 - [Inspect devices and test actions](user-guide/home-devices_en.md) — Inspect device cards, capabilities and states, then test advertised actions.
 - [Workspace plan query](workspace-plan-query_en.md) — Paginated search scoped to host sessions and workspace.
 
@@ -51,6 +53,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Use a remote persona from a local Route](remote-persona-reference_en.md) — **Experimental in 0.3.19**. Select a source PC and persona in the same RabiLink application, use an automatic handshake for read-only access, and retain local message inputs and the handling Agent. Real two-PC delivery remains pending acceptance.
 - [Agent context injection](agent-context-injection_en.md) — **Current guide** for the persona-scoped bidirectional ledger, per-endpoint/conversation recent-message budgets, archival boundaries, persona-directory and cross-persona credentials, paths, and reply context inside `AgentPacket`.
 - [Desktop-pet motion API](desktop-pet-agent-motion_en.md) — Move the pet and read arrival, interruption and uncertain receipts.
+- [Desktop pet bubbles and speech](desktop-pet-bubbles_en.md) — Show spoken persona text and customize the paw skin, font, colors and lifetime.
 - [Rabi Agent interfaces](rabi-agent-interfaces_en.md) — **Current contract** for handler replies, persona discovery, idempotent one-way cross-persona delivery, receipts, thread bridge, plans, memory, Remote Agent, and role skills.
 - [Plans and memory](plan-and-memory-model_en.md) — **Current guide** for Role Knowledge sources, recall, explicit consolidation, and side effects.
 - [Unified dynamic record lifecycle](dynamic-record-lifecycle_en.md) — **Current guide** for archival, memory consolidation, physical sharding, retention, and the 24/72-hour dynamic windows.

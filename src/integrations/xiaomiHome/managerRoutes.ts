@@ -19,6 +19,7 @@ import { XiaomiHomeAuthMutationReceipts } from "./authMutationReceipts.js";
 import { randomBytes } from "node:crypto";
 import { vacuumCloudConnectPage } from "./vacuumCloudPage.js";
 import type { HomeAssistantDeploymentConfig } from "../../shared/homeAssistantDeploymentContract.js";
+import { parseHomeDirectoryQuery } from "./directoryQuery.js";
 
 export type XiaomiHomeManagerRoutesContext = {
   runtime: XiaomiHomeRuntimeController;
@@ -359,21 +360,21 @@ export function handleXiaomiHomeManagerApi(
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === `${root}/resources`) {
-    if ([...requestUrl.searchParams.keys()].some(key => key !== "includeActions")
-      || requestUrl.searchParams.getAll("includeActions").length > 1
-      || requestUrl.searchParams.has("includeActions") && !["0", "1"].includes(requestUrl.searchParams.get("includeActions")!)) {
-      context.jsonResponse(response, 400, {code: -1, error: {code: "xiaomi_home_query_invalid", message: "includeActions must be 0 or 1."}});
-      return true;
-    }
-    respond(response, context, authority, context.runtime.client.listResources(requestUrl.searchParams.get("includeActions") === "1", authority));
+    respond(response, context, authority, Promise.resolve().then(() => context.runtime.client.queryResources(parseHomeDirectoryQuery(requestUrl.searchParams, "resources"), authority)));
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === `${root}/devices`) {
-    if (requestUrl.search) {
-      context.jsonResponse(response, 400, { code: -1, error: { code: "xiaomi_home_query_invalid", message: "Device directory does not accept query parameters." } });
-      return true;
-    }
-    respond(response, context, authority, context.runtime.client.listDevices(authority));
+    respond(response, context, authority, Promise.resolve().then(() => context.runtime.client.queryDevices(parseHomeDirectoryQuery(requestUrl.searchParams, "devices"), authority)));
+    return true;
+  }
+  if (request.method === "GET" && requestUrl.pathname.startsWith(`${root}/devices/`)) {
+    respond(response, context, authority, Promise.resolve().then(() => {
+      if (requestUrl.search) throw new XiaomiHomeManagerApiError(400, "xiaomi_home_query_invalid", "Device detail does not accept query parameters.");
+      let deviceId: string;
+      try { deviceId = decodeURIComponent(requestUrl.pathname.slice(`${root}/devices/`.length)); }
+      catch { throw new XiaomiHomeManagerApiError(400, "xiaomi_home_device_invalid", "Device ID encoding is invalid."); }
+      return context.runtime.client.getDevice(deviceId, authority);
+    }));
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === `${root}/entity-actions`) {

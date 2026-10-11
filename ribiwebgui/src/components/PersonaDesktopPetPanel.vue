@@ -269,7 +269,26 @@ onBeforeUnmount(() => {
           <v-switch v-model="binding.clickThrough" label="鼠标点透" color="secondary" density="compact" hide-details :disabled="!binding.enabled" />
           <v-switch v-model="binding.locked" label="锁定位置" color="secondary" density="compact" hide-details :disabled="!binding.enabled" />
           <v-switch v-model="binding.hideOnFullscreen" label="全屏时隐藏" color="secondary" density="compact" hide-details :disabled="!binding.enabled" />
-          <v-switch v-model="binding.bubbleEnabled" label="显示结果气泡" color="secondary" density="compact" hide-details :disabled="!binding.enabled" />
+          <v-switch v-model="binding.bubbleEnabled" label="显示气泡" color="secondary" density="compact" hide-details :disabled="!binding.enabled" />
+        </div>
+        <div class="section-title small-title mt-6 mb-3">气泡样式</div>
+        <v-select v-model="binding.bubbleStyle.skin" label="外观" :items="[{ title: '猫爪', value: 'cat-paw' }, { title: '纯色', value: 'plain' }]" density="compact" :disabled="!binding.enabled" />
+        <v-text-field v-model="binding.bubbleStyle.fontFamily" label="字体" placeholder="系统默认" maxlength="80" density="compact" :disabled="!binding.enabled" />
+        <div class="desktop-pet-slider-grid">
+          <v-number-input v-model="binding.bubbleStyle.fontSize" label="字号（px）" :min="12" :max="24" :disabled="!binding.enabled" />
+          <v-number-input v-model="binding.bubbleStyle.maxWidth" label="宽度（px）" :min="220" :max="480" :step="10" :disabled="!binding.enabled" />
+          <v-number-input v-model="binding.bubbleStyle.displaySeconds" label="停留时间（秒）" :min="2" :max="30" :disabled="!binding.enabled" />
+          <div>
+            <div class="virtual-avatar-field-label">气泡不透明度：{{ Math.round(binding.bubbleStyle.opacity * 100) }}%</div>
+            <v-slider v-model="binding.bubbleStyle.opacity" :min="0.5" :max="1" :step="0.05" hide-details :disabled="!binding.enabled" />
+          </div>
+        </div>
+        <div class="pet-bubble-colors">
+          <label>文字颜色 <input v-model="binding.bubbleStyle.textColor" type="color" :disabled="!binding.enabled"></label>
+          <template v-if="binding.bubbleStyle.skin === 'plain'">
+            <label>背景 <input v-model="binding.bubbleStyle.backgroundColor" type="color" :disabled="!binding.enabled"></label>
+            <label>描边 <input v-model="binding.bubbleStyle.borderColor" type="color" :disabled="!binding.enabled"></label>
+          </template>
         </div>
         <div class="virtual-avatar-field-label mt-4 mb-2">动画帧率</div>
         <v-btn-toggle v-model="binding.fpsCap" color="secondary" density="compact" mandatory divided :disabled="!binding.enabled">
@@ -304,6 +323,9 @@ onBeforeUnmount(() => {
 }
 
 .pet-wander-settings { padding-left: 16px; border-left: 2px solid var(--rr-border-soft); }
+.pet-bubble-colors { display: flex; flex-wrap: wrap; gap: 16px; margin: 8px 0 16px; }
+.pet-bubble-colors label { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.pet-bubble-colors input { width: 40px; height: 28px; cursor: pointer; }
 .pet-corner-settings { padding-left: 16px; }
 .pet-wait-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 

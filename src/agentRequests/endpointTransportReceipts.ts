@@ -4,12 +4,23 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import type { PreparedEndpointDelivery, EndpointDeliveryReceipt } from "./endpointDelivery.js";
 import { validateEndpointReceipt } from "./endpointDelivery.js";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 type TransportEvidence = { deliveryId: string; generation: string; promptHash: string; executionOptionsHash: string; target: PreparedEndpointDelivery["target"]; receipt?: EndpointDeliveryReceipt };
 
 /** Transport-only ledger. An attempted operation is never dispatched again after a crash or timeout. */
 export class EndpointTransportReceipts {
   constructor(private readonly directory: string) {}
+  private mutate<T>(delivery: PreparedEndpointDelivery, action: string, operation: () => T): T {
+    const id = createHash("sha256").update(delivery.deliveryId).digest("hex");
+    const audit = (outcome: "started" | "committed" | "failed") => recordDataMutationAudit({
+      group: "agent.delivery", event: "endpoint_transport_receipt_mutation", owner: "EndpointTransportReceipts", action,
+      target: { type: "endpoint_delivery", id }, dataSource: { kind: "ledger", id }, outcome
+    });
+    audit("started");
+    try { const result = operation(); audit("committed"); return result; }
+    catch (error) { audit("failed"); throw error; }
+  }
   private file(delivery: PreparedEndpointDelivery): string {
     return path.join(this.directory, `${createHash("sha256").update(delivery.deliveryId).digest("hex")}.json`);
   }
@@ -27,15 +38,17 @@ export class EndpointTransportReceipts {
   }
   async beginAttempt(delivery: PreparedEndpointDelivery): Promise<boolean> {
     if (this.read(delivery)) return false;
-    fs.mkdirSync(this.directory, { recursive: true });
     try {
-      const fd = fs.openSync(this.file(delivery), "wx", 0o600);
-      try {
-        fs.writeFileSync(fd, JSON.stringify({ deliveryId: delivery.deliveryId, generation: delivery.generation,
-          promptHash: delivery.promptHash, executionOptionsHash: delivery.executionOptionsHash, target: delivery.target } satisfies TransportEvidence));
-        fs.fsyncSync(fd);
-      } finally { fs.closeSync(fd); }
-      return true;
+      return this.mutate(delivery, "reserve_attempt", () => {
+        fs.mkdirSync(this.directory, { recursive: true });
+        const fd = fs.openSync(this.file(delivery), "wx", 0o600);
+        try {
+          fs.writeFileSync(fd, JSON.stringify({ deliveryId: delivery.deliveryId, generation: delivery.generation,
+            promptHash: delivery.promptHash, executionOptionsHash: delivery.executionOptionsHash, target: delivery.target } satisfies TransportEvidence));
+          fs.fsyncSync(fd);
+        } finally { fs.closeSync(fd); }
+        return true;
+      });
     } catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") { this.read(delivery); return false; } throw error; }
   }
   async writeReceipt(delivery: PreparedEndpointDelivery, receipt: EndpointDeliveryReceipt): Promise<void> {
@@ -43,11 +56,13 @@ export class EndpointTransportReceipts {
     const original = this.read(delivery);
     if (!original) throw new Error("Transport attempt was not reserved.");
     if (original.receipt) return;
-    const file = this.file(delivery);
-    const temporary = `${file}.receipt`;
-    const fd = fs.openSync(temporary, "wx", 0o600);
-    try { fs.writeFileSync(fd, JSON.stringify({ ...original, receipt })); fs.fsyncSync(fd); }
-    finally { fs.closeSync(fd); }
-    fs.renameSync(temporary, file);
+    this.mutate(delivery, "write_receipt", () => {
+      const file = this.file(delivery);
+      const temporary = `${file}.receipt`;
+      const fd = fs.openSync(temporary, "wx", 0o600);
+      try { fs.writeFileSync(fd, JSON.stringify({ ...original, receipt })); fs.fsyncSync(fd); }
+      finally { fs.closeSync(fd); }
+      fs.renameSync(temporary, file);
+    });
   }
 }

@@ -79,6 +79,9 @@ test("persona Hook migration preserves settings across Agent changes and removes
     config.gateways[0].codexHooks!.completionDeliveries = [completionRule];
     const followup = { enabled: true, cooldownSeconds: 90, rules: [{ id: "review", enabled: true, statusKeys: ["custom-review"], prompt: "Check remaining work" }] };
     config.gateways[0].codexHooks!.planFollowup = followup;
+    config.gateways[0].codexHooks!.byAgent = { dsh: {
+      ...normalizeCodexHookSettings({ sessionContextEnabled: true }), planFollowup: { ...followup, enabled: false }
+    } };
     config.gateways[0].agentAdapters = ["copilotCli"];
     repo.writeConfig(config);
     const saved = repo.readConfig().gateways[0];
@@ -86,6 +89,8 @@ test("persona Hook migration preserves settings across Agent changes and removes
     assert.equal(saved.codexHooks?.onlyPrimaryPersonaCanSendMessages, false);
     assert.deepEqual(saved.codexHooks?.completionDeliveries, [completionRule]);
     assert.deepEqual(saved.codexHooks?.planFollowup, followup);
+    assert.equal(saved.codexHooks?.byAgent?.dsh?.sessionContextEnabled, true);
+    assert.equal(saved.codexHooks?.byAgent?.dsh?.planFollowup?.enabled, false);
     assert.deepEqual(JSON.parse(fs.readFileSync(personaPath, "utf8")).codexHooks.planFollowup, followup);
     assert.deepEqual(JSON.parse(fs.readFileSync(personaPath, "utf8")).codexHooks.completionDeliveries, [completionRule]);
     assert.equal(JSON.parse(fs.readFileSync(adapterPath, "utf8")).codexHooks, undefined);

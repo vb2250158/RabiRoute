@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { userFacingError } from "../userFacingError";
 import { computed, ref } from "vue";
+import type { AgentAdapterType } from "@shared/agentAdapterCapabilities";
 import type { GatewayDefinition } from "@shared/gatewayConfigModel";
 import { AGENT_HOOK_EVENTS, AGENT_HOOK_CONDITIONS, AGENT_HOOK_DESTINATIONS, agentHookRuleErrors,
   type AgentCompletionDeliveryRule, type AgentHookCondition, type AgentHookDestination, type AgentHookSession } from "@shared/agentHookAutomation";
 import { createAgentCompletionRule, createTtsCompletionRule } from "../persona/agentCompletionRules";
 
-const props = defineProps<{ modelValue: AgentCompletionDeliveryRule[]; gateways: GatewayDefinition[]; gatewayId: string }>();
+const props = defineProps<{ modelValue: AgentCompletionDeliveryRule[]; gateways: GatewayDefinition[]; gatewayId: string; agentType?: AgentAdapterType }>();
 const emit = defineEmits<{ "update:modelValue": [value: AgentCompletionDeliveryRule[]] }>();
 const projects = ref<string[]>([]);
 const loading = ref(false);
@@ -26,14 +27,16 @@ async function scanSessions(more = false) {
   if (sessionLoading.value) return;
   sessionLoading.value = true; error.value = "";
   try {
-    const query = new URLSearchParams({ codexOffset: String(more ? nextSessionOffset.value ?? 0 : 0), codexLimit: "100" });
-    const response = await fetch(`/api/scan/agents?${query}`); const data = await response.json();
+    const type = props.agentType ?? "codex";
+    const query = new URLSearchParams({ [`${type}Offset`]: String(more ? nextSessionOffset.value ?? 0 : 0), [`${type}Limit`]: "100" });
+    const response = await fetch(`/api/scan/agents${type === "dsh" ? "/dsh" : ""}?${query}`); const data = await response.json();
     if (!response.ok) throw new Error(data.message || "读取聊天会话失败");
-    const codex = data.agents?.codex;
-    const found: AgentHookSession[] = (codex?.sessions ?? []).filter((session: AgentHookSession) => session.id)
+    const agent = data.agents?.[type];
+    if (!agent) throw new Error("所选 Agent 端未返回会话，请检查 Agent 端连接。");
+    const found: AgentHookSession[] = (agent.sessions ?? []).filter((session: AgentHookSession) => session.id)
       .map((session: AgentHookSession) => ({ id: session.id, name: session.name || "未命名任务" }));
     sessions.value = [...new Map([...(more ? sessions.value : []), ...found].map(session => [session.id, session])).values()];
-    nextSessionOffset.value = codex?.sessionPage?.hasMore ? codex.sessionPage.nextOffset ?? null : null;
+    nextSessionOffset.value = agent.sessionPage?.hasMore ? agent.sessionPage.nextOffset ?? null : null;
   } catch (cause) { error.value = userFacingError(cause); }
   finally { sessionLoading.value = false; }
 }
@@ -63,25 +66,21 @@ function addCondition(rule: AgentCompletionDeliveryRule, type: string) {
 async function scanProjects() {
   loading.value = true; error.value = "";
   try {
-    const response = await fetch("/api/scan/agents"); const data = await response.json();
+    const response = await fetch(props.agentType === "dsh" ? "/api/scan/agents/dsh" : "/api/scan/agents"); const data = await response.json();
     if (!response.ok) throw new Error(data.message || "读取项目目录失败");
-    // Every adapter owns its own project list. Codex was the only one read here,
-    // which hid DSH (and future adapter) workspaces from the project condition.
-    const scanned = Object.values(data.agents ?? {}).flatMap((agent: unknown) => {
-      const projects = (agent as { projects?: { path?: string }[] } | null)?.projects;
-      return Array.isArray(projects) ? projects.map(item => String(item?.path || "")) : [];
-    }).filter(Boolean);
+    const agent = data.agents?.[props.agentType ?? "codex"];
+    if (!agent) throw new Error("所选 Agent 端未返回项目，请检查 Agent 端连接。");
+    const scanned: string[] = (agent.projects ?? []).map((item: { path?: string }) => String(item.path || "")).filter(Boolean);
     projects.value = [...new Set(scanned)];
-    if (!projects.value.length) projects.value = data.cwdOptions ?? [];
   } catch (cause) { error.value = userFacingError(cause); }
   finally { loading.value = false; }
 }
 </script>
 
 <template>
-  <section class="hook-delivery-rules mt-6">
+  <section class="hook-delivery-rules">
     <div class="section-title">事件投递</div>
-    <p class="section-note">选择事件，添加需要满足的条件，再指定接收消息的消息端。</p>
+    <p class="section-note">选择触发事件和接收消息的消息端。</p>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-3">{{ error }}</v-alert>
     <v-card v-for="(rule, index) in modelValue" :key="rule.id" variant="outlined" class="pa-4 mb-4">
       <div class="d-flex align-center justify-space-between mb-3">
@@ -109,7 +108,7 @@ async function scanProjects() {
             </v-list>
           </v-menu>
         </div>
-        <p v-if="!rule.conditions.length" class="section-note">未设置条件，将匹配所有已托管 Agent 任务。添加多个条件时，必须全部满足。</p>
+        <p v-if="!rule.conditions.length" class="section-note">匹配所选 Agent 端的全部托管任务；添加多个条件时需全部满足。</p>
         <div v-for="(item, conditionIndex) in rule.conditions" :key="item.type" class="hook-condition">
           <div class="d-flex align-center justify-space-between">
             <span>{{ AGENT_HOOK_CONDITIONS.find(option => option.value === item.type)?.title || item.type }}</span>
@@ -152,13 +151,17 @@ async function scanProjects() {
       </div>
       <p v-for="message in agentHookRuleErrors(rule)" :key="message" class="section-note text-warning">{{ message }}</p>
     </v-card>
-    <v-btn variant="tonal" prepend-icon="mdi-plus" @click="emit('update:modelValue', [...modelValue, createAgentCompletionRule()])">添加事件投递规则</v-btn>
-    <v-btn class="ml-2" variant="tonal" prepend-icon="mdi-account-voice" @click="emit('update:modelValue', [...modelValue, createTtsCompletionRule(gatewayId)])">添加 TTS 播报</v-btn>
+    <div class="hook-delivery-actions">
+      <v-btn variant="tonal" prepend-icon="mdi-plus" @click="emit('update:modelValue', [...modelValue, createAgentCompletionRule()])">添加投递规则</v-btn>
+      <v-btn variant="tonal" prepend-icon="mdi-account-voice" @click="emit('update:modelValue', [...modelValue, createTtsCompletionRule(gatewayId)])">添加 TTS 播报</v-btn>
+    </div>
     <p class="section-note mt-2">规则随人格配置保存，发送结果可在消息路线的发送日志中查看。</p>
   </section>
 </template>
 
 <style scoped>
+.hook-delivery-rules .section-note { font-weight: 400; }
+.hook-delivery-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .hook-rule-section { border-top: 1px solid rgba(var(--v-theme-on-surface), 0.1); padding-top: 16px; margin-top: 16px; }
 .hook-rule-label { font-weight: 600; margin-bottom: 12px; }
 .hook-condition { padding: 12px; margin-bottom: 8px; background: rgba(var(--v-theme-on-surface), 0.035); border-radius: 8px; }

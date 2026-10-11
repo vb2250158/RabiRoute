@@ -274,7 +274,7 @@ test("plan task completion rejects a Codex target bound to the source session", 
   assert.equal(readRolePanelTimeline(roleDir).length, 0);
 });
 
-test("plan task completion respects the target Codex endpoint Hook switch", async (t) => {
+test("plan task completion respects the source Agent end's Hook switch", async (t) => {
   const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-plan-delivery-disabled-"));
   t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
   const selected = runtime("YeYu__disabled", "YeYu");
@@ -300,4 +300,7 @@ test("plan task completion respects the target Codex endpoint Hook switch", asyn
   );
   assert.equal(handoffCount, 0);
   assert.equal(readRolePanelTimeline(roleDir).length, 0);
+  selected.definition.codexHooks.byAgent = { dsh: { ...selected.definition.codexHooks, planTaskCompletionEnabled: true } };
+  await deliver({ ...delivery(roleDir, selected.definition.id), sourceAgentType: "dsh" });
+  assert.equal(handoffCount, 1);
 });

@@ -26,6 +26,7 @@ class DesktopPetManager(QObject):
         self._open_persona = open_persona
         self._client = DesktopPetRosterClient(manager_url)
         self._events = DesktopPetEventStream(manager_url)
+        self._speech_events = DesktopPetEventStream(manager_url, path="/api/speech/events")
         self._events.settings_changed.connect(lambda _payload: self.refresh())
         self._events.connection_changed.connect(self._connection_changed)
         self._refresh_task: QtAsyncTask | None = None
@@ -41,6 +42,7 @@ class DesktopPetManager(QObject):
         self._retry_timer.timeout.connect(self.refresh)
         self._rebuild_menu()
         self._events.start()
+        self._speech_events.start()
         self.refresh()
 
     @property
@@ -98,6 +100,7 @@ class DesktopPetManager(QObject):
         self._loading = False
         self._load_error = ""
         self._events.stop()
+        self._speech_events.stop()
         for controller in tuple(self._controllers.values()):
             controller.close()
         self._controllers.clear()
@@ -124,6 +127,7 @@ class DesktopPetManager(QObject):
                     persona_name=item.name,
                     initial_binding=item.binding,
                     event_stream=self._events,
+                    speech_event_stream=self._speech_events,
                     default_slot=slot,
                 )
                 controller.visibility_changed.connect(lambda _visible: self._rebuild_menu())

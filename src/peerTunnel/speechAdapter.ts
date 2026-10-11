@@ -12,9 +12,9 @@ export function createPeerSpeechAdapter(runtime: () => Pick<PeerTunnelRuntime, "
     const tunnel = runtime(); const selected = tunnel?.selected() || "";
     if (!selected || speechUsesLocalDevice(pathname)) return requestLocalSpeech(serviceUrl, pathname, init, { timeoutMs });
     let playback = false;
-    let model = "", voice = "";
+    let model = "", voice = "", text = "";
     if (pathname === "/v1/audio/speech" && typeof init.body === "string") {
-      const payload = JSON.parse(init.body); playback = payload.play === true; model = String(payload.model || ""); voice = String(payload.voice || "");
+      const payload = JSON.parse(init.body); playback = payload.play === true; model = String(payload.model || ""); voice = String(payload.voice || ""); text = String(payload.input || "");
       init = { ...init, body: JSON.stringify({ ...payload, play: false }) };
     }
     const response = await requestLocalSpeech(serviceUrl, pathname, init, { timeoutMs,
@@ -22,6 +22,7 @@ export function createPeerSpeechAdapter(runtime: () => Pick<PeerTunnelRuntime, "
     if (playback && response.status >= 200 && response.status < 300) {
       const form = new FormData(); form.append("file", new Blob([new Uint8Array(response.body)], { type: response.contentType }), "remote.wav");
       form.append("model", model); form.append("voice", voice);
+      form.append("text", text.slice(0, 4000));
       const queued = await requestLocalSpeech(serviceUrl, "/v1/playback/audio", { method: "POST", body: form }, { timeoutMs: 15_000 });
       if (queued.status < 200 || queued.status >= 300) throw new Error("远端已合成，但本机播放队列未接受音频；不会重新合成。");
       const job = JSON.parse(queued.body.toString());

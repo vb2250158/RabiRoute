@@ -3,27 +3,42 @@ import { performance } from "node:perf_hooks";
 
 export function summarizeCpuProfile(profile: Profiler.Profile) {
   const nodes = new Map(profile.nodes.map(node => [node.id, node]));
+  const parents = new Map<number, number>();
+  for (const node of profile.nodes) for (const child of node.children ?? []) parents.set(child, node.id);
+  const describe = (id: number) => {
+    const frame = nodes.get(id)?.callFrame;
+    const url = frame?.url ?? "";
+    const marker = url.lastIndexOf("/dist/");
+    return { function: (frame?.functionName ?? "unknown").slice(0, 160),
+      file: marker >= 0 ? url.slice(marker + 1) : url.startsWith("node:") ? url : "<external>",
+      line: (frame?.lineNumber ?? -1) + 1 };
+  };
   const totals = new Map<number, number>();
   for (let index = 0; index < (profile.samples?.length ?? 0); index++) {
     const id = profile.samples![index];
     totals.set(id, (totals.get(id) ?? 0) + (profile.timeDeltas?.[index] ?? 0));
   }
   return [...totals.entries()].sort((left, right) => right[1] - left[1]).slice(0, 12).map(([id, micros]) => {
-    const frame = nodes.get(id)?.callFrame;
-    const url = frame?.url ?? "";
-    const marker = url.lastIndexOf("/dist/");
+    const callers: ReturnType<typeof describe>[] = [];
+    let parent = parents.get(id);
+    const seen = new Set<number>();
+    while (parent !== undefined && callers.length < 8 && !seen.has(parent)) {
+      seen.add(parent);
+      const caller = describe(parent);
+      if (caller.file !== "dist/plugin-kernel/automaticCodeRuntime.js"
+          && !caller.file.startsWith("node:internal/async_local_storage/")
+          && !(caller.file === "<external>" && !caller.function)) callers.push(caller);
+      parent = parents.get(parent);
+    }
     return {
-      function: (frame?.functionName ?? "unknown").slice(0, 160),
-      file: marker >= 0 ? url.slice(marker + 1) : url.startsWith("node:") ? url : "<external>",
-      line: (frame?.lineNumber ?? -1) + 1,
-      selfMs: Math.round(micros / 1000)
+      ...describe(id), selfMs: Math.round(micros / 1000), callers
     };
   });
 }
 
 export function startManagerStallDiagnostics(
   record: (detail: { elapsedMs: number; delayedMs: number; frames?: ReturnType<typeof summarizeCpuProfile>; error?: string }) => void,
-  durationMs = 180_000
+  durationMs = 600_000
 ): () => void {
   const session = new Session();
   let stopped = false;

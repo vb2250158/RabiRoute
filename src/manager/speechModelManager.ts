@@ -6,6 +6,7 @@ import { spawn, type ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
 import { configuredModelPaths, modelFilesPresent, speechConfigPath } from "./speechModelFiles.js";
 import { SpeechModelSettingsStore } from "./speechModelSettings.js";
+import { packagedSpeechPython, speechCoreDependencyFiles, speechDependenciesCurrent } from "./speechDependencies.js";
 import type {
   SpeechManagedModel,
   SpeechManagedModelCapability,
@@ -45,11 +46,6 @@ type InstallManifest = {
 
 // Match the runtime startup gate: pip's target directory alone is not evidence
 // that the core API and microphone dependencies have been installed.
-const coreDependencyFiles = [
-  "fastapi/__init__.py", "uvicorn/__init__.py", "httpx/__init__.py",
-  "python_multipart/__init__.py", "numpy/__init__.py", "scipy/__init__.py",
-  "soundfile.py", "sounddevice.py"
-];
 
 function defaultModelRoot(rootDir: string): string {
   const localAppData = String(process.env.LOCALAPPDATA || "").trim();
@@ -88,6 +84,9 @@ export class SpeechModelManager {
   private activeJob: SpeechModelManagementJob | undefined;
   private lastJob: SpeechModelManagementJob | undefined;
   private lastOutput = "";
+  private runtimePreparation?: Promise<void>;
+  private automaticFailure?: Error;
+  private readonly runtimeWaiters = new Set<{ resolve(): void; reject(error: Error): void }>();
 
   constructor(private readonly options: SpeechModelManagerOptions) {
     this.platform = options.platform ?? process.platform;
@@ -119,7 +118,7 @@ export class SpeechModelManager {
   }
 
   private dependenciesPresent(root: string): boolean {
-    return coreDependencyFiles.every(relative => fs.existsSync(path.join(root, relative)));
+    return speechCoreDependencyFiles.every(relative => fs.existsSync(path.join(root, relative)));
   }
 
   private dependenciesRoot(): string {
@@ -136,7 +135,8 @@ export class SpeechModelManager {
     return {
       platformSupported: this.platform === "win32",
       dependenciesInstalled: this.dependenciesPresent(this.dependenciesRoot()),
-      windowsHostInstalled: fs.existsSync(path.join(this.pluginRoot, "runtime", "RabiSpeech.exe")),
+      windowsHostInstalled: fs.existsSync(path.join(this.pluginRoot, "runtime", "RabiSpeech.exe"))
+        || !!packagedSpeechPython(this.options.packageRoot ?? this.options.rootDir) && fs.existsSync(path.join(this.pluginRoot, "scripts", "windows_host.py")),
       catalogVersion: this.catalog.schema_version,
       models: this.catalog.models.map(model => {
         const manifestRow = manifestRows.get(model.alias);
@@ -174,15 +174,43 @@ export class SpeechModelManager {
     };
   }
 
-  installRuntime(guard?: SpeechAuthorityGuard): SpeechModelManagementSnapshot {
+  /** The existing installation job owns preparation; concurrent capture starts join it. */
+  ensureRuntime(allowFirstInstall = true): Promise<void> {
+    if (this.runtimePreparation) return this.runtimePreparation;
+    if (speechDependenciesCurrent(this.pluginRoot, this.dependenciesRoot())) return Promise.resolve();
+    if (this.automaticFailure) return Promise.reject(this.automaticFailure);
+    if (this.activeJob?.kind === "model") return Promise.reject(new SpeechModelManagerError("模型下载进行中，请等待后重试开启记录。"));
+    if (!allowFirstInstall && !fs.existsSync(this.stableDependenciesRoot()) && !fs.existsSync(path.join(this.pluginRoot, ".deps"))) {
+      return Promise.reject(new SpeechModelManagerError("首次使用时会自动安装采集环境，也可在模型管理中安装。"));
+    }
+    const preparation = (async () => {
+      if (!this.activeJob) this.installRuntime(undefined, true);
+      await new Promise<void>((resolve, reject) => this.runtimeWaiters.add({ resolve, reject }));
+      if (!speechDependenciesCurrent(this.pluginRoot, this.stableDependenciesRoot())) {
+        throw new SpeechModelManagerError("采集环境校验未通过，请在模型管理中重试安装。");
+      }
+    })();
+    this.runtimePreparation = preparation.catch(error => {
+      // Failed downloads must not be replayed at every recording interval.
+      this.automaticFailure = new SpeechModelManagerError(`采集环境准备失败：${this.safeMessage(error instanceof Error ? error.message : String(error))} 请在模型管理中重试安装。`);
+      throw this.automaticFailure;
+    }).finally(() => { this.runtimePreparation = undefined; });
+    return this.runtimePreparation;
+  }
+
+  installRuntime(guard?: SpeechAuthorityGuard, ensureMissing = false): SpeechModelManagementSnapshot {
     guard = stickySpeechAuthority(guard);
     guard();
     this.assertWindows();
+    this.automaticFailure = undefined;
     const dependenciesRoot = this.stableDependenciesRoot();
+    const python = packagedSpeechPython(this.options.packageRoot ?? this.options.rootDir);
+    const bundledHost = fs.existsSync(path.join(this.pluginRoot, "runtime", "RabiSpeech.exe"));
     return this.startJob({
       kind: "runtime",
       command: path.join(this.pluginRoot, "scripts", "install.ps1"),
-      args: ["-DependencyRoot", dependenciesRoot],
+      args: ["-DependencyRoot", dependenciesRoot, ...(ensureMissing ? ["-EnsureMissing"] : []),
+        ...(python ? ["-Python", python] : []), ...(bundledHost || python ? ["-SkipHostBuild"] : [])],
       dependenciesRoot,
       message: "正在安装 RabiSpeech 语音运行环境。"
     }, guard);
@@ -219,7 +247,7 @@ export class SpeechModelManager {
 
   stop(): void {
     if (!this.activeChild || !this.activeJob) return;
-    this.activeChild.kill();
+    const child = this.activeChild;
     this.lastJob = {
       ...this.activeJob,
       state: "failed",
@@ -229,6 +257,8 @@ export class SpeechModelManager {
     };
     this.activeChild = null;
     this.activeJob = undefined;
+    child.kill();
+    this.settleRuntimeWaiters(new SpeechModelManagerError("安装任务因 Manager 关闭而停止。"));
   }
 
   private startJob(input: {
@@ -286,7 +316,7 @@ export class SpeechModelManager {
     this.activeChild = child;
     // Accepted jobs are owned by their immutable job identity, not a request lease.
     child.stdout.on("data", chunk => { if (this.activeJob?.id === job.id) this.captureOutput(chunk); });
-    child.stderr.on("data", chunk => { if (this.activeJob?.id === job.id) this.captureOutput(chunk); });
+    child.stderr.on("data", chunk => { if (this.activeJob?.id === job.id) this.captureOutput(chunk, true); });
     child.once("error", error => this.finishJob(job.id, 1, this.safeMessage(error.message)));
     child.once("close", code => this.finishJob(job.id, code ?? 1));
     this.publish();
@@ -296,6 +326,7 @@ export class SpeechModelManager {
 
   private finishJob(jobId: string, exitCode: number, launchError = ""): void {
     if (this.activeJob?.id !== jobId) return;
+    const runtime = this.activeJob.kind === "runtime";
     const failed = exitCode !== 0 || Boolean(launchError);
     this.lastJob = {
       ...this.activeJob,
@@ -310,13 +341,20 @@ export class SpeechModelManager {
     };
     this.activeChild = null;
     this.activeJob = undefined;
+    if (runtime) this.settleRuntimeWaiters(failed ? new SpeechModelManagerError(this.lastJob.error || "运行环境安装失败。") : undefined);
     this.publish();
   }
 
-  private captureOutput(chunk: unknown): void {
+  private settleRuntimeWaiters(error?: Error): void {
+    for (const waiter of this.runtimeWaiters) { if (error) waiter.reject(error); else waiter.resolve(); }
+    this.runtimeWaiters.clear();
+  }
+
+  private captureOutput(chunk: unknown, failure = false): void {
     const text = String(chunk || "").replace(/\u001b\[[0-9;]*m/g, "");
     const lines = text.split(/[\r\n]+/).map(line => line.trim()).filter(Boolean);
-    if (lines.length) this.lastOutput = this.safeMessage(lines.at(-1) || "");
+    const diagnostic = failure ? lines.find(line => /Error|Exception|not recognized|failed|ERROR|无法|失败/.test(line)) : lines.at(-1);
+    if (diagnostic) this.lastOutput = this.safeMessage(diagnostic);
   }
 
   private publish(): void {

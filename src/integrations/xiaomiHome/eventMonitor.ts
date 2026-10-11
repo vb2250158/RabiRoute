@@ -48,6 +48,7 @@ type XiaomiHomeEventMonitorDependencies = {
   deliverEvent: (event: XiaomiHomeEvent, context: XiaomiHomeEventDeliveryContext) => Promise<unknown>;
   captureMotionClip?: (candidate: XiaomiMiotMotionClipCandidate) => Promise<XiaomiHomeArtifactPublicRecord>;
   reconnectDelayMs?: number;
+  recoverConnection?: () => Promise<void>;
 };
 
 function websocketUrl(baseUrl: string): string {
@@ -209,7 +210,7 @@ export class XiaomiHomeEventMonitor {
     this.deliveryMode = config.eventDeliveryMode === "all" ? "all" : "significant";
     this.cameraMotionEntityIds = Array.isArray(config.cameraMotionEntityIds) ? config.cameraMotionEntityIds : [];
     this.monitoredEntityIds = Array.isArray(config.monitoredEntityIds) ? config.monitoredEntityIds : [];
-    this.createSocket = dependencies.createSocket ?? (url => new WebSocket(url) as unknown as SocketLike);
+    this.createSocket = dependencies.createSocket ?? (url => new WebSocket(url, { handshakeTimeout: this.resolved.requestTimeoutMs }) as unknown as SocketLike);
     this.reconnectDelayMs = dependencies.reconnectDelayMs ?? 5000;
     this.connectionState = !this.enabled ? "disabled" : !this.token ? "authorization_required" : "stopped";
   }
@@ -264,12 +265,14 @@ export class XiaomiHomeEventMonitor {
       socket = this.createSocket(websocketUrl(this.resolved.baseUrl));
     } catch {
       this.connectionState = "reconnecting";
+      void this.dependencies.recoverConnection?.().catch(() => undefined);
       this.reconnectTimer = setTimeout(() => this.connect(), this.reconnectDelayMs);
       return;
     }
     this.socket = socket;
     socket.on("message", data => this.handleMessage(data));
     socket.on("error", () => {
+      if (this.stopped || this.socket !== socket) return;
       this.connectionState = "reconnecting";
       socket.close();
     });
@@ -277,7 +280,10 @@ export class XiaomiHomeEventMonitor {
       if (this.socket === socket) this.socket = undefined;
       if (!this.stopped) {
         this.connectionState = this.connectionState === "authorization_failed" ? "authorization_failed" : "reconnecting";
-        if (this.connectionState !== "authorization_failed") this.reconnectTimer = setTimeout(() => this.connect(), this.reconnectDelayMs);
+        if (this.connectionState !== "authorization_failed") {
+          void this.dependencies.recoverConnection?.().catch(() => undefined);
+          this.reconnectTimer = setTimeout(() => this.connect(), this.reconnectDelayMs);
+        }
       }
     });
   }

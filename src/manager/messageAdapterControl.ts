@@ -16,6 +16,7 @@ import {
 } from "./messageAdapterHealth.js";
 import type { NapcatHealthScanPayload } from "../messageEndpoints/napcatHealthScan.js";
 import {
+  recentMessageEvidence,
   scanFenneNoteEndpoint,
   scanRabiLinkEndpoint,
   scanWearableEndpoint,
@@ -87,7 +88,7 @@ export type MessageAdapterControlScanContext = {
   rootDir: string;
   adapterRuntimes(type: MessageEndpointType): GatewayRuntime[];
   routeCallbackEndpoint(runtime: GatewayRuntime, type: MessageEndpointType): MessageAdapterEndpoint | null;
-  routeHasRecentMessages(runtime: GatewayRuntime, type: MessageEndpointType): boolean;
+  routeHasRecentMessages(runtime: GatewayRuntime, type: MessageEndpointType): boolean | undefined;
   checkHttpEndpoint(url: string, timeoutMs?: number): Promise<boolean>;
   fenneNotePlaybackUrl: string;
   scanNapcatEndpoint(): MessageAdapterScanResult | Promise<MessageAdapterScanResult>;
@@ -423,7 +424,7 @@ export function createBuiltinMessageAdapterScanProviders(
           : credentialsRetained
             ? "外部 API 暂时不可达，但会话凭据仍保留，不要求扫码。"
             : "当前没有可用会话；请明确点击生成二维码后扫码。";
-      const hasRecentMessages = runtimes.some(runtime => context.routeHasRecentMessages(runtime, "weixin"));
+      const hasRecentMessages = recentMessageEvidence(runtimes, runtime => context.routeHasRecentMessages(runtime, "weixin"));
       return {
         type: "weixin",
         label: "个人微信 / Weixin",
@@ -437,7 +438,7 @@ export function createBuiltinMessageAdapterScanProviders(
         requirements: [
           { id: "route", label: "已配置个人微信消息端", required: true, ok: runtimes.length > 0, detail: runtimes.length > 0 ? "已存在使用 weixin adapter 的 Route。" : "在 Route 中启用个人微信消息端。" },
           { id: "login", label: "个人微信当前会话", required: true, ok: loggedIn, detail: loginDetail },
-          { id: "recent-message", label: "历史个人微信消息证据", required: false, ok: hasRecentMessages, detail: hasRecentMessages ? "存在历史消息记录；它不代表当前登录。" : "尚无历史消息记录；它与当前登录状态相互独立。" }
+          { id: "recent-message", label: "历史个人微信消息证据", required: false, ok: hasRecentMessages, detail: hasRecentMessages === undefined ? "历史消息尚未确认，请稍后刷新。" : hasRecentMessages ? "存在历史消息记录；它不代表当前登录。" : "尚无历史消息记录；它与当前登录状态相互独立。" }
         ],
         warnings: [
           "个人微信接入仍是实验能力，依赖 OpenClaw iLink API；单入口故障不会升级为 Manager 或 QQ 全局故障。",

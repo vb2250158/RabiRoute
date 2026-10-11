@@ -12,13 +12,14 @@ export type HomeAssistantOsStatus = Readonly<{
   version?: string;
   root?: string;
   progress?: HomeAssistantInstallProgress;
+  installed?: boolean;
 }>;
 
 export interface HomeAssistantOsDriver {
   readonly installationPath?: string;
   inspect(authority?: XiaomiHomeRequestAuthority): Promise<HomeAssistantOsStatus>;
   subscribe?(changed: () => void): () => void;
-  run(operation: "Install" | "Start", autoStart: boolean, authority?: XiaomiHomeRequestAuthority): Promise<HomeAssistantOsStatus>;
+  run(operation: "Install" | "Start" | "Recover", autoStart: boolean, authority?: XiaomiHomeRequestAuthority, signal?: AbortSignal): Promise<HomeAssistantOsStatus>;
 }
 
 const execute = promisify(execFile);
@@ -53,10 +54,10 @@ export class WindowsHomeAssistantOs implements HomeAssistantOsDriver {
     if (!["not_installed", "installing", "reboot_required", "installed", "error"].includes(value.state) || typeof value.message !== "string") {
       throw new Error("Home Assistant OS 安装状态无效，请检查本机安装日志。");
     }
-    return value;
+    return { ...value, installed: fs.existsSync(path.join(this.root, "image.json")) && fs.existsSync(path.join(this.root, "home-assistant.vhdx")) };
   }
 
-  async run(operation: "Install" | "Start", autoStart: boolean, authority?: XiaomiHomeRequestAuthority): Promise<HomeAssistantOsStatus> {
+  async run(operation: "Install" | "Start" | "Recover", autoStart: boolean, authority?: XiaomiHomeRequestAuthority, signal?: AbortSignal): Promise<HomeAssistantOsStatus> {
     authority?.assert();
     if (process.platform !== "win32") return this.inspect(authority);
     if (this.root.startsWith("\\\\") || !fs.existsSync(this.script)) throw new Error("Home Assistant OS 安装器必须从本机安装包运行。");
@@ -64,7 +65,7 @@ export class WindowsHomeAssistantOs implements HomeAssistantOsDriver {
     authority?.dispatch();
     await execute(powershell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", this.script,
       "-Operation", operation, "-Root", this.root, "-AutoStart", autoStart ? "yes" : "no"],
-    { windowsHide: true, timeout: 30 * 60 * 1000, maxBuffer: 1024 * 1024 });
+    { windowsHide: true, timeout: 30 * 60 * 1000, maxBuffer: 1024 * 1024, signal });
     authority?.assert();
     return this.inspect(authority);
   }

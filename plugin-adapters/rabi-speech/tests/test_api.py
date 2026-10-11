@@ -917,11 +917,13 @@ def test_remote_audio_enters_existing_host_fifo_and_rejects_invalid_wav(tmp_path
     monkeypatch.setattr(PlaybackCoordinator, "_default_player", staticmethod(lambda *_args: None))
     client, _tts, _asr = fixture(tmp_path)
     data = wav_file(tmp_path / "remote.wav").read_bytes()
-    response = client.post("/v1/playback/audio", files={"file": ("remote.wav", data, "audio/wav")}, data={"model": "remote-model", "voice": "sample"})
+    response = client.post("/v1/playback/audio", files={"file": ("remote.wav", data, "audio/wav")}, data={"model": "remote-model", "voice": "sample", "text": "spoken words"})
     assert response.status_code == 200
     job = response.json()
     assert job["provider"] == "peer"
     assert job["model"] == "remote-model"
+    assert job["text"] == "spoken words"
+    assert "path" not in job
     assert job["id"]
     invalid = client.post("/v1/playback/audio", files={"file": ("bad.wav", b"not a wave", "audio/wav")})
     assert invalid.status_code == 415

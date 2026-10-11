@@ -93,6 +93,8 @@ export type SpeechPushMode = "hot" | "keyword";
 import { normalizePlanFollowup } from "./planFollowup.js";
 
 export type CodexHookSettings = {
+  /** Persona-owned overrides, resolved using the lifecycle event's producer. */
+  byAgent?: Partial<Record<AgentAdapterType, Omit<CodexHookSettings, "byAgent">>>;
   planFollowup?: import("./planFollowup.js").PlanFollowupSettings;
   sessionContextEnabled: boolean;
   reasoningContextEnabled: boolean;
@@ -167,7 +169,16 @@ export function normalizeCodexHookSettings(value: unknown): CodexHookSettings {
   const raw = value && typeof value === "object" && !Array.isArray(value)
     ? value as Partial<CodexHookSettings>
     : {};
+  const byAgent: CodexHookSettings["byAgent"] = {};
+  for (const type of agentAdapterTypes) {
+    const scoped = raw.byAgent?.[type];
+    if (scoped && typeof scoped === "object" && !Array.isArray(scoped)) {
+      const { byAgent: _nested, ...settings } = normalizeCodexHookSettings({ ...scoped, byAgent: undefined });
+      byAgent[type] = settings;
+    }
+  }
   return {
+    ...(Object.keys(byAgent).length ? { byAgent } : {}),
     sessionContextEnabled: raw.sessionContextEnabled !== false,
     reasoningContextEnabled: raw.reasoningContextEnabled !== false,
     planTaskCompletionEnabled: raw.planTaskCompletionEnabled !== false,
@@ -176,6 +187,13 @@ export function normalizeCodexHookSettings(value: unknown): CodexHookSettings {
     completionDeliveries: normalizeAgentCompletionDeliveries(raw.completionDeliveries),
     planFollowup: normalizePlanFollowup(raw.planFollowup)
   };
+}
+
+/** Old persona settings remain the default until an end receives its own settings. */
+export function agentHookSettingsFor(value: unknown, agentType = "codex"): Omit<CodexHookSettings, "byAgent"> {
+  const normalized = normalizeCodexHookSettings(value);
+  const { byAgent, ...defaults } = normalized;
+  return byAgent?.[agentType as AgentAdapterType] ?? defaults;
 }
 
 export type PipelineDefinition = {

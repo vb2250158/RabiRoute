@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 import time
+from collections import deque
 from collections.abc import Callable
 from typing import Protocol, TypeVar
 
@@ -38,6 +39,7 @@ class DesktopPetIdleScheduler(QObject):
         self._active = False
         self._current_state = ""
         self._last_random_state = ""
+        self._recent_random_states: deque[str] = deque(maxlen=2)
         self._last_activity_at: float | None = None
         self._sleep_due = False
         self._random_timer = QTimer(self)
@@ -54,6 +56,8 @@ class DesktopPetIdleScheduler(QObject):
         self._sleep_due = False
         if self._last_random_state not in behavior.random_states:
             self._last_random_state = ""
+        self._recent_random_states = deque(
+            (state for state in self._recent_random_states if state in behavior.random_states), maxlen=2)
         if self._active:
             if self._last_activity_at is None:
                 self._last_activity_at = self._clock()
@@ -127,12 +131,14 @@ class DesktopPetIdleScheduler(QObject):
         if not self._active or self._current_state != "idle":
             return
         candidates = list(self._behavior.random_states)
-        if len(candidates) > 1 and self._last_random_state in candidates:
-            candidates.remove(self._last_random_state)
+        # Prefer actions not shown recently, falling back for small action pools.
+        fresh = [state for state in candidates if state not in self._recent_random_states]
+        candidates = fresh or [state for state in candidates if state != self._last_random_state] or candidates
         if not candidates:
             return
         state_name = self._random.choice(candidates)
         self._last_random_state = state_name
+        self._recent_random_states.append(state_name)
         self._current_state = state_name
         self.animation_requested.emit(state_name)
 

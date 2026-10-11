@@ -254,6 +254,18 @@ test("Codex hook control markers remain strict", () => {
   assert.equal(parseCodexHookControl("please use YeYu"), null);
 });
 
+test("followup uses the event producer's saved settings instead of another Agent end", async (t) => {
+  const { root, roleDir, service } = fixture({ hookEnabled: () => false });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(roleDir, "personaConfig.json"), JSON.stringify({ codexHooks: {
+    planFollowup: { enabled: false }, byAgent: { dsh: { planFollowup: { enabled: true, cooldownSeconds: 0,
+      rules: [{ id: "dsh-only", enabled: true, statusKeys: ["执行中"], prompt: "Continue the approved DSH work" }] } } }
+  } }));
+  const request: CodexHookContextRequest = { sessionId: "session-plan-worker", eventName: "Stop", cwd: root, lastAssistantMessage: "Result" };
+  assert.equal((await service.handleHook({ ...request, agentType: "codex", turnId: "codex-turn" })).followup, undefined);
+  assert.match((await service.handleHook({ ...request, agentType: "dsh", turnId: "dsh-turn" })).followup!.reason, /approved DSH work/);
+});
+
 test("an unbound Codex session receives no Rabi context", (t) => {
   const { root, service } = fixture();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

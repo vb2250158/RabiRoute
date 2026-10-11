@@ -4,16 +4,36 @@ import { AllDayRecordingService, AllDayRecordingStore, recordingOperation, type 
 import type { AllDayEvent } from "../shared/allDayRecording.js";
 import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
 import { localModelSettingsRequestAllowed } from "./speechModelSettingsAccess.js";
+import { AllDayRecordingReadModel, type AllDayReadReady } from "./allDayRecordingReadModel.js";
+import { managerKnowledgePageWorkerPool, ManagerReadWorkerPool } from "./managerReadWorkerPool.js";
+import type { AllDayReadJob } from "./allDayRecordingReadStorage.js";
 
 export function createAllDayRecording(options: {
   roleDirectory(roleId: string): string;
   hostId: string;
   mobileRoot: string;
   speechUrl(): string;
+  ensureSpeech?(): Promise<void>;
   changed(roleId: string): void;
+  indexChanged?(roleId: string, day: string, failed: boolean): void;
+  readChanged?(roleId: string, event: AllDayReadReady): void;
+  runRead?(job: AllDayReadJob, signal?: AbortSignal): Promise<unknown>;
   mobileAudio(owner: string, chunks: string[], authorize?: RecordingAuthorization): Promise<Buffer>;
 }) {
-  const store = new AllDayRecordingStore(options.roleDirectory, options.hostId, options.mobileRoot);
+  let reads: AllDayRecordingReadModel;
+  // Reconstruction has its own one-worker queue, still within the global budget.
+  // Unrelated startup catalogs must not delay a requested recording day.
+  const repairReads = options.runRead ? undefined : new ManagerReadWorkerPool({maxConcurrency:1,maxQueue:32,timeoutMs:600_000});
+  const store = new AllDayRecordingStore(options.roleDirectory, options.hostId, options.mobileRoot, {
+    scan: async (directory,day) => {
+      const input:AllDayReadJob={kind:"scan",directory,day,mobileRoot:options.mobileRoot,mobileDeviceIds:[]};
+      return options.runRead ? await options.runRead(input) as AllDayEvent[] : repairReads!.run<AllDayEvent[]>({type:"all_day_recording_read",input});
+    },
+    committed: (role,event,bytes,complete) => reads.committed(role,event,bytes,complete)
+  });
+  reads = new AllDayRecordingReadModel({directory:role=>store.directory(role),mobileRoot:options.mobileRoot,settings:role=>store.settings(role),
+    run:(input,signal)=>options.runRead ? options.runRead(input,signal) : managerKnowledgePageWorkerPool.run({type:"all_day_recording_read",input},{signal,timeoutMs:60_000}),
+    ready:(role,event)=>options.readChanged?.(role,event)});
   async function speech<T>(endpoint: string, body?: unknown, authorize?: RecordingAuthorization): Promise<T> {
     const result = await recordingOperation(authorize, () => requestLocalSpeechJson<T & { detail?: string }>(options.speechUrl(), endpoint, body === undefined ? {} : {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body)
@@ -23,6 +43,9 @@ export function createAllDayRecording(options: {
   }
   const service = new AllDayRecordingService(store, {
     changed: options.changed,
+    prepare: options.ensureSpeech,
+    stopCapture: async (sessionId, authorize) => { await speech("/v1/all-day/capture/stop", { sessionId }, authorize); },
+    renewCapture: async sessionId => { await speech("/v1/all-day/capture/renew", { sessionId }); },
     startMicrophone: async (sessionId, authorize) => (await speech<{ audioSessionId: string }>("/v1/all-day/microphone/start", { sessionId }, authorize)).audioSessionId,
     stopMicrophone: async (sessionId, authorize) => { await speech("/v1/all-day/microphone/stop", { sessionId }, authorize); },
     audioFile: async (recordId, authorize) => {
@@ -53,7 +76,10 @@ export function createAllDayRecording(options: {
       throw new Error("Audio history exceeds this query budget; recording coverage is incomplete");
     }
   });
-  return { service, store, mobileAudio: options.mobileAudio, async audio(recordId: string, authorize?: RecordingAuthorization) {
+  return { service, store, reads, mobileAudio: options.mobileAudio,
+    async dispose() {reads.dispose();await Promise.all([service.dispose(),repairReads?.stop()]);},
+    repairIndex: (roleId: string, day: string) => { void store.repairIndex(roleId,day,error => { if(!error) reads.invalidate(roleId,day); options.indexChanged?.(roleId,day,!!error); }); },
+    async audio(recordId: string, authorize?: RecordingAuthorization) {
     return recordingOperation(authorize, () => requestLocalSpeech(options.speechUrl(), `/v1/records/${encodeURIComponent(recordId)}/audio`, {}, { timeoutMs: 15_000 }));
   } };
 }
@@ -93,31 +119,41 @@ export function allDayRecordingHandler(runtime: ReturnType<typeof createAllDayRe
       const action = match[2] || "";
       if (request.method !== "GET" && !String(request.headers["content-type"] || "").toLowerCase().startsWith("application/json")) { send(415, { code: -1, message: "Use application/json for recording controls" }); return; }
       let data: unknown;
-      if (request.method === "GET" && !action) data = { ...await runtime.service.snapshot(roleId, authorize), devices: await runtime.store.mobileDevices(authorize) };
-      else if (request.method === "GET" && action === "recent") data = { events: await runtime.store.recent(roleId, authorize) };
-      else if (request.method === "GET" && action === "catalog") data = await runtime.store.catalog(roleId, url.searchParams.get("day") ?? undefined);
+      if (request.method === "GET" && !action) data = { ...await runtime.service.snapshot(roleId,authorize), devices: await runtime.store.mobileDevices(authorize) };
+      else if (request.method === "GET" && action === "recent") data = await runtime.reads.recent(roleId);
+      else if (request.method === "GET" && action === "catalog") {
+        const day = url.searchParams.get("day") ?? undefined;
+        if(url.searchParams.get("refresh")==="1") runtime.reads.invalidate(roleId,day);
+        data = await runtime.reads.catalog(roleId,day);
+        if(url.searchParams.get("summary")==="1") data={...data as object,events:[]};
+      }
+      else if (request.method === "POST" && /^index-repair\/\d{4}-\d{2}-\d{2}$/.test(action)) {
+        runtime.repairIndex(roleId,action.split("/")[1]); data = { queued: true };
+      }
       else if (request.method === "GET" && action === "page") {
         const direction = url.searchParams.get("direction");
         if (direction !== "older" && direction !== "newer") throw new Error("Invalid event direction");
-        data = await runtime.store.page(roleId, direction, { time: Number(url.searchParams.get("time")), id: url.searchParams.get("id") || "" }, url.searchParams.get("source") || "all", 100, url.searchParams.get("type") || "all", authorize);
+        data = await runtime.reads.page(roleId, direction, { time: Number(url.searchParams.get("time")), id: url.searchParams.get("id") || "" }, url.searchParams.get("source") || "all", 100, url.searchParams.get("type") || "all");
       }
-      else if (request.method === "GET" && action === "events") data = { events: await runtime.store.timeline(roleId, Number(url.searchParams.get("since")), Number(url.searchParams.get("until")), authorize) };
-      else if (request.method === "PUT" && action === "settings") {
-        const body = await recordingOperation(authorize, () => options.readBody(request));
-        data = await runtime.service.configure(roleId, body, authorize);
-      }
-      else if (request.method === "POST" && action === "start") data = await runtime.service.start(roleId, authorize);
-      else if (request.method === "POST" && action === "stop") data = await runtime.service.stop(roleId, false, authorize);
+      else if (request.method === "GET" && action === "events") data = await runtime.reads.timeline(roleId, Number(url.searchParams.get("since")), Number(url.searchParams.get("until")));
+      else if (request.method === "PUT" && action === "settings") { data = await runtime.service.configure(roleId, await recordingOperation(authorize, () => options.readBody(request)),authorize); runtime.reads.invalidate(roleId); }
+      else if (request.method === "POST" && action === "start") data = await runtime.service.start(roleId,authorize);
+      else if (request.method === "POST" && action === "stop") data = await runtime.service.stop(roleId,false,authorize);
       else if (request.method === "GET" && /^media\/\d{4}-\d{2}-\d{2}\/[a-f0-9]{64}\.(jpg|wav)$/.test(action)) {
         const [, day, file] = action.split("/");
         const extension = file.slice(-3);
-        const body = await runtime.store.media(roleId, day, file.slice(0, -4), extension, authorize);
+        const pending=new AbortController(),cancel=()=>pending.abort();response.once("close",cancel);
+        let body:Buffer;
+        try {body=await runtime.reads.media(roleId, day, file.slice(0, -4), extension,pending.signal);}
+        finally {response.removeListener("close",cancel);}
+        if(response.destroyed) return;
         authorize();
         response.writeHead(200, { "content-type": extension === "wav" ? "audio/wav" : "image/jpeg", "cache-control": "private, no-store" }); authorize(); response.end(body); return;
       } else if (request.method === "GET" && action === "audio") {
         const since = Number(url.searchParams.get("since")), until = Number(url.searchParams.get("until"));
-        const event = (await runtime.store.timeline(roleId, since, until, authorize)).find(row => row.id === url.searchParams.get("id"));
-        authorize();
+        const timeline = await runtime.reads.timeline(roleId,since,until);
+        const event = timeline.events.find(row => row.id === url.searchParams.get("id"));
+        if(!event && (timeline.loading || timeline.pendingDays.length)) {send(409,{code:-1,message:"Recording history is loading; retry playback when ready"});return;}
         if (event?.mobileMedia) {
           // The private resource owner is the event's authenticated phone, not the public Agent.
           const bytes = await recordingOperation(authorize, () => runtime.mobileAudio(event.mobileMedia!.owner, event.mobileMedia!.chunks, authorize));

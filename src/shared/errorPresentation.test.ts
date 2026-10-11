@@ -14,6 +14,19 @@ test("error response adds both locales and preserves machine fields", () => {
 });
 test("unknown failures retain the original diagnostic", () => assert.match(presentError("vendor-specific-19", {}, "zh-CN"), /vendor-specific-19/));
 
+test("filesystem replacement errors retain OS evidence without claiming identity denial", () => {
+  const message = "EPERM: operation not permitted, rename 'preview.partial' -> 'preview.json'";
+  const result = errorResponsePresentation({ code: -1, message }, 400) as Record<string, any>;
+  assert.equal(result.reason, "filesystem_failure");
+  assert.equal(result.message, message);
+  assert.match(result.errorMessages["zh-CN"], /文件系统/);
+  assert.doesNotMatch(result.errorMessages["zh-CN"], /身份.*权限|参数未通过校验/);
+  assert.match(result.errorMessages.en, /file system/i);
+  assert.ok(result.errorMessages.en.includes(message));
+  const denied = errorResponsePresentation({ message: "permission denied" }, 403) as Record<string, any>;
+  assert.equal(denied.reason, "forbidden");
+});
+
 test("DSH connection failures have specific reasons and Chinese recovery guidance", () => {
   const missing = errorResponsePresentation({ code: -1, message: "DSH authentication configuration has no matching endpoint." }, 400) as Record<string, any>;
   assert.equal(missing.reason, "dsh_connection_configuration");

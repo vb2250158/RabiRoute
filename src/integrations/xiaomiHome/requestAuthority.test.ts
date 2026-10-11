@@ -62,7 +62,7 @@ function context(runtime: object, readJsonBody: XiaomiHomeManagerRoutesContext["
 
 test("authenticated remote Agent reaches inventory and deployment without WebGUI exemption", async t => {
   const f = await fixture(t, (request, response) => handleXiaomiHomeManagerApi(request, new URL(request.url!, "http://fixture.invalid"), response,
-    { ...context({ client: { listResources: async () => ["inventory"] }, deployment: { inspect: async () => ({ state: "ready" }) } }, async () => ({} as never)), controlPlaneAccessAllowed: () => false }));
+    { ...context({ client: { queryResources: async () => ({ items: ["inventory"], total: 1, offset: 0, limit: 20, hasMore: false }) }, deployment: { inspect: async () => ({ state: "ready" }) } }, async () => ({} as never)), controlPlaneAccessAllowed: () => false }));
   for (const suffix of ["/resources", "/deployment"]) { const response = await fetch(f.url + suffix, { headers: f.headers }); assert.equal(response.status, 200); }
 });
 

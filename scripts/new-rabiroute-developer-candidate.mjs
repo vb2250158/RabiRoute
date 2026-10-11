@@ -117,6 +117,8 @@ function createDeveloperCandidate(options) {
   assertDeveloperLocksCompatible(baseLock.toString("utf8"), buildLock.toString("utf8"));
   requireFile(hostCoreRoot, "RabiRouteHost.Core.dll");
   for (const relative of knowledgeRuntimeFiles) requireFile(buildRoot, relative);
+  requireFile(buildRoot, "packages/rabi-companion/presets.json");
+  requireFile(buildRoot, "packages/rabi-companion/scene-rules.json");
   const relayRuntimeFiles = readRelayRuntimeFiles(buildRoot);
   assertWebPluginEntries(buildRoot);
 
@@ -131,6 +133,7 @@ function createDeveloperCandidate(options) {
     replaceDirectory(path.join(buildRoot, "dist"), path.join(stagingRoot, "dist"));
     replaceDirectory(path.join(buildRoot, "ribiwebgui", "dist"), path.join(stagingRoot, "ribiwebgui", "dist"));
     replaceDirectory(path.join(buildRoot, "assets"), path.join(stagingRoot, "assets"));
+    replaceDirectory(path.join(buildRoot, "packages/rabi-companion"), path.join(stagingRoot, "packages/rabi-companion"));
     // Overlay the shared owner and compatibility wrappers even if the immutable base contains older MCP code.
     for (const relative of knowledgeRuntimeFiles) {
       const destination = path.join(stagingRoot, ...relative.split("/"));

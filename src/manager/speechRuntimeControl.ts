@@ -11,17 +11,13 @@ import type {
 import { normalizeLocalSpeechServiceUrl } from "../speech/localSpeechClient.js";
 import { inspectLocalSpeechService } from "./speechServiceStatus.js";
 import { prepareStableSpeechExecutable } from "./speechStableExecutable.js";
+import { packagedSpeechPython, speechCoreDependencyFiles } from "./speechDependencies.js";
 
 const execFileAsync = promisify(execFile);
 
 // pip creates its --target directory before installing packages. Check the core
 // API and microphone modules before using that directory; startup health still
 // verifies the actual imports and runtime, including their transitive dependencies.
-const coreDependencyFiles = [
-  "fastapi/__init__.py", "uvicorn/__init__.py", "httpx/__init__.py",
-  "python_multipart/__init__.py", "numpy/__init__.py", "scipy/__init__.py",
-  "soundfile.py", "sounddevice.py"
-];
 
 type RuntimeChild = Pick<ChildProcess, "exitCode" | "pid" | "unref"> &
   Partial<Pick<ChildProcess, "stdout" | "stderr">>;
@@ -47,6 +43,7 @@ export type SpeechRuntimeControlOptions = {
   rootDir: string;
   packageRoot?: string;
   serviceUrl(): string;
+  ensureDependencies?: (allowFirstInstall: boolean) => Promise<void>;
   platform?: NodeJS.Platform;
   existsSync?: typeof fs.existsSync;
   inspect?: (serviceUrl: string) => Promise<SpeechRuntimeStatus>;
@@ -154,10 +151,10 @@ export class SpeechRuntimeControl {
     this.stopTimeoutMs = options.stopTimeoutMs ?? 15_000;
   }
 
-  start(guard?: SpeechAuthorityGuard): Promise<SpeechRuntimeControlResult> {
+  start(guard?: SpeechAuthorityGuard, allowFirstInstall = true): Promise<SpeechRuntimeControlResult> {
     const authority = stickySpeechAuthority(guard);
     authority();
-    return this.runExclusive(() => awaitSpeechAuthority(authority, () => this.startUnlocked(authority)));
+    return this.runExclusive(() => awaitSpeechAuthority(authority, () => this.startUnlocked(authority, allowFirstInstall)));
   }
 
   stop(guard?: SpeechAuthorityGuard): Promise<SpeechRuntimeControlResult> {
@@ -183,14 +180,16 @@ export class SpeechRuntimeControl {
     const serviceRoot = path.join(this.options.packageRoot ?? this.options.rootDir, "plugin-adapters", "rabi-speech");
     const stableDependencies = path.join(this.options.rootDir, "plugin-adapters", "rabi-speech", ".deps");
     const bundledDependencies = path.join(serviceRoot, ".deps");
+    const bundledExecutable = path.join(serviceRoot, "runtime", "RabiSpeech.exe");
     return {
       serviceRoot,
       // Existing packaged installers write beside their scripts. Retain that
       // current-release result until installation writes the stable state root;
       // a complete stable installation always takes precedence across releases.
       dependenciesRoot: this.dependenciesPresent(stableDependencies) ? stableDependencies : bundledDependencies,
-      bundledExecutable: path.join(serviceRoot, "runtime", "RabiSpeech.exe"),
+      bundledExecutable,
       runtimeExecutable: this.options.packageRoot && path.resolve(this.options.packageRoot) !== path.resolve(this.options.rootDir)
+        || !this.existsSync(bundledExecutable) && !!packagedSpeechPython(this.options.packageRoot ?? this.options.rootDir)
         ? path.join(this.options.rootDir, "runtime", "speech", "RabiSpeech.exe")
         : path.join(serviceRoot, "runtime", "RabiSpeech.exe"),
       hostScript: path.join(serviceRoot, "scripts", "windows_host.py"),
@@ -199,7 +198,7 @@ export class SpeechRuntimeControl {
   }
 
   private dependenciesPresent(root: string): boolean {
-    return coreDependencyFiles.every(relative => this.existsSync(path.join(root, relative)));
+    return speechCoreDependencyFiles.every(relative => this.existsSync(path.join(root, relative)));
   }
 
   /**
@@ -221,7 +220,7 @@ export class SpeechRuntimeControl {
     if (!this.dependenciesPresent(paths.dependenciesRoot)) {
       throw new SpeechRuntimeControlError("RabiSpeech 尚未安装依赖，请先运行 scripts\\install.ps1。", 409);
     }
-    if (!this.existsSync(paths.bundledExecutable)) {
+    if (!this.existsSync(paths.bundledExecutable) && !packagedSpeechPython(this.options.packageRoot ?? this.options.rootDir)) {
       throw new SpeechRuntimeControlError("RabiSpeech Windows 运行时不存在，请先完成安装。", 409);
     }
     if (!this.existsSync(paths.hostScript)) {
@@ -232,7 +231,7 @@ export class SpeechRuntimeControl {
     }
   }
 
-  private async startUnlocked(guard?: SpeechAuthorityGuard): Promise<SpeechRuntimeControlResult> {
+  private async startUnlocked(guard?: SpeechAuthorityGuard, allowFirstInstall = true): Promise<SpeechRuntimeControlResult> {
     guard = stickySpeechAuthority(guard);
     guard();
     const serviceUrl = normalizeLocalSpeechServiceUrl(this.options.serviceUrl());
@@ -245,9 +244,13 @@ export class SpeechRuntimeControl {
       throw new SpeechRuntimeControlError(current.error || "RabiSpeech 服务地址无效。", 409);
     }
 
+    await awaitSpeechAuthority(guard, async () => { await this.options.ensureDependencies?.(allowFirstInstall); });
     const paths = this.runtimePaths();
     this.assertWindowsRuntimeInstalled(paths);
-    if (paths.runtimeExecutable !== paths.bundledExecutable) await awaitSpeechAuthority(guard, () => prepareStableSpeechExecutable(paths.bundledExecutable, this.options.rootDir, guard));
+    const bundledHost = this.existsSync(paths.bundledExecutable);
+    const python = packagedSpeechPython(this.options.packageRoot ?? this.options.rootDir);
+    const executableSource = bundledHost ? paths.bundledExecutable : python!;
+    if (paths.runtimeExecutable !== executableSource) await awaitSpeechAuthority(guard, () => prepareStableSpeechExecutable(executableSource, this.options.rootDir, guard));
     let recoveredOwnedBindConflict = false;
     while (true) {
       if (!this.launchChild || this.launchChild.exitCode !== null) {
@@ -255,7 +258,8 @@ export class SpeechRuntimeControl {
         this.launchOutput = "";
         this.launchChild = this.spawnRuntime(
           "powershell.exe",
-          ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", paths.startScript],
+          ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", paths.startScript,
+            ...(python ? ["-Python", python] : [])],
           {
             cwd: paths.serviceRoot,
             detached: false,
@@ -266,6 +270,8 @@ export class SpeechRuntimeControl {
               PYTHONUTF8: "1",
               PYTHONIOENCODING: "utf-8",
               RABISPEECH_DEPS_ROOT: paths.dependenciesRoot,
+              // Both optional speech bundles and the standard portable Python
+              // use the same stable executable identity outside the sealed release.
               RABISPEECH_HOST_EXECUTABLE: paths.runtimeExecutable,
               RABISPEECH_CONFIG: this.userSpeechConfigPath(paths)
             }

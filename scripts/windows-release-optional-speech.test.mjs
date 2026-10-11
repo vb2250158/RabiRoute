@@ -48,6 +48,8 @@ test("Windows release explicitly includes required discovery and Agent transport
   assert.deepEqual(
     [...allowlist[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]),
     [
+      "packages/rabi-companion/presets.json",
+      "packages/rabi-companion/scene-rules.json",
       "scripts/Resolve-RabiRouteManagerUrl.ps1",
       "scripts/lib/discover-manager-url.mjs",
       "apps/rabi-agent/lib/manager-client.mjs",

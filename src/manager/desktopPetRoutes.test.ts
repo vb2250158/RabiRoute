@@ -49,6 +49,18 @@ function writePack(roleDir: string, personaId = "YeYu", packId = "yeyu-library-d
   }), "utf8");
 }
 
+test("companion mapping keeps only existing looping actions", () => {
+  const roleDir = roleFixture(), cacheRoot = roleFixture();
+  try {
+    writePack(roleDir);
+    const manifestPath = path.join(roleDir, "desktop-pet", "packs", "yeyu-library-default", "pet-pack.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.companionStates = { watch: "thinking", play: "idle-reading", other: "missing", "bad key": "sleep" };
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    assert.deepEqual(listDesktopPetPacks("YeYu", roleDir, cacheRoot).packs[0].companionStates, { watch: "thinking" });
+  } finally { fs.rmSync(roleDir, { recursive: true }); fs.rmSync(cacheRoot, { recursive: true }); }
+});
+
 test("desktop pet catalog binds packs to the role and naturally sorts PNG frames", () => {
   const roleDir = roleFixture();
   const cacheRoot = roleFixture();
@@ -210,6 +222,40 @@ test("desktop pet API promotes a validated shared-source pack into the runtime c
   }]);
 });
 
+test("slow pet image metadata does not block independent health requests", async t => {
+  const roleDir = roleFixture(), cacheRoot = roleFixture();
+  writePack(roleDir);
+  const syncRealpath = fs.realpathSync;
+  const asyncRealpath = fs.promises.realpath;
+  let entered!: () => void;
+  const reading = new Promise<void>(resolve => { entered = resolve; });
+  t.mock.method(fs, "realpathSync", ((file: fs.PathLike, ...args: unknown[]) => {
+    if (String(file).startsWith(roleDir)) {
+      entered(); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
+    }
+    return (syncRealpath as (...values: unknown[]) => unknown)(file, ...args);
+  }) as typeof fs.realpathSync);
+  t.mock.method(fs.promises, "realpath", (async (file: fs.PathLike, ...args: unknown[]) => {
+    if (String(file).startsWith(roleDir)) { entered(); await new Promise(resolve => setTimeout(resolve, 200)); }
+    return (asyncRealpath as (...values: unknown[]) => unknown)(file, ...args);
+  }) as typeof fs.promises.realpath);
+  const server = http.createServer((request, response) => {
+    const url = new URL(request.url || "/", "http://127.0.0.1");
+    if (url.pathname === "/health") { response.end("healthy"); return; }
+    handleDesktopPetApi(request, url, response, () => roleDir, undefined, cacheRoot);
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const address = server.address() as import("node:net").AddressInfo;
+  const base = `http://127.0.0.1:${address.port}`, started = performance.now();
+  const asset = fetch(`${base}/api/desktop-pet/roles/YeYu/packs/yeyu-library-default/assets/idle.gif`);
+  await reading;
+  assert.equal((await fetch(base + "/health")).status, 200);
+  const healthMs = performance.now() - started;
+  assert.equal((await asset).status, 200);
+  assert.ok(healthMs < 150, `health was blocked for ${healthMs}ms by image metadata`);
+});
+
 test("desktop pet API serves role-scoped catalog and image assets", async t => {
   const roleDir = roleFixture();
   const cacheRoot = roleFixture();
@@ -247,18 +293,18 @@ test("desktop pet API serves role-scoped catalog and image assets", async t => {
   assert.equal(assetResponse.headers.get("content-type"), "image/gif");
   assert.equal(Buffer.from(await assetResponse.arrayBuffer()).toString("ascii"), "GIF89a");
 
-  const originalReadFileSync = fs.readFileSync;
-  fs.readFileSync = ((filePath: fs.PathOrFileDescriptor, ...args: unknown[]) => {
+  const originalReadFile = fs.promises.readFile;
+  fs.promises.readFile = (async (filePath: fs.PathLike, ...args: unknown[]) => {
     if (String(filePath).endsWith("idle.gif")) {
       throw Object.assign(new Error("too many open files"), { code: "EMFILE" });
     }
-    return (originalReadFileSync as unknown as (...values: unknown[]) => unknown)(filePath, ...args);
-  }) as typeof fs.readFileSync;
+    return (originalReadFile as unknown as (...values: unknown[]) => unknown)(filePath, ...args);
+  }) as typeof fs.promises.readFile;
   try {
     const exhaustedAssetResponse = await fetch(`${baseUrl}${idleUrl}`);
     assert.equal(exhaustedAssetResponse.status, 503);
   } finally {
-    fs.readFileSync = originalReadFileSync;
+    fs.promises.readFile = originalReadFile;
   }
 
   const bindingResponse = await fetch(`${baseUrl}/api/desktop-pet/roles/YeYu`, {

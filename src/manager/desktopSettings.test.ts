@@ -4,11 +4,35 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  normalizeDesktopPetBubbleStyle,
   DEFAULT_SCREENSHOT_CLIPBOARD_SHORTCUT,
   DEFAULT_SCREENSHOT_SHORTCUT,
   normalizeDesktopSettings
 } from "../shared/desktopSettingsContract.js";
 import { DesktopSettingsStore } from "./desktopSettings.js";
+
+test("bubble appearance is safe, persona-scoped and survives Manager storage", () => {
+  const normalized = normalizeDesktopPetBubbleStyle({ skin: "unknown", fontSize: Infinity, maxWidth: 9999,
+    textColor: "url(file:///private)", fontFamily: "hello\u0000font", displaySeconds: -1, opacity: 0 });
+  assert.equal(normalized.skin, "cat-paw");
+  assert.equal(normalized.fontSize, 14);
+  assert.equal(normalized.maxWidth, 480);
+  assert.equal(normalized.textColor, "#504650");
+  assert.equal(normalized.fontFamily, "hellofont");
+  assert.equal(normalized.displaySeconds, 2);
+  assert.equal(normalized.opacity, .5);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pet-bubble-style-"));
+  try {
+    const file = path.join(root, "settings.json");
+    const store = new DesktopSettingsStore(file);
+    store.write({ pets: { first: { packId: "sample", bubbleStyle: { maxWidth: 400, textColor: "#123456", skin: "plain" } },
+      second: { packId: "sample" } } });
+    const restored = new DesktopSettingsStore(file).read();
+    assert.equal(restored.pets.first!.bubbleStyle.maxWidth, 400);
+    assert.equal(restored.pets.first!.bubbleStyle.textColor, "#123456");
+    assert.equal(restored.pets.second!.bubbleStyle.maxWidth, 320);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 test("desktop settings keep the safe default while preserving an explicit F3 binding", () => {
   assert.deepEqual(normalizeDesktopSettings({ screenshot: {

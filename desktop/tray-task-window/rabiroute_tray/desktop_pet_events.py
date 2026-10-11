@@ -39,11 +39,14 @@ class DesktopPetEventStream(QObject):
     work_ended = Signal(object)
     settings_changed = Signal(object)
     motion_requested = Signal(object)
+    companion_changed = Signal(object)
+    companion_reaction = Signal(object)
+    playback_changed = Signal(object)
     connection_changed = Signal(bool)
 
-    def __init__(self, manager_url: str) -> None:
+    def __init__(self, manager_url: str, *, path: str = "/api/events") -> None:
         super().__init__()
-        self._url = f"{manager_url.rstrip('/')}/api/events"
+        self._url = f"{manager_url.rstrip('/')}{path}"
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._response: object | None = None
@@ -95,6 +98,12 @@ class DesktopPetEventStream(QObject):
                             self.motion_requested.emit(payload)
                         elif event_name == "desktop_settings_changed" and isinstance(payload, dict):
                             self.settings_changed.emit(payload)
+                        elif event_name == "companion_changed" and isinstance(payload, dict):
+                            self.companion_changed.emit(payload)
+                        elif event_name == "companion_reaction" and isinstance(payload, dict):
+                            self.companion_reaction.emit(payload)
+                        elif event_name == "playback_changed" and isinstance(payload, dict):
+                            self.playback_changed.emit(payload)
             except AttributeError:
                 if not self._stop.is_set():
                     raise
