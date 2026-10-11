@@ -114,7 +114,7 @@ test("Agent entry catalog exposes capabilities and bounded receipt lookup but no
   assert.equal(authorizeAgentApiOperation("GET", "/api/agent/xiaomi-home/health").allowed, true);
   assert.equal(authorizeAgentApiOperation("GET", "/api/agent/xiaomi-home/capabilities").allowed, true);
   assert.equal(authorizeAgentApiOperation("GET", "/api/agent/xiaomi-home/resources/home%3Aha%3Amedia_player.speaker").allowed, true);
-  assert.equal(authorizeAgentApiOperation("GET", "/api/roles/home%3Aha%3Amedia_player.speaker/plans").allowed, false);
+  assert.equal(authorizeAgentApiOperation("GET", "/api/roles/home%3Aha%3Amedia_player.speaker/plans").allowed, true);
   assert.equal(authorizeAgentApiOperation("GET", "/api/agent/xiaomi-home/action-requests?idempotencyKey=speech-one").allowed, true);
   assert.equal(authorizeAgentApiOperation("GET", "/api/agent/xiaomi-home/action-requests?idempotencyKey=x&idempotencyKey=y").allowed, false);
   assert.equal(authorizeAgentApiOperation("PUT", "/api/agent/xiaomi-home/settings").allowed, false);

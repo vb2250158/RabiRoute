@@ -1,343 +1,97 @@
-<!-- docs-language-switch -->
-<div align="center">
-English | <a href="./rabilink-relay-server.md">简体中文</a>
-</div>
-<!-- /docs-language-switch -->
+# RabiLink public Relay
 
-# RabiLink Public Relay
+English | [简体中文](rabilink-relay-server.md)
 
-Starting with 0.3.20, PCs include a bounded self-reported `rabi-pc-version-<version>` tag in existing capability advertisements. Existing registration and discovery carry it without a new public Relay endpoint. Manager parses it into the display field `rabiPcVersion`; older devices and invalid or conflicting advertisements show an unknown version. The local version comes only from the running Manager, while a remote version comes only from that device's advertisement. This metadata does not attest software integrity, grant permissions or replace capability checks such as `peer-tunnel-v1` and `persona-reference-v1`. Each PC starts advertising after its actual running installation is updated.
+Relay owns connection, authentication and generic forwarding. RabiPC owns personas, Skills, chat history, device status, ASR settings and message processing. With remoteAgent enabled, an authenticated Agent can call every public API on the target PC. Future public APIs need no Relay update, and persona or workspace binding does not narrow the API surface.
 
-Device ownership has changed: configure watches, bands, and glasses in mobile recording, which submits recording events. Separate PC device entries are removed; legacy device protocols below are retained for compatibility maintenance. See [implementation and retirement criteria](mobile-recording-event-boundary_en.md).
+This is experimental. Local fixtures, builds, installed runtime, public deployment and hardware acceptance are separate evidence. See the [AIUI acceptance checklist](aiui-agent-acceptance_en.md).
 
-> Maturity: experimental. Relay, PC worker, remote WebGUI, input/downlink mailboxes, device logs, and the unified ledger have implementations. Real public-network, account-isolation, device, and recovery acceptance is still required.
+## Architecture and transport selection
 
-The Relay is a built-in system transport owned by Manager, not a message adapter. In the primary native-app route, glasses exchange audio/media only with the phone backend; the phone calls Relay, while the PC worker owns the Route-facing `rabilink` path. Ordinary observations may still enter the record-first ledger. Phone/glasses speech instead uses restricted `audio-streams/rabilink/start|chunk|stop` endpoints to forward continuous PCM to target-PC RabiSpeech. VAD, segmentation, ASR, and voiceprint processing run on the PC; Manager then stores one host-wide speech record and delivers it to the frozen RabiLink Route. Replies use the independent downlink and default to the originating device.
+Android and PC use the generic encrypted Peer Tunnel in LAN → P2P → Relay order to reach the same target. Relay provides same-application discovery, connection signaling and forwarding; PC services own endpoints and state. Persona source, device profile owner and default message target may differ. Callers freeze the target for each operation.
 
-The same Relay exposes a restricted RabiSpeech API. `health`, models, `audio/speech`, and `audio/transcriptions` are synchronous model calls that do not enter an Agent. `audio-streams/rabilink/*` is the formal Android speech path: after target-PC recognition, RabiSpeech automatically enters the host-wide store and Route delivery. `POST /api/rabilink/speech/messages` remains only a completed-ASR compatibility/debug endpoint. See [RabiSpeech local TTS / ASR service](rabispeech-plugin_en.md).
+An AIUI host limited to `wx.request` uses the existing buffered HTTP Relay fallback. Its capability is HTTP Relay, not verified AIUI LAN/P2P. Both transports reach the same public Manager APIs.
 
-```text
-Speech uplink
-  glasses / phone microphone -> phone backend
-  -> restricted ordered PCM stream -> PC worker
-  -> RabiSpeech VAD / segmentation / ASR / voiceprint
-  -> host-wide speech store -> rabilink Route -> persona context
+Relay stores accounts, credentials, connection assignments, same-application directories, opaque request/response queues, leases, cursors, blobs and operation status. Server diagnostics remain supported. Persona templates, business authorization, history assembly, ASR priorities, health interpretation and record-first decisions belong to PCs or clients. Relay neither rewrites opaque business bodies nor dispatches them through per-API business allowlists.
 
-Ordinary uplink
-  text / control / media / compatibility input -> Relay mailbox
-  -> PC worker -> unified conversation ledger -> later review
+The generic HTTP connection identity includes its original `authenticatedAt` timestamp. The original queue item and identical operation retries retain it; late arrival or another claim cannot extend connection authority. The PC verifies it through an internal MAC. Short leases for a phone to connect under a separate glasses identity belong to the PC; see [Device connection grants](device-peer-connection_en.md). Relay adds neither a business API dispatch table nor a public-key grant registry.
 
-Downlink
-  Codex/scheduler/planner -> RabiRoute Outbox policy
-  -> Relay persistent messages -> phone cursor consumption
-  -> Rabi PC TTS -> phone -> glasses PCM playback
-```
-
-The phone owns glasses transport state, not the Agent, ledger, Route/Agent configuration, or long-term memory.
-
-## Start the Relay
-
-The Windows deployment script registers `RabiLinkRelay` and `RabiLinkCaddy` with no execution-time limit and with restart-on-failure settings. Relay state replacement handles an existing Windows destination file. If the process exits between moving the old file to a backup and installing the new file, the next startup restores the orphaned backup and removes stale backups. A long-running deployment is not stopped by the Scheduled Task default 72-hour limit, and an `EPERM` while replacing `runtime-state.json` is rolled back immediately or recovered at the next startup.
+## Start and enroll
 
 ```powershell
 cd C:\Path\To\RabiRoute
-$env:RABILINK_RELAY_PORT="8788"
+$env:RABILINK_RELAY_PORT = "8788"
 node scripts/rabilink-relay-server.mjs
 ```
 
-Open the management console:
+Read `/health`, then register an account and create an application at HTTPS `/manage`. Copy the PC enrollment prompt from the console; a private Agent on the target PC uses a short-lived single-use code to configure its connection. See [PC enrollment](rabilink-pc-pairing_en.md). Keep credentials out of public logs, examples and screenshots.
 
-```text
-https://<relay-host>/manage
+Each PC needs an independent deviceId and GUID. Disabling its server connection stops transport without deleting credentials or routes. Bounded `rabi-pc-version-<version>` advertisements provide display metadata, not integrity proof or permissions. Public API access follows the actual target PC's remoteAgent and connection-authentication contracts.
+
+Windows deployment uses `scripts/deploy-rabilink-relay-windows.ps1`. `scripts/rabilink-relay-runtime-files.json` is the single Relay runtime manifest, covering static dependencies and the actual HTTP-served pairing script, without PC business modules. Preserve complete private snapshots before deployment; check runtime version, `/health`, connection directories and original queue IDs afterward. Discover the deployed data path rather than assuming an example directory.
+
+Deployment defaults to RuntimeOnly. PrepareOnly builds a local ZIP without contacting the server. Full Caddy/WebGUI updates require explicit `-RuntimeOnly:$false`. After stopping Relay, deployment snapshots code, ws dependencies, the original scheduled task and complete data using the prior/current manifests and fixed retirement list, verifying SHA-256 per file. Runtime copying excludes data/logs. It does not import old business state or infer connection owners. A backup failure resumes the original task without replacing code.
+
+The bundle includes `rollback-rabilink-relay.ps1 -Root <service-directory> -BackupRoot <that backups/code-... snapshot>`. It verifies snapshot hashes before restoring original code and scheduled tasks and removing files introduced by that deployment. Live data created after deployment is preserved. Private data snapshots support separate investigation and explicitly authorized data recovery, never automatic code rollback. Recheck local/public `/health`, original account/task IDs and connection directories afterward.
+
+## Connection metadata
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/rabilink/mobile/state` | Connection directory, targets and service advertisements; no battery, persona or ASR priority |
+| `PATCH /api/rabilink/mobile/target` | `{targetDeviceId}`, default message destination |
+| `PATCH /api/rabilink/mobile/connection` | `{connectionOwnerDeviceId}`, first explicit immutable application settings owner |
+| `GET /api/rabilink/devices/connections` | Immutable device assignments with application connectionOwnerDeviceId and device connectionTargetDeviceId |
+| `POST /api/rabilink/devices/token` | Independent device credential; new bindings require explicit connectionTargetDeviceId |
+| `GET /api/rabilink/peers` | Same-application connection and capability discovery |
+
+The application owner must be a same-application PC advertising Manager service. Changing the default destination does not change this fixed owner. Resetting the same device binding's credential preserves its owner; a different owner requires a new binding. Missing explicit assignments fail closed instead of guessing from an old tasks-only destination. Assignments describe connection and data ownership, never persona-derived public API permissions.
+
+## Generic HTTP
+
+`POST /api/rabilink/device/api` accepts authenticated application or device credentials:
+
+```json
+{
+  "targetDeviceId": "pc-example",
+  "request": {
+    "method": "PATCH",
+    "path": "/api/example/future-capability",
+    "headers": {"if-match": "\"revision-example\""},
+    "operationId": "operation-example",
+    "body": {"value": "example"}
+  }
+}
 ```
 
-Create an account and RabiLink application, then click **复制接入提示词** (Copy onboarding prompt). Give the complete prompt to a private Agent task on the target PC. A one-time code valid for thirty minutes enables automatic configuration and connection without entering the master application token. See [PC onboarding prompt](rabilink-pc-pairing_en.md). Released token clients remain compatible through the separate `/manage?integration=1` page; normal onboarding does not offer parallel authentication methods. Do not use the retired `RABILINK_RELAY_TOKEN` model.
+Paths must be safe relative public paths. Query parameters and generic contract headers are preserved; external URLs, path escapes, credentials and forged transport identity are rejected. targetDeviceId selects a same-application target and remains fixed through readback. Relay does not accept profileRevision routing or interpret persona references.
 
-## Device enrollment and status
+When `targetDeviceId` is omitted, only the device's registered `connectionTargetDeviceId` or the application's explicitly registered `connectionOwnerDeviceId` is used. A missing connection target returns `API_CONNECTION_TARGET_REQUIRED`. The old message or task `targetDeviceId` is not an API-routing default; original task target data remains preserved.
 
-An AIUI installation without a token can show its full device serial number and the `/manage` address. For released AIUI compatibility, the user enters that SN in the application card at `/manage?integration=1` and opens a bounded claim window. AIUI polls:
+Results are wrapped in `{code:0,data:{structuredContent:{ok,statusCode,headers,data}}}`. Preserve the PC result's meaning; Relay HTTP 200 is not business success. See the [generic API contract](../apps/rabilink-aiui/docs/generic-api-transport_en.md) for exact fields. PC workers establish identity only from server-generated connection metadata, never model-supplied IDs.
 
-```http
-POST /api/rabilink/devices/token
-```
+Requests and responses preserve new business headers such as `x-token-count` and `x-secret-version`; sensitive substrings in a name do not deny it. Only explicit authentication, source identity and framing headers, plus the internal `x-rabilink-*` and `x-forwarded-*` namespaces, are denied. The transport generates local credentials and signatures, which callers cannot override.
 
-The claim returns a device-scoped token only during the authorized window.
+Writes durably record operationId before dispatch through the existing WebGUI HTTP queue. `GET /api/rabilink/device/api/operations/{operationId}` returns transport state. Different intent under the same key is rejected. Uncertain writes are never automatically replayed; read the original PC resource or business receipt. Transport state is not a business receipt. The current 2048-write ledger fails closed at capacity without evicting keys. No second per-business Relay dispatch exists.
 
-Mobile/device status can be posted to:
+## Tasks, output and service forwarding
 
-```http
-POST /api/rabilink/mobile/device-status
-```
+Actual Rokid/Lingzhu wire entries remain as transport codecs. `/rokid/rabilink/input` and `/api/rabilink/devices/input` preserve raw bodies and task IDs, leases, destinations and verified identities. Workers must declare taskFormat=opaque-v1; old decoder requests receive 426. PCs interpret text aliases, health metrics, processingPolicy, routeProfileId and record-first before using existing message and health owners. Relay does not invent those fields.
 
-The management/device state reports battery, charging, receipt time, and staleness. It does not store CXR authorization or expose Relay tokens.
+`/worker/messages`, device messages/cursors/receipts and blobs provide generic output transport. Device received/played/failed states are delivery evidence, not proof of correct Agent processing. PCs choose content, delivery channels and recipients. See [AIUI documentation](../apps/rabilink-aiui/README_en.md) for the complete Agent, Rokid model, TTS/ASR and steering behavior.
 
-## Remote RibiWebGUI
+`/api/rabilink/speech/{path}` forwards safe relative public speech paths with generic HTTP methods, without per-API allowlists. Target selection, size limits, timeouts and fencing belong to transport. ASR/VAD, voiceprints, model configuration, speech storage and message processing belong to the target RabiSpeech/Manager. See [RabiSpeech](rabispeech-plugin_en.md). `/api/rabilink/video/offer` forwards connection exchange only.
 
-After signing in, open a PC by stable `rabiGuid`:
+## New PC APIs and retired entries
 
-```text
-https://<relay-host>/manage/<account>/<RabiGUID>/#/routes
-```
+Profiles and templates use the [public profile API](aiui-agent-profile-http_en.md). PC settings use `/api/rabilink/mobile/asr-settings`, device-status, proof and proofs. Health capabilities use PC `/api/rabilink/devices/health-capabilities`. All use generic Manager transport; Relay has no business state copy.
 
-The server queues ordinary WebGUI HTTP requests for that PC worker. The worker discovers this application's current `managerBaseUrl` through Host status and rediscovers it after an application-generation change instead of binding a fixed port. It then returns status, body, and headers. Attachments, images, and downloads stay under the same prefix. Video `Range` / `If-Range` reaches the local Manager and preserves `206`, `Content-Range`, and `Accept-Ranges`. `/api/events` and `/api/speech/events` bypass the one-shot request queue: the PC worker maintains one bounded, cancellable local SSE upstream for each path, and Relay isolates and fans out those paths to remote pages. Ordinary APIs, media, and `Range` / `206` remain finite proxy traffic. The Relay never opens an inbound connection to the user's PC.
+Old `/manage/.../agent-profile`, `/api/rabilink/device/agent-profile*`, device/knowledge, mobile/aiui, mobile/webgui, mobile/routes, mobile/asr-settings, mobile/device-status and proof business entries are retired with 404 or 410. The old profile editor and knowledge-grant switch are removed. Update all clients, explicitly enroll assignments and configure through the new contract. There are no old-client proxies or old-business imports. Preserve original accounts, task IDs, unknown extensions and complete private raw snapshots.
 
-Local Manager listening is independent from Relay connectivity. Manager serves local and LAN WebGUI first on an operating-system-assigned port, then connects to Relay asynchronously. A Relay outage degrades only WAN access and cannot block Manager startup or hold a fixed local port hostage. Relay recovery, a remote page opened later, and page reconnects are hot connections and do not require a Manager restart.
+## Limits and diagnostics
 
-If no PC worker can serve a remote request, API callers receive structured `RABI_PC_WEBGUI_UNAVAILABLE` with a diagnostic request ID; a worker response deadline returns `RABI_PC_WEBGUI_TIMEOUT`. Both are marked `retryable`, send `Retry-After: 3`, and omit local exceptions, paths, and addresses. Ordinary browser navigation receives an HTML error page with the same diagnostic ID and recovery guidance instead of a context-free 502/504.
+The default data directory is data/rabilink-relay; RABILINK_RELAY_DATA_DIR overrides it, and RABILINK_RELAY_APP_STORE_FILE selects the application file. Transport options include RABILINK_RELAY_WEBGUI_REQUEST_WAIT_MS, RABILINK_RELAY_WEBGUI_BODY_MAX_BYTES, RABILINK_RELAY_SPEECH_REQUEST_WAIT_MS, RABILINK_RELAY_SPEECH_BODY_MAX_BYTES, RABILINK_RELAY_TASK_TTL_MS, RABILINK_RELAY_OUTBOX_TTL_MS and RABILINK_RELAY_LEASE_MS. Exact bounds are defined by source clamps. Old server battery-expiry and ASR business environment variables no longer apply.
 
-Remote WebGUI uses the `/manage` login cookie, while the PC worker uses a separate RabiLink application token. Relay never forwards that application token, the management cookie, or a LAN `webgui_token` to the local Manager, and these authentication boundaries are not merged.
+Check `/health` and the same-application directory, then actual PC capabilities/version, Manager generation and original request IDs, operation IDs and receipts. Diagnostics exclude credentials. Restore snapshots on storage replacement failure; corrupt stores fail closed. Never replay an uncertain mutation by changing destination, key or persona.
 
-## Application management after login
-
-When a computer or cloud session cannot expose its local configuration page to the user's browser, use [PC onboarding prompt](rabilink-pc-pairing_en.md): the console copies a complete prompt with a one-time code, and the target Agent redeems it, saves private configuration, and verifies the connection. The updated Relay must be deployed; source implementation alone is not public acceptance.
-
-After signing in at `/manage`, the left sidebar lists the account's applications. Selecting an application displays the Copy onboarding prompt button and connected PCs. Application settings and logs are collapsed by default; existing glasses bindings retain their Agent configuration controls. Refreshing retains the current selection; creating an application selects it, and deleting the selected application selects the first remaining one. With no applications, the right pane displays the creation form. The sidebar's **New application** button also opens that form. On narrow screens, the application list appears above the details.
-
-The PC list, recent events, glasses logs, and glasses log filters follow the selected application. Account authentication and application-token authorization boundaries remain unchanged.
-
-## Native read-only RabiLink Home
-
-Home no longer embeds `/admin` or `/manage`. The browser calls only Manager `GET /api/rabi/link-home`; Manager uses its server-held application token to call the configured Relay's fixed `GET /api/rabilink/peers`. Home receives only an allowlisted projection of computer name, identifier, online state, and services within the current application, not raw upstream objects, credentials, or other applications' data. Tokens never reach the Home browser or URLs. This is a read-only endpoint, not an arbitrary-path proxy or a grant of management privileges.
-
-Unconfigured, connection, authentication, and read failures must remain distinct from zero devices or first-time initialization; only a successful empty response means no devices. Administrators still sign in independently at `/manage` in a new window; Home does not depend on the management cookie. These are design boundaries, not evidence of deployment or real-interaction acceptance.
-
-## Same-application PC discovery and generic remote access
-
-The global worker retains same-application discovery and generic peer capabilities but no longer advertises persona synchronization. The shared `PeerLanServer` LAN listener accepts only encrypted peer RPC at `POST /api/rabilink/peer/receive` over HTTP; WebSocket upgrades are authorized by the existing peer runtime. It exposes neither the full Manager/WebGUI nor retired synchronization APIs. The OS assigns its port by default; the local `RABILINK_PEER_LAN_PORT` environment variable can configure it. Manager emits `peer_lan_status` for listener state. PCs using the same application token can call:
-
-```text
-GET /api/rabilink/peers?deviceId=<self>&deviceGuid=<self-guid>
-```
-
-The response contains only other workers in that application, with stable ID, GUID, online state, capabilities, and `peerUrls`. An active `/api/rabilink/events` SSE connection is direct PC-presence evidence and requires no polling to remain online. During reconnect overlap, the PC becomes offline only when its last active connection closes. New connections, capability/LAN-address changes, and final disconnects publish the generic `peer_changed` event to other subscribers in the same application; they no longer trigger persona-manifest reconciliation. Only legacy clients without SSE use bounded recent-request activity as a compatibility fallback.
-
-Automatic/manual persona synchronization and `/api/rabilink/persona-sync/proxy` are retired. Use existing RabiLink access to the target PC's persona, Agent, and data without replicating persona data; the target retains ownership. Generic LAN/P2P/Relay transport and remote WebGUI, Agent, and speech entry points remain. See [Cross-PC API calls](rabilink-peer-rpc_en.md) and [Generic cross-PC connections](rabilink-peer-tunnel_en.md) for permissions and limits, and [Persona data synchronization retirement](persona-data-sync_en.md) for historical-data retention. These are source contracts, not evidence of deployment or comprehensive remote acceptance.
-
-Worker endpoints:
-
-```http
-GET  /worker/webgui-requests?limit=1&deviceId=<pc>&deviceGuid=<guid>
-POST /worker/webgui-requests/<requestId>/response
-POST /worker/webgui-events
-```
-
-Finite response bodies are base64-safe for HTML, JavaScript, CSS, images, audio/video, and JSON. Request headers are limited to `Accept`, `Content-Type`, `User-Agent`, `Range`, and `If-Range`; hop-by-hop response headers and cookies are removed. The worker parses local Manager `/api/events` and `/api/speech/events`, then posts each event to `/worker/webgui-events` with its stream path. Relay publishes it only to an authenticated page for the selected PC and the same path, without business polling. If the finite proxy unexpectedly receives `text/event-stream`, it cancels and rejects that response immediately rather than retaining a never-ending local connection. The proxy rewrites common absolute `/api`, `/manager-config`, and `/assets` paths so the remote page continues addressing the same PC. Bundled reports are served under the same authenticated PC prefix. Frontend report links must use relative `reports/...` URLs rather than root-relative `/reports/...`; Relay exposes only the build's `assets/` and `reports/` directories, not arbitrary server files.
-
-## Direct RabiSpeech API
-
-The speech API uses the target application's token rather than the WebGUI login cookie:
-
-```http
-GET  /api/rabilink/speech/health
-GET  /api/rabilink/speech/v1/models
-POST /api/rabilink/speech/v1/audio/speech
-POST /api/rabilink/speech/v1/audio/transcriptions
-POST /api/rabilink/speech/v1/audio-streams/rabilink/start
-POST /api/rabilink/speech/v1/audio-streams/rabilink/chunk?streamId=...&sequence=1
-POST /api/rabilink/speech/v1/audio-streams/rabilink/stop
-POST /api/rabilink/speech/messages  # compatibility/debug, not the Android main path
-```
-
-Prefix these paths with the Relay HTTPS origin. The application must select an online PC whose RabiSpeech is actually running and advertising `speech`. From 0.3.22, authenticated devices in the same application may use actually provided speech services by default, without an additional permission switch; the public application token's fixed paths and model scope still apply. See [Call TTS and ASR remotely](user-guide/speech-api_en.md) for copyable calls, acceptance, and error recovery. The machine-readable contract is available at `/api/rabilink/speech/openapi.json`.
-
-## Publish Relay and verify documentation parity
-
-The HTML, JavaScript, and `reports/` below `/manage/<account>/<RabiGUID>/` come from the **Relay server's own** `ribiwebgui/dist`, not from the selected PC's local WebGUI. Updating only RabiPC does not update the public guide. Uploading only the frontend does not add a new static-resource prefix to an old Relay script.
-
-Maintainers should build and run the read-only check first:
-
-```powershell
-npm run build
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
-  skills\audit-rabiroute-public-docs\scripts\Test-RabiLinkDocumentationRuntime.ps1
-```
-
-The check reads the server address, public host, and SSH key path from the ignored `data/rabilink-relay/config.json`. It does not print those values, upload files, overwrite state, or restart a process. Interpret the result as follows:
-
-- `LocalReady=true`: the local Relay, WebGUI, report, bilingual guide, and OpenAPI are ready;
-- `DeploymentNeeded=true`: the public server still has an older script or guide and needs a release;
-- `ReadyToDeploy=true`: public health, supervisors, processes, and local artifacts satisfy the release preconditions.
-
-Only after explicit release authorization, run:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
-  scripts\deploy-rabilink-relay-windows.ps1
-```
-
-The deployer first copies the remote scripts, Caddy configuration, and complete WebGUI to `C:\opt\rabilink-relay\backups\code-<timestamp>`. It preserves account, application, token-hash, and queue state under `data/`, cleans up legacy Relay supervisors together with their child processes, updates files, recreates the scheduled tasks, and verifies that the same Node process remains alive after the health check. This prevents a stale listener from producing a brief successful health response while the new task restart-loops. Run the read-only check again; expect `DeploymentNeeded=false`, `RemoteReportsRoute=true`, and `RemoteSpeechGuide=true`.
-
-The selected PC's Manager, worker, and local speech process belong to a separate runtime package. See [Windows desktop launch and packaging](windows-launcher-and-packaging_en.md). Do not combine Relay publishing and RabiPC installation into one non-recoverable copy.
-
-## AIUI input and downlink
-
-### Synchronous compatibility request
-
-```http
-POST /rokid/rabilink
-```
-
-This compatibility path may wait for a worker result up to `RABILINK_RELAY_REPLY_TIMEOUT_MS`. It is not the preferred connected-conversation state machine.
-
-### Record-first input
-
-```http
-POST /rokid/rabilink/input
-```
-
-Final ASR text becomes an observation. The PC worker writes it to the unified ledger and completes the input without waiting for Codex. Review happens later.
-
-### Event-driven global downlink
-
-```http
-GET /api/rabilink/events?deviceId=<stable-device-id>&deviceKind=glasses&after=<cursor>
-Accept: text/event-stream
-```
-
-Android, PC workers, and other SSE-capable clients may connect with an empty cursor. On `ready` or `outbox_available`, read one immediate delta:
-
-```http
-GET /api/rabilink/devices/messages?deviceId=<stable-device-id>&deviceKind=glasses&after=<cursor>&waitMs=0&stream=1
-```
-
-Rokid AIUI QuickJS has no SSE, WebSocket, or chunk callback. The production AIUI page therefore uses `GET /rokid/rabilink/messages?stream=1&waitMs=25000`. Relay registers one internal `outbox_available` waiter and immediately rechecks the cursor; it returns only when an event arrives or the deadline expires, without scanning the business queue. Hiding the page or leaving conversation mode stops continuation.
-
-Persist `nextCursor` verbatim as an opaque value and reuse it only for reconnect recovery and idempotency; never parse or construct it. The cursor carries a shared Relay generation that survives normal restarts and is shared by processes using the same data directory. After a runtime-state rollback or invalid cursor, the response sets `cursorReset=true` with `cursorResetReason` and replays messages that are still retained. Clients must deduplicate by stable `deliveryId` (falling back to message ID only when absent) before saving the replacement cursor. This prevents an old client cursor from remaining permanently ahead of a restored Relay state. Neither transport requires a `taskId`, so proactive messages created before the glasses page opens are delivered normally. Broadcast and kind-only messages use the configured Outbox TTL. A message with explicit `targetDeviceIds` is retained beyond that TTL until every explicit target returns `delivered`.
-
-PC-side producers publish through RabiRoute when possible:
-
-```http
-POST /api/agent/send
-```
-
-with a stable `deliveryId`, caller `sender.agentType + sender.sessionId`, an exact `routeId`, `channel=rabilink`, `params.proactive=true`, an explicit device selector, and a text `payload` for task-free messages. After route policy passes, RabiRoute publishes to:
-
-```http
-POST /worker/messages
-```
-
-Use a stable `deliveryId` for retry idempotency.
-
-## Generic portable-device API
-
-```http
-POST /api/rabilink/devices/input
-GET  /api/rabilink/devices/messages?deviceId=<id>&deviceKind=<kind>&after=<cursor>&stream=1
-POST /api/rabilink/devices/message-receipts
-POST /api/rabilink/devices/logs
-POST /api/rabilink/devices/media?fileName=<safe-name>
-GET  /api/rabilink/devices/media/<media-id>?fileName=<safe-name>
-```
-
-Generic clients must identify their device ID or kind. The glasses compatibility stream implicitly selects `deviceKind=glasses`. The management console can filter device logs by account/application, device, source, severity, session, time range, and query text.
-
-Receipt requests carry `messageId` or stable `deliveryId`, the reporting device identity, and `state=delivered|played|playback_failed`. `delivered` means received/presented and is never equivalent to `played`; only the actual output device may produce `played` after its own completion event. Relay idempotently persists first-success timestamps per device in `runtime-state.json` and emits `outbox_receipt`. It never infers playback from PCM writes, estimated duration, or channel connectivity.
-
-Media upload uses a raw image/video/audio request body and returns attachment metadata. Publish that metadata in an observation only after upload succeeds. The PC worker accepts only the controlled media path and downloads it with the same application token into private Route data before ledger append. The default object limit is 64 MiB (`RABILINK_RELAY_DEVICE_MEDIA_MAX_BYTES`) and temporary objects expire after seven days (`RABILINK_RELAY_DEVICE_MEDIA_TTL_MS`). Relay cleans once at startup and calculates the earliest remaining expiry; later uploads rearm one cleanup deadline only when they expire sooner, with no fixed directory scan. This is serialized file-message transfer, not live video or resumable upload.
-
-## Legacy task API
-
-The following endpoints remain for older Rizon/plugin compatibility and diagnostics:
-
-```http
-POST /rokid/rabilink/tasks
-GET  /rokid/rabilink/tasks/<taskId>
-GET  /rokid/rabilink/tasks/<taskId>/messages?after=<cursor>
-POST /worker/tasks/<taskId>/result
-POST /worker/tasks/<taskId>/messages
-POST /worker/tasks/<taskId>/finish
-```
-
-New AIUI connected conversation should not model each observation as a request that waits for one final answer.
-
-## PC worker
-
-Claim inputs with:
-
-```http
-GET /worker/tasks?limit=1&deviceId=<pc-device-id>
-```
-
-The PC first subscribes to `/api/rabilink/events` with its stable device ID/GUID and capabilities. `task_available`, `webgui_available`, and `speech_available` each trigger one immediate queue drain with `waitMs=0`; `peer_changed` notifies same-application discovery changes without starting persona synchronization. A legacy nonzero `waitMs` blocks on the same internal event and performs one recovery claim after subscription; it does not restore queue scanning.
-
-Relay is the single filter for the phone's "processing Rabi PC" picker. PC-class workers, workers advertising `tasks`, `webgui`, or `speech`, and compatible legacy records with a stable GUID can appear in `GET /api/rabilink/mobile/state`; retired synchronization capabilities do not qualify a worker. Portable terminals declared as `phone`, `glasses`, `watch`, or `earbuds` remain valid `/api/rabilink/events` subscribers but are never PC candidates. `PATCH /api/rabilink/mobile/target` applies the same rule and rejects terminal devices as processing targets.
-
-Relay management uses the same rule for **Connected PC Rabi**, the PC count, and each application's processing-PC selector. Phones, glasses, watches, and earbuds keep their own online events, messages, and device logs, but never receive an **Open PC WebGUI** action. A legacy record without `deviceKind/capabilities` is treated as a compatibility PC only when it has a stable `rabiGuid`; old GUID-less `rabi-phone` / `rabi-glass` records are excluded.
-
-For `rabilink.observation`, the worker writes the role ledger, then calls the finish endpoint to confirm local persistence. It does not directly call Codex inside the claim request. Older non-record-only tasks still use the compatibility forwarding path.
-
-Local/LAN debugging can POST directly to the configured local `/rabilink` gateway endpoint, but the production public path uses Relay and the global PC worker.
-
-## Important environment variables
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `RABILINK_RELAY_APP_TOKEN` | empty | PC worker application token; Relay server itself does not read it |
-| `RABILINK_RELAY_PORT` / `PORT` | `8788` | Listen port |
-| `RABILINK_RELAY_HOST` / `HOST` | `0.0.0.0` | Listen address |
-| `RABILINK_RELAY_REPLY_TIMEOUT_MS` | `60000` | Compatibility synchronous reply wait |
-| `RABILINK_RELAY_MESSAGE_WAIT_MS` | `60000` | Single-task debugging compatibility; the persistent product path does not depend on task queries |
-| `RABILINK_RELAY_OUTBOX_WAIT_MS` | `60000` | Event-backed request deadline for clients without SSE; SSE clients use `waitMs=0` |
-| `RABILINK_RELAY_OUTBOX_TTL_MS` | `172800000` | Retention for broadcasts, kind-only targets, and messages whose explicit targets all returned `delivered`; pending explicit targets do not expire by this TTL |
-| `RABILINK_RELAY_WORKER_TASK_WAIT_MS` | `60000` | Legacy worker event-wait deadline and recent-activity fallback; an active SSE connection directly owns online presence |
-| `RABILINK_RELAY_WEBGUI_REQUEST_WAIT_MS` | `30000` | Remote WebGUI response wait |
-| `RABILINK_RELAY_WEBGUI_BODY_MAX_BYTES` | `41943040` | Default remote WebGUI request and decoded-response limit; worker Base64 responses have a separate encoding-expansion gate |
-| `RABILINK_RELAY_TASK_TTL_MS` | `600000` | Legacy task retention |
-| `RABILINK_RELAY_LEASE_MS` | `180000` | Worker lease |
-| `RABILINK_RELAY_DATA_DIR` | `data/rabilink-relay` | Runtime state, logs, accounts, and applications |
-
-`RABILINK_RELAY_TOKEN` is retired. Do not use it for the server or worker.
-
-The Relay stores shared task/outbox state, stable `deliveryId` values, and per-device receipts in `<dataDir>/runtime-state.json`, allowing multiple Relay processes or reverse-proxy distribution without losing task completion or downlink visibility. `<dataDir>/outbox-cursor-state.json` stores only a random shared generation and the issued-sequence high-water mark so a rollback of `runtime-state.json` can be detected; it contains no message body, token, or device profile. TTL cleanup applies only to broadcasts, kind-only targets, or old messages whose explicit targets all returned `delivered`. Both files are runtime data and must not be committed.
-
-## Unified PC ledger concurrency
-
-Manager and gateway processes may both append to the same role ledger. Cross-process writes, deduplication, rotation, and index replacement are serialized with a lock in the data directory. Stale locks are recovered after a bounded age. Do not manually remove a lock that is actively being written.
-
-## OpenAPI and Rizon
-
-OpenAPI documents are available under `/rokid/rabilink/openapi*.json`. Validate them with:
-
-```powershell
-npm run relay:rabilink:openapi:check
-```
-
-Use the normal, manual-auth, or agent-token variant according to Rizon's authentication support. Never publish a real application token inside a reusable OpenAPI/plugin artifact.
-
-## Verification
-
-Local and public checks include:
-
-```powershell
-npm run relay:rabilink:test:shared-state
-npm run relay:rabilink:test:public
-npm run active-intelligence:e2e
-npm run config-rollback:e2e
-```
-
-For a custom public host:
-
-```powershell
-npm run relay:rabilink:test:public:custom -- `
-  -BaseUrl https://rabi.example.com `
-  -ExpectedOpenApiServerUrl https://rabi.example.com `
-  -SkipQueueSmoke
-```
-
-Public acceptance must prove account/application isolation, record-first input, task-free proactive downlink, cursor recovery, idempotent retry, multi-process shared state, remote WebGUI routing to the selected PC, device-log isolation, and rollback after configuration tests.
-
-## Security boundary
-
-- Use per-account/per-application tokens and device enrollment; no shared public token.
-- Keep tokens out of query strings where header/body alternatives exist, logs, screenshots, examples, and Git.
-- Do not expose the local Manager directly to the Internet.
-- Enforce body limits, wait limits, leases, TTLs, and target-device filtering.
-- Treat the Relay as transport/mailbox infrastructure, not as an Agent or role-context owner.
-
-## Mobile ASR priority
-
-Application-authenticated `GET/PATCH /api/rabilink/mobile/asr-settings` returns computers advertising `asr` and their priority. PATCH accepts `{ "priority": ["computer-a", "computer-b"] }`, rejecting duplicates and non-ASR computers. Availability affects selection without removing saved ranks. RabiSpeech must actually run, with an enabled ASR provider declared by local `/v1/capabilities.providers.asr`. Same-application authentication allows access by default without a separate sharing permission; TTS-only computers are excluded.
-
-Audio uses an end-to-end encrypted connection established through authenticated signalling: LAN, then P2P, then Relay. Deployment must include `rabilink-event-hub.mjs`, `rabilink-proxy-request-queue.mjs`, `lib/rabilink-tunnel-broker.mjs`, `lib/rabilink-asr-priority.mjs` and `ws`. Replacing only the main server script cannot upgrade older installations.
-
-The PC reads local `/v1/capabilities` on connection, then reads and republishes capabilities in response to speech-stream `ready` and `capabilities_changed` events or Manager model-management changes, without idle timer polling. A disconnected speech event stream withdraws speech advertisements; reconnection verifies them again. Disabling the global RabiLink connection cancels this generation's subscriptions and requests. Slow startup and service recovery do not require an incoming speech request.
+Isolated tests cover staged Relay startup, application isolation, future API forwarding, frozen destinations, original headers/receipts, opaque bodies, PC owner restart and retired entries. Public deployment, account login, hardware wake, simultaneous voice input/output and platform upload require separate verification.

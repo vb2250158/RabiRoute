@@ -1,6 +1,7 @@
 /// <reference types="node" />
 import assert from "node:assert/strict";
 import test from "node:test";
+import { webcrypto } from "node:crypto";
 import type { XiaomiHomeAuthorizationSnapshot } from "../../src/shared/xiaomiHomeAuthContract";
 import { xiaomiHomeAuthClient } from "../src/xiaomiHomeAuthClient";
 
@@ -22,7 +23,7 @@ test("Xiaomi Home credential client fences every mutation and only sends the can
   const originalCrypto = globalThis.crypto;
   Object.defineProperty(globalThis, "crypto", {
     configurable: true,
-    value: { randomUUID: () => "00000000-0000-4000-8000-000000000001" }
+    value: { getRandomValues: webcrypto.getRandomValues.bind(webcrypto) }
   });
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     requests.push({ input, init });

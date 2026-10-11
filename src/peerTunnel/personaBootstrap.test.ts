@@ -6,7 +6,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { PERSONA_BOOTSTRAP_DOMAIN, PERSONA_REFERENCE_CAPABILITY, personaPeerRequestAllowed } from "../shared/personaPeerService.js";
+import { PERSONA_REFERENCE_CAPABILITY, personaPeerRequestAllowed } from "../shared/personaPeerService.js";
 import type { TunnelChannel } from "./channel.js";
 import { serveTunnel, tunnelFetch } from "./http.js";
 import { APPLICATION_ACCESS_CAPABILITY, APPLICATION_BOOTSTRAP_DOMAIN, PeerTunnelRuntime } from "./runtime.js";
@@ -33,7 +33,7 @@ function grants(root: string) { return JSON.parse(readFileSync(path.join(root, "
 
 test("application bootstrap is deduplicated, pins both keys and enables all offered services", { timeout: 10_000 }, async t => {
   const root = folder(t); let calls = 0, signals = 0, receiverEnabled = true, receiverToken = "test-application";
-  const upstream = await server(t, (request, response) => { calls++; response.setHeader("content-type", "application/json"); response.end(JSON.stringify({ path: request.url, method: request.method })); });
+  const upstream = await server(t, (request, response) => { calls++; response.setHeader("content-type", "application/json"); response.end(JSON.stringify({ path: request.url, method: request.method, deviceId: request.headers["x-rabilink-tunnel-device-id"] })); });
   const lan = await server(t, (_request, response) => response.end());
   const common = { generation: "current", relay, onStatus: () => {}, allowApplicationConnection: () => true,
     services: () => ({ manager: { baseUrl: upstream.url, headers: { "x-test-owner": "fixed" } }, speech: { baseUrl: upstream.url }, resources: { baseUrl: upstream.url, pathPrefix: "/resource-cache" } }) };
@@ -53,9 +53,10 @@ test("application bootstrap is deduplicated, pins both keys and enables all offe
   assert.equal(ag.bootstrapScope, bg.bootstrapScope);
   assert.equal((await a.directory()).peers[0].personaSupported, true);
   // A private tunnel.json entry cannot redirect or relax the persona service.
-  const configured = grants(path.join(root, "b")); configured.services = { persona: { baseUrl: "http://127.0.0.1:1", pathPrefix: "/unsafe" } };
+  const configured = grants(path.join(root, "b")); configured.services = { manager: { baseUrl: "http://127.0.0.1:1" }, persona: { baseUrl: "http://127.0.0.1:1", pathPrefix: "/unsafe" } };
   writeFileSync(path.join(root, "b", "tunnel.json"), JSON.stringify(configured));
-  const allowed = await a.fetch("b", "persona", "/meta"); assert.equal(allowed.status, 200); assert.equal((await allowed.json()).path, "/meta");
+  const allowed = await a.fetch("b", "persona", "/meta", { headers: { "x-rabilink-tunnel-device-id": "forged" } });
+  assert.equal(allowed.status, 200); assert.deepEqual(await allowed.json(), { path: "/meta", method: "GET", deviceId: "a" });
   assert.equal(signals, 1, "Business reads must reuse the bootstrapped session");
   const session = await a.session("b");
   for (const [service, requested, method] of [["manager", "/api/roles/Example/plans", "POST"], ["speech", "/health", "GET"], ["resources", "/audio.wav", "GET"]]) {
@@ -117,9 +118,9 @@ test("an application token change never reauthorizes an already established chan
   token = "second-application";
   await a.ensureApplicationConnection("b");
   assert.equal(signals, 2);
-  const denied = await tunnelFetch(oldSession, "manager", "/meta"); assert.equal(denied.status, 403); await denied.text();
-  assert.equal(calls, 1, "Rebinding a pin to a new scope must not authorize an old channel");
-  await assert.rejects(a.session("b"), /peer_service_denied/); assert.equal(oldSession.closed, true);
+  await assert.rejects(tunnelFetch(oldSession, "manager", "/meta"), /unavailable|disconnected/);
+  assert.equal(calls, 1, "Rebinding a pin to a new scope must close the old channel");
+  const freshSession = await a.session("b"); assert.notEqual(freshSession, oldSession); assert.equal(oldSession.closed, true);
   assert.equal(await (await a.fetch("b", "manager", "/meta")).text(), "allowed"); assert.equal(calls, 2);
 });
 

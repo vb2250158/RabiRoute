@@ -180,8 +180,19 @@ export type PlanStorageLifecycleTransitionResult = {
   inventoryHash: string;
 };
 
+export type PlanStorageLifecycleAbandonment = {
+  transactionPath: string;
+  planId: string;
+  transactionId: string;
+  reason: string;
+  observedInventoryHash: string;
+};
+
 export type PlanStorageLifecycleRecoveryResult = {
   results: PlanStorageLifecycleTransitionResult[];
+  // Superseded transitions keep their manifest and payload and are retired in place,
+  // so a startup gate reports them without blocking every role forever.
+  abandoned: PlanStorageLifecycleAbandonment[];
   failures: Array<{ transactionPath: string; error: string }>;
 };
 
@@ -1210,20 +1221,93 @@ export function commitPlanLifecycleTransitionUnderLease(
   return completeLifecycleTransitionUnderLease(lease, manifest, transactionRoot);
 }
 
-export function recoverPlanLifecycleTransitions(roleDir: string): PlanStorageLifecycleRecoveryResult {
+/**
+ * A prepared lifecycle transition can be overtaken by a later committed write.
+ * Once the canonical content is neither this transition's recorded source nor its
+ * recorded target, the transition can never be replayed (that would overwrite the
+ * newer content) and never be rolled back (its source is gone). Retiring it in
+ * place preserves the manifest and payload as evidence while letting startup
+ * recovery move past it. Anything that does not match this exact shape stays a
+ * failure so real damage still blocks the gate.
+ */
+function retireSupersededLifecycleTransition(
+  resolvedRoleDir: string,
+  manifest: StoredPlanStorageLifecycleTransition,
+  transactionRoot: string
+): PlanStorageLifecycleAbandonment | null {
+  if (manifest.fromBucket !== manifest.toBucket) return null;
+  let observed: { bucket: PlanStorageBucket; inventoryHash: string };
+  try {
+    const location = resolveCanonicalPlanStorageLocation(resolvedRoleDir, manifest.planId);
+    if (!location || location.bucket !== manifest.toBucket) return null;
+    observed = { bucket: location.bucket, inventoryHash: physicalPackageInventory(location.directory).hash };
+  } catch {
+    // An unreadable or colliding current location is not proof of advancement.
+    return null;
+  }
+  if (observed.inventoryHash === manifest.expectedSourceInventoryHash
+    || observed.inventoryHash === manifest.finalInventoryHash) return null;
+  const reason = "The canonical plan storage advanced past both this transition's source and target snapshots, "
+    + "so the prepared snapshot can neither be replayed nor rolled back.";
+  const receiptPath = path.join(transactionRoot, "receipt.json");
+  atomicWriteFileSync(receiptPath, `${JSON.stringify({
+    schemaVersion: 1,
+    kind: "plan_storage_lifecycle_transition_receipt",
+    status: "abandoned",
+    transactionKind: manifest.transactionKind,
+    transactionId: manifest.transactionId,
+    planId: manifest.planId,
+    storageId: manifest.storageId,
+    fromBucket: manifest.fromBucket,
+    toBucket: manifest.toBucket,
+    expectedSourceInventoryHash: manifest.expectedSourceInventoryHash,
+    finalInventoryHash: manifest.finalInventoryHash,
+    observedInventoryHash: observed.inventoryHash,
+    reason,
+    abandonedAt: new Date().toISOString()
+  }, null, 2)}\n`);
+  return {
+    transactionPath: receiptPath,
+    planId: manifest.planId,
+    transactionId: manifest.transactionId,
+    reason,
+    observedInventoryHash: observed.inventoryHash
+  };
+}
+
+export function recoverPlanLifecycleTransitions(
+  roleDir: string,
+  options: { planId?: string } = {}
+): PlanStorageLifecycleRecoveryResult {
   const resolvedRoleDir = path.resolve(roleDir);
+  const planId = options.planId === undefined ? undefined : canonicalLogicalPlanId(options.planId);
   const root = path.join(plansRoot(resolvedRoleDir), "quarantine", "plan-storage-lifecycle-transactions");
-  const manifests = fixedDepthTransactionManifests(root, 2);
-  const result: PlanStorageLifecycleRecoveryResult = { results: [], failures: [] };
+  // Scope before scanning or parsing: another plan's corrupt WAL must not
+  // expand this request's admitted write set or contaminate its outcome.
+  const manifests = planId === undefined
+    ? fixedDepthTransactionManifests(root, 2)
+    : fixedDepthTransactionManifests(path.join(root, canonicalPlanStorageKey(planId)), 1);
+  const result: PlanStorageLifecycleRecoveryResult = { results: [], abandoned: [], failures: [] };
   for (const manifestPath of manifests.sort()) {
+    let manifest: StoredPlanStorageLifecycleTransition | undefined;
     try {
       if (fs.existsSync(path.join(path.dirname(manifestPath), "receipt.json"))) continue;
-      const manifest = readLifecycleManifest(manifestPath, resolvedRoleDir);
+      manifest = readLifecycleManifest(manifestPath, resolvedRoleDir);
+      if (planId !== undefined && manifest.planId !== planId) {
+        throw new Error(`Plan storage lifecycle recovery scope mismatch: ${manifestPath}`);
+      }
       const outcome = withPlanStorageLease(resolvedRoleDir, manifest.planId, (lease) =>
-        completeLifecycleTransitionUnderLease(lease, manifest, path.dirname(manifestPath))
+        completeLifecycleTransitionUnderLease(lease, manifest as StoredPlanStorageLifecycleTransition, path.dirname(manifestPath))
       );
       result.results.push(outcome);
     } catch (error) {
+      const retired = manifest
+        ? retireSupersededLifecycleTransition(resolvedRoleDir, manifest, path.dirname(manifestPath))
+        : null;
+      if (retired) {
+        result.abandoned.push(retired);
+        continue;
+      }
       result.failures.push({
         transactionPath: manifestPath,
         error: error instanceof Error ? error.message : String(error)

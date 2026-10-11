@@ -1,3 +1,5 @@
+import { requestRabiLinkManagerFixture, startRabiLinkOwnerFixture } from '../../../scripts/rabilink-owner-fixture.mjs';
+import { createHash } from 'node:crypto';
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -12,7 +14,8 @@ const appId = "app-device-status-smoke";
 const port = 19000 + Math.floor(Math.random() * 1000);
 const baseUrl = `http://127.0.0.1:${port}`;
 const appStorePath = path.join(tempDir, "apps.json");
-const statusPath = path.join(tempDir, "mobile-device-status", `${appId}.json`);
+const pcDirectory = path.join(tempDir, "pc-owner");
+const statusPath = path.join(pcDirectory, "rabilink-mobile-owner", createHash("sha256").update("synthetic-owner-scope").digest("hex") + ".json");
 
 fs.writeFileSync(appStorePath, JSON.stringify({
   accounts: [],
@@ -22,14 +25,15 @@ fs.writeFileSync(appStorePath, JSON.stringify({
     ownerAccountId: "account-smoke",
     enabled: true,
     token,
-    targetDeviceId: "",
+    targetDeviceId: "pc-status",
+    connectionOwnerDeviceId: "pc-status",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   }],
   workers: []
 }, null, 2));
 
-let relay = null;
+let relay = null, owner = null;
 
 function startRelay() {
   relay = spawn(process.execPath, [relayScript], {
@@ -70,6 +74,7 @@ async function waitForRelay() {
 }
 
 async function request(pathname, options = {}) {
+  if (pathname !== "/api/rabilink/mobile/state") return requestRabiLinkManagerFixture(baseUrl, "pc-status", token, pathname, options);
   const response = await fetch(`${baseUrl}${pathname}`, {
     method: options.method || "GET",
     headers: {
@@ -86,6 +91,7 @@ async function request(pathname, options = {}) {
 try {
   startRelay();
   await waitForRelay();
+  owner = await startRabiLinkOwnerFixture({ relayBaseUrl: baseUrl, token, appId, deviceId: "pc-status", directory: pcDirectory });
 
   const unauthorized = await request("/api/rabilink/mobile/device-status", {
     method: "POST",
@@ -111,25 +117,31 @@ try {
   assert.equal(updated.body.deviceStatus.stale, false);
   assert.equal(JSON.stringify(updated.body).includes(token), false);
 
-  const liveState = await request("/api/rabilink/mobile/state");
+  const directoryState = await request("/api/rabilink/mobile/state");
+  assert.equal(Object.hasOwn(directoryState.body, "deviceStatus"), false);
+  const liveState = await request("/api/rabilink/mobile/device-status");
   assert.equal(liveState.body.deviceStatus.batteryLevel, 73);
   assert.equal(liveState.body.deviceStatus.charging, true);
   assert.equal(liveState.body.deviceStatus.stale, false);
 
+  await owner.stop(); owner = null;
   await stopRelay();
   const stored = JSON.parse(fs.readFileSync(statusPath, "utf8"));
-  stored.receivedAt = new Date(Date.now() - 120000).toISOString();
+  stored.deviceStatus.receivedAt = new Date(Date.now() - 240000).toISOString();
   fs.writeFileSync(statusPath, `${JSON.stringify(stored, null, 2)}\n`, "utf8");
 
   startRelay();
   await waitForRelay();
-  const staleState = await request("/api/rabilink/mobile/state");
+  owner = await startRabiLinkOwnerFixture({ relayBaseUrl: baseUrl, token, appId, deviceId: "pc-status", directory: pcDirectory });
+  const staleState = await request("/api/rabilink/mobile/device-status");
   assert.equal(staleState.body.deviceStatus.batteryLevel, 73);
   assert.equal(staleState.body.deviceStatus.stale, true);
   assert.ok(staleState.body.deviceStatus.ageMs >= 120000);
 
-  console.log("RabiLink Relay device-status smoke passed: auth, validation, persistence and staleness.");
+  assert.equal(fs.existsSync(path.join(tempDir, "mobile-device-status")), false);
+  console.log("RabiLink device-status generic transport smoke passed: real PC owner, auth, validation, persistence and staleness.");
 } finally {
+  if (owner) await owner.stop();
   await stopRelay();
   fs.rmSync(tempDir, { recursive: true, force: true });
 }

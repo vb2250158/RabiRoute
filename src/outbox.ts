@@ -1103,13 +1103,45 @@ function stableDeliveryJson(value: unknown): string {
     .join(",")}}`;
 }
 
-function agentReplyDeliveryTrace(request: AgentReplyRequest): { deliveryId?: string; deliveryRequestDigest?: string } {
+export function agentReplyDeliveryTrace(request: AgentReplyRequest): { deliveryId?: string; deliveryRequestDigest?: string } {
   const deliveryId = requestField(request, "deliveryId");
   if (!deliveryId) return {};
   return {
     deliveryId,
     deliveryRequestDigest: createHash("sha256").update(stableDeliveryJson(request), "utf8").digest("hex")
   };
+}
+
+/** Business projection owned by Outbox: audit metadata is not a send result. */
+export function projectAgentReplyHistoryResult(data: Readonly<Record<string, unknown>>): AgentReplyResult {
+  if (typeof data.ok !== "boolean" || !["sent", "draft", "blocked", "failed"].includes(String(data.status))) {
+    throw new Error("Original Outbox result is invalid.");
+  }
+  const result: AgentReplyResult = { ok: data.ok, status: data.status as AgentReplyResult["status"] };
+  if (data.targetType !== undefined) {
+    if (data.targetType !== "group" && data.targetType !== "private" && data.targetType !== "role_panel"
+      && data.targetType !== "plan_feedback" && data.targetType !== "voice_transcript" && data.targetType !== "rabilink") {
+      throw new Error("Original Outbox result is invalid.");
+    }
+    result.targetType = data.targetType;
+  }
+  const stringFields = ["reason", "routeProfileId", "messageId", "groupId", "userId",
+    "instanceId", "sentMessageId", "sentFileId", "sentFileName"] as const;
+  for (const key of stringFields) {
+    if (data[key] === undefined) continue;
+    if (typeof data[key] !== "string") throw new Error("Original Outbox result is invalid.");
+    Object.assign(result, { [key]: data[key] });
+  }
+  if (data.draft !== undefined) throw new Error("Draft history cannot prove original terminal delivery.");
+  return result;
+}
+
+/** Select only the same explicit-route log used by this owner; never scan other routes. */
+export function agentReplyHistorySource(request: AgentReplyRequest, options: AgentReplyOptions) {
+  const route = resolveExplicitSendRoute(options, requestField(request, "routeProfileId"));
+  if (!route) throw new Error("Original Outbox route is unavailable.");
+  return { logPath: path.join(agentReplyDataDirsForRoute(options, route)[0], "outbox-adapter.log.jsonl"),
+    traceReplyRequest: agentReplyDeliveryTrace, projectResult: projectAgentReplyHistoryResult };
 }
 
 function outboxData(value: unknown): Record<string, unknown> | undefined {

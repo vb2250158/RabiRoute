@@ -57,15 +57,15 @@ Help 查询参数为 `operationId`、`path`、`method`，每项最多一次且�
 
 旁路送达只证明平台接收，不能冒充 callback、knowledge-callback、Outbox 或计划状态已记录。保留原标识、目标、时间、摘要和真实平台回执；恢复后先查状态，再按接口支持方式补录，不为补回执重发正文，不直接修改真实存储。没有补录能力时明确保留“旁路已送达，正式回传待恢复”。下一次独立投递仍从 Rabi 开始。
 
-### QQ 只读诊断（源码合同；本机身份未验证）
+### QQ 只读诊断（权限对等源码合同；部署与实际 QQ 未验收）
 
-`GET /api/agent/qq/diagnostics?routeId=<精确RouteID>` 只接受当前已认证的 `TrustedLanAgentSource`，不接受请求体或其它 query。Manager 从当前批准且已启用的 LAN Agent binding 核对来源 session、provider、node/Agent 与该 Route 的远端 primary target；普通本机 loopback、DSH 会话名、请求参数和 send permission 开关都不能代替可信来源。没有本机可信身份时返回 403，不得绕过管理能力拒绝。
+`GET /api/agent/qq/diagnostics?routeId=<精确RouteID>` 接受统一入口认证且仍启用的 Agent principal，或符合现有 socket、Host、Origin 与代理检查的可信本机管理请求；不接受请求体或其它 query。不再以 Route primary、provider 或来源元数据形成远端专属门禁；原凭据、Agent 启用状态、授权代次与批准 binding 仍由统一认证检查，异步探针及输出前复验原授权。伪造 Agent 请求头、DSH 会话名或请求参数不授权；撤销请求不回退到本机身份。源码实施与回归不代表运行节点已更新，不得绕过鉴权拒绝。
 
-授权后要求 Route 已启用、QQ 消息端已启用、恰有一个已启用的配置实例、Gateway 正在运行，并仅向该实例配置的本机 OneBot HTTP origin 发出短时 `GET /get_status`。请求禁止重定向、不缓存、无 body；不访问 WebUI、其它 Route 或其它 QQ 实例。返回只有 `routeId`、`instanceId`、`wsConnected` 和 `oneBot.reachable/online/good` 布尔值，不含 QQ 号、昵称、URL、token、消息正文、原始错误或路径。WS 值来自对应 Route 的实例运行状态，只有其 `lastConnectedAt` 不早于当前 Gateway 的 `startedAt` 才可为 true；历史状态不能代替当前进程；OneBot 探针失败为 HTTP 503/未知，不解释为 QQ 离线。该诊断**不赋予发送权限**，不回填登录/账号配置，不代表真实 QQ 已验收；当前 DSH 本机 trusted source 尚不可宣称可用，禁止真实 QQ 烟测。
+授权后要求 Route 已启用、QQ 消息端已启用、恰有一个已启用的配置实例、Gateway 正在运行，并仅向该实例配置的本机 OneBot HTTP origin 发出短时 `GET /get_status`。请求禁止重定向、不缓存、无 body；不访问 WebUI、其它 Route 或其它 QQ 实例。返回只有 `routeId`、`instanceId`、`wsConnected` 和 `oneBot.reachable/online/good` 布尔值，不含 QQ 号、昵称、URL、token、消息正文、原始错误或路径。WS 值来自对应 Route 的实例运行状态，只有其 `lastConnectedAt` 不早于当前 Gateway 的 `startedAt` 才可为 true；历史状态不能代替当前进程；OneBot 探针失败为 HTTP 503/未知，不解释为 QQ 离线。该诊断**不赋予发送权限**，不回填登录/账号配置，不代表真实 QQ 已验收；实际 QQ 烟测须另有明确授权和当前连接证据，不由源码测试自动授权。
 
 ### QQ 群文件元数据（源码合同；运行态未验证）
 
-`GET /api/agent/qq/group-files?routeId=<精确RouteID>&groupId=<精确群号>[&folderId=<文件夹ID>]` 要求当前已认证的 `TrustedLanAgentSource`、对应 Route 已批准且启用的远端 primary Agent，以及 `messageAdapterPolicies.napcat.readableGroupFileIds` 中对该群号独立配置的读取授权（默认空）。普通 loopback、消息发送权限、目标群和允许发送的文件根目录都不提供此读取授权。只选精确 Route 下唯一启用的 NapCat 实例，不跨 Route、账号或群回退；拒绝多余/重复参数和请求体。读取前后均复核授权，不泄露凭据、原始上游错误、其它群的元数据；不下载或发送文件。
+`GET /api/agent/qq/group-files?routeId=<精确RouteID>&groupId=<精确群号>[&folderId=<文件夹ID>]` 使用与 QQ 诊断相同的可信 Agent／本机管理身份边界，不要求 Route primary 或额外可信来源元数据。两端均须满足 `messageAdapterPolicies.napcat.readableGroupFileIds` 对该群号独立配置的读取授权（默认空）；启用 Agent、loopback、消息发送权限、目标群和允许发送的文件根目录都不能替代该对象读取 ACL。只选精确 Route 下唯一启用的 NapCat 实例，不跨 Route、账号或群回退；拒绝多余/重复参数和请求体。读取前后均复核授权，不泄露凭据、原始上游错误、其它群的元数据；不下载或发送文件。
 
 根目录调用只读 `get_group_root_files`，指定 `folderId` 调用只读 `get_group_files_by_folder`，固定 `file_count: 50`、3 秒超时、最多 256 KiB 响应和 50 项投影，返回有界的文件/文件夹元数据。`completenessUnknown: true` 与 `potentiallyTruncated: true` 始终表示无法证明穷尽；非法条目可能丢弃，`projectionTruncated` 仅标记投影裁剪。找到精确文件可作为存在证据，空结果或未找到**不能证明缺失**，不得以此自动补发。补发缺失文件还需要平台支持并经验证的完整分页/搜索覆盖，或覆盖对应期间的可信自发事件与原 Outbox 终态经平台对照形成的逐文件闭环；缺少这些证据时停止缺失判定并回传未知，不能扩大范围或绕过权限。此为源码接线与测试合同，不代表当前安装版本、DSH 工具能力或 QQ 在线状态已验收。
 
@@ -88,7 +88,7 @@ GET /api/agent/qq/messages/<messageId>/attachments/0?routeId=<routeId>&kind=grou
 
 单附件最多 64 MiB，JSON 响应最多 1 MiB；消息读取最长 8 秒，附件读取最长 30 秒，每个服务上下文最多两个并发读取，超额返回 429 `QQ_READ_BUSY`。下载可能触发 NapCat 自身媒体缓存，Rabi 不另存业务记录。空路径且没有受支持下载地址返回 422 `QQ_MEDIA_REFERENCE_UNAVAILABLE`，超限返回 413，消息 ID／会话不符或读取中 Route 改变返回 409；上游失败返回 503，不回显原始错误。调用方按需要保存返回的文件并检查非空结果。
 
-这些入口要求直接本机回环管理连接；LAN Agent 和 Relay 请求返回 403 `QQ_READ_LOCAL_REQUIRED`。远端目录可发现接口不表示具有读取权限，远端对象读取授权尚未接入。仅选择指定 Route 的唯一启用实例，拒绝含多个实例的配置，不跨 Route 或账号回退；本机管理读取权限不赋予发送权限。既有 `message-endpoint-history` 继续用于 Rabi 已记录消息的跨来源检索；原消息与附件需求优先使用上述受管入口。
+这些入口接受统一认证且仍启用的 LAN Agent principal，与可信直接本机管理连接同权；未认证 Relay／隧道请求及伪造 Agent 请求头不授权。异步读取、备用上游读取和输出前复验原授权，撤销返回 403 且不回退到本机身份。仅选择指定 Route 的唯一启用实例，拒绝含多个实例的配置，不跨 Route 或账号回退；本机管理读取权限不赋予发送权限。既有 `message-endpoint-history` 继续用于 Rabi 已记录消息的跨来源检索；原消息与附件需求优先使用上述受管入口。
 
 正常群聊、私聊和最新反馈查询先走 Rabi。安装版通过 `RabiRouteHost.exe --command status --json` 获取当前 `managerBaseUrl`、`applicationGenerationId`、`managerInstanceId`；源码模式使用结构化 READY 地址。读取 `<managerBaseUrl>/meta`，按上节合同核对 generation/实例身份；普通查询要求 `health.live=true`、`health.requiredReady=true`，接受 `healthy` 或 `degraded`，再由目标接口判断依赖是否可用。旧地址或瞬时失败时重新发现并有界重试；Hook 的概括性“Host 未运行”提示不能替代实际失败原因。不扫描端口、不读取退役实例锁、不直接启停 Manager。
 
@@ -241,6 +241,10 @@ npm run manager
 此模式仍提供 `/meta`、计划、记忆和校验等 Manager HTTP 接口；`GET /meta` 会返回 `managerAutostart: false`。它关闭已停止 Route 的自动启动和文件监视器，不移除显式运行控制接口。若调用方已经显式启动某条 Route，之后又通过 Manager 保存配置，Manager 仍会重启该运行中 Route 以应用新的会话、模型和消息端设置；否则界面保存态会与真实投递态分叉。调用方仍不得在没有相应授权时请求启动、重启、触发、回传或外发动作。生产托盘和正常消息路由不设置该变量，行为保持不变。
 
 ### Codex Hook 上下文接口
+
+已启用并鉴权的远端 Agent 可以调用 Hook 人格目录、诊断与会话绑定管理接口，无需工作区、人格或 Route 绑定。提交 `/context` 时须提供该 Agent 真实拥有的会话和匹配的 `agentType`；默认值为 `codex`。读取请求体后、写入前再次核验原连接仍有效，避免撤销后的请求继续写入。消息组登记同样使用公共接口，不再单独限制远端调用方。
+
+通用入口接受 `GET/HEAD/POST/PUT/PATCH/DELETE/OPTIONS`，不按 Windows 文件名限制资源 ID，也不按接口目录拒绝未来路径。普通业务正文可以是数组、标量或包含 `sender`、`worker` 等目标配置字段，具体 Schema 由目标接口校验；来源身份检查只用于真实消息投递、处理决策和 Hook 事件。
 
 Codex 插件必须把 Hook 原始事件提交给 Manager，而不是在插件内复制人格、计划、记忆或召回逻辑：
 
@@ -916,7 +920,7 @@ node rabi-agent.mjs --api GET /api/agent/uploads/<UUID> --agent <agentId>
 - Manager 内部可信 resolver 每次请求重新核对授权、归属、完整性和 TTL，并持有 inflight lease 防止在途文件被清理；不扩大 `allowedFileRoots`，原本地 `path` 流程及其根目录检查照旧。
 - 渠道仍须允许发送并支持 `file`；发送者身份仍按投递合同核对。上传成功不是群发送成功，必须检查 `/api/agent/send` 的 Manager 与 NapCat 回执；发送不确定时查询原 `deliveryId` 回执。
 - NapCat 已接受群文件但随后 caption 失败时，仍保留 `status=sent`，只补发文本，不重发文件。当前 NapCat 接口读取 Manager 交给它的文件路径；异机 NapCat 必须能够通过共享目录读取该路径。本功能只解决远端 Agent 到 Manager 的上传，不解决任意跨机 NapCat 文件可读性。
-- 这不扩大远端线程桥权限：仍只支持 `responsePolicy: "none"` 单向投递，`required`、`inReplyToRequestId` 正式回复和远端到远端投递仍拒绝。
+- 远端线程投递通过 Manager 持有的端点合同处理，支持 `responsePolicy: "none"`、`required`、`inReplyToRequestId` 正式回复以及远端到远端投递；来源必须来自原始认证 lease，目标必须是已启用的精确实例 Agent 会话，不接受请求正文自称的身份。旧连接、停用后重新启用、换会话或换 owner 均不能继承原授权。未支持精确 owner 执行的 Provider 失败关闭，不启动备用 Runtime。
 
 当图片或文件已经作为计划附件存在时，可用 `payload.planAttachment` 按 ID 引用，不必先复制到 `allowedFileRoots` 里的目录：
 
@@ -1010,6 +1014,17 @@ Agent 可以主动向自己已经掌握的群号或企业微信群 chat id 发�
 ```
 
 ## Codex 正式线程桥
+
+### 已认证的跨实例端点投递（实验实现）
+
+`send`、`required` 正式回复和远端到远端往返复用同一个 Manager 请求存储。目标使用 `instanceBinding={instanceId,agentId}`，并保留原始完整 `threadId`；正式回复参数由 Manager 放入目标消息，不要自行换目标或缩短会话 ID。权限按已启用的 Provider 通用校验，但执行能力单独检查；没有精确 owner 投递能力时拒绝，不创建替代 Runtime。
+
+Manager 先从原始认证 lease 解析来源和精确目标，再持久化准备结果、渲染一次信封、记录正在投递、交给目标 owner，最后核对回执并提交。完整身份包含 `managerInstanceId`、`instanceId`、`nodeId`、`agentId`、`provider`、原始会话 ID 和授权 incarnation；回执还须匹配原 `deliveryId`、generation 和 prompt hash。连接、Agent 启停、catalog 或批准绑定变化后，不复用旧授权。
+
+发送结果不确定时返回 HTTP 202、`delivery_unconfirmed`、`retryable=false`，保留原正式回复 reservation。不得重复调用 `send` 以重发正文。`reconcile_delivery` 只核对原目标的传输证据；启动、连接、catalog、回执和 turn 事件触发有去重的恢复，不轮询、不换 owner、不自动重投。连接器只持有传输 attempt/receipt，不另建业务请求账本。Codex 可从同一个 Desktop owner 的原始用户消息恢复精确 hash；其它 Provider 缺少可读接受证据时继续待确认。
+
+该合同目前是源码实施与回归范围，不代表运行节点已经更新，更不代表两台真实电脑已通过端到端验收。
+
 
 某些调用方没有注入 `codex_app__list_threads`、`codex_app__read_thread`、`codex_app__create_thread`、`codex_app__send_message_to_thread` 等 Codex Desktop 连接器工具。提示词不能补出未注册工具，也不能因此自行启动另一个 Runtime。
 
@@ -1186,7 +1201,7 @@ Agent 间 `create` 与 `send` 投递时，Manager 按 `messageSource.agentAdapte
 - Manager 在运行期 `data/.runtime/codex-thread-creations/` 持久保存创建 reservation。状态按 `reserved → creating → thread_created → naming → initial_turn → completed` 推进。`creating` 超过 5 分钟、没有 `threadId`，并且第二次 `action=list + lookupMode=state_db` 明确确认同名同工作目录任务不存在时，Manager 才先转为 `failed_before_create`，再允许同键重试。记录已有 `threadId`、索引查询失败、查到候选任务或其它证据不足时转为 `uncertain`，后续请求返回 `409` 并禁止自动再次创建。
 - `create` 返回 `initialTurnStatus`。若任务已经创建但初始 turn 启动失败，应记录返回的 `threadId` 并用 `send` 重试，不能重复创建同名任务。
 - 创建调用超时后，先用 `action=list + lookupMode=state_db + 原任务名` 从本地任务索引回读。这个模式不启动 app-server 元数据扫描，适合判断慢创建是否稍后产生了任务；完整任务列表仍使用默认 `lookupMode=complete`。
-- Agent 正式回复仍会比较本轮 workspace，并使用统一的路径规范化规则；Windows 普通盘符路径、`\\?\` 扩展盘符路径、UNC 与扩展 UNC 的等价形式不会因为字符串写法不同而被误判为其它工作区。该校验不参与 Codex 任务身份判定。
+- Agent 正式回复按双方任务 ID 校验来源与目标，不再因为工作目录不同而拒绝；工作目录只作为身份信息随请求记录。Windows 普通盘符路径、`\\?\` 扩展盘符路径、UNC 与扩展 UNC 的等价形式仍使用统一的路径规范化规则比较，避免同一个目录因为字符串写法不同而被判成两个工作区。该校验不参与 Codex 任务身份判定。
 - 当前 Route 开启“强制使用 RabiAgent 消息投递接口”后，Codex Hook 会拒绝绕过 Rabi 的持久任务工具；DSH `RabiRoute Agent` 插件会拒绝 Shell 直接调用 `/api/agent/threads`、`/api/agent/send` 或 `session.prompt`。两端都必须使用线程桥并填写 `sourceThreadId`、`sourceAgentType` 和 `responsePolicy`。临时子 Agent 的本地协作不属于这项限制；关闭开关只停止绕过检查，已有待回复请求仍继续检查和提醒。
 - Manager 线程桥最终投给目标会话的同一个 owner：Codex 使用 Desktop IPC，DSH 使用该会话的 apiproxy owner。两者都不启动或改投备用 Runtime。
 - Codex Desktop 未启动、IPC 不可用或目标任务无法加载时返回失败；DSH Endpoint 不可用、会话不存在或工作目录冲突时也返回失败。两端都不得转给另一 Agent adapter 或备用 Runtime。
@@ -1724,8 +1739,8 @@ node rabi-agent.mjs --api GET "/api/roles/<roleId>/skills/<skillId>/download" --
 | HTTP | 含义与处理 |
 | --- | --- |
 | 401 | 凭据缺失或无效；核对已登记连接配置，不公开凭据。 |
-| 403 | 节点/Agent 或人格未授权，或技能路径/链接不安全；修正绑定或由技能拥有者检查源目录，不绕过限制。 |
-| 404 | 已授权人格中不存在该技能；刷新技能列表并核对 ID。 |
+| 403 | 节点/Agent 连接已停用或来源证明失效，或技能路径/链接不安全；核对当前连接或由技能拥有者检查源目录，不要求追加人格绑定。 |
+| 404 | 人格或技能不存在；刷新技能列表并核对 ID。 |
 | 409 | 技能 ID/归档名称冲突或生成期间源内容变化；由拥有者解决后重新下载。 |
 | 413 | 文件、条目、深度或包大小超限；明确缩小技能包，不接受残缺文件。 |
 | 503 | 队列忙、超时或工作进程退出未确认；不当作空技能包，不自动反复重试。 |

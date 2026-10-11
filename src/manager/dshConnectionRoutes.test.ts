@@ -93,7 +93,7 @@ test("DSH metadata and disconnect API fence revisions without exposing secrets o
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-const request = (address: string, headers: http.IncomingHttpHeaders) => ({ socket: { remoteAddress: address }, headers }) as Pick<http.IncomingMessage, "socket" | "headers">;
+const request = (address: string, headers: http.IncomingHttpHeaders) => ({ socket: { remoteAddress: address }, headers }) as http.IncomingMessage;
 test("DSH authorization mutations require a same-origin local browser; Relay and rebinding fail closed", () => {
   const headers = { host: "127.0.0.1:12345", origin: "http://127.0.0.1:12345" };
   assert.equal(dshConnectionRequestAllowed(request("127.0.0.1", headers), true), true);

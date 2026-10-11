@@ -60,6 +60,28 @@ test("streaming reserves cross-instance capacity, bounds bytes, reauthorizes and
   } finally { g.close(); }
 });
 
+for (const code of ["forbidden", "upload_aborted"] as const) {
+  test(`final stream fence preserves ${code} and releases staging without publication`, async () => {
+    const f = fixture();
+    try {
+      const request = input("abcd");
+      await assert.rejects(f.store.uploadStream({ ...request, size: 4,
+        content: (async function* () { yield request.content; })(),
+        assertCommitAuthorized() { throw new AgentUploadStoreError(code); }
+      }), errorCode(code));
+      assert.equal(fs.readdirSync(f.rootDir).some(name => name.startsWith(".stream-")), false);
+      assert.throws(() => f.store.get(owner, request.uploadId), errorCode("not_found"));
+      const receipt = await f.store.uploadStream({ ...request, size: 4,
+        content: (async function* () { yield request.content; })() });
+      await assert.rejects(f.store.uploadStream({ ...request, size: 4,
+        content: (async function* () { yield request.content; })(),
+        assertCommitAuthorized() { throw new AgentUploadStoreError(code); }
+      }), errorCode(code));
+      assert.deepEqual(f.store.get(owner, request.uploadId), receipt);
+    } finally { f.close(); }
+  });
+}
+
 const errorCode = (code: string) => (error: unknown) => error instanceof AgentUploadStoreError && error.code === code;
 
 test("interrupted stream reservation transitions recover under the next writer", async () => {

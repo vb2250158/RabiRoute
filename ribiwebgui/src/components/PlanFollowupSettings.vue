@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { browserUuid } from "../browserUuid";
 import { userFacingError } from "../userFacingError";
 import { computed, ref, watch } from "vue";
 import { normalizePlanFollowup, type PlanFollowupSettings, type PlanFollowupRule } from "@shared/planFollowup";
@@ -25,7 +26,7 @@ function change(rule: PlanFollowupRule, patch: Partial<PlanFollowupRule>) {
   update({ rules: settings.value.rules.map(item => item.id === rule.id ? { ...item, ...patch } : item) });
 }
 function add() {
-  update({ rules: [...settings.value.rules, { id: crypto.randomUUID(), enabled: true, statusKeys: [], prompt: "" }] });
+  update({ rules: [...settings.value.rules, { id: browserUuid(), enabled: true, statusKeys: [], prompt: "" }] });
 }
 </script>
 

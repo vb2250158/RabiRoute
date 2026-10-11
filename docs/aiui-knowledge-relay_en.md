@@ -1,13 +1,15 @@
-# Device knowledge requests and application authentication
+<!-- docs-language-switch -->
+<div align="center">
+English | <a href="./aiui-knowledge-relay.md">简体中文</a>
+</div>
+<!-- /docs-language-switch -->
 
-English | [简体中文](aiui-knowledge-relay.md)
+# Retired knowledge integration
 
-Devices call `POST /api/rabilink/device/knowledge` using independent RabiLink device credentials, with only `{operation:'list'}` or `{operation:'call',name,args}`. After authentication, ownership validation and selection of a PC in the same application, all knowledge tools and writes provided by that PC are allowed by default. Separate knowledge grants are no longer stored or intersected.
+The old knowledge bridge, intent queue, per-tool grants and phone grant editor are retired. This page preserves a documentation link; it does not describe a supported runtime or configuration path. Old business configuration is not migrated.
 
-App tokens cannot impersonate device credentials. Clients cannot override target, URL, token, owner or membership. Without the PC's `knowledgebridge` advertisement, Relay returns 503 `KNOWLEDGE_BRIDGE_NOT_READY` without queueing. Relay constructs four-field device metadata and nonReplayable, fixes the path to `/__rabilink/knowledge`, and rejects this reserved path in generic WebGUI queues.
+Use the target PC's [Manager interfaces](rabi-agent-interfaces_en.md) through the [generic API transport](../apps/rabilink-aiui/docs/generic-api-transport_en.md). Enabled authenticated Agents have the same API access as local callers, without workspace, persona or Route grants. Bindings only select automatic delivery targets. Relay handles connections, authentication and opaque transport.
 
-Enqueue, claim and re-claim revalidate current credentials, owner, application and selected target. Revocation or target rebinding prevents re-claim under stale scope. Credential digests stay internal to Relay. Revocation cannot undo execution that already began. PC reads/writes actual personas through existing Manager APIs without separate MCP configuration.
+Knowledge, persona, Skill and message state remain on the owning PC. Preserve each endpoint's actual revision, identity and receipt contract. For uncertain writes, read back the original resource or receipt; do not change the key or replay the write automatically.
 
-Writes and recent-detail touch retain stable business idempotency keys. Intent digests are persisted before dispatch; the same key cannot create a second queue, and different intent conflicts. Each device ledger is capped at 128 entries, fails closed when full and does not auto-evict. Expired write leases are not replayed. Timeouts are uncertain; never retry with a new key. See [knowledge receipts](rabilink-knowledge-operation-receipts_en.md).
-
-Owned legacy knowledge-grant GET/PUT/operations endpoints return 410 `KNOWLEDGE_GRANTS_RETIRED`; cross-account access remains 404. The management editor is removed. Historical grants remain unchanged as old data and never authorize requests. Public Relay behavior changes only after the updated Relay source is deployed.
+See [AIUI acceptance](aiui-agent-acceptance_en.md) and [Relay deployment](rabilink-relay-server_en.md) for current implementation and outstanding checks. No old knowledge URL, MCP secret or permission form is required.

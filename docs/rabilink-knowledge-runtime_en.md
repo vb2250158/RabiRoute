@@ -1,15 +1,15 @@
-# PC knowledge service and RabiLink connections
+<!-- docs-language-switch -->
+<div align="center">
+English | <a href="./rabilink-knowledge-runtime.md">简体中文</a>
+</div>
+<!-- /docs-language-switch -->
 
-English | [简体中文](rabilink-knowledge-runtime.md)
+# Retired knowledge integration
 
-Authenticated devices in the same RabiLink application can use the PC's provided knowledge tools by default, including writes and recent-memory read markers. No separate local MCP address, knowledge secret, role/tool allowlist or device grants are required. Independent Agent nodes, anonymous LAN discovery and devices in other applications do not gain access.
+The old knowledge bridge, intent queue, per-tool grants and phone grant editor are retired. This page preserves a documentation link; it does not describe a supported runtime or configuration path. Old business configuration is not migrated.
 
-The PC uses existing Manager plan, memory and knowledge APIs. Manager owns business state and durable receipts. Stable tool mappings, schema and receipt checks live in `packages/rabi-knowledge-contract`; standalone `apps/rabi-mcp` reuses them. PC requests require no separate MCP process.
+Use the target PC's [Manager interfaces](rabi-agent-interfaces_en.md) through the [generic API transport](../apps/rabilink-aiui/docs/generic-api-transport_en.md). Enabled authenticated Agents have the same API access as local callers, without workspace, persona or Route grants. Bindings only select automatic delivery targets. Relay handles connections, authentication and opaque transport.
 
-Current Manager context supplies the complete URL, application generation, instance ID and actual local persona catalog. Calls verify `/meta` identity, live, requiredReady and healthy/degraded. Post-write checks verify identity; an identity change or failed confirmation is uncertain. Startup probes verify identity only to avoid waiting on their own READY state. The `knowledgebridge` advertisement means the current probe succeeded. Manager ready, persona-catalog changes and reconnection events trigger checks; request failure or event-stream disconnection revokes readiness. Speech advertisements use the actual capability endpoint and Speech ready / capabilities_changed events. Disconnected streams reconnect with bounded backoff; idle connections do not poll capabilities. Advertisements do not prove business completion.
+Knowledge, persona, Skill and message state remain on the owning PC. Preserve each endpoint's actual revision, identity and receipt contract. For uncertain writes, read back the original resource or receipt; do not change the key or replay the write automatically.
 
-Relay's dedicated `/__rabilink/knowledge` queue carries `{appId,deviceBindingId,ownerAccountId,targetDeviceId}` with only the tool request in its body. PC checks the target and actual persona catalog, rejecting body overrides of identity, addresses or tool scope. All implemented tools are available by default; roleId enums reflect actual personas under Manager’s global rolesRoot. Custom Route persona roots are excluded from this knowledge API. Missing personas and unimplemented tools still fail.
-
-Writes and recent-detail touch keep stable idempotency keys and nonReplayable. Transport failure returns uncertain without automatic replay or replacement keys. Installed addresses must be discovered from current Host status, never a persisted port.
-
-Migration: configuration normalization and saving remove retired `speechProxyEnabled` and `knowledgeBridge` permission fields, preserving Relay connection, app token, instance identity, data and other parameters. Both PC and Relay require updates. Real cross-PC and phone/glasses acceptance remains separate from local tests.
+See [AIUI acceptance](aiui-agent-acceptance_en.md) and [Relay deployment](rabilink-relay-server_en.md) for current implementation and outstanding checks. No old knowledge URL, MCP secret or permission form is required.

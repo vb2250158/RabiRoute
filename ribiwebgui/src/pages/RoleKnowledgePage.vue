@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { browserUuid } from "../browserUuid";
 import { createBoundedPlanRefresh } from "../boundedPlanRefresh";
 import { usePlanDirectoryResize } from "../planDirectoryResize";
 import { embeddedPlanHost, visiblePlanAgentRoles } from "../embeddedPlanContext";
@@ -96,6 +97,7 @@ const planCatalogInitializing = ref(false);
 const planEventReset = ref(false);
 const knowledgeCountsReady = ref(false);
 const knowledgeCountsError = ref("");
+const knowledgeCountsLoading = ref(false);
 const planDetailErrors = reactive<Record<string, string>>({});
 const memoryError = ref("");
 const activeView = ref<PlanKnowledgeView>("plans");
@@ -290,6 +292,7 @@ const MAX_CONCURRENT_PLAN_DETAILS = 4;
 let knowledgeFilterTimer = 0;
 let memoryClockTimer = 0;
 let planListAbort: AbortController | null = null;
+let knowledgeCountsAbort: AbortController | null = null;
 const planEventRefresh = createBoundedPlanRefresh({
   allowed: () => knowledgePageWorkAllowed() && showsPlanList.value && Boolean(roleId.value),
   busy: () => loading.value || loadingMorePlans.value,
@@ -297,6 +300,9 @@ const planEventRefresh = createBoundedPlanRefresh({
   failed: error => { planError.value = userFacingError(error); }
 });
 function cancelPlanListWork(keepPending = false): void {
+  knowledgeCountsAbort?.abort();
+  knowledgeCountsAbort = null;
+  knowledgeCountsLoading.value = false;
   if (knowledgeFilterTimer) window.clearTimeout(knowledgeFilterTimer);
   knowledgeFilterTimer = 0;
   planEventRefresh.cancel(keepPending);
@@ -444,7 +450,7 @@ const knowledgeListStatus = computed(() => {
       ? "Plans could not be refreshed. Any visible items are previously loaded data; retry to update."
       : "计划未能刷新；如有显示内容，仍是此前加载的数据，请重试更新。";
   }
-  if (knowledgeCountsError.value || (showsMemoryList.value && memoryError.value)) {
+  if (!knowledgeListLoading.value && (knowledgeCountsError.value || (showsMemoryList.value && memoryError.value))) {
     return isEnglish.value ? "Some data could not be refreshed. Counts may be unavailable; please retry." : "部分数据未能刷新，数量可能暂时未知，请重试。";
   }
   if (showsPlanList.value && !planListReady.value && !loading.value) {
@@ -1322,6 +1328,44 @@ function applyFocusedPlan(plan: RolePlan): void {
   void refreshPlanMarkdownTeasers([plan], requestVersion);
 }
 
+async function refreshKnowledgeCounts(): Promise<void> {
+  const selectedRoleId = roleId.value;
+  if (!selectedRoleId || !knowledgePageWorkAllowed()) return;
+  knowledgeCountsAbort?.abort();
+  const controller = new AbortController();
+  knowledgeCountsAbort = controller;
+  const currentRequest = requestVersion;
+  knowledgeCountsLoading.value = true;
+  try {
+    const counts = await loadRoleKnowledgeFileCounts(selectedRoleId, controller.signal);
+    if (controller.signal.aborted || currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
+    knowledgeCountsError.value = "";
+    knowledgeCountsReady.value = true;
+    planPageCounts.value = {
+      ...planPageCounts.value,
+      total: counts.activePlans + counts.archivedPlans,
+      current: counts.activePlans,
+      plans: counts.activePlans,
+      archived: counts.archivedPlans
+    };
+    memoryPageCounts.value = {
+      recent: counts.recentMemory,
+      consolidated: counts.consolidatedMemory,
+      archived: 0,
+      consolidationRuns: counts.consolidationRuns
+    };
+  } catch (loadError) {
+    if (!controller.signal.aborted && currentRequest === requestVersion && selectedRoleId === roleId.value) {
+      knowledgeCountsError.value = userFacingError(loadError);
+    }
+  } finally {
+    if (knowledgeCountsAbort === controller) {
+      knowledgeCountsAbort = null;
+      knowledgeCountsLoading.value = false;
+    }
+  }
+}
+
 async function refreshKnowledge(): Promise<void> {
   const selectedRoleId = roleId.value;
   if (!knowledgePageWorkAllowed()) return;
@@ -1367,29 +1411,7 @@ async function refreshKnowledge(): Promise<void> {
     await refreshFocusedPlan(selectedRoleId, currentRequest);
     return;
   }
-  void loadRoleKnowledgeFileCounts(selectedRoleId)
-    .then((counts) => {
-      if (currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
-      knowledgeCountsReady.value = true;
-      planPageCounts.value = {
-        ...planPageCounts.value,
-        total: counts.activePlans + counts.archivedPlans,
-        current: counts.activePlans,
-        plans: counts.activePlans,
-        archived: counts.archivedPlans
-      };
-      memoryPageCounts.value = {
-        recent: counts.recentMemory,
-        consolidated: counts.consolidatedMemory,
-        archived: 0,
-        consolidationRuns: counts.consolidationRuns
-      };
-    })
-    .catch((loadError) => {
-      if (currentRequest === requestVersion && selectedRoleId === roleId.value) {
-        knowledgeCountsError.value = userFacingError(loadError);
-      }
-    });
+  void refreshKnowledgeCounts();
   if (showsPlanList.value) {
     await refreshPlanKnowledge(selectedRoleId, currentRequest);
     return;
@@ -2073,9 +2095,7 @@ function approvalAttachmentError(planId: string, zh: string, en: string): void {
 }
 
 function attachmentDraftId(): string {
-  return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return browserUuid();
 }
 
 function clipboardImageName(mimeType: string, index: number): string {
@@ -3090,14 +3110,15 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
           <v-text-field
             v-if="!focusedPlanId"
             v-model="query"
-            :label="t('搜索计划或记忆的任意内容')"
+            :placeholder="isEnglish ? 'Search plans or memories' : '搜索计划或记忆'"
+            :aria-label="t('搜索计划或记忆的任意内容')"
             prepend-inner-icon="mdi-magnify"
             clearable
             hide-details
             density="compact"
           >
             <template #append-inner>
-              <v-btn class="feedback-refresh-icon" icon="mdi-refresh" variant="text" :aria-label="t('刷新')" :title="t('刷新')" :loading="loading || memoryLoading" @click.stop="refreshKnowledge" />
+              <v-btn class="feedback-refresh-icon" icon="mdi-refresh" variant="text" :aria-label="t('刷新')" :title="t('刷新')" @click.stop="refreshKnowledge" />
             </template>
           </v-text-field>
           <v-btn v-else class="feedback-refresh-icon" icon="mdi-refresh" variant="text" :aria-label="t('刷新')" :title="t('刷新')" :loading="loading || memoryLoading" @click="refreshKnowledge" />
@@ -3116,7 +3137,11 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
         <v-icon v-else size="16" :color="knowledgeListWarning ? 'warning' : 'success'">{{ knowledgeListWarning ? 'mdi-alert-circle-outline' : 'mdi-check-circle-outline' }}</v-icon>
         <span data-no-i18n>{{ knowledgeListStatus }}</span>
       </div>
-      <v-alert v-if="knowledgeCountsError" type="warning" variant="tonal" class="ma-5">{{ t('数量暂时无法更新，已加载内容仍可使用。') }} <span data-no-i18n>{{ knowledgeCountsError }}</span></v-alert>
+      <v-alert v-if="knowledgeCountsError" type="warning" variant="tonal" class="ma-5 knowledge-counts-warning">
+        <span>{{ isEnglish ? 'Counts are unavailable. List loading is independent.' : '数量暂时不可用，列表独立加载。' }}</span>
+        <v-btn size="small" variant="text" :loading="knowledgeCountsLoading" @click="refreshKnowledgeCounts">{{ isEnglish ? 'Retry counts' : '重试数量' }}</v-btn>
+        <details class="knowledge-error-details"><summary>{{ isEnglish ? 'Error details' : '错误详情' }}</summary><span data-no-i18n>{{ knowledgeCountsError }}</span></details>
+      </v-alert>
       <v-alert v-if="roleId && showsPlanList && planPageError" type="warning" variant="tonal" class="ma-5">
         {{ t('目录尚未加载完整，已加载内容仍可使用。') }} <span data-no-i18n>{{ planPageError }}</span>
         <v-btn variant="text" :disabled="loadingMorePlans" @click="retryPlanPages">{{ t('继续加载目录') }}</v-btn>
@@ -3142,7 +3167,11 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
           <v-icon size="20">mdi-archive-outline</v-icon>
           <b>{{ isEnglish ? "Archived plans" : "已归档计划" }}</b>
         </div>
-        <div v-if="loading && !plans.length" class="knowledge-plan-skeletons" aria-live="polite">
+        <div v-if="loading && !plans.length && planCatalogInitializing" class="knowledge-loading-state" role="status">
+          <v-progress-circular indeterminate size="28" width="3" color="primary" />
+          <div><b>{{ isEnglish ? 'Preparing the plan list' : '正在准备计划列表' }}</b><p>{{ isEnglish ? 'You can switch pages. The list will appear when ready.' : '可以切换页面，准备好后会自动显示列表。' }}</p></div>
+        </div>
+        <div v-else-if="loading && !plans.length" class="knowledge-plan-skeletons" aria-live="polite">
           <div v-for="index in 3" :key="index" class="knowledge-plan-skeleton">
             <v-skeleton-loader type="heading, paragraph, paragraph, actions" />
           </div>

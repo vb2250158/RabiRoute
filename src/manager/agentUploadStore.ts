@@ -9,11 +9,11 @@ export type AgentUploadOwner = { nodeId: string; agentId: string };
 export type AgentUploadDto = { id: string; fileName: string; size: number; sha256: string; expiresAt: string };
 export type AgentUploadFile = AgentUploadDto & { path: string };
 export type AgentUploadInput = { owner: AgentUploadOwner; uploadId: string; fileName: string; content: Buffer; sha256: string };
-export type AgentUploadStreamInput = Omit<AgentUploadInput, "content"> & { content: AsyncIterable<Uint8Array>; size?: number; beforeCommit?: () => void | Promise<void> };
+export type AgentUploadStreamInput = Omit<AgentUploadInput, "content"> & { content: AsyncIterable<Uint8Array>; size?: number; beforeCommit?: () => void | Promise<void>; assertCommitAuthorized?: () => void };
 export type AgentUploadStoreOptions = {
   rootDir: string; maxFileBytes?: number; maxTotalBytes?: number; maxFiles?: number; ttlMs?: number; now?: () => number;
 };
-export type AgentUploadErrorCode = "invalid_input" | "not_found" | "conflict" | "capacity" | "integrity" | "unsafe_storage" | "storage_failure";
+export type AgentUploadErrorCode = "invalid_input" | "not_found" | "conflict" | "capacity" | "integrity" | "unsafe_storage" | "storage_failure" | "forbidden" | "upload_aborted";
 export class AgentUploadStoreError extends Error {
   constructor(readonly code: AgentUploadErrorCode) { super(`Agent upload ${code}`); this.name = "AgentUploadStoreError"; }
 }
@@ -96,7 +96,10 @@ export class AgentUploadStore {
 
   constructor(options: AgentUploadStoreOptions) {
     this.limits = Object.freeze({ maxFileBytes: options.maxFileBytes ?? 2 * 1024 ** 3,
-      maxTotalBytes: options.maxTotalBytes ?? 4 * 1024 ** 3, maxFiles: options.maxFiles ?? 100, ttlMs: options.ttlMs ?? 24 * 60 * 60 * 1000 });
+      // Keep the default total quota commensurate with the 2 GiB default single-file bound:
+      // a 4 GiB total only held two maximum-size files, so a handful of ordinary packages
+      // exhausted it while every entry was still inside its TTL.
+      maxTotalBytes: options.maxTotalBytes ?? 16 * 1024 ** 3, maxFiles: options.maxFiles ?? 100, ttlMs: options.ttlMs ?? 24 * 60 * 60 * 1000 });
     if (this.limits.maxFileBytes > 2 * 1024 ** 3 || Object.values(this.limits).some(value => !Number.isSafeInteger(value) || value <= 0)
       || typeof options.rootDir !== "string" || !path.isAbsolute(options.rootDir)
       || /^(\\\\|\/\/)/u.test(options.rootDir)) fail("invalid_input");
@@ -167,6 +170,7 @@ export class AgentUploadStore {
       if (size !== previous.size || digest.digest("hex") !== previous.sha256) fail("integrity");
       await input.beforeCommit?.();
       return this.withFile(input.owner, input.uploadId, file => {
+        input.assertCommitAuthorized?.();
         if (file.sha256 !== previous.sha256 || file.fileName !== previous.fileName || file.expiresAt !== previous.expiresAt) fail("conflict");
         return { id: file.id, fileName: file.fileName, size: file.size, sha256: file.sha256, expiresAt: file.expiresAt };
       });
@@ -198,6 +202,8 @@ export class AgentUploadStore {
       await fd.sync(); await fd.close(); fd = undefined;
       await input.beforeCommit?.();
       return this.operation("stream-commit", () => this.locked(() => {
+        // Revalidate synchronously inside the final publication lock, after all awaits.
+        input.assertCommitAuthorized?.();
         const records = this.inventory(); const now = this.timestamp(); this.cleanup(records, now);
         const existing = records.find(record => record.id === input.uploadId);
         if (existing) {

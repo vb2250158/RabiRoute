@@ -32,7 +32,7 @@ function validSdp(value: unknown): string {
 
 /** Legacy peer-rpc-v1 compatibility only. New requests use peerTunnel/.
  * Remove at the documented all-supported-peers tunnel migration milestone.
- * One bounded read-only RPC per connection; no TURN or reconnect loop. */
+ * Accepts existing clients only for transport control; no business API dispatcher or caller-side reconnect loop. */
 export class RabiPeerDirect {
   private readonly connections = new Set<RTCPeerConnection>();
   private readonly operations = new Set<Promise<void>>();
@@ -82,32 +82,6 @@ export class RabiPeerDirect {
       assertActive();
       return { sdp: peer.localDescription!.sdp };
     } catch (error) { await close(); throw error; }
-  }
-  async exchange(packet: PeerPacket, signal: (offer: { sdp: string }) => Promise<{ sdp: string }>): Promise<PeerPacket> {
-    const { peer, close, assertActive } = this.create();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([
-        (async () => {
-          const channel = peer.createDataChannel(CHANNEL);
-          const opened = channel.stateChange.watch(state => state === "open", this.timeoutMs);
-          // Observe rejection even when signalling fails before we reach the await.
-          void opened.catch(() => {});
-          const reply = new Promise<PeerPacket>((resolve, reject) => {
-            receivePacket(channel, resolve, () => reject(new Error("Invalid direct peer reply.")));
-          });
-          await peer.setLocalDescription(await peer.createOffer());
-          assertActive();
-          const answer = await signal({ sdp: peer.localDescription!.sdp });
-          assertActive();
-          await peer.setRemoteDescription({ type: "answer", sdp: validSdp(answer.sdp) });
-          await opened;
-          sendPacket(channel, packet);
-          return await reply;
-        })(),
-        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("Peer direct connection timed out.")), this.timeoutMs); })
-      ]);
-    } finally { clearTimeout(timer); await close(); }
   }
   async stop(): Promise<void> {
     this.stopped = true;

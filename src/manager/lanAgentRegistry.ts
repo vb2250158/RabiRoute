@@ -21,6 +21,8 @@ export type LanAgentNodeHello = {
 export type LanAgentUpdateState = "idle" | "requested" | "updating" | "updated" | "failed";
 
 export type LanAgentNodeStatus = LanAgentNodeHello & {
+  /** Local display alias owned by Manager, never supplied by the connector. */
+  name?: string;
   connected: boolean;
   connectedAt?: string;
   lastSeenAt?: string;
@@ -142,15 +144,25 @@ function loadState(statePath: string): PersistedState {
   }
 }
 
+export class LanAgentNodeNameConflictError extends Error {
+  constructor() { super("节点名称已被修改，请刷新后重试。"); }
+}
+
 export class LanAgentRegistry {
   private readonly connections = new Map<string, Connection>();
   private readonly nodes = new Map<string, LanAgentNodeStatus>();
   private readonly tasks = new Map<string, LanAgentTask>();
   private readonly taskChanges = new EventEmitter();
+  private readonly deliveryEvents = new EventEmitter();
+
+  onDeliveryRecoveryEvent(listener: () => void): () => void {
+    this.deliveryEvents.on("change", listener);
+    return () => this.deliveryEvents.off("change", listener);
+  }
   private readonly wss = new WebSocketServer({ noServer: true });
   private readonly statePath: string;
   readonly localInstanceId: string;
-  private readonly managementRequests = new Map<string, { connection: Connection; resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
+  private readonly managementRequests = new Map<string, { connection: Connection; resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout; operation: string; assertAuthorized?: () => void }>();
   private detachUpgrade: (() => void) | undefined;
 
   constructor(private readonly options: {
@@ -214,7 +226,7 @@ export class LanAgentRegistry {
 
   listInstances(localAgents: InstanceAgent[] = []): AgentInstance[] {
     return [{ instanceId: this.localInstanceId, local: true, connected: true, agents: localAgents }, ...this.listNodes().map(node => ({
-      instanceId: node.nodeId, local: false, address: node.remoteAddress, connected: node.connected, version: node.version,
+      instanceId: node.nodeId, name: node.name, local: false, address: node.remoteAddress, connected: node.connected, version: node.version,
       agents: (node.agents ?? []).map(agent => ({ ...agent, enabled: this.options.isAgentEnabled?.(node.nodeId, agent.agentId) ?? agent.enabled }))
     }))];
   }
@@ -224,10 +236,30 @@ export class LanAgentRegistry {
     return agent ? { ...agent } : undefined;
   }
 
-  manageAgent(instanceId: string, operation: string, params: unknown, timeoutMs = 15_000): Promise<unknown> {
+  setNodeName(nodeId: string, name: unknown, expectedName: string): LanAgentNodeStatus {
+    const node = this.requireNode(nodeId);
+    if ((node.name ?? "") !== expectedName) throw new LanAgentNodeNameConflictError();
+    if (typeof name !== "string" || name.trim().length > 80 || /[\u0000-\u001f\u007f]/u.test(name)) {
+      throw new Error("节点名称须为不超过 80 个字符的单行文字。");
+    }
+    const next = { ...node, name: name.trim() || undefined };
+    this.nodes.set(nodeId, next);
+    try { this.persist(); }
+    catch (error) { this.nodes.set(nodeId, node); throw error; }
+    recordDataMutationAudit({
+      group: "lan-agent", event: "lan_agent_node_name_changed", owner: "lan-agent-registry",
+      action: "set-node-name", target: { type: "lan-agent-node", id: nodeId },
+      dataSource: { kind: "file", id: "lan-agent/registry.json" }, outcome: "committed",
+      changes: [{ field: "name", from: node.name ?? "", to: next.name ?? "" }]
+    });
+    return structuredClone(next);
+  }
+
+  manageAgent(instanceId: string, operation: string, params: unknown, timeoutMs = 15_000, assertAuthorized?: () => void): Promise<unknown> {
+    assertAuthorized?.();
     const connection = this.requireConnection(instanceId);
     if (!this.requireNode(instanceId).agents) throw new Error("Update this instance connector before managing its Agents.");
-    if (operation === "threads" && this.options.isAgentEnabled) {
+    if (["threads", "prepared_delivery", "reconcile_prepared_delivery"].includes(operation) && this.options.isAgentEnabled) {
       const input = params as { agentId?: string; action?: string; prompt?: unknown } | null;
       const initializeNew = input?.agentId === "new-agent" && ["resolve", "create"].includes(input.action ?? "") && !input.prompt;
       if (!initializeNew && (!input?.agentId || !this.options.isAgentEnabled(instanceId, input.agentId))) throw new Error("Manager has not enabled this remote Agent.");
@@ -235,8 +267,8 @@ export class LanAgentRegistry {
     const requestId = randomUUID();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.managementRequests.delete(requestId); reject(new Error("Instance management timed out; refresh before retrying a change.")); }, timeoutMs);
-      this.managementRequests.set(requestId, { connection, resolve, reject, timer });
-      try { this.send(connection.socket, { type: "manageAgent", requestId, operation, params }); }
+      this.managementRequests.set(requestId, { connection, resolve, reject, timer, operation, assertAuthorized });
+      try { assertAuthorized?.(); this.send(connection.socket, { type: "manageAgent", requestId, operation, params }); }
       catch (error) { clearTimeout(timer); this.managementRequests.delete(requestId); reject(error); }
     });
   }
@@ -396,6 +428,7 @@ export class LanAgentRegistry {
       const previousStatus = this.nodes.get(hello.nodeId);
       const status: LanAgentNodeStatus = {
         ...hello,
+        name: previousStatus?.name,
         connected: true,
         connectedAt: nowIso(),
         lastSeenAt: nowIso(),
@@ -411,6 +444,7 @@ export class LanAgentRegistry {
       clearTimeout(connection.authenticationTimer);
       this.persist();
       this.send(connection.socket, { type: "connected", nodeId: hello.nodeId, managerTime: nowIso() });
+      this.deliveryEvents.emit("change");
       return;
     }
     const node = this.requireNode(connection.nodeId);
@@ -422,8 +456,10 @@ export class LanAgentRegistry {
       if (!pending || pending.connection !== connection) return;
       clearTimeout(pending.timer);
       this.managementRequests.delete(id);
+      try { pending.assertAuthorized?.(); } catch (error) { pending.reject(error instanceof Error ? error : new Error(String(error))); return; }
       if (message.error) pending.reject(new Error(String(message.error).slice(0, 1024)));
       else pending.resolve(message.result);
+      if (pending.operation !== "reconcile_prepared_delivery") this.deliveryEvents.emit("change");
       return;
     }
     if (type === "agentCatalog") {
@@ -431,6 +467,7 @@ export class LanAgentRegistry {
       if (connection.authenticatedNodeId) this.options.registerAgentCatalog?.(connection.credential!, agents);
       this.nodes.set(connection.nodeId, { ...this.requireNode(connection.nodeId), agents, agentTypes: [...new Set(agents.map(agent => agent.provider))] });
       this.persist();
+      this.deliveryEvents.emit("change");
       return;
     }
     if (type === "heartbeat") {
@@ -489,6 +526,7 @@ export class LanAgentRegistry {
     this.tasks.set(taskId, { ...task, ...patch, updatedAt: nowIso() });
     this.persist();
     this.taskChanges.emit(taskId);
+    this.deliveryEvents.emit("change");
   }
 
   private requireNode(nodeId: string): LanAgentNodeStatus {

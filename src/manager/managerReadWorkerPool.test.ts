@@ -31,9 +31,16 @@ class FakeReadWorker extends EventEmitter implements ManagerReadWorkerChild {
     private readonly onKill: (
       signal: NodeJS.Signals | number | undefined,
       worker: FakeReadWorker
-    ) => void = () => {}
+    ) => void = () => {},
+    private readonly autoReady = true
   ) {
     super();
+  }
+
+  override on(event: string, listener: (...args: any[]) => void): this {
+    super.on(event, listener);
+    if (event === "message" && this.autoReady) queueMicrotask(() => this.emit("message", { type: "ready" }));
+    return this;
   }
 
   send(message: unknown, callback?: (error: Error | null) => void): boolean {
@@ -68,6 +75,45 @@ class FakeReadWorker extends EventEmitter implements ManagerReadWorkerChild {
     this.emit("close", code, signal);
   }
 }
+
+test("a cold reader waits for ready and duplicate ready cannot replay the request", async () => {
+  let sends = 0;
+  let request: FakeReadRequest | undefined;
+  const child = new FakeReadWorker(56_001, value => { sends++; request = value; },
+    (_signal, worker) => worker.close(0, "SIGTERM"), false);
+  const pool = new ManagerReadWorkerPool({ workerFactory: () => child, setWorkerPriority: () => {}, timeoutMs: 1_000 });
+  try {
+    const first = pool.run(fakeReadTask("cold"));
+    assert.equal(sends, 0);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(sends, 0, "the process exists but its IPC handler is not ready");
+    child.emit("message", { type: "ready" });
+    child.emit("message", { type: "ready" });
+    assert.equal(sends, 1);
+    child.respond(request!, { first: true });
+    assert.deepEqual(await first, { first: true });
+    const second = pool.run(fakeReadTask("warm"));
+    assert.equal(sends, 2);
+    child.respond(request!, { second: true });
+    assert.deepEqual(await second, { second: true });
+  } finally { await pool.stop(); }
+});
+
+test("cancel during reader startup never dispatches on late ready", async () => {
+  let sends = 0;
+  const child = new FakeReadWorker(56_002, () => { sends++; },
+    (_signal, worker) => worker.close(0, "SIGTERM"), false);
+  const pool = new ManagerReadWorkerPool({ workerFactory: () => child, setWorkerPriority: () => {}, timeoutMs: 1_000 });
+  const controller = new AbortController();
+  try {
+    const read = pool.run(fakeReadTask("cancel-before-ready"), { signal: controller.signal });
+    controller.abort();
+    child.emit("message", { type: "ready" });
+    await assert.rejects(read, (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "aborted");
+    assert.equal(sends, 0);
+    assert.equal(pool.status().active, 0);
+  } finally { await pool.stop(); }
+});
 
 function fakeReadTask(roleDir: string) {
   return { type: "role_memory_counts" as const, roleDir };
@@ -395,7 +441,7 @@ test("manager read workers reuse a resident worker across sequential memory read
   }
 });
 
-test("manager heavy reads run in a separate low-priority process", async () => {
+test("interactive reads run in a separate normal-priority process", async () => {
   const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-manager-read-process-"));
   createRecentMemory(roleDir, {
     id: "memory-process",
@@ -413,7 +459,7 @@ test("manager heavy reads run in a separate low-priority process", async () => {
     assert.equal(status.executionMode, "child_process");
     assert.equal(status.workerPids.length, 1);
     assert.notEqual(status.workerPids[0], process.pid);
-    assert.equal(os.getPriority(status.workerPids[0]), os.constants.priority.PRIORITY_BELOW_NORMAL);
+    assert.equal(os.getPriority(status.workerPids[0]), os.constants.priority.PRIORITY_NORMAL);
   } finally {
     await pool.stop();
     fs.rmSync(roleDir, { recursive: true, force: true });

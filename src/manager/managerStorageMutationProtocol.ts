@@ -17,7 +17,7 @@ import type { RolePanelTimelineMessage } from "../rolePanelTimeline.js";
 import { sanitizeRoleId } from "../shared/routeIdentity.js";
 import { storageRevisionToken } from "../shared/storageRevision.js";
 
-export const MANAGER_STORAGE_MUTATION_PROTOCOL_VERSION = 1 as const;
+export const MANAGER_STORAGE_MUTATION_PROTOCOL_VERSION = 2 as const;
 
 /**
  * Durable mutation receipt ledger contract.
@@ -133,16 +133,31 @@ export type ManagerStorageMutationRequest = Readonly<{
   fence: ManagerStorageMutationFence;
   expectedRevision: string | null;
   task: ManagerStorageMutationTask;
+  /** Fresh per dispatch; present only when the parent must recheck request authority. */
+  admissionNonce?: string;
   actor?: import("../shared/planHistoryActor.js").PlanHistoryActor;
 }>;
+
+export type ManagerStorageMutationAdmission = Readonly<{
+  protocolVersion: typeof MANAGER_STORAGE_MUTATION_PROTOCOL_VERSION;
+  requestId: string;
+  fence: ManagerStorageMutationFence;
+  admissionNonce: string;
+  stage: "commit_admission";
+  sequence: 1;
+}> & (
+  | Readonly<{ kind: "authorization_request" }>
+  | Readonly<{ kind: "authorization_decision"; allowed: boolean }>
+);
 
 export type ManagerStorageMutationResponse = Readonly<{
   protocolVersion: typeof MANAGER_STORAGE_MUTATION_PROTOCOL_VERSION;
   requestId: string;
   fence: ManagerStorageMutationFence;
+  admissionNonce?: string;
 }> & (
   | Readonly<{ ok: true; value: unknown }>
-  | Readonly<{ ok: false; message: string; stack?: string }>
+  | Readonly<{ ok: false; message: string; stack?: string; code?: "authorization_revoked" }>
 );
 
 export type ManagerStorageMutationChildIdentity = Readonly<{
@@ -191,6 +206,10 @@ export function validateManagerStorageMutationRequest(
 ): ManagerStorageMutationRequest {
   if (request?.protocolVersion !== MANAGER_STORAGE_MUTATION_PROTOCOL_VERSION) {
     throw new Error("Storage mutation protocol version is invalid.");
+  }
+  if (request.admissionNonce !== undefined
+    && (typeof request.admissionNonce !== "string" || !/^[a-f0-9]{64}$/.test(request.admissionNonce))) {
+    throw new Error("Storage mutation admission nonce is invalid.");
   }
   if (!/^[A-Za-z0-9:._-]{1,256}$/.test(String(request.requestId || ""))) {
     throw new Error("Storage mutation requestId is invalid.");

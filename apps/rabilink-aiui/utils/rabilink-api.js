@@ -1,4 +1,6 @@
 import wx from "wx";
+import { fingerprintApiRequest } from '../../../packages/rabi-api-contract/fingerprint.mjs';
+import { phoneEyeHttpRequest, phoneEyeStreamRequest, phoneEyeOpenWebSocket } from './phone-eye-transport.js';
 
 const DEFAULT_TIMEOUT_MS = 45000;
 const CONTENT_HASH_PATTERN = /^[a-f0-9]{64}$/;
@@ -14,11 +16,6 @@ function trimEndSlash(value) {
 
 function encodePath(value) {
   return encodeURIComponent(String(value || ""));
-}
-
-function targetQuery(targetDeviceId) {
-  const target = String(targetDeviceId || "").trim();
-  return target ? `?targetDeviceId=${encodeURIComponent(target)}` : "";
 }
 
 function mutationHeaders(mutation) {
@@ -157,15 +154,92 @@ function safeParseJson(text) {
   }
 }
 
-export function getDeviceAgentProfile(config) {
-  return requestJson(config, "/api/rabilink/device/agent-profile", { timeoutMs: 12000 }).then(result => {
+// QuickJS provides buffered HTTP only. The Relay facade transports an arbitrary
+// Manager request; it never selects a persona or implements a Manager operation.
+export const AIUI_HTTP_TRANSPORT_CAPABILITIES = Object.freeze({ transport: 'relay', bufferedHttp: true, lan: false, p2p: false, streaming: false, websocket: false });
+
+function beginHttpOperation(path, body) {
+  const key = 'rabilink-aiui-http-operations-v1';
+  const previous = wx.getStorageSync(key) || { seed: Date.now().toString(36) + '-' + Math.random().toString(36).slice(2), counter: 0, rows: [] };
+  if (!Number.isSafeInteger(previous.counter) || previous.counter < 0 || previous.counter >= Number.MAX_SAFE_INTEGER || !Array.isArray(previous.rows) || previous.rows.length >= 128) throw new Error('HTTP_OPERATION_STORAGE_LIMIT');
+  const counter = previous.counter + 1, operationId = 'aiui-http:' + previous.seed + ':' + counter;
+  // Retain original write intent before dispatch. Unknown results are never replayed automatically.
+  wx.setStorageSync(key, { ...previous, counter, rows: [...previous.rows, { operationId, requestHash: fingerprintApiRequest({ path, body }), state: 'pending' }] });
+  return operationId;
+}
+
+function settleHttpOperation(operationId) {
+  if (!operationId?.startsWith('aiui-http:')) return;
+  const key = 'rabilink-aiui-http-operations-v1', state = wx.getStorageSync(key);
+  if (state?.rows) wx.setStorageSync(key, { ...state, rows: state.rows.filter(row => row.operationId !== operationId) });
+}
+
+export async function requestManagerJson(config, path, options = {}) {
+  const targetDeviceId = String(options.targetDeviceId || config.targetDeviceId || '').trim();
+  const headers = { ...mutationHeaders(options.mutation), ...options.headers };
+  const method = options.method || 'GET';
+  const operationId = options.operationId || options.mutation?.operationId || (!['GET', 'HEAD', 'OPTIONS'].includes(method) ? beginHttpOperation(path, options.body) : undefined);
+  const result = await requestDeviceApi(config, { targetDeviceId, request: {
+    method, path, headers,
+    ...(options.body === undefined ? {} : { body: options.body }),
+    ...(operationId ? { operationId } : {})
+  } });
+  const receipt = result.structuredContent;
+  if (!receipt || receipt.ok !== true || receipt.uncertain === true) {
+    const error = new Error(receipt?.code || 'MANAGER_REQUEST_UNCONFIRMED');
+    error.code = receipt?.code; error.statusCode = receipt?.statusCode; error.uncertain = receipt?.uncertain === true; error.response = receipt;
+    throw error;
+  }
+  settleHttpOperation(operationId);
+  if (receipt.data?.ok === false || (receipt.data?.code !== undefined && receipt.data.code !== 0)) {
+    const error = new Error(receipt.data.message || String(receipt.data.code || 'MANAGER_BUSINESS_FAILED'));
+    error.code = receipt.data.code; error.statusCode = receipt.statusCode; error.response = receipt.data;
+    throw error;
+  }
+  return withResponseMetadata(receipt.data, { headers: receipt.headers });
+}
+
+async function deviceProfileOwner(config) {
+  const roster = await requestJson(config, '/api/rabilink/devices/connections', { timeoutMs: 12000 });
+  const devices = roster?.data?.devices;
+  if (roster.code !== 0 || !Array.isArray(devices) || devices.length !== 1 || !devices[0].connectionTargetDeviceId) throw new Error('DEVICE_PROFILE_OWNER_UNAVAILABLE');
+  return devices[0].connectionTargetDeviceId;
+}
+
+export async function getDeviceAgentProfile(config) {
+  const owner = await deviceProfileOwner(config);
+  return requestManagerJson(config, "/api/rabilink/agent-devices/self/profile", { targetDeviceId: owner, timeoutMs: 12000 }).then(result => {
     if (result?.code !== 0 || !result.data || typeof result.data !== "object") throw new Error("Invalid device profile response");
     return result.data;
   });
 }
 
-export function reportDeviceAgentProfileApplied(config, body) {
-  return requestJson(config, "/api/rabilink/device/agent-profile/applied", { method: "POST", body, timeoutMs: 12000 }).then(result => {
+export async function requestDeviceApi(config, packet) {
+  const targetDeviceId = String(packet.targetDeviceId || config.targetDeviceId || '').trim();
+  const edge=await phoneEyeHttpRequest(config,{targetDeviceId,request:packet.request});
+  if(edge){if(!edge.structuredContent)throw new Error('PHONE_BRIDGE_RESPONSE_INVALID');return edge;}
+  return requestJson(config, '/api/rabilink/device/api', { method: 'POST', body: { targetDeviceId, request: packet.request }, timeoutMs: 30000 }).then(result => {
+    if (result?.code !== 0 || !result.data?.structuredContent) throw new Error('API_RESPONSE_INVALID');
+    return { ...result.data, transportCapabilities: AIUI_HTTP_TRANSPORT_CAPABILITIES };
+  });
+}
+
+export function recordAiuiConversation(config, packet) {
+  const ref = packet.personaRef;
+  if (!ref?.roleId || !ref.sourceDeviceId) return Promise.reject(new Error('AIUI_HISTORY_PERSONA_REQUIRED'));
+  return requestManagerJson(config, '/api/roles/' + encodePath(ref.roleId) + '/chat-history/aiui', {
+    targetDeviceId: ref.sourceDeviceId, method: 'POST', body: { sessionId: packet.sessionId, turnId: packet.turnId, userText: packet.userText, ...(packet.assistantText ? { assistantText: packet.assistantText } : {}) },
+    operationId: 'aiui-history:' + packet.sessionId + ':' + packet.turnId + ':' + (packet.assistantText ? 'reply' : 'user'), timeoutMs: 30000
+  }).then(result => {
+    const receipt = result?.data?.receipt;
+    if (result?.code !== 0 || receipt?.state !== 'committed' || receipt.turnId !== packet.turnId) throw new Error('AIUI_HISTORY_UNCONFIRMED');
+    return { ...receipt, roleId: ref.roleId, sourceDeviceId: ref.sourceDeviceId };
+  });
+}
+
+export async function reportDeviceAgentProfileApplied(config, body) {
+  const owner = await deviceProfileOwner(config);
+  return requestManagerJson(config, "/api/rabilink/agent-devices/self/profile/receipt", { targetDeviceId: owner, method: "POST", body, operationId: body.idempotencyKey, timeoutMs: 12000 }).then(result => {
     if (result?.code !== 0 || !result.data || typeof result.data !== "object") throw new Error("Device profile receipt not confirmed");
     return result.data;
   });
@@ -173,6 +247,27 @@ export function reportDeviceAgentProfileApplied(config, body) {
 
 export function getMobileState(config, timeoutMs = DEFAULT_TIMEOUT_MS) {
   return requestJson(config, "/api/rabilink/mobile/state", { timeoutMs });
+}
+export function requestManagerStream(config,packet,observer){return phoneEyeStreamRequest(config,packet,observer);}
+export function openManagerWebSocket(config,packet){return phoneEyeOpenWebSocket(config,packet);}
+
+export async function getMobileDeviceStatus(config, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  const directory = await getMobileState(config, timeoutMs);
+  const owner = String(directory.connectionOwnerDeviceId || '').trim();
+  if (!owner) throw new Error('MOBILE_OWNER_PC_NOT_CONFIGURED');
+  return requestManagerJson(config, "/api/rabilink/mobile/device-status", { targetDeviceId: owner, timeoutMs });
+}
+
+export async function getDeviceAgentContext(config) {
+  const directory=await requestJson(config,'/api/rabilink/devices/connections');
+  const devices=directory?.data?.devices || [];
+  if(devices.length!==1 || !devices[0].id || !devices[0].connectionTargetDeviceId)throw new Error('DEVICE_AGENT_CONNECTION_REQUIRED');
+  return {agentId:devices[0].id,targetDeviceId:devices[0].connectionTargetDeviceId};
+}
+export async function requestDeviceAgent(config,context,suffix,{method='GET',body,operationId}={}) {
+  const response=await requestManagerJson(config,'/api/device-agents/'+encodePath(context.agentId)+suffix,{targetDeviceId:context.targetDeviceId,method,body,operationId,timeoutMs:30000});
+  if(response?.code!==0 || !response.data)throw new Error(response?.code || 'DEVICE_AGENT_UNCONFIRMED');
+  return response.data;
 }
 
 export function selectMobileTarget(config, targetDeviceId) {
@@ -182,100 +277,71 @@ export function selectMobileTarget(config, targetDeviceId) {
   });
 }
 
-export function getMobileRoutes(config, targetDeviceId = "") {
-  return requestJson(config, `/api/rabilink/mobile/routes${targetQuery(targetDeviceId)}`)
+async function managerRoutePath(config, targetDeviceId, suffix = '') {
+  const state = await getMobileState(config);
+  const target = String(targetDeviceId || config.targetDeviceId || state.selectedTargetDeviceId || '').trim();
+  const worker = (state.workers || []).find(row => (row.id || row.guid) === target);
+  if (!worker) throw new Error('ROUTE_TARGET_NOT_CONNECTED');
+  return { targetDeviceId: worker.id || worker.guid, path: '/api/rabi/instances/' + encodePath(worker.guid || worker.id) + '/routes' + suffix };
+}
+
+export async function getMobileRoutes(config, targetDeviceId = "") {
+  const target = await managerRoutePath(config, targetDeviceId, '?includeProfiles=true&presentation=mobile');
+  return requestManagerJson(config, target.path, { targetDeviceId: target.targetDeviceId })
     .then(routeCatalogResult);
 }
 
-export function getMobileAgentOptions(config, routeId, targetDeviceId = "") {
-  return requestJson(
+export async function getMobileAgentOptions(config, routeId, targetDeviceId = "") {
+  const target = await managerRoutePath(config, targetDeviceId, '/' + encodePath(routeId) + '/agent-options');
+  return requestManagerJson(
     config,
-    `/api/rabilink/mobile/routes/${encodePath(routeId)}/agent-options${targetQuery(targetDeviceId)}`
+    target.path, { targetDeviceId: target.targetDeviceId }
   );
 }
 
-export function setMobileAgentBinding(config, routeId, binding, mutation, targetDeviceId = "") {
-  return requestJson(
+export async function setMobileAgentBinding(config, routeId, binding, mutation, targetDeviceId = "") {
+  mutationHeaders(mutation);
+  const target = await managerRoutePath(config, targetDeviceId, '/' + encodePath(routeId) + '/agent-binding');
+  return requestManagerJson(
     config,
-    `/api/rabilink/mobile/routes/${encodePath(routeId)}/agent-binding${targetQuery(targetDeviceId)}`,
+    target.path,
     {
       method: "PATCH",
       body: binding,
-      mutation
+      mutation, targetDeviceId: target.targetDeviceId
     }
   ).then((json) => requireCommittedMutationReceipt(json, mutation));
 }
 
 export function getMobileWebgui(config, path, targetDeviceId = "") {
-  const query = new URLSearchParams({ path });
-  const target = String(targetDeviceId || "").trim();
-  if (target) query.set("targetDeviceId", target);
-  return requestJson(config, `/api/rabilink/mobile/webgui?${query.toString()}`);
+  return requestManagerJson(config, path, { targetDeviceId });
 }
 
 export function postMobileWebgui(config, path, body = {}, targetDeviceId = "", method = "POST", mutation = null) {
   const headers = mutationHeaders(mutation);
-  return requestJson(
+  return requestManagerJson(
     config,
-    `/api/rabilink/mobile/webgui${targetQuery(targetDeviceId)}`,
+    path,
     {
-      method: "POST",
-      body: {
-        method,
-        path,
-        body,
-        ...(mutation ? { headers } : {})
-      },
-      mutation
+      method, body, headers, mutation, targetDeviceId
     }
   ).then((json) => mutation ? requireCommittedMutationReceipt(json, mutation) : json);
 }
 
-export function sendMobileProof(config, proof = {}) {
-  return requestJson(config, "/api/rabilink/mobile/proof", {
-    method: "POST",
-    body: proof,
+export async function sendMobileProof(config, proof = {}) {
+  const directory = await getMobileState(config, 8000);
+  const owner = String(directory.connectionOwnerDeviceId || '').trim();
+  if (!owner) throw new Error('APPLICATION_CONNECTION_OWNER_REQUIRED');
+  return requestManagerJson(config, "/api/rabilink/mobile/proof", {
+    method: "POST", body: proof, targetDeviceId: owner,
+    operationId: 'aiui-proof:' + String(proof.sessionId || '') + ':' + String(proof.event || '') + ':' + String(proof.time || Date.now()),
     timeoutMs: 8000
   });
 }
 
-export function publishRabiLinkVoiceInput(config, segment = {}) {
-  const text = String(segment.text || "").trim();
-  if (!text) return Promise.reject(new Error("Transcript text is empty."));
-  return requestJson(config, "/rokid/rabilink/input", {
-    method: "POST",
-    body: {
-      text,
-      type: "rabilink.observation",
-      deliveryMode: "observe",
-      source: "rabilink-aiui",
-      sender: "Rokid Glass",
-      clientMessageId: String(segment.id || ""),
-      sessionId: String(segment.sessionId || ""),
-      sequence: Number(segment.sequence || 0),
-      capturedAt: Number(segment.createdAt || Date.now())
-    }
-  });
-}
 
-export function requestRabiLinkConversationReview(config, request = {}) {
-  const requestedAt = Number(request.requestedAt || Date.now());
-  const clientMessageId = String(request.id || `review-${requestedAt}`);
-  return requestJson(config, "/rokid/rabilink/input", {
-    method: "POST",
-    body: {
-      text: "用户在眼镜连接会话模式单击触摸板，要求现在审阅会话记录。",
-      type: "rabilink.review_request",
-      deliveryMode: "observe",
-      reviewRequested: true,
-      source: "rabilink-aiui-touchpad",
-      sender: "Rokid Glass",
-      clientMessageId,
-      sessionId: String(request.sessionId || ""),
-      capturedAt: requestedAt
-    }
-  });
-}
+
+
 
 export function claimRabiLinkDeviceToken(config, serialNumber) {
   const normalizedSerial = String(serialNumber || "").trim();
@@ -304,34 +370,5 @@ export function publishRabiLinkDeviceLogs(config, payload = {}) {
       logs
     },
     timeoutMs: 8000
-  });
-}
-
-export async function requestDeviceKnowledge(config, body) {
-  if (!body || typeof body !== "object" || Array.isArray(body) || !["list", "call"].includes(body.operation)
-    || Object.keys(body).some(key => !["operation", "name", "args"].includes(key))) throw new Error("INVALID_KNOWLEDGE_REQUEST");
-  if (JSON.stringify(body).length > 16384) throw new Error("KNOWLEDGE_REQUEST_TOO_LARGE");
-  try {
-    const response = await requestJson(config, "/api/rabilink/device/knowledge", { method: "POST", body, timeoutMs: 20000 });
-    if (response.code !== 0 || !response.data || typeof response.data !== "object" || response.uncertain === true) {
-      const error = new Error("KNOWLEDGE_RESPONSE_NOT_CONFIRMED");
-      error.response = response; error.uncertain = response.uncertain === true;
-      throw error;
-    }
-    return response.data;
-  } catch (error) {
-    error.uncertain = error.uncertain === true || error.response?.uncertain === true;
-    throw error;
-  }
-}
-
-export function getRabiLinkMessageStream(config, after = "", waitMs = 25000) {
-  const query = new URLSearchParams();
-  query.set("after", String(after || "").trim());
-  query.set("stream", "1");
-  const boundedWaitMs = Math.max(0, Math.min(60000, Number(waitMs || 0)));
-  query.set("waitMs", String(boundedWaitMs));
-  return requestJson(config, `/rokid/rabilink/messages?${query.toString()}`, {
-    timeoutMs: Math.max(DEFAULT_TIMEOUT_MS, boundedWaitMs + 5000)
   });
 }

@@ -86,6 +86,7 @@ export function readWorkbuddyThread(threadId: string): unknown {
  * @returns the delivery receipt the bridge records for this transport.
  */
 export async function sendWorkbuddyThreadMessage(params: {
+  assertAuthorized?: () => void | Promise<void>;
   threadId: string;
   prompt: string;
   cwd: string;
@@ -112,6 +113,7 @@ export async function sendWorkbuddyThreadMessage(params: {
   };
   const { task: resolved, endpoint } = ensureWorkbuddyDeliverable(binding);
   await deliverWorkbuddyMessage({
+    assertAuthorized: params.assertAuthorized,
     sessionId: resolved.id,
     text: params.prompt,
     endpoint

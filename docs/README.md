@@ -57,6 +57,9 @@
 - [Pipeline presets](pipeline-presets.md) — Agent 会话、明确外部目标和 Outbox 状态；其中 FenneNote 输出章节仅为归档兼容说明。
 - [Agent 端接入：历史问题、正确边界与验证手册](agent-adapter-integration-lessons.md) — **现行指南**。会话重复创建、工具缺失、owner 倒置和桌面启动依赖的复盘与验证方法。
 - [标准 Agent 端接入需求](agent-adapter-standard-requirements.md) — **现行指南**。发现、认证、任务、幂等创建、投递、结果、工具、生命周期、UI、安全和验收要求。
+- [设备 Agent 接入合同](device-agent-adapter.md) — **实验实现**。配置眼镜为消息路线的处理端，使用眼镜模型执行，核验 PC 队列、原投递和响应回执。
+- [手机代眼镜建立连接](device-peer-connection.md) — **实验实现**。核验设备凭据、独立密钥与短期连接授权，让手机转发时保留眼镜身份。
+- [Agent 精确投递与正式回复](agent-endpoint-delivery.md) — **实验实现**。核验来源与目标 owner、原消息回执和必回复记录，处理超时及身份撤销。
 - [Codex Desktop Agent 接入与验收合同](codex-desktop-agent-acceptance.md) — **当前事实**。稳定 ID、按需扫描、自动初始化、Desktop 唯一 owner 和元数据 bootstrap 安全门。
 - [Rabi Codex Context 插件](rabi-codex-context-plugin.md) — **统一 Manager 版本**。Hook 只转发真实 Codex session 事件并注入 Rabi PC 返回的统一人格、计划、记忆与技能上下文。
 - [人格数据同步退役说明](persona-data-sync.md) — **已退役**。不再提供自动/手动同步或同步 API；改用现有 RabiLink 远端人格、Agent 与数据访问，不复制数据，保留历史资料。
@@ -97,7 +100,7 @@
 - [本地语音模型下载说明](local-speech-model-downloads.md) — 使用模型管理页按需下载，并查看每个 TTS/ASR 模型的来源、隔离环境与验证要求。
 - [RabiSpeech 性能与功能报告](rabispeech-performance-report.md) — 六个 TTS、五个主要 ASR 的冷/热态、效果、硬件与 CUDA 问题。
 - [语音服务器与通用连接](rabilink-peer-tunnel.md) — 选择另一台电脑的语音服务，查看在线状态、实际线路和往返延迟。
-- [跨电脑接口调用](rabilink-peer-rpc.md) — 按设备 ID 查询同一应用的另一台 PC，检查 LAN、P2P 或 Relay 的实际调用结果。
+- [设备发现与连接信令](rabilink-peer-rpc.md) — 查找同一应用的 PC，了解连接握手；全部接口读写和流式请求见[通用连接](rabilink-peer-tunnel.md)。
 - [RabiLink Relay](rabilink-relay-server.md) — Relay server、PC worker、远程 WebGUI、统一会话账本和下行流。
 - [RabiLink Cloudflare Worker](rabilink-relay-cloudflare-worker.md) — Relay 边缘代理实现。
 - [RabiLink 眼镜端三条路线对比](rabilink-glasses-route-comparison.md) — 原生灵珠智能体、AIUI 与原生 App 的宿主、生命周期、设备能力、发布成本和当前建议。
@@ -110,14 +113,14 @@
 - [AIUI 到手机 / 原生眼镜方案的功能等价清单](rabilink-aiui-native-parity.md) — 按代码、自动化与真机证据逐项记录迁移完成度。
 - [AIUI 手机设备配置 HTTP](aiui-agent-profile-http.md) — **实验实现**：手机设置页、设备归属、版本冲突和眼镜应用回执；尚未整体验收。
 - [AIUI 配置应用生命周期](../apps/rabilink-aiui/docs/agent-profile-runtime.md) — 缓存、当前对话结束后应用与模型状态说明。
-- [AIUI 工具合同核对](../apps/rabilink-aiui/docs/agent-tool-contract.md) — 官方工具调用事件与尚未证实的结果续轮接口。
+- [AIUI 工具合同核对](../apps/rabilink-aiui/docs/agent-tool-contract.md) — 模型与工具调用事件、续轮合同和验收边界。
 - [独立 RabiPC 知识 MCP](../apps/rabi-mcp/README.md) — 为独立 MCP 客户端提供 HTTP/stdio 工具；RabiLink 使用内置 Manager 路径，无需部署此服务。
 - [本机知识桥设置](user-guide/knowledge-bridge-settings.md) — 连接后使用 PC 知识工具，核对服务就绪和业务结果。
 - [手机知识授权](knowledge-grant-phone-ui.md) — 了解旧知识授权页面的退役和迁移入口。
 - [PC 知识桥运行配置](rabilink-knowledge-runtime.md) — 复用 Manager 知识接口、应用鉴权与就绪确认。
 - [知识写入回执查询](rabilink-knowledge-operation-receipts.md) — 按真实设备凭据查询原操作键的持久回执，未知结果不重放。
-- [AIUI Agent 历史验收记录](aiui-agent-acceptance.md) — 开发维护：分清构建、运行与真机证据，查看未完成能力和验收出口。
-- [AIUI 单步知识工具](../apps/rabilink-aiui/docs/knowledge-single-step.md) — 只读工具、显式角色选择、真实结果与不自动续轮边界。
+- [新版 AIUI Agent 验收](aiui-agent-acceptance.md) — 开发维护：按新版合同核验构建、运行、硬件唤醒和语音交互，查看待完成项。
+- [AIUI 通用接口与连接](../apps/rabilink-aiui/docs/generic-api-transport.md) — 任意公开接口、目标电脑、人格归属和传输验证范围。
 - [RabiLink AIUI 常驻边界](rabilink-aiui-residency-plan.md) — 已实现链路与常驻能力限制混合文档，阅读时区分代码事实和计划。
 - [RabiLink 主动智能需求](rabilink-active-intelligence-requirements.md) — 用户状态、情景识别、群消息命中计划/记忆后的处理闭环和主动介入的目标合同与实施追踪，不等同于全部完成。
 - [RabiLink 原生应用设计](rabilink-glasses-app-design.md) — 手机/眼镜体验设计。

@@ -24,7 +24,13 @@ Android 全天记录整合正在实施：`RabiConversationService` 是手机/眼
 
 通用跨 PC 连接由 `src/peerTunnel/` 拥有：认证、三线路选择、流复用、RTT 和请求转发。语音页面使用同一目标选择，设备采集与播放保留本机归属。见[通用连接](rabilink-peer-tunnel.md)。
 
-跨 PC 只读调用由 `rabiPeerProtocol.ts` 拥有加密合同和同一应用鉴权分派，`rabiPeerClient.ts` 编排 LAN/P2P/Relay，`rabiPeerDirect.ts` 拥有有界 WebRTC 连接。`rabiPeerDiscovery.ts` 是独立于已退役同步功能的通用设备发现；RabiLink 插件拥有 HTTP 入口及释放，`src/manager/peerLanServer.ts` 的 `PeerLanServer` 承载 peer RPC/tunnel；完整 Manager 仅通过已鉴权的 `manager` 服务转发，不在 peer LAN 端口直接暴露。通用状态事件为 `peer_lan_status`，端口设置为 `RABILINK_PEER_LAN_PORT`，设备变更事件为 `peer_changed`；这些名称描述本轮源码调整，不代表已经部署或实机验收。见[跨电脑接口调用](rabilink-peer-rpc.md)。
+Manager 内部 HTTP 转发由 `src/shared/internalManagerHop.ts` 证明来源；公开 generation、loopback IP 或裸代理请求头均不能证明设备身份。已鉴权的传输 owner 使用本进程内存随机密钥，为每次 HTTP 请求签发 MAC 与唯一 nonce，绑定来源设备、转发类型、原始方法和路径、当前应用作用域及 generation。外部私有请求头先被剥离；同一请求可重复复验，新请求重放 nonce 会被拒绝，作用域或 generation 变化也会拒绝。通用 Manager 与资源下载保留该证明，独立语音服务使用自身鉴权；不增加用户配置或逐接口授权。当前源码测试包含真实 HTTP 转发和篡改、防重放验证，安装版与真机验收另行记录。
+
+手机代理眼镜时，普通应用连接不拥有眼镜身份。真实眼镜凭据经既有通用设备 HTTP 转发到 PC 的 `device-bootstrap`，由当前 Relay MAC 证明来源和原始 `authenticatedAt`；PC 仅保存独立公钥的 45 秒绝对短租约。普通应用握手永久拒绝 `glasses-*`；到期、换 key、scope 或重启后不回落为普通应用。内存 owner guard 绑定每次内部 hop，并在 Manager 已接纳请求的后续复验与流字节处理中检查当前 key、epoch 和截止；nonce 表清理不会取消已接纳请求的 guard。无新服务端业务分发表，完整协议及离线撤销窗口见[通用连接](rabilink-peer-tunnel.md#手机代理眼镜的独立身份)。
+
+全部跨 PC 业务读取、写入、HTTP 流、WebSocket 和二进制请求由 `src/peerTunnel/` 的通用 `manager` 服务转发，连接按 LAN → P2P → Relay 选择并复用。`rabiPeerProtocol.ts` 和 `rabiPeerClient.ts` 仅处理 `system.describe` 与连接分配信令；`rabiPeerDirect.ts` 保留现有手机所需的 `transport.offer` 接收端。旧 `/api/rabilink/peer/call`、`plans.list` / `persona.manifest` 业务注册及逐请求 P2P 调用端已移除。`rabiPeerDiscovery.ts` 继续提供独立于已退役同步功能的设备发现；RabiLink 插件拥有 HTTP 入口及释放，`src/manager/peerLanServer.ts` 的 `PeerLanServer` 承载控制信令和加密隧道，完整 Manager 不在 peer LAN 端口直接暴露。通用状态事件为 `peer_lan_status`，端口设置为 `RABILINK_PEER_LAN_PORT`，设备变更事件为 `peer_changed`。保留旧信令的依赖、退出条件与验收范围见[设备发现和连接信令](rabilink-peer-rpc.md)。
+
+公网服务器的目标边界是连接、鉴权和中转；人格、Skill、聊天记录及接口执行归目标 PC 的现有业务 owner，AIUI 的模型由乐奇配置。新增 Manager API 和公开业务 header 通过通用隧道透传，无需向服务器新增逐业务分发表；服务器不拥有 PC 人格副本或以人格绑定决定权限。私有认证和代理身份 header 由传输 owner 重建，第三 PC 转发有界，写入结果未知时不自动重放。本轮传输核心和本机多端夹具已验证这些合同；历史服务器专用路由的迁移、全项目构建及实际运行版本仍需分别核对，不能据此宣称整个服务器或真机链路已完成迁移。
 
 实验视频直连由 `RabiDirectVideoSender.kt` 与 `src/manager/rabiDirectVideo.ts` 承担两端传输。RabiLink Manager 插件拥有接收器生命周期和本机文件；`rabiDirectVideoRoutes.ts` 仅接收有界 SDP，Relay 不接收视频字节。SDK 取流留在眼镜适配器。见 [能力与验收限制](rabilink-direct-video.md)。
 
@@ -138,7 +144,7 @@ skills/
 - `heartbeatAdapter.ts`：定时触发心跳消息。
 - `messageAdapter.ts`：消息端 Adapter 的最小 Interface。
 
-Xiaomi Home 是 Manager 持有的插件消息端，不在 Gateway 内复制常驻 listener。`src/integrations/xiaomiHome/` 统一拥有 Home Assistant REST/WebSocket 客户端、受保护单账号凭据、设置 revision、事件监听、动作 receipt 和录像 artifact；Route 卡片通过 `/api/agent/xiaomi-home/auth` 同时提交候选地址、候选令牌和设置 revision。Manager 必须先用候选令牌验证候选 origin，再原子替换设置与地址绑定凭据；运行时不得把旧地址的凭据装入新地址。认证 mutation 还接受当前 lifecycle fence 与 `Idempotency-Key`，非回环地址默认要求 HTTPS。
+Xiaomi Home 是 Manager 持有的插件消息端，不在 Gateway 内复制常驻 listener。`src/integrations/xiaomiHome/` 统一拥有 Home Assistant REST/WebSocket 客户端、受保护单账号凭据、设置 revision、事件监听、动作 receipt 和录像 artifact；Route 卡片通过 `/api/agent/xiaomi-home/auth` 同时提交候选地址、候选令牌和设置 revision。Manager 必须先用候选令牌验证候选 origin，再原子替换设置与地址绑定凭据；运行时不得把旧地址的凭据装入新地址。认证 mutation 还接受当前 lifecycle fence 与 `Idempotency-Key`，非回环地址默认要求 HTTPS。所有公共 Xiaomi API 先验证 ingress 捕获的 Agent principal，再考虑本机或 WebGUI 配置例外；已认证远端 Agent 与本机同权。显式请求守卫跨 body、队列、provider、凭据提交、部署进程和流式分块复核原租约，global/node ABA 不会重新授权旧请求。派发前失效返回 `not_started`，派发后隐藏回执并返回 `unknown`，不抹除已提交事实；后台 monitor/start 不捕获请求生命周期。录像保留独立 token ACL，远端 Agent 的 node bearer 占用 `Authorization`，录像 token 使用 `x-rabiroute-artifact-token`。
 
 `rolePanel` 和 `remoteAgent` 出现在 MessageAdapter 类型中，但它们的真实入口由 Manager 提供：角色面板走 Manager/托盘 timeline，Remote Agent v3 由 RabiGUI 主动扫描连接远端 bridge。Gateway 子进程只上报对应状态，不另开网络 listener。
 
@@ -411,6 +417,8 @@ startManager();
 
 `GenerationRuntime` 按真实依赖组件切换。revision、配置、权限和依赖 revision 不变时复用现有实例；变化只重载受影响组件。缺少必需能力的实例进入 `waiting_dependency`。候选激活或 effect 发布失败时，旧组件继续服务；不相关组件照常更新。成功发布后释放旧 effect scope。Manager API 从 generation 的不可变 service 与 contribution 快照生成 Plugin Catalog；Web 模块按包 ID、版本和 SHA-256 revision 发布不可变资源。
 
+`ManagerPluginRouteRegistry` 按已发布的 activation 隔离路由。同一插件在同一次激活中分批注册的设备、视频和 peer 路由全部保留；新激活发布后只选择该实例的最新已发布激活，不混用旧路由。每个 disposer 只移除自身注册批次。插件显示 active 不能单独证明全部 HTTP 入口可达，验收须经过真实注册表分发。
+
 ```text
 plugins/contracts/plugin-sdk/
 plugins/builtin/<package-id>/1.0.0/
@@ -434,7 +442,7 @@ unregister routes
 
 `ManagerPluginRequestTracker` 拒绝新工作，并同时等待 HTTP response 与 `trackOperation()` 登记的实际业务 Promise。拥有外部资源的插件先移除路由批次，再等待已接收的发送、任务、配置写入、扫描和回调，最后在同一个 disposer 中停止资源。Remote Agent 回调使用插件级 `AbortSignal` 并等待真正结束；NapCat 由 `napcatLifecycleOwner.ts` 按路由绑定维护持久进程记录，停止前核对 PID、创建时间和程序路径；删除、停用及启动恢复都使用同一入口，普通 QQ 不作为发现目标；FenneNote 等待转发任务退出。RabiLink 保存活动运行 Promise，停止时 abort 并等待运行结束；停止期间排队的配置会在 stop 完成后重启，但第二次 `stop()` 会先清除目标 signature，从而取消该排队重启。通用 `PeerLanServer` 关闭 listener 和活动 Socket；本地 WebGUI、Speech、SSE 与 Relay 回写都绑定停止信号。配置 watcher 的 `afterReload` 和 Rabi 身份配置 PATCH 都等待异步 Relay 同步。`GenerationRuntime` 按依赖组件生成候选并发布不可变快照，发布成功后逆序释放旧 effect scope；候选失败时释放候选资源并继续使用旧 revision。
 
-Manager 端点、身份、完整必需插件集与 handler READY 不等待计划存储的 NAS 恢复；READY 后父进程主线程不得触碰远端文件系统。`managerWatchBroker.ts` 只对本地根目录使用原生 watcher；UNC 配置与插件根由可终止子进程执行有界 `readdir/stat`，超时后必须确认旧 child 退出再重建。`gatewayDiagnosticsSnapshot.ts` 把人格、状态和日志诊断交给 `managerReadWorker`，`/gateways` 与 `/api/gateways` 只读取带单调 revision 的深冻结内存快照；刷新失败保留上一份快照并显式标为 stale/degraded。远端人格只读 manifest 与旧同步索引解耦，由 `peerPersonaManifest.ts` 承担有界读取，不加载同步写入者或获取计划包同步锁。后台 watcher 或快照降级进入 `/health` 诊断，但不能阻塞回环控制面。
+Manager 端点、身份、完整必需插件集与 handler READY 不等待计划存储的 NAS 恢复；READY 后父进程主线程不得触碰远端文件系统。`managerWatchBroker.ts` 只对本地根目录使用原生 watcher；UNC 配置与插件根由可终止子进程执行有界 `readdir/stat`，超时后必须确认旧 child 退出再重建。`gatewayDiagnosticsSnapshot.ts` 把人格、状态和日志诊断交给 `managerReadWorker`，`/gateways` 与 `/api/gateways` 只读取带单调 revision 的深冻结内存快照；刷新失败保留上一份快照并显式标为 stale/degraded。远端人格与计划读取复用通用 `manager` 隧道和目标 PC 的既有接口、读 worker 与有界预算，不再使用独立 RPC 清单读取模块或旧同步索引。后台 watcher 或快照降级进入 `/health` 诊断，但不能阻塞回环控制面。
 
 内置与树外 Manager 插件都在 Manager 进程内执行，并受同一 Manifest、能力图、权限和 effect scope 约束。当前插件合同面向可信扩展；需要运行不可信代码时，应新增独立进程宿主并定义跨进程能力合同，不能把进程内权限检查当作安全沙箱。
 
@@ -554,6 +562,10 @@ Gateway 配置的事实源 Module。
 `src/personaPlanWorkflow.ts` 读取并校验每个人格 `personaConfig.json.planWorkflow`，它是状态 key、名称、说明、颜色、顺序、视图和生命周期规则的唯一真源。`src/roleKnowledge.ts` 只把 `plan.status` 当作配置 key，并通过 workflow role 与状态属性校验分析、信息不足、审批、执行、完成和归档，不包含十态枚举。v1/v2/v3/v4 配置第一次读取时由同一模块迁移为 v5：在审批标记后复用匹配的启用“已审批”定义或新增默认定义，并绑定 `roles.approved`；匹配定义未启用时拒绝迁移。其它自定义状态、说明和相对顺序保持不变。v1 仍先补齐 `roles.informationNeeded`，v2/v3 只更新未自定义的旧默认说明。v5 目录读取不自动恢复被移除的状态。`archiveStatus=未归档 | 已归档` 是独立归档变量；只有配置为 `terminal` 且 `archiveEligible` 的状态可以在 `archiveAfterHours` 后归档，归档时保留原 key。`src/roleKnowledgePresentation.ts` 返回配置中的 label、description、palette、order 与 views；`src/roleKnowledgePagination.ts` 动态生成状态筛选和 `byStatus` 计数。状态配置 revision 参与展示缓存。已归档计划在普通列表和关键词召回前被排除，只能通过明确计划 ID 或归档视图读取。状态移除采用 `enabled → retiring → retired`，当前计划先迁移，旧定义继续解释归档计划和追加式历史。
 
 计划目录的物理写入只有一个边界：`src/planStorageRepository.ts`。它拥有跨进程 lease、完整终态快照、publish/receipt 恢复、active/archive 迁移和旧布局冲突隔离；`src/roleKnowledge.ts` 只组装业务终态并调用 Repository，不直接创建、改写或移动计划目录。Manager 在可终止的 one-shot child 中依次执行 lifecycle recovery、旧布局迁移、feedback WAL recovery 和 `planStoragePackageRecovery.ts` 的 `recoverStoredPlanPackages()` 旧事务恢复（不得接受新同步），以建立计划存储的读取/变更资格。该资格生命周期不阻塞 Manager READY；`running` 或 `degraded` 时计划变更失败关闭，降级进入 `/health`，Host 与 Tray 保持当前 application generation。`src/planAttachments.ts` 只负责附件数量/大小限制、本机路径或 Base64 读取、图片/视频签名校验、哈希及待提交字节准备，不能自行落盘；附件和 `plan.json` 必须随同一次 Repository transaction 原子发布。`src/manager/planAttachmentRoutes.ts` 只按 `roleId + planId + attachmentId` 提供受控读取，在响应前同时校验词法路径和 realpath 都没有离开该计划目录；图片/视频以内联响应返回，视频支持单段字节范围读取，公开计划 DTO 去掉本机 `path`。WebGUI 只消费该 HTTP 边界来绘制固定宽度的 16:9 图片、视频和 Markdown 简短预览卡片、普通文件卡片及页内完整预览；Markdown 卡片只流式读取正文开头并转成截断纯文本，不在卡片中执行 Markdown HTML、链接或图片。局域网资源统一通过 `managerResourceUrl` 附加当前会话认证；WebGUI 不拥有计划编辑器或任意路径读取能力。
+
+`src/manager/managerStorageMutationAdmission.ts` 定义工作进程的单次不可逆提交准入，不是可续期授权 lease。HTTP 的原始请求授权只留在父进程，由 `roleStorageApplication.ts` 与 `managerStorageMutationPool.ts` 在异步读取、入队、派发和准入时复验。IPC v2 的完整 fence、稳定 requestId、本次派发随机 nonce、固定阶段与序号须精确匹配；nonce 不进入持久 payload、摘要或审计。准入发生在回执查询、回执预留、事务恢复及业务访问之前，不能把异步握手放在同步文件锁回调里。允许后可完成整个操作；撤销只拒绝尚未准入的操作，不保证撤销返回后零发布。已派发拒绝和中断保守保留 unknown，原幂等键可能已有历史写入，须先权威回读。更强的撤销屏障需要跨进程共享的授权、提交与恢复协调边界，目前尚未实现。源码回归不代表 Host 部署或双机验收。
+
+计划状态批量退役不是跨计划原子事务：进入首个计划写入边界后，后续验证、CAS 或 I/O 异常保留不确定回执，不得报告“未开始”或释放幂等键。未完成退役目前没有持久批次进度证明，工作流 ETag 不变或状态看似退役都不能证明该请求可重试或已完成；恢复失败关闭，须权威回读及人工协调，不自动重放。单计划请求的生命周期恢复仅访问该计划的事务目录并核对 manifest 身份；全人格扫描仅由明确的启动恢复入口使用。
 
 `src/planFeedbackSubmission.ts` 是反馈写入的唯一 command service：它在同一个计划 lease 下重读计划、校验 `stepId/guidance/mentions`，再委托 `src/planFeedbackStore.ts` 以 WAL transaction 原子提交 JSONL 与附件。`src/planFeedback.ts` 只保留公开类型、读取折叠和 post-commit 状态更新，不是第二个物理写入器。同一 `feedbackId` 使用固定 `response-<feedbackId>` 结果 ID；`guidance` 只关联 `planId`，用于人格配置中 `acceptsGuidance=true` 且未进入审批的状态，`approval_suggestion` 关联审批步骤。Manager 的 `/api/roles/:roleId/plans/:planId/feedback` 在 durable commit 后立即返回稳定 `202`，Agent/秘书投递进入响应后的持久 post-commit saga。`src/manager/planQaFeedback.ts` 以 `feedback.id` 作为稳定 `deliveryId`，重试前权威 readback；已接收、仍执行、确认缺失分别进入成功、等待和安全重试。`src/manager/planFeedbackRecovery.ts` 参与同一计划存储资格恢复，处理未完成 WAL 和 post-commit/dispatching/dispatch_failed 状态，不能以不确定错误重放第二份反馈。`src/manager/planSecretaryAssignment.ts` 解析计划独立 `secretaryBinding`：已有有效绑定固定复用；未分配时按 planId 从当前启用秘书池稳定选一个并由 `controlPlaneRoutes.ts` 通过规范 `updatePlan()` 保存。启用秘书时，引导/审批正文直达业务任务，负责秘书同时收到控制通知；业务绑定不完整时完整反馈优先交给秘书。只有没有可用秘书时才走人格 Agent 回退。终态统一发布 `plan_feedback_changed`，事件不进入角色面板 timeline、兼容消息历史或统一会话账本。绑定业务任务收到引导后必须 PATCH 整个计划，并在需要时调整后续步骤，再用固定结果 ID 写无 `stepId` 的 `guidance_response`；审批仍写 `approval_response`。`guidance` 和 Agent 回复不改变状态。用户审批的 durable 保存则在同一 WAL 事务中发布反馈、表单、附件与计划快照，将 `markerStatus` 设为配置 `roles.approved` 的 key，保持 `activationStatus` 不变。WebGUI 消费 `presentation.approval.state=approved`，折叠审批区；编辑时回填持久数据，再提交追加历史。已审批只表示意见已提交，不授权全部选项或自动实施。仅在同一 `feedbackId` 的 confirmed 成功投递且计划版本未变时，post-commit 流程才转为配置 `roles.analysis`；`pending/failed`、不确定结果及过期回执都不能覆盖当前状态。
 
@@ -710,7 +722,7 @@ RibiWebGUI 通过 `personaVoiceIdentityClient.ts` 复用这两个 API，不新�
 
 ### 人格同步退役后的边界
 
-人格数据同步是删除功能，不是运行时开关。自动对账、同步工作台、`/api/persona-sync/*` 和 Relay 同步代理不再是当前合同。RabiLink 远端人格访问、RPC 与 tunnel 保留；独立只读清单由 `src/manager/peerPersonaManifest.ts` 提供，不依赖旧同步写入模块，也不创建同步副本。`src/planStoragePackageRecovery.ts` 的 `recoverStoredPlanPackages()` 仅恢复已准备的旧计划存储事务，保留 staging、回执及冲突证据，不接受新同步或导入命令。已有全部用户数据保留；实现接线与运行验收仍需分别核对，不能据此宣称部署完成。见[同步退役说明](persona-data-sync.md)。
+人格数据同步是删除功能，不是运行时开关。自动对账、同步工作台、`/api/persona-sync/*` 和 Relay 同步代理不再是当前合同。RabiLink 远端人格和计划访问通过通用 `manager` 隧道调用目标 PC 的业务 owner；旧独立 RPC 清单模块已删除，保留的 RPC 只承担连接信令，不创建同步副本。`src/planStoragePackageRecovery.ts` 的 `recoverStoredPlanPackages()` 仅恢复已准备的旧计划存储事务，保留 staging、回执及冲突证据，不接受新同步或导入命令。已有全部用户数据保留；实现接线与运行验收仍需分别核对，不能据此宣称部署完成。见[同步退役说明](persona-data-sync.md)。
 
 <details>
 <summary>旧版本架构与测试事实（历史参考，不可继续执行）</summary>

@@ -6,6 +6,15 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.30 - 2026-10-11
+
+- Merge upstream and local message, device-Agent and storage changes. Enabled authenticated Agents use public APIs; plan and Route bindings are not additional permission grants, while source sessions retain identity validation.
+- Clarify full functionality after connection: only capabilities explicitly disabled by the user in WebGUI or configuration are restricted. Publication checks must not add feature grants, extra credentials or pairing restrictions. Preserve phone pairing and existing leases, with paired HTTP, SSE, WebSocket and renewal verified.
+- Fix indexed recording reads rewriting recent previews, Windows short-path installation-root mismatches, and plugin restart races that failed to await old process-lease release after forced termination.
+- Align communication-drain, Xiaomi API and bounded-pulse fixtures. Serial heavy-storage regression passed 31 tests, plugin executor passed 5, and Xiaomi API/admission passed 48.
+- Align static audits with phone recording, automatic audio-source selection and opaque Relay forwarding; all 4 baseline/mutation tests pass. The Manager READY fixture uses a temporary minimal resource package and existing lifecycle injection without increasing shutdown timeouts, verifying cancellation and clean exit around hung plan startup. Isolated read/write worker regressions pass 45 tests, and Windows installation-failure rollback passes 2.
+- Source synchronization only: no installation, deployment, application restart or physical phone/glasses acceptance. Remaining publication gates are subject to final commit evidence.
+
 ## 0.3.29 - 2026-10-10
 
 - Add the Agent pet-motion API for logical coordinates, screen corners and active-window corners. Execute each request once, distinguish acceptance, execution, arrival, interruption and uncertain results, and exclude Desktop claim/result endpoints from Agent tools.

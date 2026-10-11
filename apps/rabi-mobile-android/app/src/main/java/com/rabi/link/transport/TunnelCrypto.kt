@@ -22,13 +22,18 @@ internal class TunnelCrypto(private val seed: ByteArray, private val device: Str
     val publicKey = pem(SubjectPublicKeyInfoFactory.createSubjectPublicKeyInfo(privateKey.generatePublicKey()).encoded)
     fun sign(bytes: ByteArray): String = Ed25519Signer().run { init(true,privateKey); update(bytes,0,bytes.size); b64(generateSignature()) }
     fun bootstrap(target: String, service: String = "speech"): JSONObject {
-        require(service in listOf("speech","resources"))
+        require(service in listOf("manager","speech","resources"))
         val expires = System.currentTimeMillis()+50_000
         val fields = "{\"source\":${q(device)},\"publicKey\":${q(publicKey)},\"target\":${q(target)},\"expiresAt\":$expires}"
-        return JSONObject(fields).put("kind","bootstrap-$service").put("signature",sign(("rabi-$service-bootstrap-v1"+fields).toByteArray()))
+        return JSONObject(fields).put("kind","bootstrap-application").put("signature",sign(("rabi-application-bootstrap-v1"+fields).toByteArray()))
     }
-    fun handshake(target: String, trustedKey: String): Handshake = Handshake(target,trustedKey)
-    inner class Handshake(private val target: String, private val trustedKey: String) {
+    fun deviceBootstrap(target: String, expiresAt: Long, nonce: String): JSONObject {
+        require(device.startsWith("glasses-") && nonce.matches(Regex("[A-Za-z0-9._:-]{16,128}")))
+        val fields="{\"source\":${q(device)},\"publicKey\":${q(publicKey)},\"target\":${q(target)},\"expiresAt\":$expiresAt,\"nonce\":${q(nonce)}}"
+        return JSONObject(fields).put("signature",sign(("rabi-device-delegation-v1"+fields).toByteArray()))
+    }
+    fun handshake(target: String, trustedKey: String, expectedGeneration: String? = null): Handshake = Handshake(target,trustedKey,expectedGeneration)
+    inner class Handshake(private val target: String, private val trustedKey: String,private val expectedGeneration: String?) {
         private val ephemeral = X25519PrivateKeyParameters(SecureRandom())
         private val fields = "{\"deviceId\":${q(device)},\"generation\":${q(generation)},\"publicKey\":${q(publicKey)},\"ephemeral\":${q(pem(SubjectPublicKeyInfoFactory.createSubjectPublicKeyInfo(ephemeral.generatePublicKey()).encoded))},\"nonce\":${q(hex(ByteArray(24).also { SecureRandom().nextBytes(it) }))},\"target\":${q(target)}}"
         val hello = fields.dropLast(1)+",\"signature\":${q(sign(("rabi-tunnel-v1"+fields).toByteArray()))}}"
@@ -36,6 +41,7 @@ internal class TunnelCrypto(private val seed: ByteArray, private val device: Str
             require(bytes.size <= 8192)
             val remote = JSONObject(String(bytes,Charsets.UTF_8))
             require(remote.getString("deviceId")==target && remote.getString("target")==device && remote.getString("publicKey")==trustedKey)
+            require(expectedGeneration==null || remote.getString("generation")==expectedGeneration) { "peer_generation_changed" }
             require(remote.getString("nonce").matches(Regex("[a-f0-9]{48}")))
             val body = listOf("deviceId","generation","publicKey","ephemeral","nonce","target").joinToString(",","{","}") { q(it)+":"+q(remote.getString(it)) }
             val signer = Ed25519Signer(); signer.init(false,PublicKeyFactory.createKey(unpem(trustedKey)) as Ed25519PublicKeyParameters)

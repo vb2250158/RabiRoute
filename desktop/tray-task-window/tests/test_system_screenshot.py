@@ -14,8 +14,8 @@ TRAY_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, TRAY_ROOT)
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QSize, Qt, Signal  # noqa: E402
-from PySide6.QtGui import QColor, QImage, QKeyEvent, QMouseEvent  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtGui import QColor, QEnterEvent, QImage, QKeyEvent, QMouseEvent  # noqa: E402
+from PySide6.QtWidgets import QApplication, QPushButton  # noqa: E402
 
 from rabiroute_tray.manager_client import DesktopSettings  # noqa: E402
 from rabiroute_tray.plugin_catalog import DesktopPluginHotkey  # noqa: E402
@@ -26,6 +26,7 @@ from rabiroute_tray.system_screenshot import (  # noqa: E402
     ScreenshotCaptureOverlay,
     ScreenshotComposer,
     ScreenshotWindowCandidate,
+    PinnedImageWindow,
     PinnedScreenshotStore,
     ScreenshotHistory,
     ScreenCaptureLayout,
@@ -644,9 +645,12 @@ class SystemScreenshotTest(unittest.TestCase):
                 overlay,
                 QMouseEvent(QEvent.Type.MouseMove, QPointF(20, 18), QPointF(20, 18), Qt.MouseButton.NoButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier),
             )
-            self.assertEqual(overlay._color_hex_label.text(), "#12AB34")
+            self.assertEqual(overlay._color_value_label.text(), "#12AB34")
             self.assertTrue(overlay._color_tip.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents))
-            self.assertEqual(overlay._color_tip.size(), QSize(126, 150))
+            self.assertEqual(overlay._color_tip.size(), QSize(224, 156))
+            self.assertEqual(overlay._color_tip.copy_hint.text(), "C 取色")
+            self.assertEqual(overlay._color_tip.format_hint.text(), "Shift 切换 RGB / HTML")
+            self.assertEqual(overlay._color_tip.copy_hint.geometry().top(), overlay._color_tip.format_hint.geometry().top())
             self.assertGreater(overlay._color_swatch.geometry().top(), overlay._color_magnifier.geometry().bottom())
             self.assertIn("#12AB34", overlay._color_swatch.styleSheet())
             magnifier = overlay._color_magnifier.pixmap().toImage()
@@ -659,6 +663,100 @@ class SystemScreenshotTest(unittest.TestCase):
             self.assertTrue(overlay._selection.isEmpty())
             self.assertTrue(overlay.copy_current_color())
             overlay.close()
+
+    def test_candidate_hover_keeps_color_tip_above_overlay_and_copies_color(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "screen.png"
+            image = QImage(500, 400, QImage.Format.Format_ARGB32)
+            image.fill(QColor("#12ab34"))
+            self.assertTrue(image.save(str(path), "PNG"))
+            overlay = ScreenshotCaptureOverlay(ScreenshotHistory((path,)), QRect(0, 0, 500, 400))
+            colors: list[str] = []
+            overlay.color_copy_requested.connect(colors.append)
+            overlay._pointer_position = QPoint(25, 25)
+            candidate = ScreenshotWindowCandidate(QRect(overlay.mapToGlobal(QPoint(10, 10)), QSize(300, 250)))
+            overlay.set_window_candidates((candidate,))
+            self.assertTrue(overlay._color_tip.isVisible())
+
+            # Production raises the capture window after pixels initialize the tip.
+            with patch.object(overlay._color_tip, "raise_") as raise_tip:
+                overlay.show()
+                overlay.raise_()
+                for point in (QPoint(30, 30), QPoint(45, 45)):
+                    QApplication.sendEvent(
+                        overlay,
+                        QMouseEvent(QEvent.Type.MouseMove, QPointF(point), QPointF(point), Qt.MouseButton.NoButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier),
+                    )
+                self.assertGreaterEqual(raise_tip.call_count, 2)
+
+            self.assertEqual(overlay._hover_window_candidate, candidate)
+            self.assertTrue(overlay._selection.isEmpty())
+            self.assertTrue(overlay._color_tip.isVisible())
+            self.assertEqual(overlay._color_value_label.text(), "#12AB34")
+            QApplication.sendEvent(overlay, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_C, Qt.KeyboardModifier.NoModifier))
+            self.assertEqual(colors, ["#12AB34"])
+            self.assertTrue(overlay._selection.isEmpty())
+            self.assertTrue(overlay._focus_hovered_window_candidate())
+            self.assertFalse(overlay._color_tip.isVisible())
+            overlay.close()
+
+    def test_shift_toggles_color_format_without_committing_candidate_or_copying(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "screen.png"
+            image = QImage(500, 400, QImage.Format.Format_ARGB32)
+            image.fill(QColor("#12ab34"))
+            self.assertTrue(image.save(str(path), "PNG"))
+            overlay = ScreenshotCaptureOverlay(ScreenshotHistory((path,)), QRect(0, 0, 500, 400))
+            colors: list[str] = []
+            overlay.color_copy_requested.connect(colors.append)
+            overlay._pointer_position = QPoint(25, 25)
+            candidate = ScreenshotWindowCandidate(QRect(overlay.mapToGlobal(QPoint(10, 10)), QSize(300, 250)))
+            overlay.set_window_candidates((candidate,))
+            try:
+                QApplication.sendEvent(overlay, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Shift, Qt.KeyboardModifier.ShiftModifier))
+                self.assertEqual(overlay._color_value_label.text(), "rgb(18, 171, 52)")
+                self.assertEqual(overlay._color_tip.copy_hint.text(), "C 取色")
+                self.assertEqual(colors, [])
+                self.assertTrue(overlay._selection.isEmpty())
+                self.assertEqual(overlay._hover_window_candidate, candidate)
+                self.assertTrue(overlay._color_tip.isVisible())
+                self.assertIn("#12AB34", overlay._color_swatch.styleSheet())
+                for modifiers, repeat in ((Qt.KeyboardModifier.ShiftModifier, True), (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier, False)):
+                    QApplication.sendEvent(overlay, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Shift, modifiers, "", repeat))
+                    self.assertEqual(overlay._color_value_label.text(), "rgb(18, 171, 52)")
+                QApplication.sendEvent(overlay, QKeyEvent(QEvent.Type.KeyRelease, Qt.Key.Key_Shift, Qt.KeyboardModifier.NoModifier))
+                QApplication.sendEvent(overlay, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_C, Qt.KeyboardModifier.NoModifier))
+                self.assertEqual(colors, [overlay._color_value_label.text()])
+                QApplication.sendEvent(overlay, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Shift, Qt.KeyboardModifier.ShiftModifier))
+                self.assertEqual(overlay._color_value_label.text(), "#12AB34")
+                self.assertEqual(overlay._color_tip.copy_hint.text(), "C 取色")
+                QApplication.sendEvent(overlay, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_C, Qt.KeyboardModifier.NoModifier))
+                self.assertEqual(colors, ["rgb(18, 171, 52)", "#12AB34"])
+                self.assertTrue(overlay._focus_hovered_window_candidate())
+                QApplication.sendEvent(overlay, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Shift, Qt.KeyboardModifier.ShiftModifier))
+                self.assertFalse(overlay._color_tip.isVisible())
+                with patch.object(overlay, "_copy") as copy_selection:
+                    QApplication.sendEvent(overlay, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier))
+                    copy_selection.assert_called_once()
+                self.assertEqual(colors, ["rgb(18, 171, 52)", "#12AB34"])
+            finally:
+                overlay.close()
+
+    def test_pinned_image_has_no_buttons_even_on_hover_and_keeps_copy_shortcut(self) -> None:
+        image = QImage(100, 60, QImage.Format.Format_ARGB32)
+        image.fill(QColor("#12ab34"))
+        pin = PinnedImageWindow(image, QPoint(20, 20))
+        pin.show()
+        QApplication.sendEvent(pin, QEnterEvent(QPointF(15, 12), QPointF(15, 12), QPointF(35, 32)))
+        self.assertEqual(pin.findChildren(QPushButton), [])
+        self.assertEqual(pin.size(), image.size())
+        self.assertEqual(pin._image_label.geometry(), pin.rect())
+        clipboard = QApplication.clipboard()
+        with patch.object(clipboard, "setImage") as set_image:
+            QApplication.sendEvent(pin, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier))
+            set_image.assert_called_once()
+            self.assertEqual(set_image.call_args.args[0], image)
+        pin.close()
 
     def test_color_tip_is_an_independent_mouse_transparent_window(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

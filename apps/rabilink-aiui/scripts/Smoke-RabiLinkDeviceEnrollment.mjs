@@ -86,14 +86,29 @@ try {
   });
   assert(appResult.response.status === 200 && appResult.body?.app?.id, "Management API must create an app.");
   const appId = appResult.body.app.id;
+  const appToken = String(appResult.body.app.token || "");
+  assert(appToken, "New app must expose its fixture credential once.");
+  await request(`${baseUrl}/worker/tasks?deviceId=pc-tasks&deviceGuid=guid-tasks&waitMs=0&taskFormat=opaque-v1`, {
+    headers: {"X-RabiLink-Token": appToken}
+  });
+  const taskOnly = await request(`${baseUrl}/manage/api/apps/${encodeURIComponent(appId)}/devices`, {
+    method:"POST", headers:{"X-RabiLink-Admin-Auth":adminAuth},
+    body:JSON.stringify({serialNumber,connectionTargetDeviceId:"pc-tasks"})
+  });
+  assert(taskOnly.response.status === 409 && (taskOnly.body.code === "DEVICE_CONNECTION_MANAGER_REQUIRED" || taskOnly.body.message === "DEVICE_CONNECTION_MANAGER_REQUIRED"), "A tasks-only PC cannot own glasses Manager configuration: " + JSON.stringify({status:taskOnly.response.status,code:taskOnly.body.code,message:taskOnly.body.message}));
+  await request(`${baseUrl}/worker/webgui-requests?deviceId=pc-owner&deviceGuid=guid-owner&capabilities=webgui&waitMs=1`, {
+    headers: {"X-RabiLink-Token": appToken}
+  });
 
   const bindingResult = await request(`${baseUrl}/manage/api/apps/${encodeURIComponent(appId)}/devices`, {
     method: "POST",
     headers: { "X-RabiLink-Admin-Auth": adminAuth },
-    body: JSON.stringify({ serialNumber })
+    body: JSON.stringify({ serialNumber, connectionTargetDeviceId:"pc-owner" })
   });
   assert(bindingResult.response.status === 200, "Logged-in management API must bind the glasses SN.");
   assert(bindingResult.body?.device?.claimed === false, "A new binding must wait for first device claim.");
+  const ownerBinding = bindingResult.body?.app?.deviceBindings?.find(row => row.id === bindingResult.body?.device?.id);
+  assert(ownerBinding?.connectionTargetDeviceId === "pc-owner", "Binding must freeze the explicit Manager-capable owner.");
 
   const claimResult = await request(`${baseUrl}/api/rabilink/devices/token`, {
     method: "POST",
@@ -124,6 +139,15 @@ try {
   });
   const binding = managementState.body?.apps?.find((app) => app.id === appId)?.deviceBindings?.[0];
   assert(binding?.claimed === true, "Management state must show that the glasses claimed its credential.");
+  const changedOwner = await request(`${baseUrl}/manage/api/apps/${encodeURIComponent(appId)}/devices`, {
+    method:"POST",headers:{"X-RabiLink-Admin-Auth":adminAuth},body:JSON.stringify({serialNumber,connectionTargetDeviceId:"pc-tasks"})
+  });
+  assert(changedOwner.response.status === 409 && changedOwner.body.message === "CONNECTION_TARGET_IMMUTABLE", "Credential reset cannot change the original binding owner.");
+  const reset = await request(`${baseUrl}/manage/api/apps/${encodeURIComponent(appId)}/devices`, {
+    method:"POST",headers:{"X-RabiLink-Admin-Auth":adminAuth},body:JSON.stringify({serialNumber})
+  });
+  assert(reset.response.status === 200 && reset.body.device.id === binding.id, "Credential reset must preserve the original binding identity.");
+  assert(reset.body.app.deviceBindings.find(row=>row.id===binding.id)?.connectionTargetDeviceId === "pc-owner", "Credential reset must preserve the original Manager owner.");
 
   console.log("RabiLink device enrollment smoke passed.");
 } finally {

@@ -13,6 +13,74 @@ import {
 
 const mainThreadBlock = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 
+test("delayed receipt heartbeat startup and shutdown keep timers responsive and release the isolated worker", async t => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-heartbeat-responsive-"));
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
+  const moduleUrl = new URL(import.meta.url.endsWith(".ts") ? "./durableDeliveryIdempotency.ts" : "./durableDeliveryIdempotency.js", import.meta.url).href;
+  const source = `
+    import workerThreads from "node:worker_threads";
+    import { syncBuiltinESMExports } from "node:module";
+    const OriginalWorker = workerThreads.Worker;
+    const delay = "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500);";
+    workerThreads.Worker = class extends OriginalWorker {
+      constructor(source, options) {
+        if (options?.eval && options.workerData?.control && source.includes("durable delivery heartbeat failed")) {
+          source = options.workerData.deliveryId.startsWith("33333333")
+            ? 'throw new Error("isolated heartbeat startup failure")'
+            : delay + source.replace("publishStatus(STOPPED);", delay + "publishStatus(STOPPED);");
+        }
+        super(source, options);
+      }
+    };
+    syncBuiltinESMExports();
+    const { executeDurableDelivery } = await import(${JSON.stringify(moduleUrl)});
+    const startedAt = Date.now();
+    const timer = new Promise(resolve => setTimeout(() => resolve(Date.now() - startedAt), 20));
+    let sends = 0;
+    const outcome = await executeDurableDelivery({
+      rootDir: ${JSON.stringify(rootDir)}, namespace: "fixture-only", deliveryId: "12345678-1234-4567-8123-123456789abc",
+      payload: { fixture: true }, executionLeaseMs: 30000,
+      deliver: async () => { sends += 1; return { accepted: true }; }
+    });
+    const elapsedMs = Date.now() - startedAt;
+    let allowed = true;
+    let cancelledSends = 0;
+    let cancellationCode;
+    setTimeout(() => { allowed = false; }, 20);
+    try {
+      await executeDurableDelivery({
+        rootDir: ${JSON.stringify(rootDir)}, namespace: "fixture-only", deliveryId: "22222222-1234-4567-8123-123456789abc",
+        payload: { fixture: true }, executionLeaseMs: 30000,
+        requestAuthority: () => { if (!allowed) throw Object.assign(new Error("fixture authority revoked"), { code: "AUTHORITY_REVOKED" }); },
+        deliver: async () => { cancelledSends += 1; return { accepted: true }; }
+      });
+    } catch (error) { cancellationCode = error.code; }
+    let failedSends = 0;
+    const failed = await executeDurableDelivery({
+      rootDir: ${JSON.stringify(rootDir)}, namespace: "fixture-only", deliveryId: "33333333-1234-4567-8123-123456789abc",
+      payload: { fixture: true }, deliver: async () => { failedSends += 1; return { accepted: true }; }
+    });
+    console.log(JSON.stringify({ state: outcome.state, sends, elapsedMs, timerDelayMs: await timer, cancelledSends, cancellationCode, failedSends, failedState: failed.state }));
+  `;
+  const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", source], {
+    cwd: process.cwd(), windowsHide: true, stdio: ["ignore", "pipe", "pipe"]
+  });
+  let stdout = "";
+  child.stdout?.setEncoding("utf8");
+  child.stdout?.on("data", chunk => { stdout += String(chunk); });
+  const result = await waitForChild(child);
+  assert.equal(result.code, 0, result.stderr);
+  const measured = JSON.parse(stdout.trim()) as { state: string; sends: number; elapsedMs: number; timerDelayMs: number; cancelledSends: number; cancellationCode: string; failedSends: number; failedState: string };
+  assert.equal(measured.state, "completed");
+  assert.equal(measured.sends, 1);
+  assert.ok(measured.elapsedMs >= 3000, "both owned Worker transitions must complete before the request resolves");
+  assert.ok(measured.timerDelayMs < 1200, `the 20ms timer was blocked for ${measured.timerDelayMs}ms`);
+  assert.equal(measured.cancelledSends, 0);
+  assert.equal(measured.cancellationCode, "AUTHORITY_REVOKED");
+  assert.equal(measured.failedSends, 0);
+  assert.equal(measured.failedState, "uncertain");
+});
+
 function waitForChild(child: ReturnType<typeof spawn>): Promise<{ code: number | null; stderr: string }> {
   return new Promise((resolve, reject) => {
     let stderr = "";
@@ -386,7 +454,7 @@ test("an independent heartbeat fences a remote retry while the main thread is sy
   const resultPath = path.join(rootDir, "contender-result.json");
   const duplicateMarker = path.join(rootDir, "duplicate-delivery.txt");
   const contenderReady = path.join(rootDir, "contender-ready.txt");
-  const moduleUrl = new URL("./durableDeliveryIdempotency.ts", import.meta.url).href;
+  const moduleUrl = new URL(import.meta.url.endsWith(".ts") ? "./durableDeliveryIdempotency.ts" : "./durableDeliveryIdempotency.js", import.meta.url).href;
   const remoteHost = `${os.hostname()}-simulated-remote`;
   let heartbeatBefore = 0;
   let heartbeatAfter = 0;
@@ -577,7 +645,7 @@ test("a contender that read an expired receipt under the mutation lock fences he
 
 test("a stopped receipt heartbeat worker does not keep a completed child process alive", () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-durable-worker-shutdown-"));
-  const moduleUrl = new URL("./durableDeliveryIdempotency.ts", import.meta.url).href;
+  const moduleUrl = new URL(import.meta.url.endsWith(".ts") ? "./durableDeliveryIdempotency.ts" : "./durableDeliveryIdempotency.js", import.meta.url).href;
   const source = `
     const { executeDurableDelivery } = await import(${JSON.stringify(moduleUrl)});
     const outcome = await executeDurableDelivery({

@@ -2,7 +2,7 @@
 
 [English](agent-tool-contract_en.md) | 简体中文
 
-状态：官方文档已核对，完整工具结果续轮接口尚未证实；不是设备验收报告。
+状态：原生工具结果提交 API 未证实；应用已使用官方支持的普通消息实现执行循环，真实宿主待验收。
 
 ## 官方依据
 
@@ -24,19 +24,20 @@
 - [main 模型正文](https://raw.githubusercontent.com/yodaos-project/AIUI/main/documentation/3-api/ai/language-model.md) 是此次文档核查依据，不代表当前设备安装版本。
 - [固定提交目录树](https://api.github.com/repos/yodaos-project/AIUI/git/trees/0fc2d412bf60859ffa2acab6b72375bee3584807?recursive=1) 中的 packages 包含 `cloud-integration`、`create-aiui-agent`，未提供可据以验证结果续轮的宿主 `LanguageModel` 实现。
 
-该研究没有启动或调用真实宿主。不能把 `main` 称为最新发行 runtime，也不能据此断言结果提交 API 不存在；结论仅是目前公开证据未证实，仍需实际宿主类型、版本或官方实现证据。当前保持单步执行，不猜测 API。
+该研究没有启动或调用真实宿主。不能把 `main` 称为最新发行 runtime，也不能据此断言结果提交 API 不存在；结论仅是目前公开证据未证实，仍需实际宿主类型、版本或官方实现证据。应用改用明确的观察消息续轮，不猜测原生结果提交 API。
 
 ## 当前实现边界
 
 AIUI 页面中的宿主模型是眼镜 Agent 的执行者。PC 提供 HTTP 工具服务，不替代该模型，也不要求 QuickJS 启动 stdio。Skill 是受限的指引资料；MCP 配置引用不代表工具已经连接或加载。
 
-在工具结果续轮接口未经官方类型、实现或真实宿主验证前：
+2026-10-10 补读 [官方 AI 类型参考](https://raw.githubusercontent.com/yodaos-project/AIUI/main/skills/aiui-dev/references/apis/ai.md)。其明确：请求输入允许 `user`、`assistant`，工具事件在请求完成后发送；同一会话保留消息历史，并且同时只能有一个活跃请求。`AgentWorker` 是页面/组件生命周期 Worker，不提供另一个模型结果提交合同。
 
-1. 可实现受控 HTTP 工具请求与明确结果展示，但必须标明这是单步应用执行，不宣称完整自动多步 Agent 循环。
-2. 使用 `callId` 去重，限制允许工具与参数；写操作保留稳定幂等意图，超时不能换键重放。
-3. 模型文字不得替代真实工具回执；工具输出视为不可信数据，不作为新增权限。
-4. 不通过第二模型或静默切到 PC Agent 掩盖宿主能力缺口。
+默认对话现在使用应用管理的决策协议：原生工具声明为空，模型返回完整动作 JSON；应用通过已有受管工具执行后，将实际结果作为 `user` 消息中的明确应用观察交回同一个模型。观察携带工具调用编号、不可信标记及真实结果，身份和权限仍由人格及连接合同拥有。此实现不使用或声称提供原生 `tool` role、`tool_call_id` 或自动 JavaScript 工具执行。
+
+执行器检查当前请求编号、已连接工具、参数、幂等状态及限额，格式无效或半个动作不执行。模型循环的夹具证明结果会进入下一次推理，真实宿主行为仍需验收。详见 [执行循环](agent-turn-runtime.md)。
 
 ## 后续验收
 
-必须记录真实宿主版本、工具调用事件、同一 `callId` 对应的执行回执及官方支持的续轮结果；再验证取消、超时、重复事件和权限拒绝。现有模拟测试、文档与模型可用性检查均不能替代真机证据。
+必须记录真实宿主版本、应用动作、同一调用编号对应的执行回执及观察驱动的后续推理；再验证取消、超时、重复事件和权限拒绝。现有模拟测试、文档与模型可用性检查均不能替代真机证据。
+
+`rabi_api_help` 和 `rabi_api_call` 使用同一个通用 Manager 传输。可选 `targetDeviceId` 选择已鉴权其他电脑；默认目标在本轮开始时固定。同一 `operationId` 的目标、方法、路径、正文摘要参与操作指纹，未知写入不能换目标重发。Relay 不注册每个业务接口，也不根据人格或配置版本分发。详见[接口传输](generic-api-transport.md)。

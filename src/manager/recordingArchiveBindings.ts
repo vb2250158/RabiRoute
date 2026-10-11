@@ -14,6 +14,8 @@ export function validateArchiveAdminInput(value: unknown): ArchiveAdminInput {
 export const archiveAdminDigest = (input: ArchiveAdminInput, etag: string) => createHash("sha256").update(JSON.stringify({ input: validateArchiveAdminInput(input), etag })).digest("hex");
 export const archiveSettingsEtag = (value: unknown) => `"${storageRevisionToken(value)}"`;
 export interface ArchiveAdminResult { revision: number; ownerRoleBindings: Record<string, RecordingArchiveBinding>; etag: string }
+export interface ArchiveAdminMutationContext { assertCurrent(): void; beforeMutation(): void }
+const unrestrictedAdminContext: ArchiveAdminMutationContext = { assertCurrent() {}, beforeMutation() {} };
 
 import type { RecordingArchiveNamespace } from "./recordingArchiveStore.js";
 
@@ -28,7 +30,7 @@ function keys(v: unknown, expected: string[]): asserts v is Record<string, unkno
 async function directory(p: string) { const s = await fs.lstat(p); if (!s.isDirectory() || s.isSymbolicLink()) throw new Error("Unsafe archive directory"); }
 async function readJson(file: string) { const s = await fs.lstat(file); if (!s.isFile() || s.isSymbolicLink() || s.size > 1024 * 1024) throw new Error("Unsafe configuration file"); return JSON.parse(await fs.readFile(file, "utf8")); }
 
-/** Local administrative configuration only. Upload bodies must never reach configure/provisionNamespace.
+/** Trusted administrative configuration only. Upload bodies must never reach configure/provisionNamespace.
  * Owner is the authenticated persistent device identity, never a token-derived scope.
  * A stale lock fails closed; no automatic lock breaking or role migration is performed.
  */
@@ -55,16 +57,20 @@ export class RecordingArchiveBindings {
     if (value.schemaVersion !== 1 || value.storageNamespaceId !== namespace(id)) throw new Error("Archive namespace mismatch");
   }
   /** Explicit administrative provisioning; read and resolve never create a namespace. */
-  async provisionNamespace(roleId: string, storageNamespaceId: string): Promise<RecordingArchiveNamespace> {
+  async provisionNamespace(roleId: string, storageNamespaceId: string, context: ArchiveAdminMutationContext = unrestrictedAdminContext): Promise<RecordingArchiveNamespace> {
+    context.assertCurrent();
     return auditRecordingArchiveMutation("recording-archive-bindings", roleId + ":" + storageNamespaceId, async () => {
       namespace(storageNamespaceId);
       const root = await this.root(roleId);
+      context.assertCurrent(); context.beforeMutation();
       try { await fs.mkdir(root); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e; }
       await directory(root);
       const marker = path.join(root, "namespace.json"), temporary = marker + "." + randomUUID() + ".partial";
       try {
+        context.assertCurrent(); context.beforeMutation();
         const handle = await fs.open(temporary, "wx");
-        try { await handle.writeFile(JSON.stringify({ schemaVersion: 1, storageNamespaceId })); await handle.sync(); } finally { await handle.close(); }
+        try { context.assertCurrent(); await handle.writeFile(JSON.stringify({ schemaVersion: 1, storageNamespaceId })); context.assertCurrent(); await handle.sync(); } finally { await handle.close(); }
+        context.assertCurrent(); context.beforeMutation();
         try { await fs.link(temporary, marker); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e; }
       } finally { await fs.rm(temporary, { force: true }); }
       await this.marker(root, storageNamespaceId);
@@ -135,22 +141,27 @@ export class RecordingArchiveBindings {
   }
   /** All preconditions are checked under the SAME settings lock before any NAS provisioning.
    * The operation stamp is committed with configuration, not inferred from equal binding values. */
-  async configureAdministrative(raw: ArchiveAdminInput, expectedEtag: string, operationId: string): Promise<ArchiveAdminResult> {
+  async configureAdministrative(raw: ArchiveAdminInput, expectedEtag: string, operationId: string, context: ArchiveAdminMutationContext = unrestrictedAdminContext): Promise<ArchiveAdminResult> {
+    context.assertCurrent();
     const input = validateArchiveAdminInput(raw);
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(operationId)) throw new ArchiveAdminError(400, "invalid_idempotency_key");
     const digest = archiveAdminDigest(input, expectedEtag);
     return withResourceCacheSettingsLock(this.file, async () => {
+      context.assertCurrent();
       const envelope = await this.envelope();
+      context.assertCurrent();
       const config = await this.configuration(envelope);
+      context.assertCurrent();
       const snapshot = { revision: config.revision, ownerRoleBindings: config.ownerRoleBindings };
       const old = config.ownerRoleBindings[input.owner];
       if (expectedEtag !== archiveSettingsEtag(snapshot) || (old?.bindingRevision ?? 0) !== input.expectedRevision)
         throw new ArchiveAdminError(412, "revision_conflict");
       if (old && (old.roleId !== input.roleId || old.storageNamespaceId !== input.storageNamespaceId))
         throw new ArchiveAdminError(409, "binding_migration_required");
-      if (input.provision) await this.provisionNamespace(input.roleId, input.storageNamespaceId);
+      if (input.provision) await this.provisionNamespace(input.roleId, input.storageNamespaceId, context);
       const root = await this.root(input.roleId);
       await this.marker(root, input.storageNamespaceId);
+      context.assertCurrent();
       const next = revision(config.revision + 1);
       config.revision = next;
       config.ownerRoleBindings[input.owner] = { roleId: input.roleId, storageNamespaceId: input.storageNamespaceId, enabled: input.enabled, bindingRevision: next };
@@ -159,8 +170,10 @@ export class RecordingArchiveBindings {
       await auditRecordingArchiveMutation("recording-archive-bindings", this.file, async () => {
         const temporary = this.file + "." + randomUUID() + ".partial";
         try {
+          context.assertCurrent(); context.beforeMutation();
           const handle = await fs.open(temporary, "wx");
-          try { await handle.writeFile(JSON.stringify({ ...envelope, archiveBindings: config, archiveAdminCommit: { operationId, requestDigest: digest, result } })); await handle.sync(); } finally { await handle.close(); }
+          try { context.assertCurrent(); await handle.writeFile(JSON.stringify({ ...envelope, archiveBindings: config, archiveAdminCommit: { operationId, requestDigest: digest, result } })); context.assertCurrent(); await handle.sync(); } finally { await handle.close(); }
+          context.assertCurrent(); context.beforeMutation();
           await fs.rename(temporary, this.file);
         } finally { await fs.rm(temporary, { force: true }); }
       });

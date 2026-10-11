@@ -16,6 +16,8 @@ Windows 安装版只有一个应用生命周期入口：`RabiRouteHost.exe`。Ma
 
 ## 安装、升级与恢复
 
+打包只重建输出目录中的 `version-payload`、`distribution` 和本版安装工件，不清空整个 `OutputRoot`。已有工件先完整复制到 `build-backups/<随机ID>` 并逐文件核对 SHA-256；新生成的 Desktop/Host Runtime 和其他兄弟文件保留。因此 Runtime 可以放在 `OutputRoot` 内的独立子目录；与 payload/distribution 重叠、路径越界或备份中的 reparse point 会在删除前拒绝。回归入口为 `scripts/release-output-lifecycle.test.mjs`。
+
 发布页同时提供便携 ZIP 和 `SHA256SUMS.txt`。便携 ZIP 使用 `RabiRouteHost.exe + current.json + versions/<releaseId>` 布局，只能解压到新的空目录，不能覆盖旧 RabiRoute 目录；升级既有安装必须运行 Setup。Setup 嵌入同一份便携 ZIP，先在安装盘暂存并逐清单校验哈希、大小、私有路径、reparse point 与 Host 自检，再按当前 application generation 执行 fenced quit；只有候选通过后才原子切换 `current.json` 与 bootstrap，失败会恢复上一指针和 bootstrap。经精确识别的旧生命周期入口会以 `.retired` 后缀移入安装器所有的非执行 quarantine；事务失败或断电恢复会把它们原位还原，foreign 和相似后缀文件不移动。`data/`、`logs/` 与 foreign 文件不参与覆盖或卸载。当前 Windows 包尚未签名，遇到 SmartScreen“未知发布者”提示时先核对校验和。
 
 旧安装事务恢复会先执行只读所有权检查，再允许任何指针/bootstrap 还原、登录启动或计划任务恢复、quarantine 移动、版本删除及事务清理。当前 `current.json` 必须与该旧事务保存的 backup 或 candidate 字节一致，且指针结构有效；bootstrap 也必须匹配该事务的 backup 或 candidate。原本不存在的文件只允许仍不存在或匹配 candidate，支持切换/回滚中途两文件分别处于旧、新状态。必要的备份、身份或匹配证据缺失时失败关闭；第三版本、损坏的指针或 bootstrap 漂移均拒绝恢复，保留日志、backup 和相关资源，不自动覆盖后续成功发布。`rolled-back` 仍可能表示回滚不完整，不能仅凭该状态删除或跳过日志。遇到所有权拒绝时，应保留证据并人工核对，不能删除日志后盲目重试。此检查不是完整终态重构，也不判断后续登录启动设置是否仍属于旧事务。

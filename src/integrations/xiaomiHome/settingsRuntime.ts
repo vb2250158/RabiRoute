@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { normalizeHomeSpeechBindings } from "../../shared/homeMediaContract.js";
+import type { XiaomiHomeRequestAuthority } from "./requestAuthority.js";
 import fs from "node:fs";
 import path from "node:path";
 import type {
@@ -222,7 +223,8 @@ export class XiaomiHomeRuntimeController {
     return this.snapshotValue;
   }
 
-  update(settings: unknown, expectedRevision: string): XiaomiHomeSettingsSnapshot {
+  update(settings: unknown, expectedRevision: string, authority?: XiaomiHomeRequestAuthority): XiaomiHomeSettingsSnapshot {
+    authority?.assert();
     this.vacuumRemote.assertInactive();
     const inFlight = Number(this.captureValue.status().inFlight || 0);
     if (inFlight > 0) {
@@ -230,18 +232,21 @@ export class XiaomiHomeRuntimeController {
     }
     const normalized = normalizeXiaomiHomeRuntimeSettings(settings);
     const replacement = this.createRuntime(normalized);
+    authority?.dispatch();
     const saved = this.store.write(normalized, expectedRevision);
     this.snapshotValue = saved;
     this.replaceRuntime(replacement);
     return saved;
   }
 
-  async authorization(): Promise<XiaomiHomeAuthorizationSnapshot> {
+  async authorization(authority?: XiaomiHomeRequestAuthority): Promise<XiaomiHomeAuthorizationSnapshot> {
+    authority?.assert();
     const stored = this.resolveCredential();
     const resolution = stored.metadata?.boundBaseUrl === this.snapshotValue.settings.baseUrl
       ? stored
       : Object.freeze({ source: "none" as const, removable: stored.removable });
-    const health = await this.clientValue.getHealth();
+    const health = await this.clientValue.getHealth(authority);
+    authority?.assert();
     const status = String(health.status || "unreachable") as XiaomiHomeAuthorizationState;
     return this.authorizationSnapshot(resolution, status, String(health.errorCode || "") || undefined);
   }
@@ -250,8 +255,10 @@ export class XiaomiHomeRuntimeController {
     accessToken: unknown,
     baseUrl: unknown,
     expectedRevision: string,
-    expectedAuthorizationRevision?: string
+    expectedAuthorizationRevision?: string,
+    authority?: XiaomiHomeRequestAuthority
   ): Promise<XiaomiHomeAuthorizationSnapshot> {
+    authority?.assert();
     const token = String(accessToken ?? "").trim();
     if (!token || token.length > 16384 || /[\u0000-\u001f\u007f]/.test(token)) {
       throw new XiaomiHomeManagerApiError(400, "xiaomi_home_credential_invalid", "Home Assistant access token is invalid.");
@@ -259,6 +266,7 @@ export class XiaomiHomeRuntimeController {
     if (!expectedRevision || expectedRevision !== this.snapshotValue.revision) {
       throw new XiaomiHomeManagerApiError(409, "xiaomi_home_settings_revision_changed", "Xiaomi Home settings changed; reload before connecting.");
     }
+    authority?.assert();
     this.requireAuthorizationRevision(expectedAuthorizationRevision);
     const candidateSettings = normalizeXiaomiHomeRuntimeSettings({
       ...this.snapshotValue.settings,
@@ -269,8 +277,11 @@ export class XiaomiHomeRuntimeController {
       ...candidateSettings,
       runtimeDir: this.artifacts.runtimeDir
     }, fetchImpl, token);
-    const verification = await candidate.verifyAuthorization();
+    const verification = await candidate.verifyAuthorization(authority);
+    authority?.assert();
+    this.requireAuthorizationRevision(expectedAuthorizationRevision);
     const preparedCredential = this.credentialStore.prepare(token, candidateSettings.baseUrl, verification);
+    authority?.dispatch();
     this.vacuumRemote.assertInactive();
     const saved = this.commitAuthorizationLocally(candidateSettings, expectedRevision, preparedCredential);
     this.snapshotValue = saved;
@@ -278,24 +289,27 @@ export class XiaomiHomeRuntimeController {
     return this.authorizationSnapshot(this.resolveCredential(), "ready");
   }
 
-  async refreshAuthorization(expectedAuthorizationRevision?: string): Promise<XiaomiHomeAuthorizationSnapshot> {
+  async refreshAuthorization(expectedAuthorizationRevision?: string, authority?: XiaomiHomeRequestAuthority): Promise<XiaomiHomeAuthorizationSnapshot> {
+    authority?.assert();
     this.requireAuthorizationRevision(expectedAuthorizationRevision);
-    return this.authorization();
+    return this.authorization(authority);
   }
 
-  async disconnect(expectedAuthorizationRevision?: string): Promise<XiaomiHomeAuthorizationSnapshot> {
+  async disconnect(expectedAuthorizationRevision?: string, authority?: XiaomiHomeRequestAuthority): Promise<XiaomiHomeAuthorizationSnapshot> {
+    authority?.assert();
     this.vacuumRemote.assertInactive();
     this.requireAuthorizationRevision(expectedAuthorizationRevision);
     const settings = this.snapshotValue.settings;
+    authority?.dispatch();
     this.credentialStore.clear();
     this.replaceRuntime(this.createRuntime(settings));
     const next = this.resolveCredential();
     return this.authorizationSnapshot(next, next.token ? "ready" : "authorization_required");
   }
 
-  async health(): Promise<Record<string, unknown>> {
+  async health(authority?: XiaomiHomeRequestAuthority): Promise<Record<string, unknown>> {
     return {
-      ...(await this.clientValue.getHealth()),
+      ...(await this.clientValue.getHealth(authority)),
       settings: {
         schemaVersion: this.snapshotValue.schemaVersion,
         source: this.snapshotValue.source,

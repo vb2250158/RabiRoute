@@ -435,6 +435,7 @@ export function ensureCodexDesktopDeliveryMarkerForTest(
 }
 
 async function deliverDesktopMessage(params: {
+  assertAuthorized?: () => void | Promise<void>;
   thread: CodexDesktopThread;
   prompt: string;
   cwd: string;
@@ -447,6 +448,7 @@ async function deliverDesktopMessage(params: {
   const prepared = ensureCodexDesktopDeliveryMarkerForTest(params.prompt, params.deliveryId);
   const preserveEmptyTaskTitle = !params.thread.firstUserMessage && Boolean(params.thread.title);
   const delivery = await desktopBridge.deliver({
+    assertAuthorized: params.assertAuthorized,
     threadId: params.thread.id,
     prompt: prepared.prompt,
     cwd: params.cwd,
@@ -613,9 +615,8 @@ export async function waitForCodexDesktopThreadForTest(
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const thread = dependencies.read(params.threadId);
     if (thread) {
-      if (!sameCodexWorkspace(thread.cwd, params.cwd)) {
-        throw new Error(`Codex Desktop task belongs to another workspace. Task: ${thread.cwd}; configured: ${params.cwd}`);
-      }
+      // The task's own directory is reported to callers; an enabled Agent may drive a
+      // task from another directory unless a limit is configured explicitly.
       if (!params.expectedName || thread.title === params.expectedName) return thread;
     }
     if (attempt + 1 < attempts) await dependencies.wait(delayMs);
@@ -626,6 +627,7 @@ export async function waitForCodexDesktopThreadForTest(
 }
 
 export async function sendCodexThreadMessage(params: {
+  assertAuthorized?: () => void | Promise<void>;
   threadId: string;
   prompt: string;
   cwd: string;
@@ -638,6 +640,7 @@ export async function sendCodexThreadMessage(params: {
   if (!thread) throw new Error(`Codex Desktop task was not found: ${params.threadId}`);
   if (thread.archived) throw new Error(`Codex Desktop task is archived: ${params.threadId}`);
   return deliverDesktopMessage({
+    assertAuthorized: params.assertAuthorized,
     thread,
     prompt: params.prompt,
     cwd: params.cwd,

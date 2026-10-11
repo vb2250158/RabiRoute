@@ -558,27 +558,17 @@ test("Agent thread create uses a configured workspace and fixed investigation in
   assert.match(String(createCall.prompt), /\[消息内容\]\n只读调查功能入口。/);
 });
 
-test("Agent thread create rejects workspaces outside configured Codex projects", async () => {
+test("Agent thread create accepts an existing workspace outside saved Route contexts", async () => {
+  const outside = path.dirname(process.cwd());
+  let createdCwd = "";
   const driver: AgentThreadDriver = {
     read: async () => ({}),
-    create: async () => {
-      throw new Error("driver must not be called");
-    },
+    create: async params => { createdCwd = params.cwd; return { id: "019f0000-0000-7000-8000-000000000099", title: params.title, updatedAt: "2026-10-10T00:00:00Z", source: "fixture", initialTurnStatus: "not-requested" }; },
     send: async () => undefined
   };
-
-  await assert.rejects(
-    handleAgentThreadRequest({
-      action: "create",
-      title: "任务",
-      prompt: "调查",
-      cwd: path.dirname(process.cwd()),
-      messageSource: defaultSystemMessageSource
-    }, {
-      allowedWorkspaces: [process.cwd()]
-    }, driver),
-    /Workspace is not configured/
-  );
+  const result = await handleAgentThreadRequest({ action: "create", title: "任务", cwd: outside }, { allowedWorkspaces: [process.cwd()] }, driver);
+  assert.equal(result.statusCode, 201);
+  assert.equal(createdCwd, outside);
 });
 
 test("Agent thread send starts a follow-up turn through the driver", async () => {

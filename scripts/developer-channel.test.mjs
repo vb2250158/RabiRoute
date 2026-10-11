@@ -20,6 +20,10 @@ const knowledgeRuntimeFiles = [
   "packages/rabi-knowledge-contract/schema.mjs",
   "packages/rabi-knowledge-contract/tools.mjs",
   "packages/rabi-knowledge-contract/receipt.mjs",
+  "packages/rabi-api-contract/request.mjs",
+  "packages/rabilink-agent-contract/profile.mjs",
+  "packages/rabilink-agent-contract/state.mjs",
+  "packages/rabilink-agent-contract/persona.mjs",
   "apps/rabi-mcp/lib/knowledge-tools.mjs",
   "apps/rabi-mcp/lib/knowledge-receipt.mjs"
 ];

@@ -32,11 +32,23 @@ WebGUI 的“语音服务”顶部提供“语音服务器”。每项展示设�
 
 鉴权设备默认可以调用本机实际提供的全部服务，包括 Manager 管理与知识读写。应用隔离、设备凭据、固定公钥、加密和当前连接作用域仍有效；匿名 LAN 广告不能建立信任。默认允许不代表服务已经启动、设备在线或接口存在。Host 生命周期、实例重置等本机 owner 操作仍只能由本机 Host 入口完成。
 
-`tunnel.json` 保存选定设备、固定公钥和应用作用域，不再以每项 `services` 列表管理设备权限。已有公钥保留，成功的当前应用握手将旧条目迁移到统一连接记录；旧文件本身不能证明当前应用已鉴权。每个新请求复核当前启用状态、token 作用域和固定公钥；停用、换应用凭据或删除连接记录后拒绝旧会话，公钥变化不自动覆盖。
+`tunnel.json` 保存选定设备、固定公钥和应用作用域，不再以每项 `services` 列表管理设备权限。已有公钥保留，成功的当前应用握手将旧条目迁移到统一连接记录；旧文件本身不能证明当前应用已鉴权。每个新请求复核当前启用状态、token 作用域和固定公钥；HTTP 上传、下载、SSE 和 WebSocket 在发送正文与结束流前继续复核。停用、换应用凭据或删除连接记录后停止后续字节；旧作用域的复用连接关闭，公钥变化不自动覆盖。
 
-`persona` 仍是引用功能使用的固定只读 API 别名，其路径限制不是额外的设备授权。完整管理通过 `manager` 服务，知识请求使用 Manager 既有接口。服务登记和 URL 由目标 PC 拥有，远端不能指定任意本机地址。
+`persona` 仍是人格引用使用的受限 API 别名，包含语言风格选择，其路径限制不是额外的设备授权。完整管理通过 `manager` 服务，知识请求使用 Manager 既有接口。服务登记和 URL 由目标 PC 拥有，远端不能指定任意本机地址。
 
-兼容：受支持的旧手机/眼镜仍可发送 `bootstrap-speech`、`bootstrap-resources`、`bootstrap-persona`；分别校验原签名域，但统一采用同一应用连接策略，不恢复逐服务权限。新 PC 只发送新信令。受支持客户端升级完成、旧信令使用清零后移除这些旧 wire kind。`POST /api/rabilink/peer/persona/bootstrap` 保留给已发布人格页面，只接受设备 ID 并调用统一握手；页面迁移完成后移除该别名。
+PC 和手机统一使用 `bootstrap-application`；旧 `bootstrap-speech`、`bootstrap-resources`、`bootstrap-persona` wire kind 已删除并拒绝。人格页面当前仍调用 `POST /api/rabilink/peer/persona/bootstrap`，该 HTTP 入口仅调用统一应用握手，不恢复旧 wire kind。
+
+### 手机代理眼镜的独立身份
+
+手机显式配对后，可代持眼镜凭据与独立 Ed25519 密钥。眼镜凭据通过既有 `/device/api` 通用转发调用目标 PC 的 `POST /api/rabilink/peer/device-bootstrap`；PC 只接受当前 Relay owner 签名证明中的真实 `glasses-<16位十六进制>` 来源，不接受普通应用、另一个 peer 或正文自称的设备身份。应用握手永久拒绝 `glasses-*` 来源，过期设备身份也不能退回应用握手。
+
+登记正文为 `{source,publicKey,target,expiresAt,nonce,signature}`。Ed25519 签名原文为 `rabi-device-delegation-v1` 拼接按 `source,publicKey,target,expiresAt,nonce` 顺序生成的 JSON；nonce 为 32–128 位 URL-safe 字符，signature 为 64 字节签名的标准 Base64。`source` 必须匹配真实鉴权来源，`target` 必须匹配目标 PC。返回 `sourceDeviceId,deviceId,publicKey,generation,managerGeneration,expiresAt,epoch`；两项 generation 都对应 Host 的 `applicationGenerationId`。
+
+租约仅保存在 PC 内存，绝对截止不得晚于服务器接纳原设备鉴权的 `authenticatedAt + 45秒`。排队和重试不刷新该时戳；手机须用真实眼镜凭据独立续租。活跃同公钥续租保持 epoch，换公钥或到期后重新登记更换 epoch 并关闭旧会话。PC 重启使租约失效；没有可用续租路径时到期失败关闭，凭据撤销的离线窗口最多为原租约剩余时间，不能宣称立即跨端撤销。
+
+手机可沿用应用凭据运行现有 P2P/中转信令，但内层隧道必须使用眼镜独立 source/key，不能用手机身份或透传私有头冒充眼镜。HTTP 正文、SSE 与 WebSocket 每次收发继续验证当前 key、epoch、租约、scope 和 generation；Manager 已接纳的请求在异步等待后复验同一内存 guard。租约只证明消息 owner，不按人格、工作区或 Route 限制公共 API。服务端仍只有连接、鉴权和通用中转职责。
+
+实际 HTTP 注册与 LAN 握手、首条即时请求、同 key 续租、换 key、过期、作用域变化、SSE/升级流停止字节的回归见 `src/peerTunnel/deviceDelegation.test.ts`；真实手机、眼镜和公网线路验收另行记录。
 
 只读验收模式仍禁止修改选择和建立隧道。
 
@@ -55,7 +67,11 @@ GET  /api/rabilink/peer/events?ids=[...]  SSE；ids 需 URL 编码
 任意受支持方法 /api/rabilink/peer/http/<设备>/<服务>/<原路径>
 ~~~
 
-同一 http 入口对允许升级的服务支持 WebSocket Upgrade；受限 `persona` 服务拒绝升级。服务登记 baseUrl 和可选 pathPrefix，应用还可设置请求白名单；人格白名单由应用固定，不能通过 `tunnel.json` 覆盖。通用接口不注册逐项远程业务操作。Manager 地址每代重新提供，speech 地址来自现有语音配置。额外服务只可由本机管理员在 services 中登记，不接受远端任意 URL；禁止递归访问隧道管理入口。
+同一 http 入口对允许升级的服务支持 WebSocket Upgrade；受限 `persona` 服务拒绝升级。服务登记 baseUrl 和可选 pathPrefix，应用还可设置请求白名单；人格白名单由应用固定，不能通过 `tunnel.json` 覆盖。通用接口不注册逐项远程业务操作。Manager 地址每代重新提供，speech 地址来自现有语音配置。额外服务只可由本机管理员在 services 中登记，不接受远端任意 URL。内置 `manager` 的地址和身份请求头始终由应用提供，`tunnel.json` 不能改写。公开 peer 目录、选择及第三台 PC 转发接口可通过 `manager` 访问；仅拒绝将私有握手入口 `receive`、`tunnel/socket` 当作业务接口。
+
+第三台 PC 使用现有公开接口。例如 A 已连接 B，可请求 B 的 `/api/rabilink/peer/http/pc-c/manager/api/example`，由 B 经同一连接拥有者访问 C。显式嵌套最多四跳，拒绝返回当前目标、重复目标及超限路径；不按整个 `/api/rabilink/peer/` 前缀禁用业务。没有健康目标连接时返回失败，不偷偷改为本机执行。
+
+公开请求头使用共享 `packages/rabi-api-contract` 合同透传，包括 `If-Match`、`Idempotency-Key`、预期 generation/instance 和日后新增的业务字段。仅剥离凭据、代理身份、HTTP framing、Connection 指定的逐跳字段及非法换行；新增业务头不需要修改 Relay 或隧道枚举。目标端每次转发到 Manager 或其资源下载接口时，使用进程内存密钥签发绑定真实来源、方法、原始路径、应用作用域、generation 和唯一 nonce 的 MAC；公开 generation、loopback 地址与裸身份头不能替代该证明。相同请求可以重复复验，不同请求重放 nonce 会被拒绝；作用域和 generation 失效后也会拒绝。调用方私有头先被剥离，证明不返回外部；独立语音服务保留自身鉴权。
 
 HTTP、二进制、上传下载、SSE 和 WebSocket 共用分帧、多路复用和每流窗口控制。每连接最多十六个流，单帧约三十二 KiB，发送数据块十二 KiB。隧道不把整个文件装进 JSON。普通语音控制 API 保留现有有界缓冲合同，流式使用通用接口。
 
@@ -71,6 +87,8 @@ HTTP、二进制、上传下载、SSE 和 WebSocket 共用分帧、多路复用�
 
 ## 兼容与验证
 
-peer-rpc-v1 保留为旧客户端只读兼容和小型信令入口。新通用请求不使用旧逐项业务分发；信令使用单次 Relay 交换，不跨线路重放分配请求。移除条件：受支持设备完成隧道升级、信令入口迁移、旧客户端调用证据清零，并完成双 PC 验收；在该迁移里程碑删除旧 DataChannel 与业务分发。
+`peer-rpc-v1` 现在仅承担 `system.describe` 和 `transport.offer` / `transport.tunnel` 信令，不再承载只读业务。`POST /api/rabilink/peer/call`、`plans.list` / `persona.manifest` 注册、每业务请求新建 P2P 的调用端及旧清单辅助模块已删除。即使误注册旧业务操作，信令分派器也拒绝执行或列出它。所有读取和写入使用本页的通用 `manager` 连接。
 
-测试：src/peerTunnel/tunnel.test.ts、src/peerTunnel/speechAdapter.test.ts、ribiwebgui/tests/peer-server-presentation.test.ts，以及语音 Python API/peer_compute 测试。真实验收需记录每种线路、RTT、新接口零适配、目标切换、断线、权限拒绝和音频实际播放。真实公网与设备升级的证据独立于本机自动化结果。
+现有受支持手机的 `transport.offer` 与旧 DataChannel 接收端继续用于控制面，且不拥有第二套业务规则；新 PC 只使用一次性、绑定目标 generation/instance 的信令交换，不跨线路重放连接分配。受支持客户端迁移到 `transport.tunnel`、旧控制 wire 使用清零并完成设备验收后，删除旧 offer/DataChannel 接收端。
+
+本轮传输核心 66 项测试通过，覆盖三个本机真实 Runtime 的 A→B→C LAN 转发、未知 PUT 接口、未知请求/响应头、100 KiB 二进制，以及连接复用、真实本机 WebRTC、Relay、SSE/WS 撤权和写入失败不重放。验证入口：`src/peerTunnel/tunnel.test.ts`、`http.test.ts`、`personaBootstrap.test.ts`、`src/rabiPeerClient.test.ts` 与 `src/manager/rabiPeerRoutes.test.ts`。语音展示与播放另见 `speechAdapter.test.ts`、`ribiwebgui/tests/peer-server-presentation.test.ts` 和语音 Python API/peer_compute 测试。真实验收需记录每种线路、RTT、新接口零适配、目标切换、断线、权限拒绝和音频实际播放。真实公网与设备升级的证据独立于本机自动化结果。

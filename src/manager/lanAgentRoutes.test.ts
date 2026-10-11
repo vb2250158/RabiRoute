@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import test from "node:test";
 import { listenManagerEndpoint } from "../managerEndpointPolicy.js";
-import type { LanAgentRegistry } from "./lanAgentRegistry.js";
+import { LanAgentNodeNameConflictError, type LanAgentRegistry } from "./lanAgentRegistry.js";
 import type { LanAgentReleaseStore } from "./lanAgentReleaseStore.js";
 import { handleLanAgentApi } from "./lanAgentRoutes.js";
 import { webguiRequestToken, webguiTokenMatches } from "./webguiLanAccess.js";
@@ -27,9 +27,17 @@ function jsonResponse(response: http.ServerResponse, statusCode: number, body: u
 
 async function startServer(verifiedConnection = false) {
   let updateRequests = 0;
+  let name = "";
   const registry = {
     listNodes: () => [{ nodeId: "node-a", connected: true }],
     listTasks: () => [],
+    listInstances: () => [{ instanceId: "node-a", name, local: false, connected: false, agents: [] }],
+    setNodeName: (nodeId: string, nextName: unknown, expectedName: string) => {
+      if (name !== expectedName) throw new LanAgentNodeNameConflictError();
+      if (typeof nextName !== "string") throw new Error("Invalid name");
+      name = nextName.trim();
+      return { nodeId, name };
+    },
     requestUpdate: (nodeId: string, version: string) => {
       updateRequests += 1;
       return { nodeId, targetVersion: version, updateState: "requested" };
@@ -116,4 +124,22 @@ test("LAN Agent management accepts the explicit WebGUI token", async () => {
   } finally {
     await app.close();
   }
+});
+
+test("node renaming requires management auth and a current name, with independent catalog readback", async () => {
+  const app = await startServer();
+  const url = `${app.baseUrl}/api/lan-agent/instances/node-a/name`;
+  const headers = { "content-type": "application/json", "x-rabiroute-webgui-token": PLACEHOLDER_REQUEST_VALUE };
+  try {
+    const denied = await fetch(url, { method: "PUT", body: JSON.stringify({ name: "Worker PC", expectedName: "" }) });
+    assert.equal(denied.status, 401);
+    const missingVersion = await fetch(url, { method: "PUT", headers, body: JSON.stringify({ name: "Worker PC" }) });
+    assert.equal(missingVersion.status, 400);
+    const renamed = await fetch(url, { method: "PUT", headers, body: JSON.stringify({ name: "Worker PC", expectedName: "" }) });
+    assert.equal(renamed.status, 200);
+    const stale = await fetch(url, { method: "PUT", headers, body: JSON.stringify({ name: "Stale PC", expectedName: "" }) });
+    assert.equal(stale.status, 409);
+    const catalog = await fetch(`${app.baseUrl}/api/lan-agent/instances`, { headers });
+    assert.equal((await catalog.json() as { instances: Array<{ name: string }> }).instances[0]?.name, "Worker PC");
+  } finally { await app.close(); }
 });

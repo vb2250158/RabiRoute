@@ -14,14 +14,14 @@ import java.time.Instant
 import java.util.concurrent.Executors
 
 /** Consumes existing device-info events only. Owns no CXR connection, service or timer. */
-class RabiGlassStatusPublisher(context: Context, private val onChanged: Runnable) : AutoCloseable {
+class RabiGlassStatusPublisher(context: Context, private val onChanged: Runnable, managerTransport: com.rabiroute.sdk.RabiLinkManagerHttpTransport) : AutoCloseable {
     private val app = context.applicationContext
     private val worker = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     // Latest-value outbox: status is a snapshot, not a history of every battery callback.
     // Token is never persisted; identity is a one-way digest binding endpoint + credential.
     private val outbox = AtomicFile(File(app.filesDir, "glass-status-pending.json"))
-    private val sdk = RabiRouteSdk()
+    private val sdk = RabiRouteSdk(managerTransport=managerTransport)
     @Volatile private var closed = false
     @Volatile var status = "尚未收到眼镜状态"; private set
     @Volatile var observedAt = ""; private set

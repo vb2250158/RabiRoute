@@ -7,6 +7,14 @@ description: Prepares, reviews, commits, and publishes RabiRoute changes with a 
 
 Use this skill with `github-submit-workflow` and `ai-code-security-review`; read both before changing submission state. A request to “prepare” does not authorize commit or push. A request to “commit” does not authorize push.
 
+## Scope boundary: submission checks are not API permissions
+
+A pull/merge/push request authorizes repository synchronization, conflict resolution and proportionate validation, not a separate security redesign. Review findings are evidence to investigate, not authority to disable working features, clear connection leases, add permission switches, require new credentials or rewrite connection contracts. Do not turn a suspected risk into a feature change without verifying the actual contract and obtaining authorization for a changed behavior.
+
+For RabiRoute, an authenticated RabiLink connection can use every public RabiPC API by default. Only capabilities explicitly disabled by the user in WebGUI or configuration are restricted, within that setting's declared scope; an absent setting does not imply denial. An enrollment switch controls admission, not a second default-off feature layer. Plan, persona, workspace, Route and API catalogs are context/discovery mechanisms, not additional permission gates. Never introduce a second management token, per-feature allowlist or extra pairing requirement during submission. Preserve existing connectivity when resolving conflicts; validate remote access, not only loopback fixtures. Publication checks (private data, version metadata and tests) govern the Git commit only and must never become runtime restrictions.
+
+When a finding concerns existing behavior rather than a merge regression, report its verified evidence separately and leave the behavior unchanged. Fix only demonstrated in-scope regressions; do not classify a deliberately supported remote call as unauthorized merely because it is remote. If a test conflicts with the current connection contract, reconcile the test against that contract instead of narrowing production access to satisfy it.
+
 ## Quick start
 
 Run from any directory inside the RabiRoute repository:

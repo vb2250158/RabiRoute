@@ -1,8 +1,9 @@
 import type http from "node:http";
 import { definitionUsesNapcat, normalizeNapCatInstances, normalizeReadableGroupFileIds, type GatewayDefinition } from "../shared/gatewayConfigModel.js";
-import { resolvePrimaryAgentTarget } from "../shared/routeAgentTargets.js";
 import { readNapCatGroupFiles, type GroupFilesPage } from "../napcat.js";
-import { getTrustedLanAgentSource, type TrustedLanAgentSource } from "./lanAgentBodyAuthority.js";
+import { getTrustedLanAgentSource, hasLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
+import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
+import { localModelSettingsRequestAllowed } from "./speechModelSettingsAccess.js";
 
 const PATH = "/api/agent/qq/group-files";
 const groupIdPattern = /^[1-9][0-9]{0,15}$/;
@@ -12,21 +13,12 @@ type Authority = { provider: string; sessionId: string };
 export type AgentGroupFilesContext = {
   /** Exact Route lookup; never discover another Route from group or instance. */
   route: (routeId: string) => GatewayDefinition | undefined;
-  approvedBinding: (nodeId: string, agentId: string) => Authority | null;
-  isAgentEnabled: (nodeId: string, agentId: string) => boolean;
+  /** Legacy context wiring only; ingress principal owns Agent authorization. */
+  approvedBinding?: (nodeId: string, agentId: string) => Authority | null;
+  isAgentEnabled?: (nodeId: string, agentId: string) => boolean;
   jsonResponse: (response: http.ServerResponse, statusCode: number, body: unknown) => void;
   readFiles?: typeof readNapCatGroupFiles;
 };
-
-function authorized(source: TrustedLanAgentSource, definition: GatewayDefinition, context: AgentGroupFilesContext): boolean {
-  const binding = context.approvedBinding(source.nodeId, source.agentId);
-  const provider = binding?.provider === "codex-desktop" ? "codex" : binding?.provider;
-  const primary = resolvePrimaryAgentTarget(definition);
-  return context.isAgentEnabled(source.nodeId, source.agentId)
-    && provider === source.provider && Boolean(binding?.sessionId) && binding?.sessionId === source.sessionId
-    && primary?.provider === source.provider && primary.binding?.instanceId === source.nodeId
-    && primary.binding.agentId === source.agentId;
-}
 
 function safeOrigin(raw: string): string | undefined {
   try {
@@ -37,7 +29,7 @@ function safeOrigin(raw: string): string | undefined {
   } catch { return undefined; }
 }
 
-/** HTTP handler requires the Manager's authenticated LAN Agent middleware to have installed a trusted source. */
+/** Public bounded metadata read; Agent admission and the independent group ACL are separate gates. */
 export async function handleAgentGroupFiles(
   request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse, context: AgentGroupFilesContext
 ): Promise<boolean> {
@@ -47,8 +39,20 @@ export async function handleAgentGroupFiles(
     context.jsonResponse(response, status, { code: -1, errorCode });
     return true;
   };
-  const source = getTrustedLanAgentSource(request);
-  if (!source) return deny(403, "QQ_GROUP_FILES_TRUSTED_SOURCE_REQUIRED");
+  let principal: ReturnType<typeof assertTrustedLanAgentPrincipal>;
+  try { principal = assertTrustedLanAgentPrincipal(request); }
+  catch { return deny(403, "QQ_GROUP_FILES_NOT_AUTHORIZED"); }
+  const authorized = () => {
+    try {
+      // Keep the original ingress lease; revocation must never select local fallback.
+      if (assertTrustedLanAgentPrincipal(request) !== principal) return false;
+      if (principal) return true;
+      if (request.headers["x-rabilink-tunnel-local"] || request.headers["x-rabilink-resource-owner"] || request.headers["x-rabiroute-peer-proxy"]) return false;
+      return !getTrustedLanAgentSource(request) && !hasLanAgentBodyGuard(request)
+        && localModelSettingsRequestAllowed(request);
+    } catch { return false; }
+  };
+  if (!authorized()) return deny(403, "QQ_GROUP_FILES_TRUSTED_SOURCE_REQUIRED");
   if (request.headers["content-length"] !== undefined || request.headers["transfer-encoding"] !== undefined) return deny(400, "QQ_GROUP_FILES_BODY_NOT_ALLOWED");
   const fields = [...requestUrl.searchParams.entries()];
   const keys = fields.map(([key]) => key);
@@ -60,7 +64,7 @@ export async function handleAgentGroupFiles(
   if (!routeId || routeId.length > 256 || !groupIdPattern.test(groupId)
     || (folderId !== undefined && !folderIdPattern.test(folderId))) return deny(400, "QQ_GROUP_FILES_INVALID_QUERY");
   const definition = context.route(routeId);
-  if (!definition || definition.id !== routeId || definition.enabled !== true || !authorized(source, definition, context)) return deny(403, "QQ_GROUP_FILES_NOT_AUTHORIZED");
+  if (!definition || definition.id !== routeId || definition.enabled !== true || !authorized()) return deny(403, "QQ_GROUP_FILES_NOT_AUTHORIZED");
   if (!definitionUsesNapcat(definition)) return deny(409, "QQ_GROUP_FILES_NAPCAT_DISABLED");
   const allowlist = normalizeReadableGroupFileIds(definition.messageAdapterPolicies?.napcat?.readableGroupFileIds);
   if (!allowlist.includes(groupId)) return deny(403, "QQ_GROUP_FILES_GROUP_NOT_ALLOWED");
@@ -71,20 +75,26 @@ export async function handleAgentGroupFiles(
   if (instances.length !== 1) return deny(409, "QQ_GROUP_FILES_INSTANCE_AMBIGUOUS");
   const instance = instances[0]!;
   const origin = safeOrigin(instance.httpUrl);
+  const configuredInstance = { ...raw[0] };
   if (!origin) return deny(409, "QQ_GROUP_FILES_ENDPOINT_UNSAFE");
-  if (!authorized(source, definition, context)
+  if (!authorized()
     || !normalizeReadableGroupFileIds(definition.messageAdapterPolicies?.napcat?.readableGroupFileIds).includes(groupId)) return deny(403, "QQ_GROUP_FILES_NOT_AUTHORIZED");
   try {
     const page: GroupFilesPage = await (context.readFiles ?? readNapCatGroupFiles)(
       { httpUrl: origin, accessToken: instance.accessToken ?? "" }, groupId, folderId
     );
     const current = context.route(routeId);
-    if (!current || current !== definition || !authorized(source, current, context)
+    const configured = current?.napcatInstances;
+    if (!authorized() || !current || current.id !== routeId || current.enabled !== true || !definitionUsesNapcat(current)
+      || !Array.isArray(configured) || configured.length !== 1 || configured[0]?.enabled === false
+      || configured[0]?.id !== configuredInstance.id || configured[0]?.httpUrl !== configuredInstance.httpUrl
+      || configured[0]?.accessToken !== configuredInstance.accessToken
       || !normalizeReadableGroupFileIds(current.messageAdapterPolicies?.napcat?.readableGroupFileIds).includes(groupId)) {
       return deny(403, "QQ_GROUP_FILES_NOT_AUTHORIZED");
     }
     context.jsonResponse(response, 200, { code: 0, data: { routeId, groupId, folderId: folderId ?? null, instanceId: instance.id, ...page } });
   } catch {
+    if (!authorized()) return deny(403, "QQ_GROUP_FILES_NOT_AUTHORIZED");
     // No upstream error body or URL: either may carry an access token or private data.
     return deny(503, "QQ_GROUP_FILES_UPSTREAM_UNAVAILABLE");
   }

@@ -18,7 +18,7 @@
 
 认证 owner 来自手机安装实例的稳定设备身份，经隧道握手与公钥校验确认，不使用 Token 派生 scope。更换凭据需要重新授权，不等于修改录音归属；卸载重装产生的新身份不能自动继承旧身份。目标 worker 使用稳定电脑设备 ID，不使用临时 Manager 代际 ID。
 
-电脑的归档设置接口复用连接鉴权来建立 `owner → role → archiveRoot` 绑定。角色目录通过现有配置解析，领域相对目录为 `all-day-recording/media-archive`；部署路径和角色值不写入协议默认值。上传正文不能自选 owner、role 或任意路径。命名空间使用持久 UUID；NAS 缺失、绑定禁用或 marker 不匹配时失败关闭，不回退成本机缓存归档。
+受限电脑管理配置（可信本机管理请求，或统一入口认证且仍启用的 Agent）可以建立 `owner → role → archiveRoot` 绑定；手机 resources 隧道不获得管理权限。角色目录通过现有配置解析，领域相对目录为 `all-day-recording/media-archive`；部署路径和角色值不写入协议默认值。上传正文不能自选 owner、role 或任意路径。命名空间使用持久 UUID；NAS 缺失、绑定禁用或 marker 不匹配时失败关闭，不回退成本机缓存归档。
 
 协议保存 `pcm_s16le`、16 kHz、单声道原始 PCM。播放需要的 WAV 头临时生成，不把 WAV 与 PCM 作为两套长期媒体副本。上限分别为：
 
@@ -60,7 +60,7 @@ c272627f1bec72e289cdd190fdf3534229e8b8a1062d11c28631b7339abc7a7b
 | Contract / Android `RecordingArchiveContract` | 已实现严格校验与跨语言 golden hash；不代表真实上传已接通 |
 | Store | 已实现对象、不可变 envelope、强回执与命名空间围栏；NAS 隔离文件机制测试已通过，目录 fsync `EPERM` 与断电持久性仍是验收边界 |
 | Bindings | 已实现受控角色绑定与配置 CAS；复用 `resource-cache.json`，旧目录更新须保留绑定并共用锁 |
-| Routes | 归档能力、对象、manifest、receipt 及电脑管理入口已接入源码；管理写入复用连接鉴权并要求强 ETag 与 Idempotency-Key |
+| Routes | 归档能力、对象、manifest、receipt 及电脑管理入口已接入源码；管理写入接受可信本机或有效 Agent，要求强 ETag 与 Idempotency-Key，并在正文、锁等待、实际写入和输出边界复验原授权 |
 | Catalog | 已实现显式重建与可重建本机缓存、绑定快照的分页游标；普通翻页不扫描 NAS，未就绪不伪报空历史 |
 | Runtime | Manager 运行入口、管理 API、生命周期、目录与 ASR hook 已接入源码；未安装部署验收 |
 | Jobs | 状态机、冻结选择和实际 processing 调用链已接入；源码接通不代表真实音频、NAS 故障与恢复已验收 |

@@ -48,7 +48,9 @@ To enable the integration, change only this instance's `enabled` field to `true`
 
 ## Local RabiRoute facade
 
-RabiRoute Manager provides these paths to local and authenticated remote connections, reusing connection credentials without a loopback-only caller restriction. The client still connects to YeYu Gamer on this PC:
+RabiRoute Manager exposes the same public paths to authenticated enabled remote Agents and trusted local callers. Requests without Agent credentials must still pass loopback, Host, Origin, and forwarded-header checks; an invalid original request lease cannot fall back to local access. The downstream YeYu Gamer Manager remains at its fixed local endpoint, and its independent Token is never disclosed to remote callers.
+
+Requests recheck their original authority after request-body, credential-file, HTTP, and response-body waits. Revocation or disable/re-enable never restores an old request. Denial before dispatch reports `not_started`; denial after HTTP dispatch conservatively reports `unknown` / `uncertain`, withholds the business receipt, and does not claim to undo a downstream accepted command:
 
 ```http
 GET /api/agent/yeyu-gamer/health

@@ -256,6 +256,33 @@ test("watch installation failure uses authoritative scan instead of a stale fast
   assert.equal((await readPlanPageCatalogInWorker(root,planReadFence(root)))[0]!.focus,"different length external content");
 });
 
+test("quarantine lease churn cannot invalidate a cold page, while canonical plan changes still refresh", async t => {
+  const { root, file, plan } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  let changed: (event: fs.WatchEventType, name: string | null) => void = () => {};
+  const watcher = Object.assign(new EventEmitter(), { close() {}, unref() { return this; }, ref() { return this; } });
+  t.mock.method(fs, "watch", (_file: fs.PathLike, _options: unknown, listener: typeof changed) => {
+    changed = listener;
+    return watcher;
+  });
+  const originalStat = fs.promises.stat;
+  t.mock.method(fs.promises, "stat", async (...args: Parameters<typeof originalStat>) => {
+    const result = await originalStat(...args);
+    changed("rename", "quarantine/plan-storage-locks/lease.lock");
+    changed("change", "quarantine/transactions/manifest.json");
+    changed("rename", "active\\sample\\attachments\\preview.json");
+    changed("change", "active/sample/feedback/event.json");
+    return result;
+  });
+  assert.equal((await readPlanPageCatalogInWorker(root, planReadFence(root))).length, 1);
+  fs.writeFileSync(file, JSON.stringify({ ...plan, focus: "changed" }));
+  changed("change", path.relative(path.join(root, "plans"), file));
+  assert.equal((await readPlanPageCatalogInWorker(root, planReadFence(root)))[0]?.focus, "changed");
+  fs.rmSync(path.dirname(file), { recursive: true });
+  changed("rename", "active\\sample");
+  assert.equal((await readPlanPageCatalogInWorker(root, planReadFence(root))).length, 0);
+});
+
 test("dirty-read failure is explicit and the next request can rebuild",async t=>{
   const {root,file,plan}=fixture(); t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   await readPlanPageCatalogInWorker(root,planReadFence(root));

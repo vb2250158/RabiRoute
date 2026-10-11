@@ -17,6 +17,7 @@ export function recoverAgentResponseDelivery(
   const original = records.find(record => record.source.threadId === threadId
     && (record.pendingResponseDeliveryId === deliveryId || record.response?.deliveryId === deliveryId));
   if (!original) return { status: "reservation_missing", deliveryId };
+  if (original.source.endpoint || original.target.endpoint) return { status: "endpoint_receipt_required", deliveryId };
   const followup = records.find(record => record.deliveryId === deliveryId);
   const communication = { deliveryId, inReplyToRequestId: original.id, requestId: followup?.id };
   if (original.status === "responded" && original.response?.deliveryId === deliveryId) {
@@ -58,6 +59,7 @@ export function recoverAgentResponseDelivery(
         || preparation.target.threadId !== original.source.threadId
         || !sameCodexWorkspace(preparation.source.workspace || "", original.target.workspace || "")
         || !sameCodexWorkspace(preparation.target.workspace || "", original.source.workspace || "")) continue;
+      if (preparation.source.endpoint || preparation.target.endpoint) continue;
       store.commit(preparation, { action: "receipt_recovered", transport: "desktop-ipc" });
       return { ...communication, status: "receipt_recovered" };
     }

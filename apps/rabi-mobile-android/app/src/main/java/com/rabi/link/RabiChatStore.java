@@ -61,6 +61,12 @@ public final class RabiChatStore {
     public void append(String id, String role, String kind, String text, String fileName, String contentType,
                        String routeProfileId, String localPath, String clientMessageId,
                        String deliveryState, String failure) {
+        appendRecorded(id, role, kind, text, fileName, contentType, routeProfileId, localPath, clientMessageId, deliveryState, failure, System.currentTimeMillis());
+    }
+
+    public void appendRecorded(String id, String role, String kind, String text, String fileName, String contentType,
+                               String routeProfileId, String localPath, String clientMessageId,
+                               String deliveryState, String failure, long createdAt) {
         synchronized (LOCK) {
             try {
                 JSONArray values = readArray(chatFile);
@@ -75,7 +81,7 @@ public final class RabiChatStore {
                         .put("clientMessageId", clean(clientMessageId).isEmpty() ? stableId : clean(clientMessageId))
                         .put("deliveryState", safe(deliveryState)).put("failure", safe(failure))
                         .put("playbackState", "").put("playbackFailure", "")
-                        .put("createdAt", System.currentTimeMillis());
+                        .put("createdAt", createdAt);
                 values.put(value);
                 while (values.length() > 1000) values.remove(0);
                 write(chatFile, values.toString());

@@ -1,13 +1,15 @@
-# RabiLink PC knowledge bridge (experimental wiring)
+<!-- docs-language-switch -->
+<div align="center">
+English | <a href="./rabilink-knowledge-bridge.md">简体中文</a>
+</div>
+<!-- /docs-language-switch -->
 
-English | [简体中文](rabilink-knowledge-bridge.md)
+# Retired knowledge integration
 
-`src/manager/rabiLinkKnowledgeBridge.ts` is a disabled-by-default policy layer. `apps/rabi-mcp/lib/knowledge-http-client.mjs` uses the official SDK to connect to the existing knowledge MCP HTTP service. Neither implements Manager business logic, creates an inference runtime, or executes a shell.
+The old knowledge bridge, intent queue, per-tool grants and phone grant editor are retired. This page preserves a documentation link; it does not describe a supported runtime or configuration path. Old business configuration is not migrated.
 
-The root runtime now uses official SDK 1.30.1 through `rabiLinkKnowledgeRuntime.ts`, dispatching dedicated queues before generic local proxying. rabi-agent dependencies remain unchanged; the independent adapter remains available for standalone hosts. Actual HTTP and fake-queue tests do not imply installation or device acceptance. See the [runtime contract](rabilink-knowledge-runtime_en.md) for configuration, secret redaction, grants and capability advertisement. Never accept module paths, endpoint URLs or tokens from device requests.
+Use the target PC's [Manager interfaces](rabi-agent-interfaces_en.md) through the [generic API transport](../apps/rabilink-aiui/docs/generic-api-transport_en.md). Enabled authenticated Agents have the same API access as local callers, without workspace, persona or Route grants. Bindings only select automatic delivery targets. Relay handles connections, authentication and opaque transport.
 
-Local settings are enabled, url, token, allowedRoles, allowedTools and allowWrites. The URL must be exactly `http://127.0.0.1:<port>/mcp`, without query, user information or other paths. Writes default off. Recent-memory details update view timestamps and also require write permission and a stable business idempotency key. Argument validation shares the single `packages/rabi-knowledge-contract` schema with knowledge-tools, without duplicating tools or Manager paths.
+Knowledge, persona, Skill and message state remain on the owning PC. Preserve each endpoint's actual revision, identity and receipt contract. For uncertain writes, read back the original resource or receipt; do not change the key or replay the write automatically.
 
-The caller must authenticate and inject appId, deviceBindingId, ownerAccountId and targetDeviceId. This module checks their presence, not their identity or ownership. Relay must explicitly select the app-owned PC. Generic WebGUI queue requests must not forge reserved paths or device metadata. Effective authorization remains the intersection of device grants, local PC policy and MCP server policy.
-
-Transport failures never retry automatically. Mutations return `uncertain`; the queue owner must durably preserve the original business key/body and reconcile authoritatively, never replay with a new key. Errors do not expose underlying exceptions or credentials. Tests cover rejection before transport, stable keys, single-attempt failures and official SDK HTTP initialization/discovery/call.
+See [AIUI acceptance](aiui-agent-acceptance_en.md) and [Relay deployment](rabilink-relay-server_en.md) for current implementation and outstanding checks. No old knowledge URL, MCP secret or permission form is required.

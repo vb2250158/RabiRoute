@@ -79,10 +79,10 @@ export const rabiLinkAiuiDocPages: RabiLinkAiuiDocPage[] = [
     section: "RabiLink 眼镜端",
     diagramLabel: "能力归属架构图",
     subtitle: "原生灵珠智能体、AIUI 页面和原生 App 是三种客户端宿主路线，不是三套互不兼容的 RabiRoute 后端。",
-    summary: "三条路线都可以把消息交给同一个 RabiLink Relay、RabiRoute Route、统一会话账本和 PC Agent。真正不同的是眼镜上由谁承载交互：原生灵珠智能体路线复用平台托管对话与 OpenAPI 工具；AIUI 路线在灵珠智能体下挂载 AIX 页面，获得自定义 HUD、前台原生 ASR/TTS 和受控页面逻辑；App 路线安装原生 Android 应用，以最高工程成本换取更完整的生命周期、设备 SDK 和系统集成空间。",
+    summary: "三条路线可复用 RabiLink Relay 和 RabiRoute 公共服务。原生灵珠路线复用平台托管对话；AIUI 默认由乐奇配置的宿主模型执行，页面拥有 HUD、ASR/TTS 与工具请求；App 路线提供 Android 生命周期和系统集成。AIUI 的路由唤醒与工具结果续推理尚未验证，不能标为完整 Agent。",
     bullets: [
       "原生灵珠智能体路线适合最快验证对话、工具调用和 Relay 连通性；它复用官方入口，但 UI、会话节奏和设备能力主要由平台决定。",
-      "AIUI 路线是当前自定义眼镜体验的主线：同一个灵珠智能体挂载 AIX 页面，页面前台可持续续接 ASR、消费主动下行并用原生 TTS 播报。",
+      "AIUI 路线通过 AIX 页面提供宿主模型、HUD 与原生 ASR/TTS；手机可设置人格及其来源电脑。绑定不限制接口权限，旧远端观察仅在显式兼容模式启用。",
       "App 路线适合深度设备能力、原生生命周期和长期常驻采集研究；它需要 APK、签名、权限、SDK 兼容和真机安装维护，不能因为是原生 App 就自动承诺 24 小时后台录音。",
       "自由度从原生灵珠智能体、AIUI 到原生 App 逐级提高，但平台代管能力逐级减少，发布、权限、生命周期和真机维护责任也逐级转移到项目自身。",
       "三条路线可以并存：原生灵珠作为轻量入口和兼容路径，AIUI 承担当前产品化 HUD，App 作为需要系统权限或更强设备控制时的深化路线。",
@@ -117,7 +117,7 @@ export const rabiLinkAiuiDocPages: RabiLinkAiuiDocPage[] = [
           label: "语音与推理归属",
           values: [
             "平台智能体负责一轮对话理解和工具调用；RabiRoute 通过 OpenAPI/Relay 接收请求。",
-            "页面用 AIUI 原生 ASR/TTS；配置助手的 LanguageModel 只选择白名单动作，主要推理仍由 PC Agent 完成。",
+            "日常对话由乐奇 AIUI 宿主模型执行，调用 RabiPC 公共接口；配置助手保留受控配置动作。工具自动续推理仍待正式接口。",
             "App 自己选择 RokidAiSdk、系统能力、本地或云 ASR/TTS；业务推理仍可统一交给 PC Agent。"
           ]
         },
@@ -125,7 +125,7 @@ export const rabiLinkAiuiDocPages: RabiLinkAiuiDocPage[] = [
           label: "能力归属边界",
           values: [
             "灵珠平台拥有唤醒、ASR/TTS、对话 UI 和工具调度；项目主要拥有 OpenAPI 工具与后端处理。",
-            "灵珠平台拥有智能体身份、入口和页面调起；AIUI 页面拥有 HUD、ASR/TTS 与前台状态机；PC 拥有主要 Agent 能力。",
+            "乐奇提供模型与原生语音；AIUI 页面执行对话、HUD 和前台状态机；RabiPC 提供人格、公共接口、记录与路由。",
             "App 拥有 UI、语音接线、设备 SDK 和 Android 生命周期；PC 继续拥有 Agent、人格、记忆、配置与动作门。"
           ]
         },
@@ -197,7 +197,7 @@ export const rabiLinkAiuiDocPages: RabiLinkAiuiDocPage[] = [
     },
     diagram: {
       title: "三条眼镜路线，共用一套后端",
-      caption: "上半段选择眼镜客户端宿主；进入 Relay 后，三条路线汇入相同的 RabiRoute、统一账本、PC Agent 和安全回传链。",
+      caption: "先选择眼镜交互宿主。AIUI 默认由宿主模型执行，Relay 连接人格来源 RabiPC 的公共接口与记录；完整路由唤醒和工具续推理仍待验证。",
       lanes: [
         {
           label: "原生灵珠智能体路线",
@@ -211,10 +211,10 @@ export const rabiLinkAiuiDocPages: RabiLinkAiuiDocPage[] = [
         {
           label: "AIUI 路线",
           steps: [
-            { title: "灵珠平台拥有", detail: "智能体身份 / 入口 / 页面调起", icon: "mdi-account-voice", kind: "agent" },
-            { title: "AIUI 页面拥有", detail: "HUD / ASR / TTS / 触摸 / 前台状态机", icon: "mdi-glasses", kind: "mode" },
+            { title: "灵珠平台拥有", detail: "模型配置 / 原生语音 / 页面宿主", icon: "mdi-account-voice", kind: "agent" },
+            { title: "AIUI 页面拥有", detail: "模型请求 / HUD / ASR / TTS / 引导队列", icon: "mdi-glasses", kind: "mode" },
             { title: "RabiLink Relay", detail: "观察与主动消息独立推进", icon: "mdi-cloud-sync-outline", kind: "service" },
-            { title: "PC 端拥有", detail: "Agent / 人格 / 记忆 / 配置 / 账本 / 动作门", icon: "mdi-desktop-tower-monitor", kind: "result" }
+            { title: "PC 端拥有", detail: "人格 / 公共接口 / 记忆 / 配置 / 记录 / 路由", icon: "mdi-desktop-tower-monitor", kind: "result" }
           ]
         },
         {

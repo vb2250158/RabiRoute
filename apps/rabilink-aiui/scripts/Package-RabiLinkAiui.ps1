@@ -66,6 +66,12 @@ finally {
     }
   }
   if (Test-Path -LiteralPath $stagingRoot) {
+    $resolvedStagingRoot = [System.IO.Path]::GetFullPath($stagingRoot)
+    $resolvedTempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $resolvedStagingRoot.StartsWith($resolvedTempRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not ([System.IO.Path]::GetFileName($resolvedStagingRoot) -match '^rabilink-aiui-aix-[0-9a-f]{32}$')) {
+      throw "Refusing to remove an unexpected package staging directory."
+    }
     Remove-Item -LiteralPath $stagingRoot -Recurse -Force
   }
 }

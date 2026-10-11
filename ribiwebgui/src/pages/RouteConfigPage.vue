@@ -249,7 +249,7 @@ async function runAgentScan(): Promise<void> {
   finally { agentScan.value.loading = false; }
 }
 
-import { readRabiLinkHome, rabiLinkDeviceDisplayName, rabiLinkDeviceKind } from "../rabiLinkHomeClient";
+import { deviceAgentInstanceFromCatalog } from "../deviceAgentCatalog";
 
 const agentInstances = ref<AgentInstance[]>([]);
 const lanAgentLoading = ref(false);
@@ -261,39 +261,22 @@ async function refreshLanAgentNodes(): Promise<void> {
   try {
     const access = await fetch("/api/webgui-access").then(response => response.json());
     const token = access.data?.token || managerAccessToken();
-    const response = await fetch("/api/lan-agent/instances", { cache: "no-store", headers: { "x-rabiroute-webgui-token": token } });
-    const body = await response.json();
-    if (!response.ok || body.code !== 0) throw new Error(body.message || "读取远端节点失败");
-    const lanInstances: AgentInstance[] = body.instances || [];
-
-    const rabiLinkInstances: AgentInstance[] = [];
-    try {
-      const linkHome = await readRabiLinkHome(new AbortController().signal);
-      for (const device of linkHome.devices) {
-        if (!device.online) continue;
-        const kind = rabiLinkDeviceKind(device);
-        const displayName = rabiLinkDeviceDisplayName(device);
-        const isEdgeAgent = kind === "phone" || kind === "glasses" || device.capabilities.some(c => c.includes("agent"));
-        if (!isEdgeAgent) continue;
-        const kindLabel = kind === "glasses" ? "Rokid 眼镜智能体" : (kind === "phone" ? "手机智能体" : "RabiLink 智能体");
-        rabiLinkInstances.push({
-          instanceId: device.guid || device.id,
-          local: false,
-          address: displayName,
-          connected: true,
-          agents: [{
-            agentId: "agent",
-            name: `${displayName}（${kindLabel}）`,
-            provider: "codex",
-            enabled: true
-          }]
-        });
-      }
-    } catch {
-      // RabiLink 离线或未配置时静默忽略，不阻塞局域网节点
-    }
-
-    agentInstances.value = [...lanInstances, ...rabiLinkInstances];
+    const headers = { "x-rabiroute-webgui-token": token };
+    const catalogs = await Promise.allSettled([
+      fetch("/api/lan-agent/instances", { cache: "no-store", headers }).then(async response => {
+        const body = await response.json();
+        if (!response.ok || body.code !== 0) throw new Error(body.message || "读取电脑 Agent 实例失败");
+        return (body.instances || []) as AgentInstance[];
+      }),
+      fetch("/api/device-agents", { cache: "no-store", headers }).then(async response => {
+        const body = await response.json();
+        if (!response.ok || body.code !== 0) throw new Error(body.message || "设备 Agent 未配置：请在设备设置中绑定人格和所属电脑后刷新。");
+        const instance = deviceAgentInstanceFromCatalog(body.data);
+        return instance ? [instance] : [];
+      })
+    ]);
+    agentInstances.value = catalogs.flatMap(result => result.status === "fulfilled" ? result.value : []);
+    lanAgentError.value = catalogs.flatMap(result => result.status === "rejected" ? [userFacingError(result.reason)] : []).join("；");
   } catch (error) {
     agentInstances.value = [];
     lanAgentError.value = userFacingError(error);
@@ -3196,6 +3179,7 @@ const agentDefs: Array<{ type: AgentAdapterType; title: string; note: string; ic
   { type: "astrbot",     title: "AstrBot",         note: "通过 AstrBot ChatUI / 机器人框架投递消息",    icon: "mdi-robot-happy-outline", hasCwd: false, hasThread: false },
   { type: "dsh",         title: "DSH（DeepSeek Harness 会话）", note: "通过 session.prompt API 投递到本机 DSH 会话", icon: "mdi-brain", hasCwd: true, hasThread: true },
   { type: "workbuddy",   title: "WorkBuddy（腾讯 AI 办公工作台）", note: "通过会话网关投递到本机 WorkBuddy 已有任务", icon: "mdi-briefcase-outline", hasCwd: true, hasThread: true },
+  { type: "deviceAgent", title: "设备 Agent（实验）", note: "由已绑定设备执行；电脑仅负责消息投递和回执", icon: "mdi-glasses", hasCwd: false, hasThread: false },
   { type: "antigravity", title: "Antigravity（Google 的 Agent 开发环境）", note: "通过官方 agy agentapi 投递到本机 Antigravity 会话", icon: "mdi-rocket-launch-outline", hasCwd: true, hasThread: true },
 ];
 
@@ -3204,7 +3188,8 @@ const agentShortLabels: Partial<Record<AgentAdapterType, string>> = {
   codex: "Codex Desktop",
   dsh: "DSH",
   workbuddy: "WorkBuddy",
-  antigravity: "Antigravity"
+  antigravity: "Antigravity",
+  deviceAgent: "设备 Agent"
 };
 
 const addAgentMenu = ref(false);
@@ -3218,15 +3203,17 @@ const remoteAgentItems = computed(() => (gateway.value?.remoteAgentTargets || []
   const agent = instance?.agents.find(item => item.agentId === target.agentId);
   const definition = agentDefs.find(item => item.type === target.provider);
   const agentLabel = agent?.name || (definition ? `${definition.title} · ${target.agentId}` : target.agentId);
-  return { ...target, instance, agent, title: `远端 · ${agentLabel}（${instance?.address || target.instanceId}）` };
+  return { ...target, instance, agent, title: `远端 · ${instance?.name ? `${instance.name} / ` : ''}${agentLabel}（${instance?.address || target.instanceId}）` };
 }));
 const availableAgentsToAdd = computed(() => [
-  ...agentDefs.filter(agent => !agentTypes.value.includes(agent.type)).map(agent => ({ ...agent, key: localAgentTargetKey(agent.type), title: `本机 · ${agent.title}`, nodeId: undefined as string | undefined, agentId: undefined as string | undefined })),
-  ...agentInstances.value.filter(instance => !instance.local).flatMap(instance => instance.agents.flatMap(remote => {
-    const def = agentDefs.find(agent => agent.type === (remote.provider === "codex-desktop" ? "codex" : remote.provider)) || agentDefs[0];
+  ...agentDefs.filter(agent => agent.type !== "deviceAgent" && !agentTypes.value.includes(agent.type)).map(agent => ({ ...agent, key: localAgentTargetKey(agent.type), title: `本机 · ${agent.title}`, nodeId: undefined as string | undefined, agentId: undefined as string | undefined })),
+  ...agentInstances.value.flatMap(instance => instance.agents.flatMap(remote => {
+    if (instance.local && remote.provider !== "deviceAgent") return [];
+    const def = agentDefs.find(agent => agent.type === (remote.provider === "codex-desktop" ? "codex" : remote.provider));
+    if (!def) return [];
     const key = remoteAgentTargetKey({ instanceId: instance.instanceId, agentId: remote.agentId });
     if (remoteAgentItems.value.some(item => item.id === key)) return [];
-    return [{ ...def, key, title: `远端 · ${remote.name}（${instance.address || instance.instanceId}）`, nodeId: instance.instanceId, agentId: remote.agentId }];
+    return [{ ...def, key, title: `远端 · ${instance.name ? `${instance.name} / ` : ''}${remote.name}（${instance.address || instance.instanceId}）`, nodeId: instance.instanceId, agentId: remote.agentId }];
   }))
 ]);
 const primaryAgent = computed(() => gateway.value ? resolvePrimaryAgentTarget(gateway.value) : undefined);
@@ -3798,6 +3785,7 @@ function agentWarnings(type: AgentAdapterType): string[] {
 
 function addAgent(type: AgentAdapterType, nodeId?: string, agentId?: string): void {
   if (!gateway.value) return;
+  if (type === "deviceAgent" && (!nodeId || !agentId)) return;
   addRouteAgent(gateway.value, type, nodeId, agentId);
   if (nodeId && agentId) {
     remoteAgentParamOpen.value[remoteAgentTargetKey({ instanceId: nodeId, agentId })] = true;
@@ -6320,20 +6308,21 @@ watch(
               <v-icon class="catalog-row-icon" color="secondary">mdi-monitor-dashboard</v-icon>
               <span class="catalog-row-main">
                 <strong>{{ target.title }}</strong>
-                <small>由这台远端电脑上的 Agent 处理消息</small>
+                <small>{{ target.provider === 'deviceAgent' ? '实验：由设备执行，所属电脑负责消息投递和回执' : '由这台远端电脑上的 Agent 处理消息' }}</small>
               </span>
               <div class="catalog-row-actions">
-                <v-chip size="x-small" :color="target.instance?.connected && target.agent ? 'success' : 'warning'" variant="tonal">{{ target.instance?.connected && target.agent ? '实例在线' : '暂不可用' }}</v-chip>
+                <v-chip size="x-small" :color="target.provider !== 'deviceAgent' && target.instance?.connected && target.agent ? 'success' : 'warning'" variant="tonal">{{ target.provider === 'deviceAgent' ? '实验设备' : target.instance?.connected && target.agent ? '实例在线' : '暂不可用' }}</v-chip>
                 <v-btn :icon="remoteAgentParamOpen[target.id] ? 'mdi-chevron-up' : 'mdi-chevron-down'" size="small" variant="text" :title="remoteAgentParamOpen[target.id] ? '收起参数' : '展开参数'" @click.stop="remoteAgentParamOpen[target.id] = !remoteAgentParamOpen[target.id]" />
                 <v-btn icon="mdi-close" size="small" variant="text" color="error" title="从此路线移除远端 Agent" @click.stop="removeRemoteAgent(target.id)" />
               </div>
             </div>
             <v-expand-transition>
               <div v-if="remoteAgentParamOpen[target.id]" class="catalog-param-panel">
-                <InstanceAgentSettings v-if="target.instance && target.agent" :key="target.id" :instance="target.instance" :agent="target.agent" @saved="refreshLanAgentNodes" />
+                <v-alert v-if="target.provider === 'deviceAgent'" type="warning" variant="tonal">实验设备 Agent：人格在设备设置中绑定，模型和语音由设备宿主提供。设备未完成加载时消息保留原投递身份等待，不会改投电脑模型。真机唤醒与执行需另行验收。</v-alert>
+                <InstanceAgentSettings v-else-if="target.instance && target.agent" :key="target.id" :instance="target.instance" :agent="target.agent" @saved="refreshLanAgentNodes" />
                 <v-alert v-else type="warning" variant="tonal">此远端 Agent 暂不可用，配置仍然保留，不会改投本机。请刷新实例列表。</v-alert>
                 <v-btn class="mt-2" size="small" variant="text" prepend-icon="mdi-refresh" :loading="lanAgentLoading" @click="refreshLanAgentNodes">刷新实例列表</v-btn>
-                <PrimaryAgentAdvancedSettings v-if="gateway.primaryAgentTarget === target.id" :gateway="gateway" :provider="target.provider" :target-title="target.title" :error="codexPlanAssistants.error" :notice="codexPlanAssistants.message" @change="touch">
+                <PrimaryAgentAdvancedSettings v-if="gateway.primaryAgentTarget === target.id && target.provider !== 'deviceAgent'" :gateway="gateway" :provider="target.provider" :target-title="target.title" :error="codexPlanAssistants.error" :notice="codexPlanAssistants.message" @change="touch">
                   <template #plan-actions>
                     <div v-if="gateway.codexPlanAssistantEnabled" class="catalog-param-grid">
                       <v-text-field v-model.number="codexPlanAssistants.count" type="number" :min="1" :max="8" label="协助会话数量" />

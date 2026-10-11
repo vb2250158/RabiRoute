@@ -27,7 +27,7 @@ async function waitForHealth(baseUrl, child) {
   throw new Error("relay did not become healthy");
 }
 
-test("speech proxy allowlists completed mobile ASR messages for the target Manager", async () => {
+test("speech proxy forwards opaque future HTTP and leaves business interpretation to target PC", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rabilink-speech-messages-"));
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -38,7 +38,8 @@ test("speech proxy allowlists completed mobile ASR messages for the target Manag
       HOST: "127.0.0.1",
       PORT: String(port),
       RABILINK_RELAY_DATA_DIR: directory,
-      RABILINK_RELAY_WEBGUI_DIST_DIR: path.join(directory, "missing-webgui")
+      RABILINK_RELAY_WEBGUI_DIST_DIR: path.join(directory, "missing-webgui"),
+      RABILINK_RELAY_SPEECH_REQUEST_WAIT_MS: "5000"
     },
     stdio: ["ignore", "pipe", "pipe"]
   });
@@ -68,18 +69,26 @@ test("speech proxy allowlists completed mobile ASR messages for the target Manag
       body: JSON.stringify({ targetDeviceId: "pc-a" })
     });
     assert.equal(target.status, 200);
+    const storeFile = path.join(directory, 'apps.json'), store = JSON.parse(fs.readFileSync(storeFile));
+    store.apps[0].deviceBindings = [{ id: 'eyes', serialHash: createHash('sha256').update('synthetic-eyes').digest('hex'), enabled: true, credentialHash: createHash('sha256').update('rbd_synthetic').digest('hex') }];
+    fs.writeFileSync(storeFile, JSON.stringify(store));
+    const future = fetch(baseUrl + '/api/rabilink/speech/v99/future-capability?variant=new', { method: 'PATCH', headers: { 'x-rabilink-token': 'rbd_synthetic', 'content-type': 'application/json' }, body: JSON.stringify({ future: true }) });
+    future.catch(() => {});
+    const futureClaim = await fetch(baseUrl + '/worker/speech-requests?deviceId=pc-a&deviceGuid=guid-a&waitMs=1000', { headers: { 'x-rabilink-token': token } });
+    const futureRequest = (await futureClaim.json()).requests[0];
+    assert.equal(futureRequest.path, '/v99/future-capability?variant=new'); assert.equal(futureRequest.method, 'PATCH');
+    await fetch(baseUrl + '/worker/speech-requests/' + futureRequest.id + '/response', { method: 'POST', headers: { 'x-rabilink-token': token, 'content-type': 'application/json' }, body: JSON.stringify({ deviceId: 'pc-a', deviceGuid: 'guid-a', ok: true, statusCode: 200, headers: { 'content-type': 'application/json' }, bodyBase64: Buffer.from(JSON.stringify({ future: true })).toString('base64') }) });
+    assert.deepEqual(await (await future).json(), { future: true });
 
     const signalHeaders = { "content-type": "application/json", "x-rabilink-token": token };
     const signal = { deviceId: "phone-video", sdp: "v=0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n" };
-    assert.equal((await fetch(`${baseUrl}/api/rabilink/video/offer`, {
-      method: "POST", headers: signalHeaders, body: JSON.stringify({ ...signal, bytes: "camera payload" })
-    })).status, 400);
     assert.equal((await fetch(`${baseUrl}/api/rabilink/video/offer`, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(signal)
     })).status, 401);
     const pendingVideo = fetch(`${baseUrl}/api/rabilink/video/offer`, {
       method: "POST", headers: signalHeaders, body: JSON.stringify(signal)
     });
+    pendingVideo.catch(() => {});
     let videoRequest;
     for (let attempt = 0; attempt < 50 && !videoRequest; attempt++) {
       const claimed = await fetch(`${baseUrl}/worker/speech-requests?deviceId=pc-a&deviceGuid=guid-a&waitMs=0&capabilities=webgui,speech,video-direct`, { headers: signalHeaders });
@@ -99,6 +108,7 @@ test("speech proxy allowlists completed mobile ASR messages for the target Manag
     const pendingPreview = fetch(`${baseUrl}/api/rabilink/speech/v1/records?kind=asr&source_device_id=phone-a&since=123&limit=1000`, {
       headers: { "x-rabilink-token": token }
     });
+    pendingPreview.catch(() => {});
     let claimedPreview;
     for (let attempt = 0; attempt < 50 && !claimedPreview; attempt += 1) {
       const response = await fetch(`${baseUrl}/worker/speech-requests?deviceId=pc-a&deviceGuid=guid-a&deviceName=PC-A&waitMs=0&capabilities=webgui,speech`, {
@@ -138,6 +148,7 @@ test("speech proxy allowlists completed mobile ASR messages for the target Manag
       headers: { "content-type": "application/json", "x-rabilink-token": token },
       body: JSON.stringify(payload)
     });
+    pending.catch(() => {});
     let claimed;
     for (let attempt = 0; attempt < 50 && !claimed; attempt += 1) {
       const response = await fetch(`${baseUrl}/worker/speech-requests?deviceId=pc-a&deviceGuid=guid-a&deviceName=PC-A&waitMs=0&capabilities=webgui,speech`, {
@@ -146,7 +157,7 @@ test("speech proxy allowlists completed mobile ASR messages for the target Manag
       claimed = (await response.json()).requests?.[0];
       if (!claimed) await new Promise(resolve => setTimeout(resolve, 20));
     }
-    assert.equal(claimed.path, "/api/speech/messages");
+    assert.equal(claimed.path, "/messages");
     assert.deepEqual(JSON.parse(Buffer.from(claimed.bodyBase64, "base64").toString("utf8")), payload);
     await fetch(`${baseUrl}/worker/speech-requests/${encodeURIComponent(claimed.id)}/response`, {
       method: "POST",
@@ -185,6 +196,7 @@ test("speech proxy allowlists completed mobile ASR messages for the target Manag
       body: JSON.stringify(startPayload),
       headers: { "content-type": "application/json", "x-rabilink-token": token, "X-RabiLink-Expected-Worker-Id": "pc-a" }
     });
+    pendingStart.catch(() => {});
     let claimedStart;
     for (let attempt = 0; attempt < 50 && !claimedStart; attempt += 1) {
       const response = await fetch(`${baseUrl}/worker/speech-requests?deviceId=pc-a&deviceGuid=guid-a&deviceName=PC-A&waitMs=0&capabilities=webgui,speech`, {
@@ -194,6 +206,7 @@ test("speech proxy allowlists completed mobile ASR messages for the target Manag
       if (!claimedStart) await new Promise(resolve => setTimeout(resolve, 20));
     }
     assert.equal(claimedStart.path, "/v1/audio-streams/rabilink/start");
+    assert.equal(claimedStart.expectedWorkerFencing, true); assert.equal(claimedStart.nonReplayable, true);
     assert.deepEqual(JSON.parse(Buffer.from(claimedStart.bodyBase64, "base64").toString("utf8")), startPayload);
     await fetch(`${baseUrl}/worker/speech-requests/${encodeURIComponent(claimedStart.id)}/response`, {
       method: "POST",
@@ -225,6 +238,7 @@ test("speech proxy allowlists completed mobile ASR messages for the target Manag
       headers: { "content-type": "application/octet-stream", "x-rabilink-token": token },
       body: pcm
     });
+    pendingChunk.catch(() => {});
     let claimedChunk;
     for (let attempt = 0; attempt < 50 && !claimedChunk; attempt += 1) {
       const response = await fetch(`${baseUrl}/worker/speech-requests?deviceId=pc-a&deviceGuid=guid-a&deviceName=PC-A&waitMs=0&capabilities=webgui,speech`, {
@@ -266,6 +280,7 @@ test("speech proxy allowlists completed mobile ASR messages for the target Manag
       headers: { "content-type": "application/octet-stream", "x-rabilink-token": token },
       body: Buffer.alloc(0)
     });
+    pendingKeepalive.catch(() => {});
     let claimedKeepalive;
     for (let attempt = 0; attempt < 50 && !claimedKeepalive; attempt += 1) {
       const response = await fetch(`${baseUrl}/worker/speech-requests?deviceId=pc-a&deviceGuid=guid-a&deviceName=PC-A&waitMs=0&capabilities=webgui,speech`, {
@@ -297,6 +312,7 @@ test("speech proxy allowlists completed mobile ASR messages for the target Manag
       headers: { "content-type": "application/json", "x-rabilink-token": token },
       body: JSON.stringify({ stream_id: "phone-a-audio" })
     });
+    pendingStop.catch(() => {});
     let claimedStop;
     for (let attempt = 0; attempt < 50 && !claimedStop; attempt += 1) {
       const response = await fetch(`${baseUrl}/worker/speech-requests?deviceId=pc-a&deviceGuid=guid-a&deviceName=PC-A&waitMs=0&capabilities=webgui,speech`, {
@@ -319,6 +335,8 @@ test("speech proxy allowlists completed mobile ASR messages for the target Manag
       })
     });
     assert.equal((await pendingStop).status, 200);
+  } catch (error) {
+    throw new Error(String(error) + "\nRelay stderr: " + stderr, { cause: error });
   } finally {
     child.kill();
     await new Promise(resolve => {

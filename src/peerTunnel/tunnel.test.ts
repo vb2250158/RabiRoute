@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
-import { sign } from "node:crypto";
+import { sign, createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { once } from "node:events";
 import { createTunnelHandshake, loadTunnelIdentity } from "./security.js";
@@ -16,6 +16,7 @@ import { PeerConnections, type TunnelCandidate } from "./connections.js";
 import { TunnelRtc } from "./rtc.js";
 import { APPLICATION_ACCESS_CAPABILITY, PeerTunnelRuntime } from "./runtime.js";
 import { handleInstanceIdentityReset } from "../manager/identityResetRoutes.js";
+import { validateInternalManagerHop } from "../shared/internalManagerHop.js";
 
 function channelPair(): [TunnelChannel, TunnelChannel] {
   const a = new EventEmitter() as TunnelChannel, b = new EventEmitter() as TunnelChannel;
@@ -26,7 +27,7 @@ function channelPair(): [TunnelChannel, TunnelChannel] {
   return [a,b];
 }
 
-test("legacy speech bootstrap pins identity under the unified application connection", async t => {
+test("application bootstrap pins identity for all services", async t => {
   const { a, b, folder } = identities(t);
   const directory = path.join(folder,"bootstrap");
   const runtime = new PeerTunnelRuntime({ dataDir:directory,deviceId:"pc",generation:"test",allowApplicationConnection:()=>true,
@@ -34,7 +35,7 @@ test("legacy speech bootstrap pins identity under the unified application connec
   t.after(()=>runtime.stop());
   const request = (identity: typeof a, expiresAt = Date.now()+30_000) => {
     const fields={source:"phone",publicKey:identity.publicKey,target:"pc",expiresAt};
-    return {...fields,kind:"bootstrap-speech",signature:sign(null,Buffer.from("rabi-speech-bootstrap-v1"+JSON.stringify(fields)),identity.privateKey).toString("base64")};
+    return {...fields,kind:"bootstrap-application",signature:sign(null,Buffer.from("rabi-application-bootstrap-v1"+JSON.stringify(fields)),identity.privateKey).toString("base64")};
   };
   const response = await runtime.offer(request(a)) as { deviceId:string; publicKey:string };
   assert.equal(response.deviceId,"pc");
@@ -47,20 +48,17 @@ test("legacy speech bootstrap pins identity under the unified application connec
   await assert.rejects(runtime.offer(request(a,Date.now()-1)),/peer_bootstrap_denied/);
   await assert.rejects(runtime.offer({...request(a),signature:"invalid"}),/peer_signature_denied/);
 });
-test("legacy resource/persona bootstrap signatures reuse the same application policy", async t => {
+test("obsolete service-specific bootstrap wire kinds are rejected", async t => {
   const { a, folder } = identities(t);
   const directory=path.join(folder,"resource-bootstrap");
   const runtime=new PeerTunnelRuntime({dataDir:directory,deviceId:"pc",generation:"test",allowApplicationConnection:()=>true,
     discover:async()=>[],signal:async()=>{},relay:()=>({url:"http://127.0.0.1",token:"application-token"}),services:()=>({}),onStatus:()=>{}});
   t.after(()=>runtime.stop());
   const fields={source:"phone",publicKey:a.publicKey,target:"pc",expiresAt:Date.now()+30000};
-  const request={...fields,kind:"bootstrap-resources",signature:sign(null,Buffer.from("rabi-resources-bootstrap-v1"+JSON.stringify(fields)),a.privateKey).toString("base64")};
-  await runtime.offer(request);
-  assert.deepEqual(JSON.parse(readFileSync(path.join(directory,"tunnel.json"),"utf8")).trustedDevices[0].services,[]);
-  await assert.rejects(runtime.offer({...request,kind:"bootstrap-speech"}),/peer_signature_denied/);
-  const persona = { ...fields, kind: "bootstrap-persona", signature: sign(null, Buffer.from("rabi-persona-bootstrap-v1" + JSON.stringify(fields)), a.privateKey).toString("base64") };
-  await runtime.offer(persona);
-  await assert.rejects(runtime.offer({...request,signature:"invalid"}),/peer_signature_denied/);
+  for (const service of ["speech", "resources", "persona"]) {
+    const request = { ...fields, kind: "bootstrap-" + service, signature: sign(null, Buffer.from("rabi-" + service + "-bootstrap-v1" + JSON.stringify(fields)), a.privateKey).toString("base64") };
+    await assert.rejects(runtime.offer(request), /peer_bootstrap_kind_denied/);
+  }
 });
 function identities(t: test.TestContext) {
   const folder = mkdtempSync(path.join(os.tmpdir(), "rabi-tunnel-test-"));
@@ -80,6 +78,22 @@ async function fixtureServer(t: test.TestContext, handler: http.RequestListener)
   t.after(() => { server.closeAllConnections(); server.close(); });
   return { server, url: "http://127.0.0.1:" + (server.address() as import("node:net").AddressInfo).port };
 }
+test("verified opens arriving before the server listener are delivered once and cleared on close", async t => {
+  const [caller, receiver] = await sessions(t);
+  const arrived = once(receiver, "activity"), stream = caller.open({ service: "test", method: "GET", path: "/first", headers: {} });
+  stream.end(); await arrived;
+  let delivered = 0;
+  receiver.on("request", incoming => {
+    ++delivered; assert.equal(incoming.id, stream.id);
+    incoming.resume(); void incoming.reply({ status: 204, headers: {} }).then(() => incoming.end());
+  });
+  assert.equal((await stream.response).status, 204); stream.resume(); assert.equal(delivered, 1);
+  const [nextCaller, nextReceiver] = await sessions(t), nextArrived = once(nextReceiver, "activity");
+  nextCaller.open({ service: "test", method: "GET", path: "/closed", headers: {} }); await nextArrived;
+  nextReceiver.close(); let stale = 0; nextReceiver.on("request", () => ++stale);
+  await new Promise<void>(resolve => queueMicrotask(resolve)); assert.equal(stale, 0);
+});
+
 test("session keys are pinned, direction-specific, encrypted and replay protected", t => {
   const { a,b,ga,gb } = identities(t);
   const ah = createTunnelHandshake(a,"b"), bh = createTunnelHandshake(b,"a");
@@ -111,15 +125,16 @@ test("service grants and paths fail closed", { timeout: 5_000 }, async t => {
   const denied = await tunnelFetch(caller,"ungranted","/private"); assert.equal(denied.status,403); await denied.text(); assert.equal(calls,0);
   assert.throws(()=>serviceEndpoint({baseUrl:upstream.url},"//other-host/private"));
   assert.throws(()=>serviceEndpoint({baseUrl:upstream.url,pathPrefix:"/safe"},"/../private"));
-  assert.throws(()=>serviceEndpoint({baseUrl:upstream.url},"/api/rabilink/peer/selection"));
+  assert.equal(serviceEndpoint({baseUrl:upstream.url},"/api/rabilink/peer/selection").pathname,"/api/rabilink/peer/selection");
 });
 test("an authorized service alias cannot impersonate a local identity reset request", async t => {
   const [caller, receiver] = await sessions(t);
   let resets = 0;
   const upstream = await fixtureServer(t, (request, response) => {
     handleInstanceIdentityReset(request, new URL(request.url!, "http://localhost"), response, {
+      ...{ trustedRemote: () => false },
       service: { available: () => true, enqueue: async input => { ++resets; return { operationId: input.operationId, state: "queued" }; }, status: async () => undefined },
-      currentGuid: () => "647f6388-a4dc-4327-ab17-3ccbd43ef9e2", trustedRemote: () => false,
+      currentGuid: () => "647f6388-a4dc-4327-ab17-3ccbd43ef9e2",
       readJson: async () => ({}), json: (response, status, body) => { response.writeHead(status); response.end(JSON.stringify(body)); }
     });
   });
@@ -266,4 +281,84 @@ test("control endpoints use the injected WebGUI authorization without bypassing 
   assert.equal((await fetch(url,{headers:{"x-test-authorized":"yes"}})).status,200);
   assert.equal((await fetch(url,{method:"PUT"})).status,403);
   assert.equal((await fetch(url,{method:"PUT",headers:{"x-test-authorized":"yes"}})).status,200);
+});
+
+
+test("revoked trust closes a reused session and prevents background upgrades", async t => {
+  const [session] = await sessions(t); let starts = 0;
+  const manager = new PeerConnections(async () => { starts++; return session; }); t.after(() => manager.stop());
+  const peer: TunnelCandidate = { id: "b", name: "B", online: true, supported: true, trusted: true, peerUrls: ["http://127.0.0.1"] };
+  await manager.get(peer); const revoked = { ...peer, trusted: false };
+  await manager.reconsider(revoked); assert.equal(session.closed, true); assert.equal(starts, 1);
+  await assert.rejects(manager.get(revoked), /trust_required/); assert.equal(starts, 1);
+});
+
+
+test("public peer APIs remain reachable while recursive and private wire paths fail closed", { timeout: 5000 }, async t => {
+  const [caller, receiver] = await sessions(t); const reached: string[] = [];
+  const upstream = await fixtureServer(t, (request, response) => { reached.push(request.url!); response.end("public"); });
+  serveTunnel(receiver, () => ({ test: { baseUrl: upstream.url } }));
+  for (const path of ["/api/rabilink/peer/list", "/api/rabilink/peer/servers", "/api/rabilink/peer/selection", "/api/rabilink/peer/http/c/manager/api/new-endpoint"]) {
+    const response = await tunnelFetch(caller, "test", path); assert.equal(response.status, 200); await response.text();
+  }
+  for (const path of ["/api/rabilink/peer/tunnel/socket", "/api/rabilink/peer/receive", "/api/rabilink/peer/http/b/manager/api/new-endpoint",
+    "/api/rabilink/peer/http/c/manager/api/rabilink/peer/http/c/manager/api/new-endpoint",
+    ["c", "d", "e", "f", "g"].map(id => "/api/rabilink/peer/http/" + id + "/manager").join("") + "/api/new-endpoint"]) {
+    const response = await tunnelFetch(caller, "test", path); assert.equal(response.status, 403, path); await response.text();
+  }
+  assert.equal(reached.length, 4);
+});
+
+test("third-PC generic Manager forwarding preserves an unknown API and public headers without business registration", { timeout: 10000 }, async t => {
+  const { folder } = identities(t); const runtimes = new Map<string, PeerTunnelRuntime>(); const lans = new Map<string, string>();
+  let ownerWrites = 0, ownerIdentity = "";
+  const owners = new Map<string, string>();
+  for (const id of ["a", "b", "c"]) {
+    const owner = await fixtureServer(t, (request, response) => {
+      const principal = validateInternalManagerHop(request, { generation: id + "-generation",
+        scope: createHash("sha256").update("http://127.0.0.1\nfixture-application").digest("hex") });
+      assert.ok(principal, "actual runtime must attest each local Manager request");
+      assert.equal(principal.deviceId, id === "b" ? "a" : "b");
+      if (id === "b" && runtimes.get(id)!.handler(request, new URL(request.url!, "http://owner.fixture"), response, async () => ({}))) return;
+      if (id === "c" && request.url === "/api/future-capability?fresh=1") {
+        ownerWrites++; ownerIdentity = String(request.headers["x-rabilink-tunnel-device-id"]);
+        assert.equal(request.headers["x-rabiroute-new-contract-field"], "future-value");
+        assert.equal(request.headers["if-match"], '"current"'); assert.equal(request.headers["idempotency-key"], "original-operation");
+        response.writeHead(201, { "x-rabiroute-future-result": "retained" }); request.pipe(response); return;
+      }
+      response.writeHead(404); response.end();
+    });
+    owners.set(id, owner.url);
+    const lan = await fixtureServer(t, (_request, response) => response.end()); lans.set(id, lan.url);
+    const runtime = new PeerTunnelRuntime({ dataDir: path.join(folder, "three", id), deviceId: id, generation: id + "-generation",
+      allowApplicationConnection: () => true, allowControl: () => true,
+      discover: async () => [...lans].filter(([peerId]) => peerId !== id).map(([peerId, url]) => ({ id: peerId, name: peerId, online: true, deviceKind: "pc", peerUrls: [url], capabilities: ["peer-tunnel-v1", APPLICATION_ACCESS_CAPABILITY] })),
+      signal: async call => runtimes.get(call.targetDeviceId)!.offer(call.input), relay: () => ({ url: "http://127.0.0.1", token: "fixture-application" }),
+      services: () => ({ manager: { baseUrl: owners.get(id)! } }), onStatus: () => {} });
+    runtimes.set(id, runtime); t.after(() => runtime.stop());
+    lan.server.on("upgrade", (request, socket, head) => runtime.upgrade(request, socket, head));
+  }
+  const body = Buffer.alloc(100000, 42);
+  const result = await runtimes.get("a")!.fetch("b", "manager", "/api/rabilink/peer/http/c/manager/api/future-capability?fresh=1", {
+    method: "PUT", headers: { "x-rabiroute-new-contract-field": "future-value", "if-match": '"current"', "idempotency-key": "original-operation", "x-rabilink-tunnel-device-id": "forged" }, body });
+  assert.equal(result.status, 201); assert.equal(result.headers.get("x-rabiroute-future-result"), "retained");
+  assert.deepEqual(Buffer.from(await result.arrayBuffer()), body); assert.equal(ownerWrites, 1); assert.equal(ownerIdentity, "b");
+  assert.equal((await runtimes.get("a")!.directory()).peers.find(peer => peer.deviceId === "b")?.transport, "lan");
+  assert.equal((await runtimes.get("b")!.directory()).peers.find(peer => peer.deviceId === "c")?.transport, "lan");
+});
+
+
+test("WebSocket ingress revocation stops new frames without forwarding or reconnecting", { timeout: 5000 }, async t => {
+  const { WebSocketServer, WebSocket } = await import("ws"); const { proxyTunnelUpgrade } = await import("./http.js");
+  const [caller, receiver] = await sessions(t); let allowed = true, frames = 0;
+  const upstream = await fixtureServer(t, (_request, response) => response.end());
+  const wss = new WebSocketServer({ server: upstream.server }); t.after(() => wss.close());
+  wss.on("connection", ws => ws.on("message", data => { frames++; ws.send(data); }));
+  serveTunnel(receiver, () => ({ test: { baseUrl: upstream.url } }));
+  const front = await fixtureServer(t, (_request, response) => response.end());
+  front.server.on("upgrade", (request, socket, head) => { void proxyTunnelUpgrade(caller, "test", "/future-socket", request, socket, head, () => { if (!allowed) throw new Error("revoked"); }); });
+  const ws = new WebSocket(front.url.replace("http:", "ws:") + "/future-socket"); t.after(() => ws.terminate());
+  await once(ws, "open"); const echo = once(ws, "message"); ws.send("allowed"); await echo;
+  allowed = false; const closed = once(ws, "close"); ws.send("denied"); await closed;
+  assert.equal(frames, 1); assert.equal(caller.streams.size, 0);
 });

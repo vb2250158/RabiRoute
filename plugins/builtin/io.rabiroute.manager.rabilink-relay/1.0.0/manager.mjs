@@ -32,6 +32,14 @@ export const activate = definePlugin({
         const video = runtime.createDirectVideoReceiver();
         const peer = runtime.createPeerRuntime();
         const videoRequests = new runtime.ManagerPluginRequestTracker();
+        const unregisterOwners = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes,
+            "manager:rabilink-relay", "manager.rabilink.owners", [videoRequests.wrap(runtime.handleRabiLinkOwnerApi)], [
+                { routeId: "device-agent-directory", kind: "exact", path: "/api/device-agents", methods: ["GET"] },
+                { routeId: "device-agent-owner", kind: "prefix", pathPrefix: "/api/device-agents/", methods: ["GET", "POST", "PUT"] },
+                { routeId: "agent-device-directory", kind: "exact", path: "/api/rabilink/agent-devices", methods: ["GET"] },
+                { routeId: "agent-device-profile", kind: "prefix", pathPrefix: "/api/rabilink/agent-devices/", methods: ["GET", "POST", "PUT"] },
+                { routeId: "mobile-state-owner", kind: "prefix", pathPrefix: "/api/rabilink/mobile/", methods: ["GET", "POST", "PUT", "PATCH"] }
+            ]);
         const unregisterVideo = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes,
             "manager:rabilink-relay", "manager.rabilink.video", [videoRequests.wrap(runtime.createDirectVideoRoutes(video))],
             [{ routeId: "rabilink-video", kind: "prefix", pathPrefix: "/api/rabilink/video/" }]);
@@ -39,6 +47,7 @@ export const activate = definePlugin({
             "manager:rabilink-relay", "manager.rabilink.peer", [videoRequests.wrap(peer.handler)],
             [{ routeId: "rabilink-peer", kind: "prefix", pathPrefix: "/api/rabilink/peer/" }]);
         ctx.effect(() => async () => {
+            unregisterOwners();
             unregisterVideo();
             unregisterPeer();
             await peer.stop();

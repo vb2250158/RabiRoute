@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { checkedFs } from "./requestAccess.mjs";
 import path from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
@@ -26,8 +27,9 @@ export class VideoService {
     this.controller = new AbortController();
     this.unsubscribeExit = runtime.onExit?.(() => { this.online = false; this.publish("video.changed", { online: false }); });
   }
-  exclusive(action) {
-    const next = this.serial.then(action);
+  exclusive(action, access) {
+    access?.assert();
+    const next = this.serial.then(() => { access?.assert(); return action(); });
     this.serial = next.catch(() => {});
     return next;
   }
@@ -46,13 +48,16 @@ export class VideoService {
       this.jobs.set(job.id, job);
     }
   }
-  async save(job) {
+  async save(job, access) {
+    const fs = checkedFs(access);
     if (this.runtime.readOnly) throw new VideoError("只读模式下不能修改视频任务。", 423);
+    access?.assert();
     job.updatedAt = new Date().toISOString();
     const target = path.join(this.runtime.stateRoot, "jobs", `${job.id}.json`);
     const temporary = `${target}.${randomUUID()}.tmp`;
     await fs.writeFile(temporary, JSON.stringify(job), { flag: "wx" });
     await fs.rename(temporary, target);
+    access?.assert();
     this.publish("video.changed", { jobId: job.id, status: job.status });
   }
   view(job) {
@@ -64,27 +69,32 @@ export class VideoService {
     return { online: this.online && this.runtime.alive(), availableModels: this.availableModels || [], availableWorkflows: this.availableWorkflows || [], models: this.catalog.models, states: this.catalog.states,
       jobs: [...this.jobs.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 100).map(job => this.view(job)) };
   }
-  async request(route, init = {}) {
+  async request(route, init = {}, access) {
+    access?.assert();
+    if (init.method && !["GET", "HEAD"].includes(init.method.toUpperCase())) access?.beforeMutation();
     const response = await this.fetch(`${this.endpoint}${route}`, { ...init, redirect: "error", signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(20000)]) });
+    access?.assert();
     if (!response.ok) throw new VideoError(`H3 服务请求失败（HTTP ${response.status}）。`, 502);
-    return response.json();
+    const value = await response.json(); access?.assert(); return value;
   }
-  async start(modelRoot, beforeStart = () => {}) {
+  async start(modelRoot, beforeStart = () => {}, access) {
     return this.exclusive(async () => {
-      await beforeStart();
+      access?.assert(); await beforeStart(); access?.assert();
       if (this.closing) throw new VideoError("视频插件正在停止。", 503);
       if (this.online && this.runtime.alive()) return this.snapshot();
-      this.endpoint = await this.runtime.start(typeof modelRoot === "function" ? modelRoot() : modelRoot);
+      this.endpoint = await this.runtime.start(typeof modelRoot === "function" ? modelRoot() : modelRoot, access);
+      access?.assert();
       try {
         const deadline = Date.now() + 120000;
         while (true) {
           if (!this.runtime.alive()) throw new VideoError("H3 进程已退出，请检查视频服务日志。", 503);
-          try { await this.request("/system_stats"); break; } catch (error) {
+          try { await this.request("/system_stats", {}, access); break; } catch (error) {
+            access?.assert();
             if (Date.now() >= deadline || this.closing) throw error;
-            await delay(1000, undefined, { signal: this.controller.signal });
+            await delay(1000, undefined, { signal: this.controller.signal }); access?.assert();
           }
         }
-        const info = await this.request("/object_info");
+        const info = await this.request("/object_info", {}, access);
         this.frameAdaptationAvailable = Boolean(info.LoadImage && info.ResizeAndPadImage);
         this.availableModels=[];
         this.availableWorkflows=[];
@@ -106,20 +116,21 @@ export class VideoService {
         this.online = true;
         this.publish("video.changed", { online: true });
         return this.snapshot();
-      } catch (error) { await this.runtime.stop(); this.endpoint = ""; this.online = false; throw error; }
-    });
+      } catch (error) { access?.assert(); await this.runtime.stop(access); this.endpoint = ""; this.online = false; access?.assert(); throw error; }
+    }, access);
   }
-  async stop() {
+  async stop(access) {
     return this.exclusive(async () => {
       if ([...this.jobs.values()].some(job => !this.catalog.states[job.status].terminal)) throw new VideoError("仍有生成任务，请等待完成或取消排队任务。", 409);
-      await this.runtime.stop();
+      await this.runtime.stop(access); access?.assert();
       this.endpoint = "";
       this.online = false;
       this.publish("video.changed", { online: false });
       return this.snapshot();
-    });
+    }, access);
   }
-  async submit(input, key) {
+  async submit(input, key, access) {
+    access?.assert();
     if (typeof key !== "string" || !/^[A-Za-z0-9._:-]{8,128}$/.test(key)) throw new VideoError("请提供 8–128 字符的 Idempotency-Key。");
     let command;
     try { command = validateCommand(input, this.catalog); } catch (error) { throw new VideoError(error.message); }
@@ -138,7 +149,7 @@ export class VideoService {
       const routingCommand = {...command};
 
       if(command.references) {
-        const references=await Promise.all(command.references.map(id=>this.assets.read(id)));
+        const references=await Promise.all(command.references.map(id=>this.assets.read(id, access)));
         routingCommand.referenceKinds = references.map(asset=>asset.kind);
         for(const [kind,limit] of [["image",9],["video",3],["audio",3]]) if(references.filter(a=>a.kind===kind).length>limit) throw new VideoError("参考素材数量超出模式限制。");
       }
@@ -147,21 +158,24 @@ export class VideoService {
       if (this.availableWorkflows && !this.availableWorkflows.some(row=>row.model===command.model && row.workflowId===resolved.workflowId && row.generateAudio===!!command.generateAudio)) throw new VideoError("工作流依赖尚未就绪。",409);
       if ([...this.jobs.values()].filter(job => !this.catalog.states[job.status].terminal).length >= 8) throw new VideoError("生成队列已满，最多接受 8 个待完成任务。", 429);
       const job = { ...command, workflowId: resolved.workflowId, samplingSteps: resolved.steps, id: randomUUID(), keyHash, commandHash, status: "queued", createdAt: new Date().toISOString(), progress: 0 };
-      await this.save(job);
+      await this.save(job, access);
+      access?.beforeMutation();
       this.jobs.set(job.id, job);
       this.pump();
       return this.view(job);
-    });
+    }, access);
   }
-  async cancel(id) {
+  async cancel(id, access) {
     return this.exclusive(async () => {
+      if (this.runtime.readOnly) throw new VideoError("只读模式下不能修改视频任务。", 423);
       const job = this.jobs.get(id);
       if (!job) throw new VideoError("任务不存在。", 404);
       if (job.status !== "queued") throw new VideoError("只能取消尚未开始的任务。", 409);
+      access?.beforeMutation();
       job.status = "cancelled";
-      await this.save(job);
+      await this.save(job, access);
       return this.view(job);
-    });
+    }, access);
   }
   pump() {
     if (this.active || this.closing) return;
@@ -277,7 +291,8 @@ export class VideoService {
       return await result;
     } finally { clearTimeout(timer); this.controller.signal.removeEventListener("abort", abort); socket.close(); }
   }
-  async outputPath(job) {
+  async outputPath(job, access) {
+    const fs = checkedFs(access);
     if (!job.output || /[\\/]/.test(job.output.filename) || !job.output.filename.startsWith(job.id)) throw new VideoError("视频输出引用无效。", 409);
     const root = await fs.realpath(path.join(this.runtime.stateRoot, "provider-output"));
     const target = path.resolve(root, job.output.subfolder, job.output.filename);

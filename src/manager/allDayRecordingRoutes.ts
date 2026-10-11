@@ -1,7 +1,9 @@
 import type http from "node:http";
 import { requestLocalSpeech, requestLocalSpeechJson } from "../speech/localSpeechClient.js";
-import { AllDayRecordingService, AllDayRecordingStore, type RecordingSample } from "./allDayRecording.js";
+import { AllDayRecordingService, AllDayRecordingStore, recordingOperation, type RecordingAuthorization, type RecordingSample } from "./allDayRecording.js";
 import type { AllDayEvent } from "../shared/allDayRecording.js";
+import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
+import { localModelSettingsRequestAllowed } from "./speechModelSettingsAccess.js";
 
 export function createAllDayRecording(options: {
   roleDirectory(roleId: string): string;
@@ -9,33 +11,33 @@ export function createAllDayRecording(options: {
   mobileRoot: string;
   speechUrl(): string;
   changed(roleId: string): void;
-  mobileAudio(owner: string, chunks: string[]): Promise<Buffer>;
+  mobileAudio(owner: string, chunks: string[], authorize?: RecordingAuthorization): Promise<Buffer>;
 }) {
   const store = new AllDayRecordingStore(options.roleDirectory, options.hostId, options.mobileRoot);
-  async function speech<T>(endpoint: string, body?: unknown): Promise<T> {
-    const result = await requestLocalSpeechJson<T & { detail?: string }>(options.speechUrl(), endpoint, body === undefined ? {} : {
+  async function speech<T>(endpoint: string, body?: unknown, authorize?: RecordingAuthorization): Promise<T> {
+    const result = await recordingOperation(authorize, () => requestLocalSpeechJson<T & { detail?: string }>(options.speechUrl(), endpoint, body === undefined ? {} : {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body)
-    }, { timeoutMs: 30_000 });
+    }, { timeoutMs: 30_000 }));
     if (result.status !== 200) throw new Error(result.data.detail || `Capture service HTTP ${result.status}`);
     return result.data;
   }
   const service = new AllDayRecordingService(store, {
     changed: options.changed,
-    startMicrophone: async sessionId => (await speech<{ audioSessionId: string }>("/v1/all-day/microphone/start", { sessionId })).audioSessionId,
-    stopMicrophone: async sessionId => { await speech("/v1/all-day/microphone/stop", { sessionId }); },
-    audioFile: async recordId => {
-      const reply = await requestLocalSpeech(options.speechUrl(), `/v1/records/${encodeURIComponent(recordId)}/audio`, {}, { timeoutMs: 15_000 });
+    startMicrophone: async (sessionId, authorize) => (await speech<{ audioSessionId: string }>("/v1/all-day/microphone/start", { sessionId }, authorize)).audioSessionId,
+    stopMicrophone: async (sessionId, authorize) => { await speech("/v1/all-day/microphone/stop", { sessionId }, authorize); },
+    audioFile: async (recordId, authorize) => {
+      const reply = await recordingOperation(authorize, () => requestLocalSpeech(options.speechUrl(), `/v1/records/${encodeURIComponent(recordId)}/audio`, {}, { timeoutMs: 15_000 }));
       if (reply.status !== 200) throw new Error(`Recording audio unavailable (${reply.status})`);
       return reply.body;
     },
-    capture: async (settings, sessionId) => (await speech<{ samples: RecordingSample[] }>("/v1/all-day/capture", { ...settings, sessionId })).samples,
-    audio: async (since, until, sessionId) => {
+    capture: async (settings, sessionId, authorize) => (await speech<{ samples: RecordingSample[] }>("/v1/all-day/capture", { ...settings, sessionId }, authorize)).samples,
+    audio: async (since, until, sessionId, authorize) => {
       const events = new Map<string, AllDayEvent>();
       let before: number | undefined;
       for (let page = 0; page < 100; page++) {
         const query = new URLSearchParams({ kind: "asr", session_id: sessionId, since: String(since / 1000), until: String(until / 1000), limit: "1000" });
         if (before !== undefined) query.set("before", String(before));
-        const data = await speech<{ data: Array<Record<string, unknown>> }>(`/v1/records?${query}`);
+        const data = await speech<{ data: Array<Record<string, unknown>> }>(`/v1/records?${query}`, undefined, authorize);
         const rows = data.data;
         for (const row of rows) {
           if (row.session_id !== sessionId || row.kind !== "asr" || row.source_device_kind !== "pc_microphone") continue;
@@ -51,8 +53,8 @@ export function createAllDayRecording(options: {
       throw new Error("Audio history exceeds this query budget; recording coverage is incomplete");
     }
   });
-  return { service, store, mobileAudio: options.mobileAudio, async audio(recordId: string) {
-    return requestLocalSpeech(options.speechUrl(), `/v1/records/${encodeURIComponent(recordId)}/audio`, {}, { timeoutMs: 15_000 });
+  return { service, store, mobileAudio: options.mobileAudio, async audio(recordId: string, authorize?: RecordingAuthorization) {
+    return recordingOperation(authorize, () => requestLocalSpeech(options.speechUrl(), `/v1/records/${encodeURIComponent(recordId)}/audio`, {}, { timeoutMs: 15_000 }));
   } };
 }
 
@@ -64,51 +66,74 @@ export function allDayRecordingHandler(runtime: ReturnType<typeof createAllDayRe
   return (request: http.IncomingMessage, url: URL, response: http.ServerResponse): boolean => {
     const match = /^\/(?:api\/)?roles\/([^/]+)\/all-day-recording(?:\/(.*))?$/.exec(url.pathname);
     if (!match) return false;
-    const send = (status: number, data: unknown) => {
+    let authorize: RecordingAuthorization | undefined;
+    const send = (status: number, data: unknown, fence = true) => {
       if (response.writableEnded || response.destroyed) return;
+      if (fence) authorize?.();
+      const body = JSON.stringify(data);
+      if (fence) authorize?.();
       response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-      response.end(JSON.stringify(data));
+      if (fence) authorize?.();
+      response.end(body);
     };
     void (async () => {
+      // Capture the original principal, never reinterpret a revoked Agent as local.
+      const lease = assertTrustedLanAgentPrincipal(request);
+      authorize = () => {
+        if (lease) {
+          if (assertTrustedLanAgentPrincipal(request) !== lease) throw new Error("Recording authorization was replaced");
+        } else if (!localModelSettingsRequestAllowed(request) || !options.local(request) || request.headers["x-rabilink-tunnel-local"]) {
+          throw new Error("Recording authorization denied");
+        }
+        if (request.method !== "GET" && options.readOnly()) throw new Error("Read only");
+      };
+      authorize();
       const roleId = decodeURIComponent(match[1]);
       if (!roleId || roleId.length > 128 || /[\\/\x00-\x1f]/.test(roleId) || roleId === "." || roleId === "..") throw new Error("Invalid persona");
-      // Capture controls and private raw media are local-host only, never a device proxy.
-      if (!options.local(request) || request.headers["x-rabilink-tunnel-local"]) { send(403, { code: -1, message: "Open all-day recording on this computer" }); return; }
-      if (request.headers.origin && request.headers.origin !== `http://${request.headers.host}` && request.headers.origin !== `https://${request.headers.host}`) { send(403, { code: -1, message: "Cross-origin recording access denied" }); return; }
       const action = match[2] || "";
-      if (request.method !== "GET" && options.readOnly()) { send(403, { code: -1, message: "Read only" }); return; }
       if (request.method !== "GET" && !String(request.headers["content-type"] || "").toLowerCase().startsWith("application/json")) { send(415, { code: -1, message: "Use application/json for recording controls" }); return; }
       let data: unknown;
-      if (request.method === "GET" && !action) data = { ...await runtime.service.snapshot(roleId), devices: await runtime.store.mobileDevices() };
-      else if (request.method === "GET" && action === "recent") data = { events: await runtime.store.recent(roleId) };
+      if (request.method === "GET" && !action) data = { ...await runtime.service.snapshot(roleId, authorize), devices: await runtime.store.mobileDevices(authorize) };
+      else if (request.method === "GET" && action === "recent") data = { events: await runtime.store.recent(roleId, authorize) };
       else if (request.method === "GET" && action === "catalog") data = await runtime.store.catalog(roleId, url.searchParams.get("day") ?? undefined);
       else if (request.method === "GET" && action === "page") {
         const direction = url.searchParams.get("direction");
         if (direction !== "older" && direction !== "newer") throw new Error("Invalid event direction");
-        data = await runtime.store.page(roleId, direction, { time: Number(url.searchParams.get("time")), id: url.searchParams.get("id") || "" }, url.searchParams.get("source") || "all", 100, url.searchParams.get("type") || "all");
+        data = await runtime.store.page(roleId, direction, { time: Number(url.searchParams.get("time")), id: url.searchParams.get("id") || "" }, url.searchParams.get("source") || "all", 100, url.searchParams.get("type") || "all", authorize);
       }
-      else if (request.method === "GET" && action === "events") data = { events: await runtime.store.timeline(roleId, Number(url.searchParams.get("since")), Number(url.searchParams.get("until"))) };
-      else if (request.method === "PUT" && action === "settings") data = await runtime.service.configure(roleId, await options.readBody(request));
-      else if (request.method === "POST" && action === "start") data = await runtime.service.start(roleId);
-      else if (request.method === "POST" && action === "stop") data = await runtime.service.stop(roleId);
+      else if (request.method === "GET" && action === "events") data = { events: await runtime.store.timeline(roleId, Number(url.searchParams.get("since")), Number(url.searchParams.get("until")), authorize) };
+      else if (request.method === "PUT" && action === "settings") {
+        const body = await recordingOperation(authorize, () => options.readBody(request));
+        data = await runtime.service.configure(roleId, body, authorize);
+      }
+      else if (request.method === "POST" && action === "start") data = await runtime.service.start(roleId, authorize);
+      else if (request.method === "POST" && action === "stop") data = await runtime.service.stop(roleId, false, authorize);
       else if (request.method === "GET" && /^media\/\d{4}-\d{2}-\d{2}\/[a-f0-9]{64}\.(jpg|wav)$/.test(action)) {
         const [, day, file] = action.split("/");
         const extension = file.slice(-3);
-        const body = await runtime.store.media(roleId, day, file.slice(0, -4), extension);
-        response.writeHead(200, { "content-type": extension === "wav" ? "audio/wav" : "image/jpeg", "cache-control": "private, no-store" }); response.end(body); return;
+        const body = await runtime.store.media(roleId, day, file.slice(0, -4), extension, authorize);
+        authorize();
+        response.writeHead(200, { "content-type": extension === "wav" ? "audio/wav" : "image/jpeg", "cache-control": "private, no-store" }); authorize(); response.end(body); return;
       } else if (request.method === "GET" && action === "audio") {
         const since = Number(url.searchParams.get("since")), until = Number(url.searchParams.get("until"));
-        const event = (await runtime.store.timeline(roleId, since, until)).find(row => row.id === url.searchParams.get("id"));
+        const event = (await runtime.store.timeline(roleId, since, until, authorize)).find(row => row.id === url.searchParams.get("id"));
+        authorize();
         if (event?.mobileMedia) {
-          const bytes = await runtime.mobileAudio(event.mobileMedia.owner, event.mobileMedia.chunks);
-          response.writeHead(200, { "content-type": "audio/wav", "cache-control": "private, no-store" }); response.end(bytes); return;
+          // The private resource owner is the event's authenticated phone, not the public Agent.
+          const bytes = await recordingOperation(authorize, () => runtime.mobileAudio(event.mobileMedia!.owner, event.mobileMedia!.chunks, authorize));
+          authorize(); response.writeHead(200, { "content-type": "audio/wav", "cache-control": "private, no-store" }); authorize(); response.end(bytes); return;
         }
         if (!event?.speechRecordId) { send(404, { code: -1, message: "Recording not found" }); return; }
-        const audio = await runtime.audio(event.speechRecordId);
-        response.writeHead(audio.status, { "content-type": audio.contentType, "cache-control": "private, no-store" }); response.end(audio.body); return;
+        const audio = await runtime.audio(event.speechRecordId, authorize);
+        authorize(); response.writeHead(audio.status, { "content-type": audio.contentType, "cache-control": "private, no-store" }); authorize(); response.end(audio.body); return;
       } else { send(405, { code: -1, message: "Unsupported recording operation" }); return; }
+      authorize();
       send(200, { code: 0, data });
-    })().catch(error => send(400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    })().catch(error => {
+      try { if (!authorize) throw error; authorize(); }
+      catch { if (response.headersSent) response.destroy(); else send(403, { code: -1, message: "Recording authorization denied" }, false); return; }
+      send(400, { code: -1, message: error instanceof Error ? error.message : String(error) });
+    });
     return true;
   };
 }

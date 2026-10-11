@@ -209,6 +209,36 @@ test("explicit model selection uses projected next, avoids redundant default wri
   } finally { stub.restore(); }
 });
 
+test("revocation after model read prevents model mutation and prompt", async () => {
+  let revoked = false;
+  const stub = installDshRpcStub([row(1)], body => {
+    if (body.method === "session/list") revoked = true;
+    return undefined;
+  });
+  try {
+    await assert.rejects(sendDshSessionMessage({ sessionId: id(1), prompt: "test", cwd: "C:\\work\\example",
+      modelSelection: selection, baseUrl: fixtureBaseUrl,
+      assertAuthorized: () => { if (revoked) throw new Error("authorization revoked"); }
+    }), /authorization revoked/);
+    assert.deepEqual(stub.requests.map(r => r.method), ["session/list"]);
+  } finally { stub.restore(); }
+});
+
+test("revocation after model mutation prevents prompt", async () => {
+  let revoked = false;
+  const stub = installDshRpcStub([row(1)], body => {
+    if (body.method === "session/selectModel") revoked = true;
+    return undefined;
+  });
+  try {
+    await assert.rejects(sendDshSessionMessage({ sessionId: id(1), prompt: "test", cwd: "C:\\work\\example",
+      modelSelection: selection, baseUrl: fixtureBaseUrl,
+      assertAuthorized: () => { if (revoked) throw new Error("authorization revoked"); }
+    }), /authorization revoked/);
+    assert.deepEqual(stub.requests.map(r => r.method), ["session/list", "session/selectModel"]);
+  } finally { stub.restore(); }
+});
+
 test("missing session model fails closed without selecting or prompting", async () => {
   const stub = installDshRpcStub([]);
   try { await assert.rejects(sendDshSessionMessage({ sessionId: id(1), prompt: "test", cwd: "C:\\work\\example", modelSelection: selection, baseUrl: fixtureBaseUrl }), /not found/); }

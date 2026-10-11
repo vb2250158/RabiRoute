@@ -333,8 +333,8 @@ export function normalizeRolePlanFromManager(plan: RolePlan): RolePlan {
   };
 }
 
-export async function loadRoleKnowledgeFileCounts(roleId: string): Promise<RoleKnowledgeFileCounts> {
-  return managerData<RoleKnowledgeFileCounts>(`/api/roles/${encodeURIComponent(roleId)}/counts`, { cache: "no-store" });
+export async function loadRoleKnowledgeFileCounts(roleId: string, signal?: AbortSignal): Promise<RoleKnowledgeFileCounts> {
+  return managerData<RoleKnowledgeFileCounts>(`/api/roles/${encodeURIComponent(roleId)}/counts`, { cache: "no-store", signal });
 }
 
 export async function loadRoleKnowledge(roleId: string): Promise<{ plans: RolePlan[]; memory: RoleMemoryPayload }> {

@@ -47,6 +47,18 @@ import com.rabi.link.modules.wearable.WearableHealthController;
 /** Foreground phone client. Glasses are optional; this service works with the phone alone. */
 public final class RabiConversationService extends Service {
     private static RabiConversationService currentInstance;
+    private com.rabi.link.modules.rokid.RabiDeviceAgentWakeConsumer deviceAgentWake;
+    private com.rabi.link.transport.RabiManagerHttpTransport managerHttpTransport;
+    private com.rabi.link.transport.RabiPhoneEyeBridge phoneEyeBridge;
+    public static synchronized org.json.JSONObject openPhoneEyeBridge() {
+        RabiConversationService current = currentInstance;
+        if (current == null || current.shutdownComplete) throw new IllegalStateException("PHONE_SERVICE_REQUIRED");
+        if (current.phoneEyeBridge == null || !current.phoneEyeBridge.isCurrent()) {
+            if (current.phoneEyeBridge != null) current.phoneEyeBridge.close();
+            current.phoneEyeBridge = new com.rabi.link.transport.RabiPhoneEyeBridge(current);
+        }
+        return current.phoneEyeBridge.connectionInfo();
+    }
     public static void pauseForLocalCapture() {
         RabiConversationService current = currentInstance;
         if (current != null) pauseRecording(current);
@@ -416,12 +428,15 @@ public final class RabiConversationService extends Service {
                 .putBoolean("callActive", false)
                 .putString("callStatus", "没有进行中的通话").apply();
         super.onCreate();
+        managerHttpTransport = new com.rabi.link.transport.RabiManagerHttpTransport(this);
+        deviceAgentWake = new com.rabi.link.modules.rokid.RabiDeviceAgentWakeConsumer(this, () -> glassController,
+                managerHttpTransport, state -> updateRuntime("deviceAgentWake", state));
         com.rabi.link.recording.RecordingResourceCache.start(this);
         createChannel();
         chatStore = new RabiChatStore(this);
         glassStatusPublisher = new com.rabi.link.modules.rokid.RabiGlassStatusPublisher(this, () -> {
             if (glassStatusPublisher != null) updateRuntime("glassDeviceStatus", glassStatusPublisher.getStatus());
-        });
+        }, managerHttpTransport);
         phoneAudioCapture = new RabiPhoneAudioCapture(this, new RabiPhoneAudioCapture.Listener() {
             @Override public void onPcm(byte[] pcm) {
                 RabiVoiceCallSession call = voiceCall;
@@ -640,6 +655,7 @@ public final class RabiConversationService extends Service {
         if (voiceCall != null) callStatus("connecting", "网络已恢复，正在确认连接；过期通话输入不补投");
         if (healthController != null) healthController.syncNow();
         if (glassStatusPublisher != null) glassStatusPublisher.onNetworkAvailable();
+        if (deviceAgentWake != null) deviceAgentWake.onConnectionAvailable();
         com.rabi.link.recording.RecordingResourceCache.kick();
         drainVideoAudio();
     }
@@ -1253,7 +1269,7 @@ public final class RabiConversationService extends Service {
             }
             @Override public void onPhoto(byte[] data) { if (!acceptsGlassCallback(callbackGeneration)) return; if (data != null && data.length > 0) backend.submitMediaFromSource(data, "image/jpeg", "rabi-glass-photo-" + System.currentTimeMillis() + ".jpg", "眼镜拍摄的照片", RabiGlassPcBackend.SOURCE_GLASSES); }
             @Override public void onGlassAppResult(String status, String summary, String error) { if (!acceptsGlassCallback(callbackGeneration)) return; updateStatus("眼镜 App · " + shortText(status + " " + summary)); }
-            @Override public void onNativeVoiceProtocol(String payload, String channel, String clientId) { if (!acceptsGlassCallback(callbackGeneration)) return; if (glassBridge != null) glassBridge.handleIncomingProtocol(channel, payload, clientId); }
+            @Override public void onNativeVoiceProtocol(String payload, String channel, String clientId) { if (!acceptsGlassCallback(callbackGeneration)) return; if (deviceAgentWake != null) deviceAgentWake.onProtocol(payload, clientId); if (glassBridge != null) glassBridge.handleIncomingProtocol(channel, payload, clientId); }
             @Override public void onAudioPcm(byte[] data, int offset, int length) {
                 if (data == null || offset < 0 || length <= 0 || offset > data.length - length) return;
                 byte[] chunk = java.util.Arrays.copyOfRange(data, offset, offset + length);
@@ -1721,6 +1737,9 @@ public final class RabiConversationService extends Service {
     }
 
     @Override public void onDestroy() {
+        if (deviceAgentWake != null) deviceAgentWake.close();
+        if (managerHttpTransport != null) managerHttpTransport.close();
+        if (phoneEyeBridge != null) phoneEyeBridge.close();
         if (activeGlassTextOutput != null) activeGlassTextOutput.close();
         if (currentInstance == this) currentInstance = null;
         initializationExecutor.shutdown();

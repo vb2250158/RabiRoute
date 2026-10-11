@@ -33,11 +33,11 @@ Screen previews fit the complete virtual desktop without cropping, preserving th
 - JPEG/WAV files are written before event commit. Computer audio is copied into recording storage instead of depending on expiring speech caches. Phone audio uses ResourceCache and requires verified SHA-256/durable receipts for every block before event commit.
 - The receiving PC owns `data/mobile-recording-events/`. Authenticated source plus stable event ID makes retries idempotent. Writes are serialized and use fsync plus atomic replacement. These records are not automatically replicated to other PCs/personas.
 - Original recordings are not automatically deleted; only temporary atomic-write files are removed. Storage exhaustion, unavailable speech services and capture-device failures remain explicit.
-- Users and local Agents may query the timeline. It does not automatically notify an Agent or inject raw recordings into prompts.
+- Users, safe local Agents, and authenticated remote Agents may query the timeline. It does not automatically notify an Agent or inject raw recordings into prompts.
 
-## Local API
+## Public Manager API
 
-Discover the current Manager URL through Host and verify `/meta`. These endpoints are local-host only, reject device tunnels, preserve Manager authorization/read-only restrictions, and accept no arbitrary paths or commands.
+Discover the current Manager URL through Host and verify `/meta`. These public endpoints grant safe local requests and authenticated remote Agents equal access, preserve Manager read-only restrictions, and accept no arbitrary paths or commands. Remote requests retain their original admission lease, revalidate after body reads, control-queue waits, storage and speech calls, and check again before writes, subsequent network calls, data disclosure, or raw media output. Revoked, replaced, or disabled-and-reenabled authorization never falls back to local access. Public permission does not change the authenticated phone resource owner, persona-visible device selection, or the Host’s single capture owner; a device tunnel is not an Agent credential.
 
 Base: `/api/roles/:roleId/all-day-recording`. JSON success: `{code:0,data:...}`; failure: `{code:-1,message:...}`.
 

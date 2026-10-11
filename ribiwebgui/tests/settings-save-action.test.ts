@@ -56,6 +56,7 @@ test("no page keeps a lower save handler", () => {
   for (const filename of fs.readdirSync(pagesDir)) {
     if (!filename.endsWith(".vue")) continue;
     const source = fs.readFileSync(path.join(fileURLToPath(pagesDir), filename), "utf8");
-    assert.doesNotMatch(source, /@click="save(?:[A-Z][A-Za-z0-9_]*)?"/, `${filename} keeps a page-level save button`);
+    const pageTemplate = source.replace(/<v-dialog\b[^>]*>[\s\S]*?<\/v-dialog>/g, "");
+    assert.doesNotMatch(pageTemplate, /@click="save(?:[A-Z][A-Za-z0-9_]*)?"/, `${filename} keeps a page-level save button`);
   }
 });

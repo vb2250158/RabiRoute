@@ -1,3 +1,4 @@
+import { stickySpeechAuthority, type SpeechAuthorityGuard } from "./speechRequestAuthority.js";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -97,12 +98,17 @@ export class SpeechModelManager {
     this.onChange = options.onChange;
   }
 
-  directorySettings() {
+  directorySettings(guard?: SpeechAuthorityGuard) {
+    guard = stickySpeechAuthority(guard);
+    guard();
     return this.settingsStore.read(path.resolve(this.options.modelRoot || defaultModelRoot(this.options.rootDir)), this.options.modelRoot ? undefined : process.env.RABISPEECH_MODEL_ROOT?.trim());
   }
 
-  updateDirectorySettings(body: unknown) {
+  updateDirectorySettings(body: unknown, guard?: SpeechAuthorityGuard) {
+    guard = stickySpeechAuthority(guard);
+    guard();
     if (this.activeJob) throw new SpeechModelManagerError("安装或下载进行中，不能切换模型目录。", 409);
+    guard();
     this.settingsStore.write(body);
     this.publish();
     return this.directorySettings();
@@ -121,7 +127,9 @@ export class SpeechModelManager {
     return this.dependenciesPresent(stable) ? stable : path.join(this.pluginRoot, ".deps");
   }
 
-  snapshot(): SpeechModelManagementSnapshot {
+  snapshot(guard?: SpeechAuthorityGuard): SpeechModelManagementSnapshot {
+    guard = stickySpeechAuthority(guard);
+    guard();
     const configPath = speechConfigPath(this.pluginRoot);
     const manifest = this.readManifest();
     const manifestRows = new Map((manifest.models ?? []).map(item => [String(item.alias || ""), item]));
@@ -166,7 +174,9 @@ export class SpeechModelManager {
     };
   }
 
-  installRuntime(): SpeechModelManagementSnapshot {
+  installRuntime(guard?: SpeechAuthorityGuard): SpeechModelManagementSnapshot {
+    guard = stickySpeechAuthority(guard);
+    guard();
     this.assertWindows();
     const dependenciesRoot = this.stableDependenciesRoot();
     return this.startJob({
@@ -175,10 +185,12 @@ export class SpeechModelManager {
       args: ["-DependencyRoot", dependenciesRoot],
       dependenciesRoot,
       message: "正在安装 RabiSpeech 语音运行环境。"
-    });
+    }, guard);
   }
 
-  installModel(alias: string): SpeechModelManagementSnapshot {
+  installModel(alias: string, guard?: SpeechAuthorityGuard): SpeechModelManagementSnapshot {
+    guard = stickySpeechAuthority(guard);
+    guard();
     this.assertWindows();
     const normalized = alias.trim();
     if (!this.catalog.models.some(model => model.alias === normalized)) {
@@ -202,7 +214,7 @@ export class SpeechModelManager {
         "-EtagTimeout", "120"
       ],
       message: `正在下载 ${normalized}。`
-    });
+    }, guard);
   }
 
   stop(): void {
@@ -226,7 +238,9 @@ export class SpeechModelManager {
     args: string[];
     dependenciesRoot: string;
     message: string;
-  }): SpeechModelManagementSnapshot {
+  }, guard?: SpeechAuthorityGuard): SpeechModelManagementSnapshot {
+    guard = stickySpeechAuthority(guard);
+    guard();
     if (this.activeJob) {
       throw new SpeechModelManagerError("已有语音安装或模型下载任务正在运行，请等待它结束。", 409);
     }
@@ -241,6 +255,7 @@ export class SpeechModelManager {
       startedAt: new Date().toISOString(),
       message: input.message
     };
+    guard();
     this.activeJob = job;
     this.lastOutput = "";
     let child: ChildProcessByStdio<null, Readable, Readable>;
@@ -265,19 +280,22 @@ export class SpeechModelManager {
       };
       this.activeJob = undefined;
       this.publish();
+      guard();
       throw new SpeechModelManagerError("安装程序没有启动，请查看最近任务中的错误。", 500);
     }
     this.activeChild = child;
-    child.stdout.on("data", chunk => this.captureOutput(chunk));
-    child.stderr.on("data", chunk => this.captureOutput(chunk));
-    child.once("error", error => this.finishJob(1, this.safeMessage(error.message)));
-    child.once("close", code => this.finishJob(code ?? 1));
+    // Accepted jobs are owned by their immutable job identity, not a request lease.
+    child.stdout.on("data", chunk => { if (this.activeJob?.id === job.id) this.captureOutput(chunk); });
+    child.stderr.on("data", chunk => { if (this.activeJob?.id === job.id) this.captureOutput(chunk); });
+    child.once("error", error => this.finishJob(job.id, 1, this.safeMessage(error.message)));
+    child.once("close", code => this.finishJob(job.id, code ?? 1));
     this.publish();
-    return this.snapshot();
+    guard();
+    return this.snapshot(guard);
   }
 
-  private finishJob(exitCode: number, launchError = ""): void {
-    if (!this.activeJob) return;
+  private finishJob(jobId: string, exitCode: number, launchError = ""): void {
+    if (this.activeJob?.id !== jobId) return;
     const failed = exitCode !== 0 || Boolean(launchError);
     this.lastJob = {
       ...this.activeJob,

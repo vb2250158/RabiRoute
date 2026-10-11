@@ -2226,13 +2226,22 @@ function ensurePlanListWatchers(roleDir: string): boolean {
         return;
       }
       const relativeName = fileName.toString();
+      const parts = relativeName.split(/[\\/]/);
+      const bucket = parts[0]?.toLowerCase();
+      if (bucket !== "active" && bucket !== "archive") return;
+      const isPlanFile = parts.length === 3 && parts[2]?.toLowerCase() === "plan.json";
+      const isPlanDirectory = parts.length <= 2;
+      // Recovery leases, transaction manifests and plan attachments do not
+      // change the catalog. Only canonical plan files or bucket/directory
+      // replacement events can invalidate a page under construction.
+      if (!isPlanFile && !isPlanDirectory) return;
       if (planPageWorkerRoles.has(cacheKey)) {
         const events = planPageWatchEvents.get(cacheKey) ?? [];
         events.push(`${_eventType}:${relativeName}`);
         if (events.length > 16) events.shift();
         planPageWatchEvents.set(cacheKey,events);
       }
-      if (!relativeName.toLowerCase().endsWith(".json")) {
+      if (!isPlanFile) {
         // Atomic directory replacement/deletion may not name plan.json.
         if (_eventType === "rename") {
           planPageStrongInvalidations.add(cacheKey);

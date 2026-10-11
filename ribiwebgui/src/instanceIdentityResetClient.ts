@@ -1,3 +1,5 @@
+import { browserUuid } from "./browserUuid";
+
 export const INSTANCE_IDENTITY_RESET_WAIT_MS = 45_000;
 const operationPath = "/api/rabi/identity/reset-instance-id";
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -55,7 +57,7 @@ export class InstanceIdentityResetClient {
     this.request = options.request ?? fetch;
     this.now = options.now ?? Date.now;
     this.pause = options.pause ?? pause;
-    this.createOperationId = options.operationId ?? (() => crypto.randomUUID());
+    this.createOperationId = options.operationId ?? browserUuid;
   }
 
   open(guid: string): void {

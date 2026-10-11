@@ -1,3 +1,4 @@
+import { requestRabiLinkManagerFixture, startRabiLinkOwnerFixture } from '../../../scripts/rabilink-owner-fixture.mjs';
 import { spawn } from "node:child_process";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -37,9 +38,14 @@ async function sleep(ms) {
 }
 
 async function fetchJson(url, options = {}) {
+  const parsed = new URL(url);
+  if (["/api/rabilink/mobile/proof", "/api/rabilink/mobile/proofs"].includes(parsed.pathname)) return requestRabiLinkManagerFixture(parsed.origin, "pc-test", "test-token", parsed.pathname + parsed.search, options);
   const response = await fetch(url, {
     ...options,
     headers: {
+      // Long synchronous PowerShell probes can outlast the fixture server keep-alive window.
+      // Fresh sockets avoid the client reusing a connection while the server closes it.
+      connection: "close",
       ...(options.body ? { "content-type": "application/json" } : {}),
       ...(options.headers || {})
     }
@@ -112,6 +118,7 @@ function writeAppStore(appStorePath, now) {
       tokenPreview: "test...oken",
       notes: "",
       targetDeviceId: "pc-test",
+      connectionOwnerDeviceId: "pc-test",
       createdAt: now,
       updatedAt: now
     }],
@@ -136,7 +143,7 @@ async function main() {
   const now = new Date().toISOString();
   writeAppStore(appStorePath, now);
 
-  let child;
+  let child, owner;
   const relayOutput = [];
   try {
     child = spawn(process.execPath, [relayServerPath], {
@@ -148,7 +155,7 @@ async function main() {
         RABILINK_RELAY_DATA_DIR: tempRoot,
         RABILINK_RELAY_APP_STORE_FILE: appStorePath,
         RABILINK_RELAY_WORKER_TASK_WAIT_MS: "5000",
-        RABILINK_RELAY_WEBGUI_REQUEST_WAIT_MS: "5000",
+        RABILINK_RELAY_WEBGUI_REQUEST_WAIT_MS: "15000",
         RABILINK_RELAY_LEASE_MS: "5000"
       },
       stdio: ["ignore", "pipe", "pipe"]
@@ -156,6 +163,7 @@ async function main() {
     child.stdout.on("data", (chunk) => relayOutput.push(String(chunk)));
     child.stderr.on("data", (chunk) => relayOutput.push(String(chunk)));
     await waitForRelay(baseUrl, child);
+    owner = await startRabiLinkOwnerFixture({ relayBaseUrl: baseUrl, token: "test-token", appId: "app-test", directory: path.join(tempRoot, "pc-owner") });
 
     const healthResult = await fetchJson(`${baseUrl}/health`);
     assert(
@@ -186,11 +194,11 @@ async function main() {
     assert(inputResult.body?.status === "accepted" && inputResult.body?.eventId, "Input acknowledgement should expose event identity and accepted state.");
     assert(!Object.hasOwn(inputResult.body || {}, "taskId"), "Input acknowledgement must not expose the Relay worker task lifecycle.");
 
-    const taskClaim = await fetchJson(`${baseUrl}/worker/tasks?deviceId=pc-renamed&deviceName=${encodeURIComponent("PC Rabi Renamed")}&deviceGuid=guid-test&waitMs=0`, { headers });
+    const taskClaim = await fetchJson(`${baseUrl}/worker/tasks?deviceId=pc-renamed&deviceName=${encodeURIComponent("PC Rabi Renamed")}&deviceGuid=guid-test&waitMs=0&taskFormat=opaque-v1`, { headers });
     assert(taskClaim.response.status === 200 && taskClaim.body?.status === "claimed", "A worker whose display id changed must still claim its selected task by stable GUID.");
     assert(taskClaim.body?.tasks?.[0]?.id === inputResult.body.eventId, "The GUID-matched worker must receive the glasses input task.");
-    assert(taskClaim.body?.tasks?.[0]?.type === "rabilink.observation" && taskClaim.body?.tasks?.[0]?.deliveryMode === "observe", "Relay must preserve record-only observation semantics for the PC worker.");
-    assert(taskClaim.body?.tasks?.[0]?.clientMessageId === "segment-stream-smoke-1" && taskClaim.body?.tasks?.[0]?.sessionId === "stream-smoke", "Relay must preserve the client id and session metadata used by the unified ledger.");
+    assert((await owner.normalize(taskClaim.body.tasks[0])).type === "rabilink.observation" && (await owner.normalize(taskClaim.body.tasks[0])).deliveryMode === "observe", "Relay must preserve record-only observation semantics for the PC worker.");
+    assert((await owner.normalize(taskClaim.body.tasks[0])).clientMessageId === "segment-stream-smoke-1" && (await owner.normalize(taskClaim.body.tasks[0])).sessionId === "stream-smoke", "Relay must preserve the client id and session metadata used by the unified ledger.");
     const finishTask = () => fetchJson(`${baseUrl}/worker/tasks/${encodeURIComponent(inputResult.body.eventId)}/finish`, {
       method: "POST",
       headers,
@@ -303,9 +311,9 @@ async function main() {
       })
     });
     assert(portableInputResult.response.status === 202 && portableInputResult.body?.status === "accepted", "A portable device observation should enter the record-first input queue.");
-    const portableTaskClaim = await fetchJson(`${baseUrl}/worker/tasks?deviceId=pc-renamed&deviceName=${encodeURIComponent("PC Rabi Renamed")}&deviceGuid=guid-test&waitMs=0`, { headers });
+    const portableTaskClaim = await fetchJson(`${baseUrl}/worker/tasks?deviceId=pc-renamed&deviceName=${encodeURIComponent("PC Rabi Renamed")}&deviceGuid=guid-test&waitMs=0&taskFormat=opaque-v1`, { headers });
     assert(portableTaskClaim.response.status === 200 && portableTaskClaim.body?.status === "claimed", "The selected PC worker should claim a portable observation.");
-    const portableTask = portableTaskClaim.body?.tasks?.[0];
+    const portableTask = await owner.normalize(portableTaskClaim.body?.tasks?.[0]);
     assert(portableTask?.id === portableInputResult.body.eventId, "The portable observation receipt and claimed task should share one event id.");
     assert(portableTask?.type === "rabilink.observation" && portableTask?.deliveryMode === "observe", "Portable input must default to record-first observation semantics.");
     assert(portableTask?.sourceDeviceId === "watch-smoke" && portableTask?.sourceDeviceKind === "watch", "Portable input must preserve source device identity and kind.");
@@ -488,145 +496,28 @@ async function main() {
     assert(runtimeProofReport.proof_session_id === proofSessionId, "Runtime proof helper should bind evidence to one page session.");
     assert(runtimeProofReport.expected_app_version === releaseVersion, "Runtime proof helper should bind evidence to the current Craft release version.");
 
-    const blockedResult = await fetchJson(`${baseUrl}/api/rabilink/mobile/webgui?path=${encodeURIComponent("/api/private")}`, { headers });
-    assert(blockedResult.response.status === 403, "Mobile WebGUI proxy should reject non-whitelisted PC paths.");
-
-    const workerPollPromise = fetchJson(`${baseUrl}/worker/webgui-requests?deviceId=pc-renamed&deviceName=${encodeURIComponent("PC Rabi Renamed")}&deviceGuid=guid-test&waitMs=5000`, { headers });
-    await sleep(100);
-    const mobilePromise = fetchJson(`${baseUrl}/api/rabilink/mobile/webgui?path=${encodeURIComponent("/manager-config")}`, { headers });
-    const workerPoll = await workerPollPromise;
-    assert(workerPoll.response.status === 200, "PC worker should poll WebGUI requests successfully.");
-    assert(workerPoll.body?.status === "claimed", "PC worker should claim the mobile WebGUI request.");
-    assert(Array.isArray(workerPoll.body?.requests) && workerPoll.body.requests.length === 1, "PC worker should receive one WebGUI request.");
-    const request = workerPoll.body.requests[0];
-    assert(request.method === "GET", "Claimed request should preserve the PC WebGUI method.");
-    assert(request.path === "/manager-config", "Claimed request should preserve the PC WebGUI path.");
-    assert(request.targetDeviceId === "pc-test", "Claimed request should target the selected PC worker.");
-
-    const pcBody = { code: 0, ok: true, source: "pc-rabi-smoke", config: { manager: { autoStart: true } } };
-    const finishResult = await fetchJson(`${baseUrl}/worker/webgui-requests/${encodeURIComponent(request.id)}/response`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        deviceId: "pc-renamed",
-        deviceGuid: "guid-test",
-        statusCode: 200,
-        headers: { "content-type": "application/json; charset=utf-8" },
-        bodyBase64: Buffer.from(JSON.stringify(pcBody), "utf8").toString("base64")
-      })
-    });
-    assert(finishResult.response.status === 200, "PC worker should be able to complete the WebGUI request.");
-    assert(finishResult.body?.request?.status === "done", "Completed WebGUI request should be marked done.");
-
-    const mobileResult = await mobilePromise;
-    assert(mobileResult.response.status === 200, "Mobile WebGUI response should use the PC response status.");
-    assert(mobileResult.body?.source === "pc-rabi-smoke", "Mobile caller should receive the PC WebGUI JSON body.");
-    assert(mobileResult.body?.config?.manager?.autoStart === true, "Mobile caller should receive nested PC config data.");
-
-    const operationId = "aiui-relay-route-mutation-1";
-    const expectedContentHash = "a".repeat(64);
-    const committedContentHash = "b".repeat(64);
-    const mutationHeaders = {
-      ...headers,
-      "Idempotency-Key": operationId,
-      "If-Match": expectedContentHash
-    };
-    const mutationWorkerPollPromise = fetchJson(`${baseUrl}/worker/webgui-requests?deviceId=pc-renamed&deviceName=${encodeURIComponent("PC Rabi Renamed")}&deviceGuid=guid-test&waitMs=5000`, { headers });
-    await sleep(100);
-    const mobileMutationPromise = fetchJson(`${baseUrl}/api/rabilink/mobile/webgui`, {
-      method: "POST",
-      headers: mutationHeaders,
-      body: JSON.stringify({
-        method: "POST",
-        path: "/gateways",
-        body: { gateways: [] },
-        headers: {
-          "Idempotency-Key": operationId,
-          "If-Match": expectedContentHash,
-          "X-Private-Diagnostic": "must-not-forward"
-        }
-      })
-    });
-    const mutationWorkerPoll = await mutationWorkerPollPromise;
-    const mutationRequest = mutationWorkerPoll.body?.requests?.[0];
-    assert(mutationRequest?.headers?.["idempotency-key"] === operationId, "Relay must forward the stable Idempotency-Key to the PC worker.");
-    assert(mutationRequest?.headers?.["if-match"] === expectedContentHash, "Relay must forward the strong If-Match hash to the PC worker.");
-    assert(!Object.hasOwn(mutationRequest?.headers || {}, "x-private-diagnostic"), "Relay mutation envelopes must discard non-allowlisted headers.");
-    const committedBody = {
-      code: 0,
-      receipt: { state: "committed", operationId, routeConfigHash: committedContentHash },
-      routeCatalog: { contentHash: committedContentHash, routeConfigHash: committedContentHash, revision: 2 }
-    };
-    await fetchJson(`${baseUrl}/worker/webgui-requests/${encodeURIComponent(mutationRequest.id)}/response`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        deviceId: "pc-renamed",
-        deviceGuid: "guid-test",
-        statusCode: 200,
-        headers: {
-          "content-type": "application/json; charset=utf-8",
-          "idempotency-key": operationId,
-          etag: `"${committedContentHash}"`,
-          "x-private-diagnostic": "must-not-return"
-        },
-        bodyBase64: Buffer.from(JSON.stringify(committedBody), "utf8").toString("base64")
-      })
-    });
-    const mobileMutation = await mobileMutationPromise;
-    assert(mobileMutation.response.status === 200, "Relay route mutation must preserve the PC status.");
-    assert(mobileMutation.body?.receipt?.operationId === operationId, "Relay route mutation must preserve the explicit committed receipt.");
-    assert(mobileMutation.response.headers.get("idempotency-key") === operationId, "Relay must return the allowlisted mutation response header.");
-    assert(!mobileMutation.response.headers.has("x-private-diagnostic"), "Relay must not return private worker response headers.");
-
-    const weakOperationId = "aiui-relay-route-mutation-weak";
-    const weakIfMatch = `W/\"${committedContentHash}\"`;
-    const weakWorkerPollPromise = fetchJson(`${baseUrl}/worker/webgui-requests?deviceId=pc-renamed&deviceName=${encodeURIComponent("PC Rabi Renamed")}&deviceGuid=guid-test&waitMs=5000`, { headers });
-    await sleep(100);
-    const weakMobilePromise = fetchJson(`${baseUrl}/api/rabilink/mobile/webgui`, {
-      method: "POST",
-      headers: {
-        ...headers,
-        "Idempotency-Key": weakOperationId,
-        "If-Match": weakIfMatch
-      },
-      body: JSON.stringify({
-        method: "POST",
-        path: "/gateways",
-        body: { gateways: [] },
-        headers: {
-          "Idempotency-Key": weakOperationId,
-          "If-Match": weakIfMatch,
-          "X-Private-Diagnostic": "must-not-forward"
-        }
-      })
-    });
-    const weakWorkerPoll = await weakWorkerPollPromise;
-    const weakRequest = weakWorkerPoll.body?.requests?.[0];
-    assert(weakRequest?.headers?.["if-match"] === weakIfMatch, "Relay must not launder a weak If-Match into a strong validator.");
-    assert(!Object.hasOwn(weakRequest?.headers || {}, "x-private-diagnostic"), "Weak-validator forwarding must retain the same mutation-only header allowlist.");
-    await fetchJson(`${baseUrl}/worker/webgui-requests/${encodeURIComponent(weakRequest.id)}/response`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        deviceId: "pc-renamed",
-        deviceGuid: "guid-test",
-        statusCode: 428,
-        headers: {
-          "content-type": "application/json; charset=utf-8",
-          "x-private-diagnostic": "must-not-return"
-        },
-        bodyBase64: Buffer.from(JSON.stringify({
-          code: -1,
-          errorCode: "route_catalog_precondition_required",
-          message: "A strong If-Match Route catalog hash is required for this mutation."
-        }), "utf8").toString("base64")
-      })
-    });
-    const weakMobile = await weakMobilePromise;
-    assert(weakMobile.response.status === 428, "Relay must preserve Manager rejection of a weak If-Match.");
-    assert(weakMobile.body?.errorCode === "route_catalog_precondition_required", "Relay must preserve the stable weak-validator error code.");
-    assert(!weakMobile.response.headers.has("x-private-diagnostic"), "Relay must not expose private headers on rejected mutations.");
+    const manager = (path, options) => requestRabiLinkManagerFixture(baseUrl, 'pc-test', 'test-token', path, options);
+    const blockedResult = await manager('/api/private');
+    assert(blockedResult.response.status === 404 && blockedResult.body.code === 'PC_PUBLIC_PATH_NOT_FOUND', 'Unknown paths reach the PC without a Relay business whitelist.');
+    const futureResult = await manager('/api/future-capability');
+    assert(futureResult.body.future === true, 'Future Manager APIs require no Relay adapter.');
+    const mobileResult = await manager('/manager-config');
+    assert(mobileResult.response.status === 200 && mobileResult.body.source === 'pc-rabi-smoke' && mobileResult.body.config.manager.autoStart, 'Generic transport returns the original Manager result.');
+    const request = (await owner.trace()).at(-1);
+    assert(request.path === '/manager-config', 'Original Manager path is preserved.');
+    const operationId = 'aiui-relay-route-mutation-1', expectedContentHash = 'a'.repeat(64), committedContentHash = 'b'.repeat(64);
+    const mobileMutation = await manager('/gateways', { method: 'POST', headers: { 'Idempotency-Key': operationId, 'If-Match': expectedContentHash }, body: { gateways: [] } });
+    const mutationRequest = (await owner.trace()).at(-1);
+    assert(mutationRequest.headers['idempotency-key'] === operationId && mutationRequest.headers['if-match'] === expectedContentHash, 'Original mutation guards reach the PC.');
+    assert(!Object.hasOwn(mutationRequest.headers, 'x-rabilink-tunnel-local'), 'Client headers cannot establish local transport identity.');
+    assert(mobileMutation.response.status === 200 && mobileMutation.body.receipt.operationId === operationId, 'Original committed receipt returns to the caller.');
+    assert(mobileMutation.response.headers.get('idempotency-key') === operationId, 'Original receipt headers return unchanged.');
+    const weakOperationId = 'aiui-relay-route-mutation-weak', weakIfMatch = `W/"${committedContentHash}"`;
+    const weakMobile = await manager('/gateways', { method: 'POST', headers: { 'Idempotency-Key': weakOperationId, 'If-Match': weakIfMatch }, body: { gateways: [] } });
+    const weakRequest = (await owner.trace()).at(-1);
+    assert(weakRequest.headers['if-match'] === weakIfMatch, 'Weak validators remain weak.');
+    assert(weakMobile.response.status === 428 && weakMobile.body.errorCode === 'route_catalog_precondition_required', 'Manager rejection survives the transport.');
+    assert(!fs.existsSync(path.join(tempRoot, 'mobile-proofs')), 'Relay must not create a second writable proof source.');
 
     const report = {
       generated_at: new Date().toISOString(),
@@ -670,6 +561,7 @@ async function main() {
     }, null, 2), "utf8");
     throw error;
   } finally {
+    if (owner) await owner.stop();
     if (child && child.exitCode == null) child.kill();
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }

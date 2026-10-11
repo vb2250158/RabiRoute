@@ -41,6 +41,7 @@ import {
 
 /** One delivery attempt. Text is the only field that may vary between runs. */
 export type WorkbuddyDeliveryRequest = {
+  assertAuthorized?: () => void | Promise<void>;
   /** Bound task id; becomes `source.conversation.id` (the routing key). */
   sessionId: string;
   /** Message body. Never logged, never persisted by this module. */
@@ -138,6 +139,7 @@ export async function deliverWorkbuddyMessage(
     payload: { text }
   };
 
+  await request.assertAuthorized?.();
   let response: Response;
   try {
     response = await fetchImpl(`${origin}/api/v1/runs`, {

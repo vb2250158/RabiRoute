@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { XiaomiHomeRequestAuthorityError } from "./requestAuthority.js";
 import fs from "node:fs";
 import path from "node:path";
 import { atomicWriteFileSync, withFileLockSync } from "../../shared/filePersistence.js";
@@ -50,7 +51,8 @@ export class XiaomiHomeAuthMutationReceipts {
       // Validation, lifecycle and revision conflicts have no external commit.
       // Release their reservation so the caller can retry with corrected input.
       // All other failures stay fail-closed because the provider effect may exist.
-      if (error instanceof XiaomiHomeManagerApiError && error.status >= 400 && error.status < 500) this.release(key, hash);
+      if ((error instanceof XiaomiHomeManagerApiError && error.status >= 400 && error.status < 500)
+        || (error instanceof XiaomiHomeRequestAuthorityError && error.outcome === "not_started")) this.release(key, hash);
       else this.markUncertain(key, hash);
       throw error;
     }).finally(() => {

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { browserUuid } from "../browserUuid";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import TtsModelParameters from "../components/TtsModelParameters.vue";
 import {normalizeTtsParameters,ttsCommandSettings,type TtsParameters} from "../speech/ttsParameters";
@@ -261,7 +262,7 @@ function duplicateCard(empty: boolean) {
   if (busy.value || uploading.value) return;
   const source = canvasItems.value.find(row => row.id === contextMenu.value?.itemId);
   if (!source) return;
-  const item: CanvasItem = { ...source, id: crypto.randomUUID(), title: `${source.title} 副本`, ...(empty ? { text: "", asset: undefined, jobId: undefined, audioUrl: undefined, audioError: undefined, audioBusy: false } : {}) };
+  const item: CanvasItem = { ...source, id: browserUuid(), title: `${source.title} 副本`, ...(empty ? { text: "", asset: undefined, jobId: undefined, audioUrl: undefined, audioError: undefined, audioBusy: false } : {}) };
   const draft = source.id === activeVideoId.value ? captureDraft() : drafts.get(source.id);
   if (!empty && draft) drafts.set(item.id, JSON.parse(JSON.stringify(draft)));
   canvasItems.value.push(item); canvas.add(item.id);
@@ -276,7 +277,7 @@ function deleteCard() {
   if (id === activeVideoId.value) {
     let next = canvasItems.value.find(row => row.kind === "video" && row.id !== id);
     if (!next) {
-      next = { id: crypto.randomUUID(), kind: "video", title: "视频 1", text: "" };
+      next = { id: browserUuid(), kind: "video", title: "视频 1", text: "" };
       canvasItems.value.push(next); canvas.add(next.id);
     }
     selectCard(next);
@@ -300,7 +301,7 @@ function exportCard() {
 function addCanvasItem(kind: CanvasKind) {
   if (busy.value || uploading.value) return;
   const count = canvasItems.value.filter(item => item.kind === kind).length + 1;
-  const item: CanvasItem = { id: crypto.randomUUID(), kind, title: `${canvasKinds.find(entry => entry.kind === kind)!.label} ${count}`, text: "" };
+  const item: CanvasItem = { id: browserUuid(), kind, title: `${canvasKinds.find(entry => entry.kind === kind)!.label} ${count}`, text: "" };
   canvasItems.value.push(item); canvas.add(item.id);
   if (contextMenu.value?.world) canvas.positions.value[item.id] = contextMenu.value.world;
   contextMenu.value = undefined;
@@ -311,7 +312,7 @@ function addJobToCanvas(job: Job) {
   if (busy.value || uploading.value) return;
   let item = canvasItems.value.find(row => row.jobId === job.id);
   if (!item) {
-    item = { id: crypto.randomUUID(), kind: job.mediaKind === "image" ? "image" : "video", title: job.mediaKind === "image" ? "生成图片" : `视频 ${canvasItems.value.filter(row=>row.kind==='video').length + 1}`, text: job.prompt, jobId: job.id };
+    item = { id: browserUuid(), kind: job.mediaKind === "image" ? "image" : "video", title: job.mediaKind === "image" ? "生成图片" : `视频 ${canvasItems.value.filter(row=>row.kind==='video').length + 1}`, text: job.prompt, jobId: job.id };
     canvasItems.value.push(item); canvas.add(item.id);
   }
   selectCard(item); showLibrary.value = false; canvas.center(item.id);
@@ -334,7 +335,7 @@ function imageSource(item: CanvasItem) { const url=imageJob(item)?.imageUrl; ret
 async function generateImage(item: CanvasItem) {
   const [w,h]=(item.imageSize || "1024x1024").split("x").map(Number);
   const body=JSON.stringify({model:item.imageModel || imageModels.value[0]?.id,prompt:item.text,width:w,height:h,seed:1});
-  if(item.imageBody!==body) {item.imageKey=crypto.randomUUID();item.imageBody=body;}
+  if(item.imageBody!==body) {item.imageKey=browserUuid();item.imageBody=body;}
   const job=await request<Job>("/jobs",{method:"POST",headers:{"content-type":"application/json","Idempotency-Key":item.imageKey!},body});
   item.jobId=job.id; item.imageKey=undefined; item.imageBody=undefined; await refresh();
 }
@@ -533,7 +534,7 @@ async function submit() {
     if (lastFrame.value) lastFrame.value = await ensurePngBase64(lastFrame.value);
   }
   const body = JSON.stringify({ model: model.value, prompt: prompt.value, width: width.value, height: height.value, frames: frames.value, seed: seed.value, quickGeneration: quickGeneration.value, generateAudio: generateAudio.value, ...(mode.value === "reference" ? { references: references.value.map(asset => asset.id), referenceVideoSound: referenceVideoSound.value } : {}), ...(mode.value === "image" && firstFrame.value ? { firstFrame: firstFrame.value } : {}), ...(mode.value === "image" && lastFrame.value ? { lastFrame: lastFrame.value } : {}) });
-  if (!pendingSubmission || pendingSubmission.body !== body) pendingSubmission = { body, key: crypto.randomUUID() };
+  if (!pendingSubmission || pendingSubmission.body !== body) pendingSubmission = { body, key: browserUuid() };
   const result = await request<Job>("/jobs", { method: "POST", headers: { "content-type": "application/json", "Idempotency-Key": pendingSubmission.key }, body });
   activeVideo.value.jobId = result.id; selectedId.value = result.id; filter.value = "all"; search.value = ""; notice.value = "已加入生成队列。";
   pendingSubmission = undefined;
@@ -557,7 +558,7 @@ async function openProject(id: string) {
   await restoreCanvasDraft();
 }
 async function createProject() {
-  const project=await request<{id:string}>("/projects",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id:crypto.randomUUID()})});
+  const project=await request<{id:string}>("/projects",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id:browserUuid()})});
   await openProject(project.id);
   pendingDraft = canvasRecord(); await saveCanvasDraft();
 }

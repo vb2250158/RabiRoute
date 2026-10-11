@@ -28,6 +28,7 @@ import {
 } from "./webhookAdapter.js";
 import { identityEndpointsForForward } from "../routing/identityContext.js";
 import { claimMobileVoiceInput } from "../shared/mobileVoiceCall.js";
+import { normalizeRabiLinkTaskInput } from './rabilinkTaskInput.js';
 
 type RelayTask = Record<string, unknown>;
 export type RabiLinkRelayTaskDisposition = "review_request" | "record_only" | "direct";
@@ -552,6 +553,12 @@ async function handleRelayTask(profile: WebhookAdapterProfile, webhookPath: stri
   if (!taskId) {
     throw new Error("Relay task has no id.");
   }
+  try { task = normalizeRabiLinkTaskInput(task); }
+  catch (error) {
+    await finishRelayTask(taskId, { ok: false, status: 'done', accepted: false, error: error instanceof Error ? error.message : 'Invalid RabiLink input' }, signal);
+    rememberAcceptedRelayTask(taskId);
+    return;
+  }
   if (!acceptedRelayTasks.has(taskId)) {
     // Validate before any forwarding. Older Relay servers preserve clientMessageId
     // but do not understand live-call deadlines; the PC is the final authority.
@@ -661,7 +668,8 @@ async function claimRelayTask(signal: AbortSignal): Promise<RelayTask | null> {
     deviceId: config.rabiLinkRelayDeviceId,
     deviceGuid: config.rabiLinkRelayDeviceGuid,
     deviceName: hostname(),
-    waitMs: "0"
+    waitMs: "0",
+    taskFormat: 'opaque-v1'
   });
   const body = await fetchRelayJson(`/worker/tasks?${params}`, {
     method: "GET",

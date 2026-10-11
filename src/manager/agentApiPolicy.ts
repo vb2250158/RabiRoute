@@ -81,7 +81,7 @@ function operations(group: string, prefix: string, definitions: readonly Definit
         ? {
             requestBody: "无请求体；必须传唯一非空 routeId query。",
             response: "仅返回所选 Route 的唯一已启用 QQ 实例 ID、WS 连接布尔值与 OneBot online/good 布尔值；探针失败不表示离线。",
-            auth: "仅可信 LAN Agent 来源；每次核对当前启用批准绑定、精确 Route 及该 Route 的远端 primary target。loopback 不可冒用。",
+            auth: "可信本机与已认证启用 Agent 权限对等；远端使用原始授权 lease 并在探针前后复验，仍核对精确 Route 和唯一已启用 QQ 实例。",
             effects: "只读当前 Route 的 WS 状态，并在授权后对其唯一实例发起短时 OneBot GET get_status；不读取消息或写入状态。",
             retry: "只读无幂等键；探针不可用时显示未知，不自动切换 Route 或实例。", mutating: false, idempotencyRequired: false
           }
@@ -89,7 +89,7 @@ function operations(group: string, prefix: string, definitions: readonly Definit
          ? {
              requestBody: "无请求体；必须传唯一非空 routeId、groupId，folderId 可选且至多一次。",
              response: "返回选定群的有界文件/文件夹元数据；completenessUnknown 与 potentiallyTruncated 表示不可据此证明文件不存在。",
-             auth: "仅可信 LAN Agent 来源；核对精确 Route 与远端 primary target，并独立校验 readableGroupFileIds 中的精确群 ID；发送权限不能替代读取权限。",
+             auth: "可信本机与已认证启用 Agent 权限对等；核对精确 Route 与唯一 QQ 实例，并独立校验 readableGroupFileIds 中的精确群 ID；发送权限不能替代读取权限。",
              effects: "只读所选 QQ 实例的 get_group_root_files 或 get_group_files_by_folder；不下载、不发送文件。",
              retry: "只读无幂等键；结果不完整时不据此去重，授权或实例不可用时不跨 Route 回退。", mutating: false, idempotencyRequired: false
            }
@@ -163,7 +163,7 @@ const roleKnowledge: readonly Definition[] = [
   ["DELETE", "/plan-marker-statuses/:statusKey", "通过兼容入口退役计划状态"],
   ["GET", "/skills", "列出人格技能"],
   ["GET", "/skills/:skillId", "读取人格技能"],
-  ["GET", "/skills/:skillId/download", "下载指定人格技能完整目录ZIP；仍需人格绑定，不执行脚本"],
+  ["GET", "/skills/:skillId/download", "下载指定人格技能完整目录ZIP；鉴权即可读取，不执行脚本"],
   ["GET", "/memory", "读取记忆概览、数量或分页", "counts limit cursor kind query"],
   ["GET", "/memory/recent", "列出近期记忆"],
   ["GET", "/memory/recent/:memoryId", "读取近期记忆（可能刷新 viewedAt）"],
@@ -220,15 +220,15 @@ const catalog: readonly AgentApiOperation[] = Object.freeze([
     ["POST", "/api/personas/:personaId/messages", "通过来源能力跨人格投递"],
     ["GET", "/api/personas/messages/receipts/:deliveryId", "读取跨人格投递回执"],
     ["GET", "/api/agent/threads", "列出 Agent 会话", "query limit offset"],
-    ["POST", "/api/agent/threads", "发现、读取、创建、命名与单向投递会话；远端来源仅支持 responsePolicy:none，不支持正式回复或跨远端投递"],
+    ["POST", "/api/agent/threads", "发现、读取、创建、命名、投递与原回执；目标执行能力由实际宿主协议决定"],
     ["PUT", "/api/agent/uploads/:uploadId", "上传当前远端 Agent 的上传文件，不自动外发"],
     ["GET", "/api/agent/uploads/:uploadId", "核对当前远端 Agent 的文件上传回执"],
     ["GET", "/api/agent/help", "按 operationId、方法或路径查询当前接口帮助", "operationId path method"],
     ["GET", "/api/agent/qq/diagnostics", "查询唯一已启用 QQ 实例的脱敏只读诊断", "routeId"],
     ["GET", "/api/agent/qq/group-files", "读取精确群的有界 QQ 文件元数据", "routeId groupId folderId"],
-    ["GET", "/api/agent/qq/history", "本机读取选定 QQ 会话历史分页；仅本机管理权限", "routeId kind target cursor limit"],
-    ["GET", "/api/agent/qq/messages/:messageId", "本机读取原消息及附件下载入口；仅本机管理权限", "routeId kind target"],
-    ["GET", "/api/agent/qq/messages/:messageId/attachments/:attachmentIndex", "本机下载原消息附件二进制；最多 64 MiB，仅本机管理权限", "routeId kind target"],
+    ["GET", "/api/agent/qq/history", "鉴权连接读取选定 QQ 会话历史分页", "routeId kind target cursor limit"],
+    ["GET", "/api/agent/qq/messages/:messageId", "鉴权连接读取原消息及附件下载入口", "routeId kind target"],
+    ["GET", "/api/agent/qq/messages/:messageId/attachments/:attachmentIndex", "鉴权连接下载原消息附件二进制；最多 64 MiB", "routeId kind target"],
     ["GET", "/api/agent/send/capabilities", "列出发送渠道、参数示例与不重试规则"],
     ["POST", "/api/agent/send", "通过渠道策略发送消息或附件"],
     ["GET", "/api/agent/send/traces", "按平台消息追踪发送", "channel sentMessageId routeId"],
@@ -244,17 +244,40 @@ const catalog: readonly AgentApiOperation[] = Object.freeze([
     ["GET", "/api/remote-agent/tasks", "列出远端 Agent 任务"],
     ["POST", "/api/remote-agent/tasks", "向已授权远端 Agent 创建任务"]
   ]),
+  ...operations("device-agent", "/api/device-agents", [
+    ["GET", "", "鉴权连接发现本机提供的设备 Agent；不要求人格或 Route 绑定"],
+    ["GET", "/:agentId/session", "读取设备会话与加载状态"],
+    ["GET", "/:agentId/pending", "读取设备队列是否存在待接收消息；不返回提示词", "waitMs"],
+    ["PUT", "/:agentId/session", "签名设备登记或续租唯一模型 owner；会话纪元由 PC 生成"],
+    ["POST", "/:agentId/deliveries", "鉴权连接向指定设备排队原消息；绑定只选择自动投递目标，排队不等于 owner 已接收"],
+    ["GET", "/:agentId/deliveries/:deliveryId", "鉴权连接读取原设备投递回执与结果", "waitMs"],
+    ["POST", "/:agentId/prepared-deliveries", "真实账本 PC 向设备所在 PC 投递原 reservation；接收 PC 回查原账本指纹，眼镜领取后才确认"],
+    ["POST", "/:agentId/prepared-deliveries/reconcile", "真实账本 PC 核对原设备执行者回执，不重新排队或启动替代模型"],
+    ["POST", "/:agentId/deliveries/claim", "已加载的签名设备领取一条消息；要求原 sessionId 和 ownerEpoch"],
+    ["POST", "/:agentId/deliveries/:deliveryId/response", "原设备 owner 按 sessionId、ownerEpoch 和 claimToken 回传原消息结果"],
+    ["GET", "/:agentId/wake-requests", "手机读取唤醒 nonce 元数据，不返回提示词"],
+    ["POST", "/:agentId/wake-requests/:nonce/claim", "手机独占领取原唤醒请求，避免重复触发"],
+    ["POST", "/:agentId/wake-requests/:nonce/receipt", "手机报告原唤醒请求的真实提交或拒绝；不能代替 owner 接收回执"]
+  ], ["实验能力；眼镜执行模型，PC 只保存投递与回执。保留原 deliveryId，不确定时先回读。每个入口继续核验连接、设备归属和当前 owner 纪元。"]),
   ...operations("processing", "/api/message-processing", [
     ["GET", "/board", "查询消息处理看板", "routeId limit"],
-    ["POST", "/requirements", "提交消息分派结果；入站 register_group 仅由 Manager 执行"],
+    ["POST", "/requirements", "登记消息组或提交消息分派结果"],
     ["GET", "/requirements/:requirementId", "读取消息处理需求"],
     ["GET", "/requirements/:requirementId/send-context", "读取发送前上下文审阅", "sourceMessageId"],
     ["POST", "/requirements/:requirementId/send-context", "提交发送前上下文审阅"],
     ["POST", "/requirements/:requirementId/outcome", "提交消息处理结果"],
     ["POST", "/requirements/:requirementId/knowledge-callback", "提交知识核对与更新回执"]
   ]),
-  // Generic codex-hook handlers do not bind requests to an authenticated principal.
-  // Remote hooks must use the separately authorized own-Agent /api/lan-agent/.../context endpoint.
+  ...operations("hook", "/api/codex-hook", [
+    ["POST", "/context", "提交真实会话的 Hook 事件；复验签名来源的会话与 provider"],
+    ["GET", "/roles", "读取可选人格"],
+    ["GET", "/doctor", "读取 Hook 诊断"],
+    ["GET", "/sessions", "列出会话人格绑定"],
+    ["GET", "/sessions/:sessionId", "读取指定会话人格绑定"],
+    ["PUT", "/sessions/:sessionId", "设置指定会话人格绑定"],
+    ["PATCH", "/sessions/:sessionId", "设置指定会话人格绑定"],
+    ["DELETE", "/sessions/:sessionId", "解除指定会话人格绑定"]
+  ]),
   ...operations("speech", "/api/speech", [
     ["GET", "/status", "读取语音服务状态"],
     ["GET", "/events", "订阅语音业务事件"],
@@ -348,10 +371,12 @@ const catalog: readonly AgentApiOperation[] = Object.freeze([
   ], ["复用已有 Manager 连接鉴权；本机、已鉴权 WebGUI 和已登记远端 Agent 使用相同业务合同。"])
 ]);
 
-/** The catalog describes operation contracts; connection authentication is separate. */
+/** Public operation contracts only; connection authentication and shared route policy are enforced separately, not by this catalog as a permission allowlist. */
 export function listAgentApiOperations(): readonly AgentApiOperation[] { return catalog; }
 
-const credentialKey = /(?:token|authorization|credential|password|secret|cookie|apikey|accesskey|capability|signature)/i;
+// Exact connection credential names, after punctuation is removed. Business
+// pagination and counters such as pageToken/tokenCount are not credentials.
+const credentialKey = /^(?:token|accessToken|refreshToken|idToken|bearerToken|authToken|webguiToken|rabilinkToken|lanAgentToken|agentToken|authorization|proxyAuthorization|credential|credentials|password|secret|clientSecret|cookie|cookie2|apiKey|xApiKey|accessKey|capability|sourceCapability|signature|sourceSignature)$/i;
 const parameterPatterns: Readonly<Record<string, RegExp>> = Object.freeze({
   date: /^\d{4}-\d{2}-\d{2}$/,
   uploadId: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
@@ -359,13 +384,13 @@ const parameterPatterns: Readonly<Record<string, RegExp>> = Object.freeze({
   mediaId: /^[0-9a-f-]{36}$/
 });
 
-function safeSegment(raw: string, allowHomeResource = false): string | undefined {
+function safeSegment(raw: string): string | undefined {
   try {
     const decoded = decodeURIComponent(raw);
-    // One decoding only. Reject separators, ADS, residual escapes, dot aliases and Windows device names.
-    if (!decoded || decoded.length > 512 || decoded.trim() !== decoded || decoded.startsWith(".") || decoded.endsWith(".")
-      || /[\s]$/.test(decoded) || (!/^[\p{L}\p{N}_ .@-]+$/u.test(decoded) && !(allowHomeResource && /^home:ha:[a-z0-9_]+\.[a-z0-9_]+$/.test(decoded)))
-      || /^(?:con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(?:\.|$)/i.test(decoded)) return undefined;
+    encodeURIComponent(decoded); // Reject unpaired UTF-16 without restricting valid Unicode IDs.
+    // HTTP resource identifiers are not filenames. Path traversal and ambiguous
+    // separators remain ingress errors; individual handlers own filename schemas.
+    if (decoded === "." || decoded === ".." || /[\/\\\x00-\x1f\x7f]/.test(decoded) || /%[0-9a-f]{2}/i.test(decoded)) return undefined;
     return decoded;
   } catch { return undefined; }
 }
@@ -380,28 +405,26 @@ const matchers = catalog.map(operation => ({ operation, segments: operation.path
 export function validateAgentApiRequestTarget(method: string, requestTarget: string):
   | { allowed: true; rawSegments: string[]; decodedSegments: (string | undefined)[]; query: string[] }
   | Extract<AgentApiAuthorization, { allowed: false }> {
-  if (typeof method !== "string" || !/^(?:GET|POST|PUT|PATCH|DELETE)$/.test(method)) return { allowed: false, reason: "invalid_method" };
+  if (typeof method !== "string" || !/^(?:GET|HEAD|OPTIONS|POST|PUT|PATCH|DELETE)$/.test(method)) return { allowed: false, reason: "invalid_method" };
   if (typeof requestTarget !== "string" || requestTarget.length > 16_384 || !requestTarget.startsWith("/")
     || requestTarget.startsWith("//") || /[\\#\x00-\x20\x7f]/.test(requestTarget)) return { allowed: false, reason: "invalid_path" };
   const separator = requestTarget.indexOf("?");
   const pathname = separator < 0 ? requestTarget : requestTarget.slice(0, separator);
   const rawSegments = pathname.slice(1).split("/");
-  const homeResourcePath = rawSegments.length === 5 && rawSegments.slice(0, 4).join("/") === "api/agent/xiaomi-home/resources";
-  const decodedSegments = rawSegments.map((segment, index) => safeSegment(segment, homeResourcePath && index === 4));
+  const decodedSegments = rawSegments.map(segment => safeSegment(segment));
   if (decodedSegments.some(segment => segment === undefined)) return { allowed: false, reason: "invalid_path" };
 
   const query: string[] = [];
   if (separator >= 0) {
     const rawQuery = requestTarget.slice(separator + 1);
-    if (!rawQuery || rawQuery.split("&").length > 128) return { allowed: false, reason: "query_not_allowed" };
-    for (const field of rawQuery.split("&")) {
+    if (rawQuery.split("&").length > 128) return { allowed: false, reason: "query_not_allowed" };
+    for (const field of rawQuery ? rawQuery.split("&") : []) {
       const equals = field.indexOf("=");
-      if (equals <= 0) return { allowed: false, reason: "query_not_allowed" };
       try {
-        const key = decodeURIComponent(field.slice(0, equals).replace(/\+/g, " "));
-        const value = decodeURIComponent(field.slice(equals + 1).replace(/\+/g, " "));
+        const key = decodeURIComponent((equals < 0 ? field : field.slice(0, equals)).replace(/\+/g, " "));
+        const value = equals < 0 ? "" : decodeURIComponent(field.slice(equals + 1).replace(/\+/g, " "));
         if (credentialKey.test(key.replace(/[^a-z0-9]/gi, ""))) return { allowed: false, reason: "query_credentials" };
-        if (!/^[A-Za-z][A-Za-z0-9]*$/.test(key) || /[\x00-\x1f\x7f]/.test(value)) return { allowed: false, reason: "query_not_allowed" };
+        if (!key || /[\x00-\x1f\x7f]/.test(key + value) || /%[0-9a-f]{2}/i.test(key)) return { allowed: false, reason: "query_not_allowed" };
         query.push(key);
       } catch { return { allowed: false, reason: "invalid_path" }; }
     }

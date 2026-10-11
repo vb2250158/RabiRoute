@@ -32,6 +32,32 @@ test("Agent upload limit persists, migrates and rejects invalid writes", () => {
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test("LAN request admission fences global disable-enable and unavailable reloads, not unrelated writes", t => {
+  const root = tempRoot();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new RabiGlobalConfigStore(root);
+  store.patch({ webguiLan: { enabled: true } });
+  const initial = store.getLanAgentAdmissionPolicy();
+  assert.equal(initial.enabled, true);
+  store.patch({ rabiName: "Renamed PC" });
+  store.patch({ webguiLan: { enabled: true } });
+  store.reload();
+  assert.deepEqual(store.getLanAgentAdmissionPolicy(), initial);
+  store.patch({ webguiLan: { enabled: false } });
+  assert.equal(store.getLanAgentAdmissionPolicy().enabled, false);
+  store.patch({ webguiLan: { enabled: true } });
+  const replacement = store.getLanAgentAdmissionPolicy();
+  assert.notEqual(replacement.incarnation, initial.incarnation);
+  const saved = fs.readFileSync(store.configPath, "utf8");
+  fs.writeFileSync(store.configPath, "{");
+  store.reload();
+  assert.equal(store.getLanAgentAdmissionPolicy().enabled, false);
+  fs.writeFileSync(store.configPath, saved);
+  store.reload();
+  assert.equal(store.getLanAgentAdmissionPolicy().enabled, true);
+  assert.notEqual(store.getLanAgentAdmissionPolicy().incarnation, replacement.incarnation);
+});
+
 test("RabiLink Relay uses an explicit global enabled switch", () => {
   const store = new RabiGlobalConfigStore(tempRoot());
   assert.equal(store.read().rabiLinkRelay.enabled, false);

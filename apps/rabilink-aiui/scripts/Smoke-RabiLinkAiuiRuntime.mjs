@@ -103,8 +103,13 @@ const wx = {
     if (String(options.url || "").endsWith("/api/rabilink/mobile/state")) {
       if (typeof options.success === "function") options.success({
         statusCode: 200,
-        data: { code: 0, ok: true, workers: [], selectedWorker: {}, deviceStatus: mobileDeviceStatus }
+        data: { code: 0, ok: true, workers: [], selectedWorker: {}, connectionOwnerDeviceId: "pc-owner" }
       });
+      return;
+    }
+    if (String(options.url || "").endsWith("/api/rabilink/device/api") && options.data?.request?.path === "/api/rabilink/mobile/device-status") {
+      if (options.data.targetDeviceId !== "pc-owner") throw new Error("Battery status escaped its connection owner");
+      options.success?.({statusCode:200,data:{code:0,data:{structuredContent:{ok:true,uncertain:false,statusCode:200,data:{code:0,deviceStatus:mobileDeviceStatus}}}}});
       return;
     }
     if (String(options.url || "").endsWith("/api/rabilink/devices/logs")) {
@@ -611,7 +616,7 @@ try {
   assert(typeof page.activateSurface === "function", "Page must expose the current surface primary action.");
   assert(typeof page.startTranscription === "function", "Page must expose foreground ASR startup.");
   assert(typeof page.handleConfigurationSpeechResult === "function", "Page must dispatch direct configuration ASR results.");
-  assert(typeof page.flushTranscriptQueue === "function", "Page must expose transcript queue synchronization.");
+  assert(typeof page.reconcileDeviceAgentReceipts === "function", "Page must reconcile the original device Agent receipt without prompt replay.");
   assert(typeof page.requestConfigurationAssistant === "function", "Page must expose in-page configuration mode switching.");
   assert(typeof page.selectTranscriptionMode === "function" && typeof page.selectConfigurationMode === "function", "Page must expose both positions of the visual mode rail.");
   assert(typeof page.executeConfigurationIntent === "function", "Page must execute normalized intents supplied by the native Agent.");
@@ -657,32 +662,10 @@ try {
   legacyTokenPage.onUnload();
   wxModule.setStorageValue("rabilink-aiui-settings", {});
 
-  const legacyQueueToken = "legacy-queue-token-value";
-  const legacyQueueTokenKey = "legacy...alue";
-  const legacyQueueStorageKey = `rabilink-aiui-agent-message-queue:${legacyQueueTokenKey}`;
-  wxModule.setStorageValue("rabilink-aiui-settings", {
-    agentCursor: "legacy-cursor",
-    agentCursorTokenKey: legacyQueueTokenKey
-  });
-  wxModule.setStorageValue(legacyQueueStorageKey, {
-    tokenKey: legacyQueueTokenKey,
-    messages: [{ id: "legacy-downlink", text: "升级后仍要保留的待播报消息", createdAt: Date.now() }]
-  });
-  const legacyQueuePage = createPageInstance(pageModule);
-  legacyQueuePage.onLoad({ token: legacyQueueToken, mode: "configuration" });
-  legacyQueuePage.activateDeferredStartup();
-  const migratedQueueSettings = wxModule.getStorageValue("rabilink-aiui-settings");
-  assert(legacyQueuePage.data.agentCursor === "legacy-cursor", "Opaque token fingerprint migration must preserve the matching Relay cursor.");
-  assert(legacyQueuePage.agentMessageQueue.length === 1, "Opaque token fingerprint migration must preserve the matching pending TTS queue.");
-  assert(/^v2-[0-9a-f]{16}$/.test(migratedQueueSettings.agentCursorTokenKey), "A legacy masked cursor scope must migrate to an opaque fingerprint.");
-  assert(wxModule.getStorageValue(legacyQueueStorageKey) === undefined, "A migrated queue must remove the storage key containing old token fragments.");
-  legacyQueuePage.onUnload();
-  wxModule.setStorageValue("rabilink-aiui-settings", {});
-
   const batteryManager = createBatteryManager(0.62, false);
   setInkNavigator("ROKID-BATTERY-SMOKE", batteryManager);
   const batteryPage = createPageInstance(pageModule);
-  batteryPage.onLoad({ mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
+  batteryPage.onLoad({ mode: "transcription" });
   assert(/^\d{2}:\d{2}$/.test(batteryPage.data.currentTime), "The lower-left clock must initialize as HH:mm during onLoad.");
   const batteryResolved = await batteryPage.refreshBatteryStatus();
   assert(batteryResolved === false, "A generic host Web Battery provider must not be mislabeled as glasses battery.");
@@ -694,7 +677,7 @@ try {
 
   wxModule.setBatteryInfo({ level: 47, isCharging: true });
   const wxBatteryPage = createPageInstance(pageModule);
-  wxBatteryPage.onLoad({ mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
+  wxBatteryPage.onLoad({ mode: "transcription" });
   const wxBatteryResolved = await wxBatteryPage.refreshBatteryStatus();
   assert(wxBatteryResolved === false, "A generic wx battery field must not be accepted as proof of glasses battery.");
   assert(wxBatteryPage.data.batteryText === "--" && wxBatteryPage.data.batterySource === "", "Unverified Mini Program battery data must remain unknown.");
@@ -711,7 +694,7 @@ try {
     source: "rokid-cxr-phone"
   });
   const relayBatteryPage = createPageInstance(pageModule);
-  relayBatteryPage.onLoad({ token: "tool-token-value", mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
+  relayBatteryPage.onLoad({ token: "tool-token-value", mode: "transcription" });
   const relayBatteryResolved = await relayBatteryPage.refreshBatteryStatus();
   assert(relayBatteryResolved === true, "A fresh phone-side Rokid CXR device status should be accepted when the Ink host has no battery API.");
   assert(relayBatteryPage.data.batteryText === "98%" && relayBatteryPage.data.batteryCharging === false, "Relay CXR battery and charging state must reach the HUD unchanged.");
@@ -774,7 +757,7 @@ try {
   browserPage.reportRuntimeProof = () => Promise.resolve(false);
   browserPage.connectTranscriptionRelay = async () => true;
   const browserRecognitionCount = recognitions.length;
-  browserPage.onLoad({ token: "tool-token-value", mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
+  browserPage.onLoad({ token: "tool-token-value", mode: "transcription" });
   browserPage.onReady();
   browserPage.activateDeferredStartup();
   assert(recognitions.length === browserRecognitionCount, "Craft card preview must not start ASR before Interactive InkView is open.");
@@ -791,7 +774,7 @@ try {
   setupPage.connectTranscriptionRelay = async () => true;
   setupPage.startTranscriptionClock = () => {};
   setupPage.scheduleTranscriptionRestart = () => {};
-  setupPage.onLoad({ token: "legacy-app-token-must-not-bypass-setup", mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
+  setupPage.onLoad({ token: "legacy-app-token-must-not-bypass-setup", mode: "transcription" });
   assert(setupPage.data.needsDeviceSetup === true, "A physical glasses startup without a token must enter Setup.");
   assert(setupPage.data.token === "", "A legacy outer app token must not bypass physical-glasses Setup.");
   assert(setupPage.data.deviceSerialNumber === "ROKID-SETUP-SMOKE", "Setup must show the physical glasses serial number.");
@@ -805,7 +788,10 @@ try {
   assert(setupClaimRequest?.data?.serialNumber === "ROKID-SETUP-SMOKE", "The claim request must send the current glasses SN.");
   setupPage.onUnload();
 
-  setInkNavigator("ROKID-SETUP-SMOKE");
+  // This owner-selection/UI fixture is standalone. The preceding SN claim
+  // fixture has a configured device credential and requires real profile/owner
+  // initialization; configured delay/failure is covered by the native contract.
+  setInkNavigator("");
   const localOwnerPage = createPageInstance(pageModule);
   localOwnerPage.reportRuntimeProof = () => Promise.resolve(false);
   localOwnerPage.onLoad({ token: "tool-token-value", mode: "transcription" });
@@ -820,248 +806,11 @@ try {
   const transcriptPage = createPageInstance(pageModule);
   transcriptPage.reportRuntimeProof = () => Promise.resolve(false);
   transcriptPage.connectTranscriptionRelay = async () => true;
-  transcriptPage.onLoad({ token: "tool-token-value", mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
+  transcriptPage.startDeviceAgentOwner = async () => {};
+  transcriptPage.onLoad({ token: "tool-token-value", mode: "transcription" });
   transcriptPage.onReady();
   transcriptPage.activateDeferredStartup();
-  assert(
-    transcriptPage.runtimeProofPayload("version-check").runtime.appVersion === craftRelease.version,
-    "Runtime proof must expose the injected Craft release version shown in the HUD."
-  );
-  transcriptPage.appendLog("ASR 12：这是一段不得上传的私密转写");
-  await transcriptPage.flushCloudLogs();
-  const cloudLogRequest = wxModule.wxCalls.requestBodies.findLast((request) => (
-    request.url.endsWith("/api/rabilink/devices/logs")
-    && JSON.stringify(request.data?.logs || []).includes("[redacted-transcript]")
-  ));
-  assert(cloudLogRequest?.data?.deviceId === "ROKID-SETUP-SMOKE", "Cloud diagnostics must identify the physical glasses when AIUI exposes the serial number.");
-  assert(cloudLogRequest?.data?.appVersion === craftRelease.version, "Cloud diagnostics must include the HUD release version.");
-  const uploadedCloudText = JSON.stringify(cloudLogRequest?.data?.logs || []);
-  assert(uploadedCloudText.includes("[redacted-transcript]"), "Cloud diagnostics must retain the ASR event while redacting the transcript text.");
-  assert(!uploadedCloudText.includes("不得上传的私密转写"), "Cloud diagnostics must never upload raw transcript content.");
-  assert(transcriptPage.cloudLogQueue.length === 0, "A successful cloud diagnostics upload must drain the persisted device queue.");
-  transcriptPage.clearTranscriptionRestart();
-  transcriptPage.startTranscription();
-  const activeRecognition = recognitions.at(-1);
-  assert(activeRecognition?.started, "Transcription mode should start a real SpeechRecognition round after first render.");
-  holdSpeech = true;
-  wxModule.agentMessageBatches.push({
-    code: 0,
-    ok: true,
-    done: false,
-    shouldContinue: true,
-    nextCursor: "out-agent-1",
-    messages: [{ id: "out-agent-1", text: "这是 Codex 返回的第一条回复。", final: true }]
-  });
-  activeRecognition.onresult?.({ results: [[{ transcript: "这是一段真实 ASR 结果" }]] });
-  await new Promise((resolve) => setTimeout(resolve, 40));
-  assert(transcriptPage.data.transcriptionText === "这是一段真实 ASR 结果", "ASR result should update the foreground transcript HUD.");
-  assert(transcriptPage.data.transcriptionSyncedCount === 1, "Final ASR text should be recorded through the Relay HTTP endpoint.");
-  assert(transcriptPage.data.transcriptionPendingCount === 0, "Successful transcript submission should drain the local queue.");
-  const observationRequest = wxModule.wxCalls.requestBodies.find((request) => request.data?.type === "rabilink.observation");
-  assert(observationRequest?.data?.deliveryMode === "observe", "Foreground ASR must enter the record-only conversation ledger instead of directly interrupting Codex.");
-  assert(observationRequest?.data?.clientMessageId, "Each recorded observation must carry a stable client message id for retry deduplication.");
-  transcriptPage.handleTranscriptionResult("这是一段真实 ASR 结果");
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert(transcriptPage.data.transcriptionSyncedCount === 1, "A rapid duplicate native-ASR final result must not create a second ledger observation.");
-  assert(transcriptPage.data.agentReplyText === "这是 Codex 返回的第一条回复。", "Connection conversation must display each normal message from the global stream without task filtering.");
-  assert(speechUtterances.at(-1)?.text === "这是 Codex 返回的第一条回复。", "Connection conversation must send each downlink message to AIUI TTS.");
-  assert(speechModes.at(-1) === "enqueue", "AIUI TTS must explicitly use the documented enqueue playback mode.");
-  assert(activeRecognition.aborted && transcriptPage.data.agentSpeaking, "Agent TTS must release ASR before playback starts.");
-  speechUtterances.at(-1)?.onend?.();
-  transcriptPage.handleTranscriptionResult("这是Codex返回的第一条回复");
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert(transcriptPage.data.transcriptionSyncedCount === 1, "A recent native-TTS echo must not return to the user-observation ledger.");
-  const recognitionCountBeforeResume = recognitions.length;
-  await new Promise((resolve) => setTimeout(resolve, 260));
-  assert(recognitions.length > recognitionCountBeforeResume && recognitions.at(-1)?.started, "ASR must resume after Agent TTS finishes.");
-
-  setInkNavigator();
-  wxModule.failNextInputs(1);
-  const offlineTranscriptPage = createPageInstance(pageModule);
-  offlineTranscriptPage.reportRuntimeProof = () => Promise.resolve(false);
-  offlineTranscriptPage.connectTranscriptionRelay = async () => true;
-  offlineTranscriptPage.onLoad({ token: "offline-transcript-token", mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
-  offlineTranscriptPage.onReady();
-  offlineTranscriptPage.activateDeferredStartup();
-  offlineTranscriptPage.handleTranscriptionResult("这条断网转写必须在页面重建后自动补传");
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  assert(offlineTranscriptPage.transcriptQueue.length === 1, "A failed observation upload must remain in durable transcript storage.");
-  const offlineSegmentId = offlineTranscriptPage.transcriptQueue[0]?.id;
-  offlineTranscriptPage.onUnload();
-
-  const wrongTokenPage = createPageInstance(pageModule);
-  wrongTokenPage.reportRuntimeProof = () => Promise.resolve(false);
-  wrongTokenPage.connectTranscriptionRelay = async () => true;
-  wrongTokenPage.onLoad({ token: "different-account-token", mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
-  wrongTokenPage.onReady();
-  wrongTokenPage.activateDeferredStartup();
-  await new Promise((resolve) => setTimeout(resolve, 30));
-  assert(wrongTokenPage.transcriptQueue.length === 0, "A different token must not inherit another account's offline observation queue.");
-  const crossAccountAttempts = wxModule.wxCalls.requestBodies.filter((request) => request.data?.text === "这条断网转写必须在页面重建后自动补传");
-  assert(crossAccountAttempts.length === 1, "Switching tokens must not upload a pending observation to the wrong account.");
-  assert(
-    wxModule.getStorageKeys().some((key) => /^rabilink-aiui-transcript-queue:v2-[0-9a-f]{16}$/.test(key)),
-    "Durable observation storage must use an opaque token fingerprint."
-  );
-  assert(
-    wxModule.getStorageKeys().every((key) => !key.includes("offlin") && !key.includes("oken")),
-    "Durable queue storage keys must not retain token prefix or suffix fragments."
-  );
-  wrongTokenPage.onUnload();
-
-  const restoredTranscriptPage = createPageInstance(pageModule);
-  restoredTranscriptPage.reportRuntimeProof = () => Promise.resolve(false);
-  restoredTranscriptPage.connectTranscriptionRelay = async () => true;
-  restoredTranscriptPage.onLoad({ token: "offline-transcript-token", mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
-  restoredTranscriptPage.onReady();
-  restoredTranscriptPage.activateDeferredStartup();
-  await new Promise((resolve) => setTimeout(resolve, 40));
-  assert(restoredTranscriptPage.transcriptQueue.length === 0, "A recreated foreground page must automatically retry its durable observation queue.");
-  assert(restoredTranscriptPage.data.transcriptionSyncedCount === 1, "The restored observation must be acknowledged exactly once after connectivity returns.");
-  const offlineAttempts = wxModule.wxCalls.requestBodies.filter((request) => request.data?.text === "这条断网转写必须在页面重建后自动补传");
-  assert(offlineAttempts.length === 2, "The offline observation should have one failed attempt and one restored attempt.");
-  assert(
-    offlineAttempts.every((request) => request.data?.clientMessageId === offlineSegmentId),
-    "Observation retries across page recreation must keep one stable client message id for server deduplication."
-  );
-  restoredTranscriptPage.onUnload();
-
-  wxModule.agentMessageBatches.push({
-    code: 0,
-    ok: true,
-    done: false,
-    shouldContinue: true,
-    nextCursor: "out-proactive-1",
-    messages: [{ id: "out-proactive-1", text: "这是 Rabi 主动投递的提醒。", final: true, proactive: true }]
-  });
-  await new Promise((resolve) => setTimeout(resolve, 140));
-  assert(transcriptPage.data.agentReplyText === "这是 Rabi 主动投递的提醒。", "The foreground Agent stream must display proactive messages without a pending task.");
-  assert(speechUtterances.at(-1)?.text === "这是 Rabi 主动投递的提醒。", "Proactive Rabi messages must enter the same ordered TTS queue.");
-  speechUtterances.at(-1)?.onend?.();
-  holdSpeech = false;
-  transcriptPage.stopAgentPolling();
-
-  const durablePage = createPageInstance(pageModule);
-  durablePage.reportRuntimeProof = () => Promise.resolve(false);
-  durablePage.connectTranscriptionRelay = async () => true;
-  durablePage.onLoad({ token: "durable-token-value", mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
-  durablePage.onReady();
-  durablePage.activateDeferredStartup();
-  durablePage.agentShouldPoll = true;
-  holdSpeech = true;
-  wxModule.agentMessageBatches.push({
-    code: 0,
-    ok: true,
-    done: false,
-    shouldContinue: true,
-    nextCursor: "out-durable-2",
-    messages: [
-      { id: "out-durable-1", text: "这条离线消息必须在页面恢复后继续播报。", final: true, proactive: true },
-      { id: "out-durable-2", text: "恢复后还要按原顺序播报第二条消息。", final: true, proactive: true }
-    ]
-  });
-  durablePage.scheduleAgentPoll(0);
-  await new Promise((resolve) => setTimeout(resolve, 40));
-  assert(speechUtterances.at(-1)?.text === "这条离线消息必须在页面恢复后继续播报。", "A durable downlink should start native TTS while the page is visible.");
-  assert(durablePage.agentMessageQueue.length === 2, "Every downlink in a batch must be persisted before its stream cursor advances.");
-  durablePage.onHide();
-  assert(durablePage.agentMessageQueue.length === 2, "Hiding the page must not remove unfinished downlinks from durable storage.");
-  const speechCountBeforeRestore = speechUtterances.length;
-
-  const wrongDurableTokenPage = createPageInstance(pageModule);
-  wrongDurableTokenPage.reportRuntimeProof = () => Promise.resolve(false);
-  wrongDurableTokenPage.connectTranscriptionRelay = async () => true;
-  wrongDurableTokenPage.onLoad({ token: "different-durable-token", mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
-  wrongDurableTokenPage.onReady();
-  wrongDurableTokenPage.activateDeferredStartup();
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  assert(wrongDurableTokenPage.agentMessageQueue.length === 0, "A different token must not inherit another account's pending TTS queue.");
-  assert(speechUtterances.length === speechCountBeforeRestore, "A pending downlink must not be spoken while a different token is active.");
-  wrongDurableTokenPage.onUnload();
-
-  const restoredDurablePage = createPageInstance(pageModule);
-  restoredDurablePage.reportRuntimeProof = () => Promise.resolve(false);
-  restoredDurablePage.connectTranscriptionRelay = async () => true;
-  restoredDurablePage.onLoad({ token: "durable-token-value", mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
-  restoredDurablePage.onReady();
-  restoredDurablePage.activateDeferredStartup();
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  assert(restoredDurablePage.agentMessageQueue.length === 2, "A recreated page must reload the unfinished downlink queue.");
-  assert(
-    speechUtterances.length === speechCountBeforeRestore + 1
-      && speechUtterances.at(-1)?.text === "这条离线消息必须在页面恢复后继续播报。",
-    "A downlink interrupted by page hide must survive local storage and resume instead of being lost behind the cursor."
-  );
-  speechUtterances.at(-1)?.onend?.();
-  assert(
-    speechUtterances.at(-1)?.text === "恢复后还要按原顺序播报第二条消息。",
-    "Durable downlinks must resume in Relay cursor order after the interrupted item finishes."
-  );
-  speechUtterances.at(-1)?.onend?.();
-  assert(restoredDurablePage.agentMessageQueue.length === 0, "Successfully spoken durable downlinks must leave the persisted queue.");
-  holdSpeech = false;
-  durablePage.onUnload();
-  restoredDurablePage.onUnload();
-
-  const poisonText = "这条消息模拟永久 TTS 失败。";
-  const healthyText = "后一条主动消息不能被失败项阻塞。";
-  const ttsFailurePage = createPageInstance(pageModule);
-  ttsFailurePage.reportRuntimeProof = () => Promise.resolve(false);
-  ttsFailurePage.connectTranscriptionRelay = async () => true;
-  ttsFailurePage.onLoad({ token: "tts-failure-token", mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
-  ttsFailurePage.onReady();
-  ttsFailurePage.activateDeferredStartup();
-  failingSpeechText = poisonText;
-  ttsFailurePage.persistAgentMessages([
-    { id: "out-tts-failed", text: poisonText, proactive: true },
-    { id: "out-tts-healthy", text: healthyText, proactive: true }
-  ]);
-  ttsFailurePage.drainAgentMessageQueue();
-  await new Promise((resolve) => setTimeout(resolve, 2100));
-  assert(
-    speechUtterances.some((utterance) => utterance.text === healthyText),
-    "A permanently failing TTS item must not starve later proactive messages."
-  );
-  assert(
-    ttsFailurePage.agentMessageQueue.length === 1
-      && ttsFailurePage.agentMessageQueue[0]?.id === "out-tts-failed"
-      && ttsFailurePage.agentMessageQueue[0]?.attempts === 3,
-    "A failed downlink must remain durable after its bounded retry budget is exhausted."
-  );
-  assert(ttsFailurePage.data.agentStatus === "TTS 失败，单击重试", "The HUD must expose the retained TTS retry state.");
-  failingSpeechText = "";
-  const ttsRetryTap = { code: "Enter", prevented: false, preventDefault() { this.prevented = true; } };
-  ttsFailurePage.onKeyUp(ttsRetryTap);
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  assert(ttsFailurePage.agentMessageQueue.length === 0, "Retry must replay and clear a retained TTS failure after playback recovers.");
-  assert(ttsRetryTap.prevented, "A touchpad TTS retry must consume the handled click.");
-  ttsFailurePage.onUnload();
-
-  const recognitionBeforeManualReview = transcriptPage.recognition;
-  const reviewTap = { code: "Enter", prevented: false, preventDefault() { this.prevented = true; } };
-  transcriptPage.onKeyUp(reviewTap);
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  const reviewRequest = wxModule.wxCalls.requestBodies.find((request) => request.data?.type === "rabilink.review_request");
-  assert(reviewRequest?.data?.reviewRequested === true && reviewRequest?.data?.deliveryMode === "observe", "A touchpad click must enqueue an immediate conversation review request.");
-  assert(transcriptPage.recognition === recognitionBeforeManualReview, "A touchpad review click must not pause or replace the continuous ASR session.");
-  assert(reviewTap.prevented, "A handled touchpad review click should prevent the host default action.");
-
-  setInkNavigator("ROKID-SETUP-SMOKE");
-  const retryPage = createPageInstance(pageModule);
-  retryPage.reportRuntimeProof = () => Promise.resolve(false);
-  retryPage.connectTranscriptionRelay = async () => true;
-  retryPage.onLoad({ token: "tool-token-value", mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
-  retryPage.onReady();
-  retryPage.activateDeferredStartup();
-  retryPage.clearTranscriptionRestart();
-  retryPage.startTranscription();
-  const failedRecognition = recognitions.at(-1);
-  failedRecognition.onerror?.({ error: "network" });
-  assert(retryPage.recognition === null, "ASR errors should release the failed recognition without waiting for an end event.");
-  assert(retryPage.transcriptionFailureCount === 1, "ASR errors should increment the bounded retry counter.");
-  assert(Boolean(retryPage.transcriptionRestartTimer), "A transient ASR error should schedule a backoff retry.");
-  retryPage.onUnload();
-
+  await new Promise(resolve => setTimeout(resolve, 80));
   let finishCalls = 0;
   transcriptPage.finish = () => { finishCalls += 1; };
   const recognitionBeforeConfig = transcriptPage.recognition;
@@ -1071,7 +820,7 @@ try {
   assert(!recognitionBeforeConfig || recognitionBeforeConfig.stopped || recognitionBeforeConfig.aborted, "Switching to the configuration assistant should release ASR first.");
   assert(transcriptPage.data.mode === "configuration" && transcriptPage.data.isConfigurationMode, "A physical down/back swipe should switch to configuration mode in the same page.");
   const configurationRecognition = transcriptPage.recognition;
-  assert(configurationRecognition?.started && transcriptPage.recognitionPurpose === "configuration", "Configuration mode must start a page-owned AIUI SpeechRecognition round after the mode frame commits.");
+  assert(configurationRecognition?.started && transcriptPage.recognitionPurpose === "configuration", "Configuration mode must start a page-owned AIUI SpeechRecognition round after the mode frame commits: " + JSON.stringify({ready:transcriptPage.pageReady,visible:transcriptPage.pageVisible,busy:transcriptPage.data.busy,modelBusy:transcriptPage.data.assistantModelBusy,desired:transcriptPage.data.assistantListeningDesired,state:transcriptPage.data.assistantStatus,policy:transcriptPage.asrHostPolicy}));
   assert(transcriptPage.data.assistantListening && transcriptPage.data.assistantStatus === "正在聆听", "Configuration HUD must expose its live listening state.");
   assert(finishCalls === 0, "Switching modes must not close the AIUI page through page.finish().");
   assert(downSwipe.prevented, "A handled physical swipe should prevent the default scroll behavior.");
@@ -1106,7 +855,9 @@ try {
   assert(transcriptPage.data.assistantUserText === "帮我读取配置", "Configuration ASR text must remain visible in the HUD.");
   const recognitionCountBeforeConfigurationResume = recognitions.length;
   await new Promise((resolve) => setTimeout(resolve, 260));
-  assert(recognitions.length > recognitionCountBeforeConfigurationResume && transcriptPage.recognitionPurpose === "configuration", "Configuration ASR must automatically start another one-round recognition after a handled command.");
+  assert(recognitions.length === recognitionCountBeforeConfigurationResume && !transcriptPage.recognition, "ASR end must wait for a new activation without starting a timer-owned recognition.");
+  transcriptPage.resumeConfigurationListening("wakeup");
+  assert(transcriptPage.recognition?.started, "A new real wake activation can start another configuration recognition.");
 
   const unknownConfigurationRecognition = transcriptPage.recognition;
   const requestsBeforeUnknownConfigurationAsr = wxModule.wxCalls.requests;
@@ -1122,7 +873,7 @@ try {
   const recognitionCountBeforeUnknownResume = recognitions.length;
   await new Promise((resolve) => setTimeout(resolve, 320));
   suppressSpeechEvents = false;
-  assert(recognitions.length > recognitionCountBeforeUnknownResume && transcriptPage.recognitionPurpose === "configuration", "Configuration ASR must resume through the fallback watchdog when AIUI exposes no utterance lifecycle events.");
+  assert(recognitions.length === recognitionCountBeforeUnknownResume && !transcriptPage.recognition && !transcriptPage.speechActive, "After recognition ends, ASR awaits activation and unsupported TTS does not pretend to remain active.");
 
   nextLanguageModelCommand = "";
   nextLanguageModelReply = "";
@@ -1208,7 +959,7 @@ try {
 
   const roundTripPage = createPageInstance(pageModule);
   roundTripPage.finish = () => { finishCalls += 1; };
-  roundTripPage.onLoad({ mode: "transcription", agentRuntimeMode: "legacy-remote-observer" });
+  roundTripPage.onLoad({ mode: "transcription" });
   for (let cycle = 0; cycle < 20; cycle += 1) {
     roundTripPage.onKeyUp({ code: "ArrowDown", preventDefault() {} });
     assert(roundTripPage.data.isConfigurationMode, `Mode cycle ${cycle + 1} should enter configuration.`);
@@ -1238,7 +989,7 @@ try {
   voiceRoundTripPage.onUnload();
   assistantPage.onUnload();
 
-  console.log(`RabiLink AIUI runtime smoke passed (${expectedCommands.length} commands / ${commandCases.length} phrases, 20 mode round trips, continuous normal/proactive stream, native LanguageModel and outer bound-Agent configuration).`);
+  console.log(`RabiLink AIUI runtime smoke passed (${expectedCommands.length} commands / ${commandCases.length} phrases, 20 mode round trips, native ASR/TTS, LanguageModel and in-page configuration).`);
 } finally {
   delete globalThis.SpeechRecognition;
   delete globalThis.SpeechSynthesisUtterance;

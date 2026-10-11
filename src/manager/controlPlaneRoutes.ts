@@ -3,6 +3,16 @@ import { RecordingArchiveRuntime } from "./recordingArchiveRuntime.js";
 import { RecordingArchiveAsrRuntime } from "./recordingArchiveAsrRuntime.js";
 import { recordingArchiveAdminHandler } from "./recordingArchiveAdminRoutes.js";
 import { hasAuthenticatedConnectionRequest, markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
+import { createRabiLinkAgentDevices, rabiLinkAgentDevicesPath } from "./rabiLinkAgentDevices.js";
+import { createDeviceAgentOwner, deviceAgentOwnerPath } from "../agentAdapters/deviceAgentOwner.js";
+import { deviceAgentDeliveryPrincipal } from "./deviceAgentDeliveryAccess.js";
+import { handleDeviceAgentThreadRequest } from "./deviceAgentThreads.js";
+import { createDeviceAgentEndpointBridge } from "./deviceAgentEndpointBridge.js";
+import { createDeviceAgentPeerAuthority } from "./deviceAgentPeerAuthority.js";
+import { createDevicePeerBootstrapRoutes } from "./devicePeerBootstrapRoutes.js";
+import { createRabiLinkMobileOwner, rabiLinkMobileOwnerPath } from "./rabiLinkMobileOwner.js";
+import { RabiLinkDeviceConnections } from "./rabiLinkDeviceConnections.js";
+import { rabiLinkAgentDevicePrincipal, rabiLinkConnectionScope, rabiLinkTrustedTransport, rabiLinkTransportAssertionPresent } from "./rabiLinkAgentDeviceConnection.js";
 import { recordingManifestHash } from "./recordingArchiveContract.js";
 import { createAllDayRecording, allDayRecordingHandler } from "./allDayRecordingRoutes.js";
 import { normalizeRouteAgentTargets, resolvePrimaryAgentTarget, primaryAgentInstanceBindings } from "../shared/routeAgentTargets.js";
@@ -22,7 +32,6 @@ import { agentRequestReminderPrompt } from "../agentRequests/replyParameters.js"
 import fs from "node:fs";
 import { createVideoRuntime } from "./videoRuntime.js";
 import { createRabiPeerRuntime } from "./rabiPeerRoutes.js";
-import { localKnowledgeRoleIds } from "./rabiLinkKnowledgeCatalog.js";
 import { discoverRabiPeers } from "../rabiPeerDiscovery.js";
 import http from "node:http";
 import os from "node:os";
@@ -40,7 +49,9 @@ import {
 } from "../agentDeliveryTest.js";
 import { normalizeAgentAdapters, parseAgentAdapterType, type AgentAdapterType } from "../agentAdapters/types.js";
 import { agentAdapterManifest, isPlanAssistantAgentType, normalizePlanBindingAgentType } from "../shared/agentAdapterCapabilities.js";
-import { agentThreadRequestFailureData, handleAgentThreadRequest as handleLocalAgentThreadRequest, type AgentThreadRequest, type AgentThreadRequestOptions } from "../agentThreads.js";
+import { agentThreadRequestFailureData, handleAgentThreadRequest as handleLocalAgentThreadRequest, readAgentEndpointSummary, type AgentThreadRequest, type AgentThreadRequestOptions } from "../agentThreads.js";
+import { createAgentEndpointDelivery } from "./agentEndpointDelivery.js";
+import { handleAgentDeliveryAuthority } from "./agentDeliveryAuthorityRoutes.js";
 import { routeInstanceThread, type InstanceThreadTransport } from "./instanceThreadRouting.js";
 import { instanceWorkerStateDirectory } from "../agentAdapters/instanceClient.js";
 import { recordPersonaUserDelivery } from "./personaUserDeliveryHistory.js";
@@ -415,9 +426,9 @@ import { LanAgentRegistry } from "./lanAgentRegistry.js";
 import { LanAgentReleaseStore } from "./lanAgentReleaseStore.js";
 import { handleLanAgentApi } from "./lanAgentRoutes.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
-import { evaluateLanAgentRequest, isLanNodeMetadataRequest } from "./lanAgentRequestAccess.js";
+import { evaluateLanAgentRequest, isLanNodeMetadataRequest, assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
 import { AgentResourceCatalog } from "./agentResourceCatalog.js";
-import { assertLanAgentBodyAuthority, registerLanAgentBodyGuard, hasLanAgentBodyGuard, validateLanAgentRequestBody, setTrustedLanAgentSource, getTrustedLanAgentSource, type TrustedLanAgentSource } from "./lanAgentBodyAuthority.js";
+import { assertLanAgentBodyAuthority, registerLanAgentBodyGuard, validateLanAgentRequestBody, setTrustedLanAgentSource, getTrustedLanAgentSource, type TrustedLanAgentSource } from "./lanAgentBodyAuthority.js";
 import { migrateLanAgentSharedCredential } from "./lanAgentCredentialMigration.js";
 import {
   generateWebguiAccessToken,
@@ -454,7 +465,6 @@ import { handlePlanAttachmentApi } from "./planAttachmentRoutes.js";
 import { roleInfoPayload } from "./roleInfoPayload.js";
 import type { ScanDiagnostic } from "./scanController.js";
 import { PeerLanServer } from "./peerLanServer.js";
-import { readPeerPersonaManifest } from "./peerPersonaManifest.js";
 import { RabiDirectVideo } from "./rabiDirectVideo.js";
 import { createDirectVideoRoutes } from "./rabiDirectVideoRoutes.js";
 import { handlePersonaVoiceTranscriptApi } from "./personaVoiceTranscriptRoutes.js";
@@ -520,6 +530,7 @@ import {
 } from "./speechModelManager.js";
 import { SpeechModelSettingsError } from "./speechModelSettings.js";
 import { localModelSettingsRequestAllowed } from "./speechModelSettingsAccess.js";
+import { stickySpeechAuthority } from "./speechRequestAuthority.js";
 import {
   parseSpeechProcessResult,
   SPEECH_EXIT_DELIVERED,
@@ -931,6 +942,7 @@ function runtimeOwnsAgentSession(runtime: GatewayRuntime, sessionId: string): bo
 }
 
 let instanceThreadTransport: InstanceThreadTransport | undefined;
+let agentEndpointDelivery: ReturnType<typeof createAgentEndpointDelivery> | undefined;
 function effectiveInstanceDefinition(definition: GatewayDefinition): GatewayDefinition {
   const target = resolvePrimaryAgentTarget(definition);
   const adapter = target?.provider;
@@ -946,17 +958,26 @@ function messageWorkerDataDir(definition: GatewayDefinition): string {
   const binding = target?.binding;
   return binding ? instanceWorkerStateDirectory(dataDirFor(definition), binding, primaryAgentSessionId(definition) || "unavailable") : dataDirFor(definition);
 }
-async function handleAgentThreadRequest(request: AgentThreadRequest, options: AgentThreadRequestOptions) {
-  if (options.remoteSource) {
-    if (request.instanceBinding) throw new Error("Remote source delivery to another remote instance requires a verified return-routing contract.");
-    return handleLocalAgentThreadRequest(request, options);
+async function handleAgentThreadRequest(request: AgentThreadRequest, options: AgentThreadRequestOptions,
+  trustedDeviceSource?: NonNullable<ReturnType<typeof rabiLinkAgentDevicePrincipal>>) {
+  const deviceThreadResult = await handleDeviceAgentThreadRequest(request, options, {
+    ownerInstanceId: rabiGlobalConfig.read().rabiGuid,
+    scope: () => rabiLinkConnectionScope(rabiLinkRelayConfigForMeta()),
+    owner: currentRabiLinkBusinessOwners().deviceAgents
+  });
+  if (deviceThreadResult) return deviceThreadResult;
+  if (request.action === "send" || request.action === "reconcile_delivery") {
+    if (!agentEndpointDelivery) throw new Error("Manager endpoint delivery authority is unavailable.");
+    return handleLocalAgentThreadRequest(request, { ...options,
+      endpointDelivery: agentEndpointDelivery.options(options.remoteSource, options.requestAuthority, trustedDeviceSource),
+      // A remote source's formal reply is routed through the same lease that admitted the
+      // original request, so a revoked or unapproved endpoint keeps refusing it.
+      ...(options.remoteSource ? { remoteEndpoint: agentEndpointDelivery.remoteEndpoint } : {}) });
   }
+  options.requestAuthority?.();
   const remote = instanceThreadTransport ? await routeInstanceThread(request, instanceThreadTransport) : undefined;
+  options.requestAuthority?.();
   if (!remote) return handleLocalAgentThreadRequest(request, options);
-  if (request.action === "send" && ["delivered", "delivered_tracking_failed", "delivery_unconfirmed"].includes(String(remote.data.status))) {
-    try { await options.onChatHistoryDelivery?.(request, remote); }
-    catch (error) { remote.data.chatHistoryWarning = error instanceof Error ? error.message : String(error); }
-  }
   return remote;
 }
 
@@ -1070,9 +1091,15 @@ const allDayRecording = createAllDayRecording({
   roleDirectory: roleDirForApi,
   hostId: os.hostname(),
   mobileRoot: path.join(rootDir, "data", "mobile-recording-events"),
-  mobileAudio: async (owner, chunks) => {
+  mobileAudio: async (owner, chunks, authorize) => {
     const parts: Buffer[] = [];
-    for (const id of chunks) parts.push(await resourceCache.read(owner, id));
+    for (const id of chunks) {
+      authorize?.();
+      const part = await resourceCache.read(owner, id);
+      authorize?.();
+      parts.push(part);
+    }
+    authorize?.();
     return Buffer.concat(parts);
   },
   speechUrl: () => speechServiceUrl(),
@@ -1253,6 +1280,7 @@ const managerRequestContexts = new WeakMap<http.ServerResponse, {
   pathname: () => string;
   startedAt: number;
   responseBytes?: number;
+  assertResponseAuthority?: () => void;
 }>();
 const managerReadOnly = managerReadOnlyEnabled();
 const deviceIdentityOwner = new DeviceIdentityOwner(rootDir);
@@ -1439,10 +1467,6 @@ function recordRabiLinkRelayReceipt(data: Record<string, unknown>): void {
 }
 
 const rabiLinkRelayRuntime = new RabiLinkRelayRuntime({
-  knowledge: {
-    endpoint: () => ({ managerBaseUrl, applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, managerInstanceId }),
-    roleIds: () => localKnowledgeRoleIds(routeCatalogPersonas(), rolesRoot)
-  },
   onStatus: status => {
     publishManagerEvent("rabilink_status", status);
   },
@@ -1635,29 +1659,16 @@ let activePeerRuntime: ReturnType<typeof createRabiPeerRuntime> | undefined;
 let activePeerTunnel: PeerTunnelRuntime | undefined;
 function createManagerPeerRuntime() {
   let tunnel: PeerTunnelRuntime;
-  const role = (input: unknown) => {
-    const roleId = (input as { roleId?: unknown })?.roleId;
-    if (typeof roleId !== "string" || !localKnowledgeRoleIds(routeCatalogPersonas(), rolesRoot).includes(roleId)) throw new Error("peer_role_denied");
-    return roleId;
-  };
   const runtime = createRabiPeerRuntime({
     tunnelOffer: input => tunnel.offer(input),
     identity: () => ({ deviceId: rabiLinkRelayConfigForMeta().deviceId,
       generation: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, instanceId: managerInstanceId }),
     token: () => rabiLinkRelayConfigForMeta().token,
-    allowed: () => rabiLinkRelayConfigForMeta().enabled ? ["plans.list", "persona.manifest"] : [],
+    enabled: () => rabiLinkRelayConfigForMeta().enabled,
     peers: () => discoverRabiPeers(peerRelayConfig()),
     relay: () => peerRelayConfig(),
     readJson: readJsonBody, json: jsonResponse,
-    onResult: event => publishManagerEvent("peer_rpc_completed", event),
-    operations: [
-      { capability: "plans", operation: "list", execute: async input => {
-        const roleId = role(input);
-        const plans = await listPlansAsync(roleDirForApi(roleId));
-        return { roleId, plans: plans.map(({ id, title, status, updatedAt }) => ({ id, title, status, updatedAt })) };
-      } },
-      { capability: "persona", operation: "manifest", execute: input => readPeerPersonaManifest(rolesRoot, role(input)) }
-    ]
+    onResult: event => publishManagerEvent("peer_rpc_completed", event)
   });
   tunnel = new PeerTunnelRuntime({
     readOnly: managerReadOnly,
@@ -1673,9 +1684,27 @@ function createManagerPeerRuntime() {
     onStatus: value => publishManagerEvent("peer_tunnel_status", value)
   });
   activePeerTunnel = tunnel;
+  const deviceBootstrap = createDevicePeerBootstrapRoutes({
+    current: () => {
+      const config = rabiLinkRelayConfigForMeta();
+      return {
+        scope: activePeerTunnel === tunnel && !managerReadOnly ? rabiLinkConnectionScope(config) : "",
+        generation: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
+        deviceId: config.deviceId
+      };
+    },
+    readJsonBody,
+    bootstrap: async (input, authority) => {
+      if (activePeerTunnel !== tunnel) throw new Error("Peer tunnel is stopping.");
+      authority.assertCurrent();
+      return tunnel.grantDeviceConnection(input, authority);
+    },
+    jsonResponse
+  });
   const currentLan = peerLanServer.status();
   if (currentLan.state === "listening") tunnel.startLanDiscovery(currentLan.port || 0);
   const handler: typeof runtime.handler = (request, url, response) => {
+    if (deviceBootstrap.handle(request, url, response)) return true;
     if (handlePersonaBootstrapApi(request, url, response, {
       allowed: (req, target) => !managerReadOnly && req.socket.localPort === managerPort && webguiLanRequestAllowed(req, target),
       identity: () => ({ applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, managerInstanceId }),
@@ -1690,7 +1719,9 @@ function createManagerPeerRuntime() {
   return { handler, async stop() {
     if (activePeerRuntime === combined) activePeerRuntime = undefined;
     if (activePeerTunnel === tunnel) activePeerTunnel = undefined;
+    deviceBootstrap.stop();
     tunnel.stop(); await runtime.stop();
+    await deviceBootstrap.drain();
   } };
 }
 const peerLanServer = new PeerLanServer({
@@ -2105,6 +2136,148 @@ function rabiLinkRelayConfigForMeta(): RabiLinkRelayGlobalConfig {
   return firstRouteLevelRabiLinkRelayConfig() || globalRelay;
 }
 
+const rabiLinkDeviceConnections = new RabiLinkDeviceConnections({
+  dataDir: path.join(rootDir, "data", "rabilink"),
+  readOnly: managerReadOnly,
+  scope: () => rabiLinkConnectionScope(rabiLinkRelayConfigForMeta()),
+  readConnections: async () => {
+    const relay = rabiLinkRelayConfigForMeta();
+    const response = await fetch(`${relay.url.replace(/\/+$/, "")}/api/rabilink/devices/connections`, {
+      headers: { "x-rabilink-token": relay.token }, redirect: "error", signal: AbortSignal.timeout(5_000)
+    });
+    if (!response.ok) throw Object.assign(new Error("CONNECTION_DIRECTORY_UNAVAILABLE"), { statusCode: 503 });
+    const value = await response.json() as { data?: import("./rabiLinkDeviceConnections.js").ConnectionDirectory };
+    if (!value.data) throw Object.assign(new Error("CONNECTION_DIRECTORY_INVALID"), { statusCode: 503 });
+    return value.data;
+  }
+});
+function rabiLinkRequestLocal(pathname: string, method = "GET", body?: unknown, headers: Record<string, string> = {}): Promise<Response> {
+  if (!pathname.startsWith("/") || pathname.startsWith("//") || /[\\#\r\n\0]/.test(pathname)) throw new Error("LOCAL_MANAGER_PATH_INVALID");
+  return fetch(managerBaseUrl + pathname, {
+    method, redirect: "error", signal: AbortSignal.timeout(30_000),
+    headers: { ...headers, "x-rabiroute-expected-generation": managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
+      ...(body === undefined || ["GET", "HEAD"].includes(method) ? {} : { "content-type": "application/json" }) },
+    ...(body === undefined || ["GET", "HEAD"].includes(method) ? {} : { body: JSON.stringify(body) })
+  });
+}
+async function rabiLinkReadResponse(response: Response): Promise<any> {
+  const value = await response.json() as { code?: number; data?: unknown };
+  if (!response.ok || value.code !== undefined && value.code !== 0) throw Object.assign(new Error("MANAGER_READ_FAILED"), { code: "MANAGER_READ_FAILED", statusCode: response.ok ? 502 : response.status });
+  return value.data ?? value;
+}
+let releaseDeviceEndpointRecovery: (() => void) | undefined;
+let rabiLinkDeviceEndpointBridge: { key: string; bridge: ReturnType<typeof createDeviceAgentEndpointBridge> } | undefined;
+let rabiLinkBusinessOwners: { key: string; agents: ReturnType<typeof createRabiLinkAgentDevices>; deviceAgents: ReturnType<typeof createDeviceAgentOwner>; mobile: ReturnType<typeof createRabiLinkMobileOwner> } | undefined;
+async function assertCurrentDeviceAgentAssignment(scope: string, agentId: string): Promise<void> {
+  const config = rabiLinkRelayConfigForMeta();
+  if (scope !== rabiLinkConnectionScope(config)) throw Object.assign(new Error("DEVICE_AGENT_CONNECTION_CHANGED"), { code: "DEVICE_AGENT_CONNECTION_CHANGED", statusCode: 401 });
+  const owner = await rabiLinkDeviceConnections.deviceTarget(agentId);
+  if (scope !== rabiLinkConnectionScope(rabiLinkRelayConfigForMeta()) || owner !== config.deviceId) {
+    throw Object.assign(new Error("DEVICE_AGENT_OWNER_MISMATCH"), { code: "DEVICE_AGENT_OWNER_MISMATCH", statusCode: 409 });
+  }
+}
+function currentDeviceAgentEndpointBridge(endpointManagerInstanceId: string) {
+  const owners = currentRabiLinkBusinessOwners();
+  const key = JSON.stringify([owners.key, endpointManagerInstanceId]);
+  if (rabiLinkDeviceEndpointBridge?.key === key) return rabiLinkDeviceEndpointBridge.bridge;
+  const bridge = createDeviceAgentEndpointBridge({ managerInstanceId: endpointManagerInstanceId,
+    ownerInstanceId: rabiGlobalConfig.read().rabiGuid,
+    scope: () => rabiLinkConnectionScope(rabiLinkRelayConfigForMeta()),
+    owner: owners.deviceAgents, assertDeviceAssignment: assertCurrentDeviceAgentAssignment,
+    peer: {
+      localDeviceId: () => rabiLinkRelayConfigForMeta().deviceId,
+      targetDeviceId: id => rabiLinkDeviceConnections.deviceTarget(id),
+      request: requestDeviceAgentPeerApi
+    }
+  });
+  rabiLinkDeviceEndpointBridge = { key, bridge };
+  return bridge;
+}
+async function requestDeviceAgentPeerApi(targetDeviceId: string, method: string, pathname: string, body?: unknown): Promise<unknown> {
+  const original = rabiLinkRelayConfigForMeta(), scope = rabiLinkConnectionScope(original);
+  const peer = activePeerTunnel, ownerInstanceId = rabiGlobalConfig.read().rabiGuid;
+  if (!scope) throw Object.assign(new Error("DEVICE_AGENT_CONNECTION_CHANGED"), { statusCode: 401 });
+  const assertCurrent = () => {
+    const current = rabiLinkRelayConfigForMeta();
+    if (scope !== rabiLinkConnectionScope(current) || original.deviceId !== current.deviceId
+      || ownerInstanceId !== rabiGlobalConfig.read().rabiGuid || peer !== activePeerTunnel) {
+      throw Object.assign(new Error("DEVICE_AGENT_CONNECTION_CHANGED"), { statusCode: 401 });
+    }
+  };
+  assertCurrent();
+  const response = targetDeviceId === original.deviceId
+    ? await rabiLinkRequestLocal(pathname, method, body)
+    : peer ? await peer.fetch(targetDeviceId, "manager", pathname, {
+        method, signal: AbortSignal.timeout(30_000),
+        ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+      }) : undefined;
+  assertCurrent();
+  if (!response) throw Object.assign(new Error("DEVICE_AGENT_PEER_UNAVAILABLE"), { statusCode: 503 });
+  const value = await rabiLinkReadResponse(response);
+  assertCurrent();
+  return value;
+}
+function currentRabiLinkBusinessOwners() {
+  const sourceDeviceId = rabiLinkRelayConfigForMeta().deviceId, sourceDeviceGuid = rabiGlobalConfig.read().rabiGuid;
+  const key = JSON.stringify([sourceDeviceId, sourceDeviceGuid, rabiLinkConnectionScope(rabiLinkRelayConfigForMeta()), managerHostIdentity?.applicationGenerationId ?? managerInstanceId]);
+  if (rabiLinkBusinessOwners?.key === key) return rabiLinkBusinessOwners;
+  releaseDeviceEndpointRecovery?.();
+  releaseDeviceEndpointRecovery = undefined;
+  rabiLinkDeviceEndpointBridge = undefined;
+  const authorize = (request: http.IncomingMessage) => rabiLinkAgentDevicePrincipal(request, rabiLinkRelayConfigForMeta(), managerHostIdentity?.applicationGenerationId ?? managerInstanceId);
+  const peerAuthority = createDeviceAgentPeerAuthority({
+    scope: () => rabiLinkConnectionScope(rabiLinkRelayConfigForMeta()),
+    localDeviceId: () => rabiLinkRelayConfigForMeta().deviceId, authorize,
+    trustedTransport: request => rabiLinkTrustedTransport(request, managerHostIdentity?.applicationGenerationId ?? managerInstanceId, rabiLinkConnectionScope(rabiLinkRelayConfigForMeta())),
+    readProof: (id, deliveryId, generation) => requestDeviceAgentPeerApi(id, "GET", "/api/agent/delivery-authority?" + new URLSearchParams({ deliveryId, generation }))
+  });
+  const deviceAgents = createDeviceAgentOwner({
+    dataDir: path.join(rootDir, "data", "rabilink"), ownerInstanceId: sourceDeviceGuid, authorize,
+    authorizePrepared: peerAuthority.authorizePrepared,
+    authorizePreparedClaim: peerAuthority.authorizePreparedClaim,
+    authorizeDelivery: async (request, agentId) => deviceAgentDeliveryPrincipal(request, agentId, {
+      authorize,
+      ownerInstanceId: () => rabiGlobalConfig.read().rabiGuid,
+    }),
+    assertDeviceAssignment: assertCurrentDeviceAgentAssignment
+  });
+  releaseDeviceEndpointRecovery = deviceAgents.onChange(() => { void agentEndpointDelivery?.recovery.onEvent(); });
+  const agents = createRabiLinkAgentDevices({
+    dataDir: path.join(rootDir, "data", "rabilink"), sourceDeviceId, authorize,
+    deviceOwnerTarget: id => rabiLinkDeviceConnections.deviceTarget(id),
+    readLocal: pathname => rabiLinkRequestLocal(pathname).then(rabiLinkReadResponse),
+    readTarget: async (id, pathname) => {
+      if (id === sourceDeviceId) return rabiLinkReadResponse(await rabiLinkRequestLocal(pathname));
+      if (!activePeerTunnel) throw Object.assign(new Error("PERSONA_SOURCE_UNAVAILABLE"), { statusCode: 503 });
+      return rabiLinkReadResponse(await activePeerTunnel.fetch(id, "manager", pathname, { signal: AbortSignal.timeout(30_000) }));
+    }
+  });
+  const mobile = createRabiLinkMobileOwner({
+    dataDir: path.join(rootDir, "data", "rabilink"), sourceDeviceId, authorize,
+    applicationOwnerTarget: () => rabiLinkDeviceConnections.applicationTarget(),
+    peers: () => discoverRabiPeers(peerRelayConfig())
+  });
+  return rabiLinkBusinessOwners = { key, agents, deviceAgents, mobile };
+}
+
+function handleRabiLinkOwnerApi(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse): boolean {
+  const pathname = requestUrl.pathname;
+  if (!rabiLinkAgentDevicesPath(pathname) && !rabiLinkMobileOwnerPath(pathname) && !deviceAgentOwnerPath(pathname)) return false;
+  void (async () => {
+    try {
+      const body = ["POST", "PUT", "PATCH", "DELETE"].includes(request.method || "") ? await readJsonBody(request) : undefined;
+      const owners = currentRabiLinkBusinessOwners();
+      if (deviceAgentOwnerPath(pathname)) await owners.deviceAgents.handle(request, response, requestUrl, body);
+      else if (rabiLinkAgentDevicesPath(pathname)) await owners.agents.handle(request, response, requestUrl, body);
+      else await owners.mobile.handle(request, response, requestUrl, body);
+    } catch {
+      if (!response.headersSent) jsonResponse(response, 400, { code: -1, error: "RABILINK_OWNER_REQUEST_INVALID" });
+      else response.destroy();
+    }
+  })();
+  return true;
+}
+
 async function syncRabiLinkRelayRuntime(onLanReady?: () => void | Promise<void>): Promise<void> {
   if (!managerShouldAutostart) {
     await Promise.all([
@@ -2123,6 +2296,7 @@ async function syncRabiLinkRelayRuntime(onLanReady?: () => void | Promise<void>)
     deviceName: globalConfig.rabiName || os.hostname(),
     rabiPcVersion: rabiRoutePackageVersion(),
     localWebguiUrl: `http://127.0.0.1:${managerPort}`,
+    applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
     peerUrls: lanEnabled ? peerLanServer.peerUrls() : [],
     localSpeechUrl: relay.speechServiceUrl
   });
@@ -3841,18 +4015,34 @@ const xiaomiHomeEventLedger = new XiaomiHomeEventLedger(roleId => roleDirForApi(
 
 async function deliverXiaomiHomeEvent(
   event: XiaomiHomeEvent,
-  context: XiaomiHomeEventDeliveryContext
+  context: XiaomiHomeEventDeliveryContext,
+  access?: Readonly<{ assert(): void; dispatch(): void }>
 ): Promise<XiaomiHomeGatewayDeliveryResult[]> {
+  access?.assert();
   try {
+    access?.dispatch();
     await xiaomiHomeEventLedger.append(sanitizeRoleId(context.agentRoleId), event);
   } catch {
+    access?.assert();
     // Ledger failure is audited by its owner; event routing remains available.
   }
+  access?.assert();
   const candidates = xiaomiHomeGatewayRuntimes(context.agentRoleId);
   if (candidates.length === 0) {
     return [{ status: "missed", matchedRuleCount: 0, sentPacketCount: 0, reason: "no_matching_xiaomi_home_gateway" }];
   }
-  return Promise.all(candidates.map(runtime => deliverXiaomiHomeEventViaGateway(runtime, event, context)));
+  const deliveries = candidates.map(runtime => {
+    access?.dispatch();
+    return deliverXiaomiHomeEventViaGateway(runtime, event, context);
+  });
+  try {
+    const results = await Promise.all(deliveries);
+    access?.assert();
+    return results;
+  } catch (error) {
+    access?.assert();
+    throw error;
+  }
 }
 
 function wearableHealthMessageFileEntry(filePath: string, record: Record<string, unknown>): Record<string, unknown> {
@@ -4311,6 +4501,12 @@ export function buildGatewayDiagnosticsWorkerSnapshot(
 }
 
 function jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void {
+  try { managerRequestContexts.get(response)?.assertResponseAuthority?.(); }
+  catch {
+    statusCode = 403;
+    body = { code: -1, error: "LAN_AGENT_AUTHORIZATION_REVOKED", uncertain: true };
+    response.setHeader("cache-control", "no-store");
+  }
   body = errorResponsePresentation(body, statusCode);
   if (statusCode >= 400) {
     const context = managerRequestContexts.get(response);
@@ -4337,7 +4533,6 @@ function jsonResponse(response: http.ServerResponse, statusCode: number, body: u
 }
 
 function readJsonBody<T>(request: http.IncomingMessage, maxBytes = 0): Promise<T> {
-  if (hasLanAgentBodyGuard(request)) maxBytes = maxBytes > 0 ? Math.min(maxBytes, 1024 * 1024) : 1024 * 1024;
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let total = 0;
@@ -4418,7 +4613,8 @@ function roleStorageRequestContext(
     idempotencyKey: singleRequestHeader(request, "idempotency-key"),
     expectedRevision: singleRequestHeader(request, "if-match")
       ?? singleRequestHeader(request, "x-rabiroute-expected-revision"),
-    signal: controller.signal
+    signal: controller.signal,
+    authorize: () => { assertTrustedLanAgentPrincipal(request); }
   });
 }
 
@@ -4996,6 +5192,7 @@ function recordAgentRequestStop(request: CodexHookContextRequest): AgentRequestS
   if (managerReadOnly) return { status: "ignored", reason: "manager_read_only", turnId: request.turnId };
   const turnId = String(request.turnId || "").trim();
   if (!turnId) return { status: "ignored", reason: "missing_turn_id" };
+  void agentEndpointDelivery?.recovery.onEvent();
   const scheduled = agentRequests.recordTargetTurnEnded(request.sessionId, request.cwd, turnId);
   for (const item of scheduled) scheduleAgentRequestReminder(item);
   if (!scheduled.length) {
@@ -5109,22 +5306,9 @@ function refreshAgentRequestReminderTimers(): void {
 }
 
 function agentThreadAllowedWorkspaces(): string[] {
-  let desktopWorkspaces: string[] = [];
-  try {
-    desktopWorkspaces = listCodexDesktopWorkspaces();
-  } catch {
-    // Keep configured workspaces available when Desktop state is temporarily unreadable.
-  }
-  return [...new Set([
-    rootDir,
-    ...desktopWorkspaces,
-    ...[...runtimes.values()].flatMap((runtime) => [
-      runtime.definition.codexCwd?.trim(),
-      runtime.definition.dshCwd?.trim(),
-      ...(runtime.definition.codexPlanAssistantSessions ?? []).map((session) => session.workspace?.trim())
-    ]).filter((value): value is string => Boolean(value))
-      .map((value) => path.resolve(rootDir, value))
-  ])];
+  // Public Agent APIs are available to authenticated callers across workspaces.
+  // Cwd and query remain caller-selected context or filters, not Route grants.
+  return [];
 }
 
 const speechModelManager = new SpeechModelManager({
@@ -7071,7 +7255,9 @@ function speechServiceUrl(): string {
   return rabiGlobalConfig.read().rabiLinkRelay.speechServiceUrl;
 }
 
-function writeSpeechProxyResponse(response: http.ServerResponse, result: LocalSpeechResponse): void {
+function writeSpeechProxyResponse(response: http.ServerResponse, result: LocalSpeechResponse, guard?: () => void): void {
+  guard?.();
+  managerRequestContexts.get(response)?.assertResponseAuthority?.();
   response.writeHead(result.status, {
     "content-type": result.contentType,
     "content-length": String(result.body.byteLength),
@@ -7144,10 +7330,13 @@ function writeSpeechModelManagerJson(
 }
 
 function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse): boolean {
+  if (!requestUrl.pathname.startsWith("/api/speech/")) return false;
+  const guard = stickySpeechAuthority(() => { assertTrustedLanAgentPrincipal(request); });
+  guard();
   const selectedSpeechServer = activePeerTunnel?.selected();
-  const targetLocal = request.headers["x-rabilink-tunnel-local"] === (managerHostIdentity?.applicationGenerationId ?? managerInstanceId);
+  const targetLocal = rabiLinkTrustedTransport(request, managerHostIdentity?.applicationGenerationId ?? managerInstanceId, rabiLinkConnectionScope(rabiLinkRelayConfigForMeta()));
   if (selectedSpeechServer && !targetLocal && ["/api/speech/runtime/", "/api/speech/model-management"].some(prefix => requestUrl.pathname.startsWith(prefix))) {
-    void activePeerTunnel!.proxySelected(request, requestUrl, response).catch(() => jsonResponse(response, 502, { code: -1, message: "远端语音服务器操作失败，不会改为操作本机。" }));
+    void activePeerTunnel!.proxySelected(request, requestUrl, response, guard).catch(() => jsonResponse(response, 502, { code: -1, message: "远端语音服务器操作失败，不会改为操作本机。" }));
     return true;
   }
   if (requestUrl.pathname === "/api/speech/model-management/settings") {
@@ -7160,7 +7349,7 @@ function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, respons
       error instanceof SpeechModelSettingsError || error instanceof SpeechModelManagerError ? error.status : 500,
       { code: -1, message: error instanceof SpeechModelSettingsError || error instanceof SpeechModelManagerError ? error.message : "模型目录设置操作失败。" });
     if (request.method === "GET") {
-      try { jsonResponse(response, 200, { code: 0, data: speechModelManager.directorySettings() }); } catch (error) { fail(error); }
+      try { jsonResponse(response, 200, { code: 0, data: speechModelManager.directorySettings(guard) }); } catch (error) { fail(error); }
     } else if (request.method === "PATCH") {
       if (managerReadOnly) { jsonResponse(response, 423, { code: -1, message: "Manager is read-only." }); return true; }
       const expectedGeneration = headerValue(request.headers["x-rabiroute-expected-application-generation-id"]).trim();
@@ -7175,43 +7364,51 @@ function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, respons
         jsonResponse(response, 415, { code: -1, message: "Expected application/json." }); return true;
       }
       void readJsonBody<unknown>(request).then(body => {
-        jsonResponse(response, 200, { code: 0, data: speechModelManager.updateDirectorySettings(body) });
+        if (!localModelSettingsRequestAllowed(request)) {
+          jsonResponse(response, 403, { code: -1, error: "LAN_AGENT_AUTHORIZATION_REVOKED", message: "Model settings authorization is no longer valid.", commitState: "not_started" }); return;
+        }
+        if (managerReadOnly) { jsonResponse(response, 423, { code: -1, message: "Manager is read-only.", commitState: "not_started" }); return; }
+        if (expectedGeneration !== (managerHostIdentity?.applicationGenerationId ?? managerInstanceId) || expectedInstance !== managerInstanceId) {
+          jsonResponse(response, 409, { code: -1, message: "Manager lifecycle changed; reload /meta before retrying.", commitState: "not_started" }); return;
+        }
+        jsonResponse(response, 200, { code: 0, data: speechModelManager.updateDirectorySettings(body, guard) });
       }).catch(fail);
     } else jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/events") {
     proxySpeechEventStream(response, {
-      openUpstream: signal => speechControl.eventStream(signal),
-      errorMessage: speechControlErrorMessage
+      openUpstream: signal => speechControl.eventStream(signal, guard),
+      errorMessage: speechControlErrorMessage,
+      guard
     });
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/status") {
-    writeSpeechJson(response, speechControl.status(), 200, 500);
+    writeSpeechJson(response, speechControl.status(guard), 200, 500);
     return true;
   }
   if (request.method === "POST" && requestUrl.pathname === "/api/speech/runtime/start") {
-    writeSpeechRuntimeJson(response, speechRuntimeControl.start());
+    writeSpeechRuntimeJson(response, speechRuntimeControl.start(guard));
     return true;
   }
   if (request.method === "POST" && requestUrl.pathname === "/api/speech/runtime/stop") {
-    writeSpeechRuntimeJson(response, speechRuntimeControl.stop());
+    writeSpeechRuntimeJson(response, speechRuntimeControl.stop(guard));
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/model-management") {
-    writeSpeechModelManagerJson(response, () => speechModelManager.snapshot());
+    writeSpeechModelManagerJson(response, () => speechModelManager.snapshot(guard));
     return true;
   }
   if (request.method === "POST" && requestUrl.pathname === "/api/speech/model-management/runtime/install") {
-    writeSpeechModelManagerJson(response, () => speechModelManager.installRuntime(), 202);
+    writeSpeechModelManagerJson(response, () => speechModelManager.installRuntime(guard), 202);
     return true;
   }
   const modelInstallMatch = requestUrl.pathname.match(/^\/api\/speech\/model-management\/models\/([^/]+)\/install$/);
   if (request.method === "POST" && modelInstallMatch) {
     writeSpeechModelManagerJson(
       response,
-      () => speechModelManager.installModel(decodeURIComponent(modelInstallMatch[1] || "")),
+      () => speechModelManager.installModel(decodeURIComponent(modelInstallMatch[1] || ""), guard),
       202
     );
     return true;
@@ -7223,28 +7420,28 @@ function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, respons
   if (request.method === "PUT" && requestUrl.pathname === "/api/speech/selection-reader/settings") {
     writeSpeechJson(
       response,
-      readJsonBody<unknown>(request).then(body => selectionSpeechSettings.write(body)),
+      readJsonBody<unknown>(request).then(body => { guard(); return selectionSpeechSettings.write(body); }),
       200,
       500
     );
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/models") {
-    writeSpeechJson(response, speechControl.models().then(models => ({ models })));
+    writeSpeechJson(response, speechControl.models(guard).then(models => ({ models })));
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/personas") {
-    jsonResponse(response, 200, { code: 0, data: { personas: speechControl.personas() } });
+    jsonResponse(response, 200, { code: 0, data: { personas: speechControl.personas(guard) } });
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/speakers") {
-    writeSpeechJson(response, speechControl.speakerRegistry(requestUrl.searchParams.get("sessionId") || undefined));
+    writeSpeechJson(response, speechControl.speakerRegistry(requestUrl.searchParams.get("sessionId") || undefined, guard));
     return true;
   }
   if (request.method === "POST" && requestUrl.pathname === "/api/speech/speakers") {
     writeSpeechJson(
       response,
-      readJsonBody<SpeechSpeakerProfileCreateCommand>(request).then(body => speechControl.createSpeakerProfile(body)),
+      readJsonBody<SpeechSpeakerProfileCreateCommand>(request).then(body => speechControl.createSpeakerProfile(body, guard)),
       200,
       400
     );
@@ -7256,21 +7453,21 @@ function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, respons
       writeSpeechJson(
         response,
         readJsonBody<SpeechSpeakerProfileUpdateCommand>(request)
-          .then(body => speechControl.updateSpeakerProfile(speakerId, body)),
+          .then(body => speechControl.updateSpeakerProfile(speakerId, body, guard)),
         200,
         400
       );
       return true;
     }
     if (request.method === "DELETE") {
-      writeSpeechJson(response, speechControl.deleteSpeakerProfile(speakerId), 200, 400);
+      writeSpeechJson(response, speechControl.deleteSpeakerProfile(speakerId, guard), 200, 400);
       return true;
     }
   }
   if (request.method === "PUT" && requestUrl.pathname === "/api/speech/speaker-bindings") {
     writeSpeechJson(
       response,
-      readJsonBody<SpeechSpeakerBindingCommand>(request).then(body => speechControl.bindSpeaker(body)),
+      readJsonBody<SpeechSpeakerBindingCommand>(request).then(body => speechControl.bindSpeaker(body, guard)),
       200,
       400
     );
@@ -7279,7 +7476,7 @@ function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, respons
   if (request.method === "PUT" && requestUrl.pathname === "/api/speech/speaker-identities") {
     writeSpeechJson(
       response,
-      readJsonBody<SpeechSpeakerIdentityCommand>(request).then(body => speechControl.identifySpeaker(body)),
+      readJsonBody<SpeechSpeakerIdentityCommand>(request).then(body => speechControl.identifySpeaker(body, guard)),
       200,
       400
     );
@@ -7291,7 +7488,8 @@ function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, respons
       speechControl.unbindSpeaker(
         requestUrl.searchParams.get("sessionId") || "",
         requestUrl.searchParams.get("recordId") || "",
-        requestUrl.searchParams.get("speakerLabel") || ""
+        requestUrl.searchParams.get("speakerLabel") || "",
+        guard
       ),
       200,
       400
@@ -7299,11 +7497,11 @@ function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, respons
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/playback/status") {
-    writeSpeechJson(response, speechControl.playbackStatus());
+    writeSpeechJson(response, speechControl.playbackStatus(guard));
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/audio-streams") {
-    writeSpeechJson(response, speechControl.audioStreams().then(audioStream => ({ audioStream })));
+    writeSpeechJson(response, speechControl.audioStreams(guard).then(audioStream => ({ audioStream })));
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/audio-streams/events") {
@@ -7314,18 +7512,18 @@ function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, respons
       beforeSequence: requestUrl.searchParams.has("beforeSequence")
         ? Number(requestUrl.searchParams.get("beforeSequence"))
         : undefined
-    }).then(events => ({ events })));
+    }, guard).then(events => ({ events })));
     return true;
   }
   if (request.method === "POST" && requestUrl.pathname === "/api/speech/audio-streams/token") {
-    writeSpeechJson(response, speechControl.audioStreamToken().then(token => ({ token })), 200, 409);
+    writeSpeechJson(response, speechControl.audioStreamToken(guard).then(token => ({ token })), 200, 409);
     return true;
   }
   if (request.method === "PUT" && requestUrl.pathname === "/api/speech/audio-streams/selection") {
     writeSpeechJson(
       response,
       readJsonBody<SpeechAudioStreamSelectionCommand>(request)
-        .then(body => speechControl.selectAudioStream(body)),
+        .then(body => speechControl.selectAudioStream(body, guard)),
       200,
       400
     );
@@ -7334,7 +7532,7 @@ function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, respons
   if (request.method === "PUT" && requestUrl.pathname === "/api/speech/playback/volume") {
     writeSpeechJson(
       response,
-      readJsonBody<SpeechPlaybackVolumeCommand>(request).then(body => speechControl.setPlaybackVolume(body)),
+      readJsonBody<SpeechPlaybackVolumeCommand>(request).then(body => speechControl.setPlaybackVolume(body, guard)),
       200,
       400
     );
@@ -7350,13 +7548,13 @@ function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, respons
       until: requestUrl.searchParams.has("until") ? Number(requestUrl.searchParams.get("until")) : undefined,
       sourceDeviceId: requestUrl.searchParams.get("sourceDeviceId") || undefined,
       before: requestUrl.searchParams.has("before") ? Number(requestUrl.searchParams.get("before")) : undefined
-    }).then(records => ({ records })));
+    }, guard).then(records => ({ records })));
     return true;
   }
   const speechRecordAudioMatch = requestUrl.pathname.match(/^\/api\/speech\/records\/([^/]+)\/audio$/);
   if (request.method === "GET" && speechRecordAudioMatch) {
-    void speechControl.recordAudio(decodeURIComponent(speechRecordAudioMatch[1]))
-      .then(result => writeSpeechProxyResponse(response, result))
+    void speechControl.recordAudio(decodeURIComponent(speechRecordAudioMatch[1]), guard)
+      .then(result => writeSpeechProxyResponse(response, result, guard))
       .catch(error => jsonResponse(response, speechControlErrorStatus(error, 502), {
         code: -1,
         message: speechControlErrorMessage(error)
@@ -7364,47 +7562,47 @@ function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, respons
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/microphone/status") {
-    writeSpeechJson(response, speechControl.microphoneStatus());
+    writeSpeechJson(response, speechControl.microphoneStatus(guard));
     return true;
   }
   if (request.method === "PUT" && requestUrl.pathname === "/api/speech/microphone/settings") {
     writeSpeechJson(
       response,
-      readJsonBody<SpeechMicrophoneSettingsCommand>(request).then(body => speechControl.updateMicrophoneSettings(body)),
+      readJsonBody<SpeechMicrophoneSettingsCommand>(request).then(body => speechControl.updateMicrophoneSettings(body, guard)),
       200,
       400
     );
     return true;
   }
   if (request.method === "POST" && requestUrl.pathname === "/api/speech/microphone/reconcile") {
-    writeSpeechJson(response, speechControl.reconcileMicrophone(), 200, 500);
+    writeSpeechJson(response, speechControl.reconcileMicrophone(guard), 200, 500);
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/microphone/devices") {
-    writeSpeechJson(response, speechControl.microphoneDevices().then(devices => ({ devices })));
+    writeSpeechJson(response, speechControl.microphoneDevices(guard).then(devices => ({ devices })));
     return true;
   }
   if (request.method === "POST" && requestUrl.pathname === "/api/speech/microphone/start") {
     writeSpeechJson(
       response,
-      readJsonBody<SpeechMicrophoneStartCommand>(request).then(body => speechControl.startMicrophone(body)),
+      readJsonBody<SpeechMicrophoneStartCommand>(request).then(body => speechControl.startMicrophone(body, guard)),
       200,
       400
     );
     return true;
   }
   if (request.method === "POST" && requestUrl.pathname === "/api/speech/microphone/stop") {
-    writeSpeechJson(response, speechControl.stopMicrophone());
+    writeSpeechJson(response, speechControl.stopMicrophone(guard));
     return true;
   }
   if (request.method === "POST" && requestUrl.pathname === "/api/speech/playback/stop") {
-    writeSpeechJson(response, speechControl.stopPlayback());
+    writeSpeechJson(response, speechControl.stopPlayback(guard));
     return true;
   }
   if (request.method === "POST" && requestUrl.pathname === "/api/speech/tts") {
     void readJsonBody<SpeechSynthesisCommand>(request)
-      .then(body => speechControl.synthesize(body))
-      .then((result) => writeSpeechProxyResponse(response, result))
+      .then(body => speechControl.synthesize(body, guard))
+      .then((result) => writeSpeechProxyResponse(response, result, guard))
       .catch(error => jsonResponse(response, speechControlErrorStatus(error), {
         code: -1,
         message: speechControlErrorMessage(error)
@@ -7414,8 +7612,8 @@ function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, respons
   if (request.method === "POST" && requestUrl.pathname === "/api/speech/asr") {
     const contentType = headerValue(request.headers["content-type"]);
     void readBodyBuffer(request, 27 * 1024 * 1024)
-      .then(body => speechControl.transcribe(contentType, body))
-      .then((result) => writeSpeechProxyResponse(response, result))
+      .then(body => speechControl.transcribe(contentType, body, guard))
+      .then((result) => writeSpeechProxyResponse(response, result, guard))
       .catch(error => jsonResponse(response, speechControlErrorStatus(error), {
         code: -1,
         message: speechControlErrorMessage(error)
@@ -7467,12 +7665,13 @@ function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, respons
     void readJsonBody<SpeechMessageCommand & { gatewayId?: string }>(request)
       .then(
         body => {
+          guard();
           const host = rabiGlobalConfig.read();
           return speechControl.acceptMessage(hostOwnedSpeechMessageCommand(body, {
             rabiGuid: host.rabiGuid,
             rabiName: host.rabiName,
             fallbackHostName: os.hostname()
-          }));
+          }), guard);
         },
         error => Promise.reject(new SpeechControlError(speechControlErrorMessage(error), 400))
       )
@@ -9407,7 +9606,31 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     instances: () => lanAgentRegistry.listInstances(),
     manage: (instanceId, params) => lanAgentRegistry.manageAgent(instanceId, "threads", params, 30_000)
   };
-  managerRuntimeOwner.register("lan_agent_registry", () => lanAgentRegistry.close());
+  agentEndpointDelivery = createAgentEndpointDelivery({ store: agentRequests, authority: lanAgentAuthority,
+    registry: lanAgentRegistry, config: rabiGlobalConfig,
+    device: {
+      resolveSource: (request, principal) => currentDeviceAgentEndpointBridge(lanAgentRegistry.localInstanceId).resolveSource(request, principal),
+      resolveTarget: request => currentDeviceAgentEndpointBridge(lanAgentRegistry.localInstanceId).resolveTarget(request),
+      authorize: (endpoint, role) => currentDeviceAgentEndpointBridge(lanAgentRegistry.localInstanceId).authorize(endpoint, role),
+      transport: (delivery, guard, reconcile) => currentDeviceAgentEndpointBridge(lanAgentRegistry.localInstanceId).transport(delivery, guard, reconcile),
+      refresh: (endpoint, role) => currentDeviceAgentEndpointBridge(lanAgentRegistry.localInstanceId).refresh(endpoint, role)
+    },
+    receiptDirectory: path.join(rootDir, "data", ".runtime", "endpoint-transport-receipts"),
+    readLocal: readAgentEndpointSummary, localOptions: request => agentThreadRequestOptions(request) });
+  const endpointRecovery = agentEndpointDelivery.recovery;
+  const releaseEndpointRecovery = lanAgentRegistry.onDeliveryRecoveryEvent(() => { void endpointRecovery.onEvent(); });
+  void endpointRecovery.onEvent();
+  managerRuntimeOwner.register("lan_agent_registry", () => {
+    releaseEndpointRecovery();
+    releaseDeviceEndpointRecovery?.();
+    releaseDeviceEndpointRecovery = undefined;
+    rabiLinkBusinessOwners = undefined;
+    rabiLinkDeviceEndpointBridge = undefined;
+    agentEndpointDelivery = undefined;
+    instanceThreadTransport = undefined;
+    instanceAgentSessions = () => [];
+    lanAgentRegistry.close();
+  });
   const lanAgentReleaseStore = new LanAgentReleaseStore({ rootDir, agentRoot: path.join(packageRoot, "apps", "rabi-agent") });
   const webPluginModules = new WebPluginModuleRegistry();
   const wearableCompanionRuntimeIdentity = createWearableCompanionRuntimeIdentity({
@@ -9663,6 +9886,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       set managerServicesReady(value) { managerServicesReady = value; },
     }) }),
     Object.freeze({ capability: "host.manager.rabilink-relay@1", value: Object.freeze({
+      handleRabiLinkOwnerApi,
       createPeerRuntime: createManagerPeerRuntime,
       createDirectVideoReceiver: () => new RabiDirectVideo(path.join(rootDir, "data", "rabilink", "video")),
       createDirectVideoRoutes: (receiver: RabiDirectVideo) => createDirectVideoRoutes(receiver, managerReadOnly, readJsonBody, jsonResponse),
@@ -9883,6 +10107,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       agentThreadRequestFailureData,
       agentThreadRequestOptions,
       getTrustedLanAgentSource,
+      getTrustedDeviceSource: (request: http.IncomingMessage) => rabiLinkAgentDevicePrincipal(request, rabiLinkRelayConfigForMeta(), managerHostIdentity?.applicationGenerationId ?? managerInstanceId) ?? undefined,
       applyManagedAgentThreadDefaults,
       createAgentThreadControlRoutes,
       handleAgentThreadRequest,
@@ -10263,13 +10488,13 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     const requestStartedAt = Date.now();
     const method = request.method ?? "UNKNOWN";
     let pathname = "/";
-    return runWithOperationContext(createOperationContext({
+    void runWithOperationContext(createOperationContext({
       traceId: requestId,
       spanId: requestId,
       requestId,
       source: "http",
       actor: { kind: "system", id: "manager-http" }
-    }), () => {
+    }), async () => {
     managerRequestContexts.set(response, {
       requestId,
       method,
@@ -10303,7 +10528,13 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     try {
       const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
       pathname = requestUrl.pathname;
-      const lanAgentAccess = evaluateLanAgentRequest(request, lanAgentAuthority, rabiGlobalConfig.read().webguiLan.enabled);
+      if (rabiLinkTransportAssertionPresent(request) && !rabiLinkTrustedTransport(request,
+        managerHostIdentity?.applicationGenerationId ?? managerInstanceId, rabiLinkConnectionScope(rabiLinkRelayConfigForMeta()))) {
+        jsonResponse(response, 403, { code: -1, error: "INTERNAL_TRANSPORT_AUTHORITY_INVALID" });
+        return;
+      }
+      const lanAgentAccess = evaluateLanAgentRequest(request, lanAgentAuthority, rabiGlobalConfig.read().webguiLan.enabled,
+        () => rabiGlobalConfig.getLanAgentAdmissionPolicy());
       if (lanAgentAccess.kind === "denied") {
         response.setHeader("cache-control", "no-store");
         response.setHeader("Connection", "close");
@@ -10312,14 +10543,15 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         return;
       }
       if (lanAgentAccess.kind === "agent") {
+        managerRequestContexts.get(response)!.assertResponseAuthority = () => { assertTrustedLanAgentPrincipal(request); };
         const skillAccess = authorizeLanAgentRoleSkillRequest(
-          lanAgentAccess, request.method, pathname, routeCatalogConfig.gateways, roleIdForDefinition
+          lanAgentAccess, request.method, pathname
         );
         if (!skillAccess.allowed) {
           jsonResponse(response, skillAccess.status, { code: -1, error: skillAccess.error });
           return;
         }
-        const binding = lanAgentAuthority.getApprovedAgentBinding(lanAgentAccess.nodeId, lanAgentAccess.agentId);
+        const binding = assertTrustedLanAgentPrincipal(request)!.binding;
         // Normalize the wire provider the same way `lanAgentBodyAuthority` does,
         // then accept any adapter that supports managed plan tasks. The previous
         // literal list predated Antigravity and silently dropped its binding.
@@ -10329,8 +10561,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
             provider: bindingProvider, sessionId: binding.sessionId, sessionName: binding.agentId });
         }
         registerLanAgentBodyGuard(request, body => {
-          if (!lanAgentAuthority.isAgentEnabled(lanAgentAccess.nodeId, lanAgentAccess.agentId)) throw new Error("Remote Agent authorization was revoked.");
-          const approved = lanAgentAuthority.getApprovedAgentBinding(lanAgentAccess.nodeId, lanAgentAccess.agentId);
+          const approved = assertTrustedLanAgentPrincipal(request)!.binding;
           assertLanAgentBodyAuthority(pathname, body, approved ? { ...approved, name: approved.agentId, enabled: true } : undefined);
         });
       }
@@ -10408,8 +10639,11 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
           return lanAgentAuthority.validateBootstrapTicket(token) || Boolean(lanAgentAuthority.authenticate(token));
         })())
       );
+      // Enabled ingress-authenticated Agents have local-equivalent public management
+      // authority. Private protocol handlers keep their own authentication boundaries.
       const managementAccessAllowed = lanAgentAccess.kind === "agent"
-        || enrollmentAccess || webguiLanRequestAllowed(request, requestUrl);
+        ? Boolean(assertTrustedLanAgentPrincipal(request))
+        : enrollmentAccess || webguiLanRequestAllowed(request, requestUrl);
       if (!managementAccessAllowed) {
         response.setHeader("cache-control", "no-store");
         response.setHeader("www-authenticate", "Bearer realm=\"RabiRoute WebGUI\"");
@@ -10420,8 +10654,21 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         });
         return;
       }
-      if (!enrollmentAccess && (lanAgentAccess.kind === "agent" || !isLoopbackRemoteAddress(request.socket.remoteAddress) || localModelSettingsRequestAllowed(request))) {
-        markAuthenticatedConnectionRequest(request);
+      if (!enrollmentAccess && (lanAgentAccess.kind === "agent" || !isLoopbackRemoteAddress(request.socket.remoteAddress) || localModelSettingsRequestAllowed(request)
+        || rabiLinkTrustedTransport(request, managerHostIdentity?.applicationGenerationId ?? managerInstanceId, rabiLinkConnectionScope(rabiLinkRelayConfigForMeta())))) {
+        const admittedGeneration = managerHostIdentity?.applicationGenerationId ?? managerInstanceId;
+        const admittedRabiLink = rabiLinkTrustedTransport(request, admittedGeneration, rabiLinkConnectionScope(rabiLinkRelayConfigForMeta()));
+        const admittedRabiLinkScope = admittedRabiLink ? rabiLinkConnectionScope(rabiLinkRelayConfigForMeta()) : undefined;
+        markAuthenticatedConnectionRequest(request, () => {
+          if (lanAgentAccess.kind === "agent") assertTrustedLanAgentPrincipal(request);
+          if (admittedRabiLink && (!admittedRabiLinkScope
+            || admittedRabiLinkScope !== rabiLinkConnectionScope(rabiLinkRelayConfigForMeta())
+            || !rabiLinkTrustedTransport(request, managerHostIdentity?.applicationGenerationId ?? managerInstanceId, rabiLinkConnectionScope(rabiLinkRelayConfigForMeta())))) {
+            throw new Error("Authenticated connection scope or generation was revoked.");
+          }
+          if (!webguiLanRequestAllowed(request, requestUrl)
+            && lanAgentAccess.kind !== "agent") throw new Error("Authenticated Manager connection was revoked.");
+        });
       }
       if (managerReadOnly && !managerReadOnlyRequestAllowed(request.method, pathname)) {
         jsonResponse(response, 423, {
@@ -10430,6 +10677,23 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         });
         return;
       }
+      if (await handleAgentDeliveryAuthority(request, requestUrl, response, {
+        store: agentRequests,
+        managerInstanceId: lanAgentRegistry.localInstanceId,
+        assertRequestAuthority: () => {
+          assertTrustedLanAgentPrincipal(request);
+          hasAuthenticatedConnectionRequest(request);
+        },
+        refreshEndpoints: async identities => {
+          if (!agentEndpointDelivery) throw new Error("Manager endpoint delivery authority is unavailable.");
+          await agentEndpointDelivery.refreshEndpoints(identities);
+        },
+        authorize: (endpoint, role) => {
+          if (!agentEndpointDelivery) throw new Error("Manager endpoint delivery authority is unavailable.");
+          agentEndpointDelivery.authorize(endpoint, role);
+        },
+        jsonResponse
+      })) return;
       if (handleManagerHostLifecycleRequest(request, requestUrl, response, {
         identity: managerHostIdentity,
         shutdown: reason => shutdownManager(reason),
@@ -10440,7 +10704,6 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       if (handleInstanceIdentityReset(request, requestUrl, response, {
         service: instanceIdentityReset,
         currentGuid: () => rabiGlobalConfig.read().rabiGuid,
-        trustedRemote: request => Boolean(getTrustedLanAgentSource(request)),
         readJson: readJsonBody,
         json: jsonResponse
       })) return;
@@ -10546,7 +10809,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       });
       jsonResponse(response, 500, { error: error instanceof Error ? error.message : String(error) });
     }
-    });
+    }).catch(error => { response.destroy(error instanceof Error ? error : new Error("Manager request failed.")); });
   };
 
   activeServer.requestTimeout = 30 * 60 * 1000; // Per-request body deadlines retain the ordinary 30-second limit.

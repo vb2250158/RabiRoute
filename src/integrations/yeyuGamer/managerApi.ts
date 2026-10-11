@@ -387,6 +387,11 @@ function normalizeWorkItem(input: YeYuGamerWorkItemCreate): YeYuGamerJsonObject 
   };
 }
 
+export type YeYuGamerRequestAccess = Readonly<{
+  authorize(): void;
+  beforeDispatch?(): void;
+}>;
+
 export class YeYuGamerManagerApiClient {
   readonly config: YeYuGamerManagerConfig;
   readonly #fetch: FetchLike;
@@ -402,25 +407,26 @@ export class YeYuGamerManagerApiClient {
     this.#readFile = dependencies.readFile ?? ((filePath, encoding) => fs.readFile(filePath, encoding));
   }
 
-  async getHealth(): Promise<YeYuGamerHealth> {
-    return this.#get("/health", parseHealth);
+  async getHealth(access?: YeYuGamerRequestAccess): Promise<YeYuGamerHealth> {
+    return this.#get("/health", parseHealth, access);
   }
 
-  async getMeta(): Promise<YeYuGamerMeta> {
-    return this.#get("/meta", parseMeta);
+  async getMeta(access?: YeYuGamerRequestAccess): Promise<YeYuGamerMeta> {
+    return this.#get("/meta", parseMeta, access);
   }
 
-  async getSnapshot(): Promise<YeYuGamerSnapshot> {
-    return this.#get("/snapshot", parseSnapshot);
+  async getSnapshot(access?: YeYuGamerRequestAccess): Promise<YeYuGamerSnapshot> {
+    return this.#get("/snapshot", parseSnapshot, access);
   }
 
-  async getCapabilities(): Promise<YeYuGamerPage<YeYuGamerCapability>> {
-    return this.#get("/capabilities", parseCapabilities);
+  async getCapabilities(access?: YeYuGamerRequestAccess): Promise<YeYuGamerPage<YeYuGamerCapability>> {
+    return this.#get("/capabilities", parseCapabilities, access);
   }
 
   async createWorkItem(
     input: YeYuGamerWorkItemCreate,
-    options: YeYuGamerDispatchOptions
+    options: YeYuGamerDispatchOptions,
+    access?: YeYuGamerRequestAccess
   ): Promise<YeYuGamerCommandReceipt> {
     if (!visibleAscii(options.idempotencyKey, 128)) {
       throw new YeYuGamerManagerApiError(400, "yeyu_gamer_idempotency_key_rejected", "idempotencyKey must contain visible ASCII and be at most 128 characters.");
@@ -431,7 +437,9 @@ export class YeYuGamerManagerApiClient {
     if (options.requestId !== undefined && !visibleAscii(options.requestId, 128)) {
       throw new YeYuGamerManagerApiError(400, "yeyu_gamer_request_id_rejected", "requestId must contain visible ASCII and be at most 128 characters.");
     }
-    const token = await this.#readCredential();
+    access?.authorize();
+    const token = await this.#readCredential(access);
+    access?.authorize();
     return this.#request("/agent/work-items", {
       method: "POST",
       headers: {
@@ -443,38 +451,45 @@ export class YeYuGamerManagerApiClient {
         ...(options.requestId ? { "X-Request-Id": options.requestId } : {})
       },
       body: JSON.stringify(normalizeWorkItem(input))
-    }, parseReceipt);
+    }, parseReceipt, access);
   }
 
-  async #get<T>(resource: "/health" | "/meta" | "/snapshot" | "/capabilities", parse: (value: unknown) => T): Promise<T> {
+  async #get<T>(resource: "/health" | "/meta" | "/snapshot" | "/capabilities", parse: (value: unknown) => T, access?: YeYuGamerRequestAccess): Promise<T> {
+    access?.authorize();
     const protectedView = resource === "/snapshot" || resource === "/capabilities";
     const headers: Record<string, string> = {};
     if (protectedView) {
-      const token = await this.#readCredential();
+      const token = await this.#readCredential(access);
+      access?.authorize();
       headers.Authorization = `Bearer ${token}`;
       headers["X-YeYu-Gamer-Actor"] = YEYU_GAMER_RABIROUTE_ACTOR;
     }
-    return this.#request(resource, { method: "GET", headers }, parse);
+    return this.#request(resource, { method: "GET", headers }, parse, access);
   }
 
-  async #readCredential(): Promise<string> {
+  async #readCredential(access?: YeYuGamerRequestAccess): Promise<string> {
+    access?.authorize();
     const credentialPath = path.join(this.config.runtimeDir, "secrets", "actors", "rabiroute.token");
     let token = "";
     try {
       token = (await this.#readFile(credentialPath, "ascii")).trim();
     } catch {
+      access?.authorize();
       throw new YeYuGamerManagerApiError(503, "yeyu_gamer_credential_unavailable", "The YeYu Gamer rabiroute credential is unavailable.");
     }
+    access?.authorize();
     if (!/^[A-Za-z0-9_-]{32,256}$/.test(token)) {
       throw new YeYuGamerManagerApiError(503, "yeyu_gamer_credential_invalid", "The YeYu Gamer rabiroute credential is invalid.");
     }
     return token;
   }
 
-  async #request<T>(resource: string, init: RequestInit, parse: (value: unknown) => T): Promise<T> {
+  async #request<T>(resource: string, init: RequestInit, parse: (value: unknown) => T, access?: YeYuGamerRequestAccess): Promise<T> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.config.requestTimeoutMs);
     try {
+      access?.authorize();
+      access?.beforeDispatch?.();
       const response = await this.#fetch(`${this.config.baseUrl}${resource}`, {
         ...init,
         redirect: "error",
@@ -484,21 +499,25 @@ export class YeYuGamerManagerApiClient {
           ...(init.headers ?? {})
         }
       });
+      access?.authorize();
       let body: unknown;
       try {
         body = await response.json();
       } catch {
+        access?.authorize();
         if (controller.signal.aborted) {
           throw new YeYuGamerManagerApiError(503, "yeyu_gamer_unreachable", "YeYu Gamer Manager is unavailable on the fixed loopback endpoint.");
         }
         throw new YeYuGamerManagerApiError(502, "yeyu_gamer_invalid_json", "YeYu Gamer Manager returned invalid JSON.");
       }
+      access?.authorize();
       if (!response.ok) {
         const problem = safeProblem(body);
         throw new YeYuGamerManagerApiError(response.status, problem.code, problem.message);
       }
       return parse(body);
     } catch (error) {
+      access?.authorize();
       if (error instanceof YeYuGamerManagerApiError) throw error;
       throw new YeYuGamerManagerApiError(503, "yeyu_gamer_unreachable", "YeYu Gamer Manager is unavailable on the fixed loopback endpoint.");
     } finally {

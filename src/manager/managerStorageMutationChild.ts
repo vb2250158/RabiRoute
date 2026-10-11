@@ -27,6 +27,7 @@ import {
 } from "../roleKnowledge.js";
 import path from "node:path";
 import { RoleStorageValidationError } from "../shared/roleStorageValidationError.js";
+import { acquireStorageMutationCommitAdmission, StorageMutationAdmissionError } from "./managerStorageMutationAdmission.js";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { ROLE_MEMORY_CATALOG_LEASE_ID } from "../memoryStorageIdentity.js";
@@ -171,7 +172,8 @@ function requiredPlanWorkflow(roleDir: string) {
 function mutatePersonaPlanStatus(
   validated: ManagerStorageMutationRequest,
   roleDir: string,
-  mutation: StorageMutationStamp
+  mutation: StorageMutationStamp,
+  markBatchWriteStarted: () => void
 ): PersonaPlanStatusMutationResult {
   return withPlanStorageLease(roleDir, nonPlanStorageLeaseId(validated), lease => {
     const checkpoint = (): void => assertPlanStorageLeaseOwner(lease);
@@ -211,12 +213,15 @@ function mutatePersonaPlanStatus(
     const retiringWorkflow = beginPersonaPlanStatusRetirement(workflow, task.statusKey, replacement.key);
     for (const plan of readPlansFromStorageInWorker(roleDir)) {
       if (plan.archiveStatus === "已归档" || plan.status !== task.statusKey) continue;
+      // Entering a write can leave a prepared WAL even if it later throws.
+      markBatchWriteStarted();
       updatePlan(roleDir, plan.id, { markerStatus: replacement.key }, undefined, mutation);
       migratedPlanIds.push(plan.id);
       checkpoint();
     }
     const retiredWorkflow = completePersonaPlanStatusRetirement(retiringWorkflow, task.statusKey);
     status = retiredWorkflow.statuses.find(candidate => candidate.key === task.statusKey)!;
+    markBatchWriteStarted();
     const written = writePersonaPlanWorkflow(roleDir, retiredWorkflow, current.revision);
     checkpoint();
     return { ...written, status, migratedPlanIds };
@@ -272,7 +277,8 @@ function deterministicDomainRejection(error: unknown): string | undefined {
 
 async function executeDomainMutation(
   validated: ManagerStorageMutationRequest,
-  roleDir: string
+  roleDir: string,
+  markBatchWriteStarted: () => void
 ): Promise<unknown> {
   const planId = validated.fence.planId;
   const mutation: StorageMutationStamp = Object.freeze({
@@ -284,7 +290,7 @@ async function executeDomainMutation(
     case "plan_status_create":
     case "plan_status_update":
     case "plan_status_delete":
-      return mutatePersonaPlanStatus(validated, roleDir, mutation);
+      return mutatePersonaPlanStatus(validated, roleDir, mutation, markBatchWriteStarted);
     case "plan_create":
       return createPlan(roleDir, { ...validated.task.input, id: planId }, mutation);
     case "plan_update":
@@ -431,15 +437,9 @@ function recoveredDomainValue(
         ? { ...current, status, migratedPlanIds: [] }
         : undefined;
     }
-    case "plan_status_delete": {
-      const current = readPersonaPlanWorkflow(roleDir);
-      const status = current?.workflow.statuses.find(candidate => candidate.key === task.statusKey);
-      if (!current || status?.state !== "retired") return undefined;
-      const remaining = readPlansFromStorageInWorker(roleDir)
-        .filter(plan => plan.archiveStatus !== "已归档" && plan.status === task.statusKey);
-      if (remaining.length > 0 || Object.values(current.workflow.roles).includes(task.statusKey)) return undefined;
-      return { ...current, status, migratedPlanIds: [] };
-    }
+    case "plan_status_delete":
+      // A retired shape has no request identity and is not batch commit proof.
+      return undefined;
     case "plan_create":
     case "plan_update":
     case "plan_secretary_binding_update":
@@ -506,7 +506,7 @@ function recoveredDomainValue(
 
 function recoverDomainTransactions(validated: ManagerStorageMutationRequest, roleDir: string): string[] {
   if (!validated.fence.planId) return [];
-  const failures = recoverPlanLifecycleTransitions(roleDir).failures.map(item => item.error);
+  const failures = recoverPlanLifecycleTransitions(roleDir, { planId: validated.fence.planId }).failures.map(item => item.error);
   if (validated.task.type.startsWith("plan_feedback_")) {
     failures.push(...recoverPlanStorageTransactions(roleDir, { planId: validated.fence.planId }).failures.map(item => item.error));
   }
@@ -521,6 +521,11 @@ async function recoverDomainMutation(
   | { state: "retry" }
   | { state: "uncertain"; reason: string }
 > {
+  if (validated.task.type === "plan_status_delete") {
+    // Neither workflow revision equality nor the final retired shape proves
+    // this batch's identity/progress. Only a completed durable receipt can replay.
+    return { state: "uncertain", reason: "Batch status retirement lacks durable request-scoped migration proof; authoritative readback and manual recovery are required." };
+  }
   const recoveryFailures = recoverDomainTransactions(validated, roleDir);
   if (recoveryFailures.length > 0) {
     return {
@@ -543,6 +548,7 @@ async function recoverDomainMutation(
 
 async function execute(request: ManagerStorageMutationRequest, identity: ManagerStorageMutationChildIdentity): Promise<unknown> {
   const validated = validateManagerStorageMutationRequest(request, identity);
+  await acquireStorageMutationCommitAdmission(validated, process);
   const roleDir = storageMutationRoleDirectory(identity.rolesRoot, validated.fence.roleId);
   const receiptRoot = path.join(roleDir, "runtime");
   const receiptNamespace = MANAGER_STORAGE_MUTATION_RECEIPT_NAMESPACE;
@@ -566,9 +572,11 @@ async function execute(request: ManagerStorageMutationRequest, identity: Manager
       expectedRevision: validated.expectedRevision
     },
     deliver: async (): Promise<DomainDeliveryResult> => {
+      let batchWriteStarted = false;
       try {
-        return committedEnvelope(await executeDomainMutation(validated, roleDir));
+        return committedEnvelope(await executeDomainMutation(validated, roleDir, () => { batchWriteStarted = true; }));
       } catch (error) {
+        if (batchWriteStarted) throw error;
         const rejection = deterministicDomainRejection(error);
         if (rejection) return { domain: "rejected", error: rejection };
         throw error;
@@ -605,6 +613,8 @@ const identity = childIdentity();
 let running = false;
 
 process.on("message", (raw: unknown) => {
+  // The admission waiter owns decisions; never treat them as new commands.
+  if (raw && typeof raw === "object" && "kind" in raw) return;
   const request = raw as ManagerStorageMutationRequest;
   if (running) {
     send({
@@ -622,6 +632,7 @@ process.on("message", (raw: unknown) => {
       protocolVersion: MANAGER_STORAGE_MUTATION_PROTOCOL_VERSION,
       requestId: request.requestId,
       fence: request.fence,
+      admissionNonce: request.admissionNonce,
       ok: true,
       value: serializable(value)
     });
@@ -630,7 +641,9 @@ process.on("message", (raw: unknown) => {
       protocolVersion: MANAGER_STORAGE_MUTATION_PROTOCOL_VERSION,
       requestId: String(request?.requestId || "invalid"),
       fence: request?.fence,
+      admissionNonce: request?.admissionNonce,
       ok: false,
+      ...(error instanceof StorageMutationAdmissionError ? { code: error.code } : {}),
       message: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack?.slice(-8 * 1024) : undefined
     } as ManagerStorageMutationResponse);

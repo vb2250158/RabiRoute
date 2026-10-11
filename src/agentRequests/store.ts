@@ -1,4 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
+import { endpointExecutionOptionsHash } from "./executionOptions.js";
+import { normalizeAgentRequestEndpoint, sameAgentEndpoint, sameAgentParty, type AgentRequestEndpoint } from "./endpoint.js";
+import type { PreparedEndpointDelivery, EndpointDeliveryReceipt } from "./endpointDelivery.js";
 import { AgentReplyStateError } from "./replyError.js";
 import { sameCodexWorkspace } from "../codexTaskIdentity.js";
 import { parseAgentAdapterType, type AgentAdapterType } from "../agentAdapters/types.js";
@@ -21,6 +24,7 @@ export type AgentResponsePolicy = "required" | "none";
 export type AgentRequestStatus = "pending_delivery" | "awaiting_response" | "responded" | "cancelled";
 
 export type AgentRequestParty = {
+  endpoint?: AgentRequestEndpoint;
   agentAdapter?: AgentAdapterType;
   threadId: string;
   agentType: string;
@@ -84,6 +88,7 @@ export type PrepareAgentCommunicationInput = Omit<AgentCommunicationPreparation,
 type AgentRequestStoreFile = {
   version: number;
   requests: Record<string, AgentRequestRecord>;
+  deliveries?: Record<string, PreparedEndpointDelivery>;
 };
 
 function nowIso(now: () => Date): string {
@@ -99,13 +104,17 @@ function cleanMessageResult(value: unknown): string {
 }
 
 function normalizedParty(value: AgentRequestParty): AgentRequestParty {
-  const threadId = cleanText(value.threadId, 100);
+  const threadId = cleanText(value.threadId, 4096);
+  if (value.threadId !== threadId) throw new Error("Agent party requires complete, unmodified threadId.");
+  const endpoint = value.endpoint ? normalizeAgentRequestEndpoint(value.endpoint) : undefined;
+  if (endpoint && endpoint.sessionId !== threadId) throw new Error("Agent endpoint sessionId does not match party threadId.");
   const agentType = cleanText(value.agentType, 80);
   if (!threadId) throw new Error("Agent request party requires threadId.");
   if (!agentType) throw new Error("Agent request party requires agentType.");
   const workspace = cleanText(value.workspace, 2_000);
   const agentAdapter = parseAgentAdapterType(cleanText(value.agentAdapter, 40));
   return {
+    ...(endpoint ? { endpoint } : {}),
     ...(agentAdapter ? { agentAdapter } : {}),
     threadId,
     agentType,
@@ -165,6 +174,7 @@ function parseRecord(value: unknown): AgentRequestRecord | undefined {
 
 export class AgentRequestStore {
   private readonly requests = new Map<string, AgentRequestRecord>();
+  private readonly deliveries = new Map<string, PreparedEndpointDelivery>();
   private readonly persistence: AgentRequestPersistence;
 
   constructor(
@@ -176,6 +186,26 @@ export class AgentRequestStore {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
     const file = raw as Partial<AgentRequestStoreFile>;
     if (!file.requests || typeof file.requests !== "object" || Array.isArray(file.requests)) return;
+    for (const value of Object.values(file.deliveries ?? {})) {
+      if (value?.deliveryId && value.preparation?.deliveryId === value.deliveryId
+        && value.source && value.target && value.promptHash === agentDeliveryPromptHash(value.prompt)) {
+        try {
+          normalizeAgentRequestEndpoint(value.source);
+          normalizeAgentRequestEndpoint(value.target);
+          if (!value.generation || value.executionOptionsHash !== endpointExecutionOptionsHash(value.executionOptions)
+            || !["prepared", "dispatching", "committed", "cancelled"].includes(value.state)
+            || !sameAgentEndpoint(value.source, value.preparation.source?.endpoint)
+            || !sameAgentEndpoint(value.target, value.preparation.target?.endpoint)
+            || value.preparation.source.threadId !== value.source.sessionId || value.preparation.target.threadId !== value.target.sessionId) continue;
+          if (value.state === "committed" && !value.receipt) continue;
+          if (value.receipt && (value.receipt.accepted !== true || value.receipt.deliveryId !== value.deliveryId
+            || value.receipt.generation !== value.generation || value.receipt.promptHash !== value.promptHash
+            || value.receipt.executionOptionsHash !== value.executionOptionsHash
+            || !sameAgentEndpoint(value.receipt.endpoint, value.target))) continue;
+          this.deliveries.set(value.deliveryId, structuredClone(value));
+        } catch { /* Malformed evidence cannot be used for recovery. */ }
+      }
+    }
     for (const value of Object.values(file.requests)) {
       const record = parseRecord(value);
       if (record) this.requests.set(record.id, record);
@@ -185,7 +215,8 @@ export class AgentRequestStore {
   private persist(): void {
     this.persistence.write({
       version: AGENT_REQUEST_SCHEMA_VERSION,
-      requests: Object.fromEntries([...this.requests.entries()].sort(([left], [right]) => left.localeCompare(right)))
+      requests: Object.fromEntries([...this.requests.entries()].sort(([left], [right]) => left.localeCompare(right))),
+      deliveries: Object.fromEntries(this.deliveries)
     } satisfies AgentRequestStoreFile);
   }
 
@@ -232,6 +263,70 @@ export class AgentRequestStore {
     }
   }
 
+  getEndpointDelivery(deliveryId: string): PreparedEndpointDelivery | undefined {
+    const delivery = this.deliveries.get(deliveryId);
+    return delivery ? structuredClone(delivery) : undefined;
+  }
+
+  listEndpointDeliveries(): PreparedEndpointDelivery[] {
+    return [...this.deliveries.values()].map(value => structuredClone(value));
+  }
+
+  assertEndpointDeliveryActive(deliveryId: string): void {
+    const delivery = this.deliveries.get(deliveryId);
+    if (!delivery || delivery.state === "cancelled") throw new Error("Endpoint delivery is missing or cancelled.");
+    const preparation = delivery.preparation;
+    const request = preparation.requestId ? this.requests.get(preparation.requestId) : undefined;
+    const original = preparation.inReplyToRequestId ? this.requests.get(preparation.inReplyToRequestId) : undefined;
+    if ((preparation.requestId && (!request || request.status === "cancelled" || request.deliveryId !== deliveryId
+        || !sameAgentParty(request.source, preparation.source) || !sameAgentParty(request.target, preparation.target)))
+      || (preparation.inReplyToRequestId && (!original || original.status === "cancelled"
+        || !sameAgentParty(original.target, preparation.source) || !sameAgentParty(original.source, preparation.target)
+        || (original.pendingResponseDeliveryId !== deliveryId && original.response?.deliveryId !== deliveryId)))) {
+      throw new Error("Endpoint request was cancelled or its exact reservation changed; execution and reconciliation are forbidden.");
+    }
+  }
+
+  bindEndpointDelivery(delivery: PreparedEndpointDelivery): void {
+    if (this.deliveries.has(delivery.deliveryId) || delivery.state !== "prepared"
+      || delivery.promptHash !== agentDeliveryPromptHash(delivery.prompt)
+      || delivery.executionOptionsHash !== endpointExecutionOptionsHash(delivery.executionOptions)
+      || delivery.preparation.deliveryId !== delivery.deliveryId
+      || !sameAgentEndpoint(delivery.source, delivery.preparation.source.endpoint)
+      || !sameAgentEndpoint(delivery.target, delivery.preparation.target.endpoint)
+      || delivery.source.sessionId !== delivery.preparation.source.threadId
+      || delivery.target.sessionId !== delivery.preparation.target.threadId) throw new Error("Invalid prepared endpoint delivery.");
+    this.deliveries.set(delivery.deliveryId, structuredClone(delivery));
+    try { this.persist(); } catch (error) { this.deliveries.delete(delivery.deliveryId); throw error; }
+  }
+
+  markEndpointDispatching(deliveryId: string): void {
+    this.assertEndpointDeliveryActive(deliveryId);
+    const delivery = this.deliveries.get(deliveryId)!;
+    if (delivery.state !== "prepared") throw new Error("Endpoint delivery cannot be redispatched.");
+    delivery.state = "dispatching";
+    try { this.persist(); } catch (error) { delivery.state = "prepared"; throw error; }
+  }
+
+  commitEndpointReceipt(deliveryId: string, receipt: EndpointDeliveryReceipt): void {
+    this.assertEndpointDeliveryActive(deliveryId);
+    const delivery = this.deliveries.get(deliveryId)!;
+    if (receipt.accepted !== true || receipt.deliveryId !== delivery.deliveryId || receipt.generation !== delivery.generation
+      || receipt.promptHash !== delivery.promptHash || receipt.executionOptionsHash !== delivery.executionOptionsHash
+      || !sameAgentEndpoint(receipt.endpoint, delivery.target)
+      || !receipt.action || !receipt.transport) throw new Error("Endpoint receipt identity mismatch.");
+    if (delivery.state === "committed") return;
+    if (delivery.state !== "dispatching") throw new Error("Endpoint delivery was not dispatched.");
+    const before = structuredClone(delivery);
+    delivery.state = "committed";
+    delivery.receipt = structuredClone(receipt);
+    try {
+      const tracked = delivery.preparation.requestId || delivery.preparation.inReplyToRequestId;
+      this.commit(delivery.preparation, receipt);
+      if (!tracked) this.persist();
+    } catch (error) { this.deliveries.set(deliveryId, before); throw error; }
+  }
+
   get(requestId: string): AgentRequestRecord | undefined {
     const record = this.requests.get(cleanText(requestId, 100));
     return record ? structuredClone(record) : undefined;
@@ -244,7 +339,7 @@ export class AgentRequestStore {
   }
 
   hasManagedSession(threadId: string, workspace?: string): boolean {
-    const id = cleanText(threadId, 100);
+    const id = cleanText(threadId, 4096);
     return [...this.requests.values()].some((record) => (
       (record.source.threadId === id && workspaceMatches(record.source.workspace, workspace))
       || (record.target.threadId === id && workspaceMatches(record.target.workspace, workspace))
@@ -263,6 +358,8 @@ export class AgentRequestStore {
     const timestamp = nowIso(this.now);
     for (const record of this.requests.values()) {
       if (record.status !== "pending_delivery" && record.status !== "awaiting_response") continue;
+      // Endpoint-bound requests never follow pool/session replacements, including remote ABA.
+      if (record.source.endpoint || record.target.endpoint) continue;
       const source = resolve(structuredClone(record.source), structuredClone(record), "source");
       const target = resolve(structuredClone(record.target), structuredClone(record), "target");
       if (source === undefined && target === undefined) continue;
@@ -324,13 +421,12 @@ export class AgentRequestStore {
     if (!record || record.status !== "awaiting_response") return undefined;
     const source = normalizedParty(respondingParty);
     const target = normalizedParty(requestedTarget);
-    if (source.threadId !== record.target.threadId || !workspaceMatches(source.workspace, record.target.workspace)) {
+    if (!sameAgentParty(source, record.target)) {
       return undefined;
     }
-    const requestedMatchesCurrent = target.threadId === record.source.threadId
-      && workspaceMatches(target.workspace, record.source.workspace);
-    const requestedMatchesHistory = (record.sourceHistory ?? []).some((party) =>
-      target.threadId === party.threadId && workspaceMatches(target.workspace, party.workspace)
+    const requestedMatchesCurrent = sameAgentParty(target, record.source);
+    const requestedMatchesHistory = !record.source.endpoint && (record.sourceHistory ?? []).some((party) =>
+      sameAgentParty(target, party)
     );
     return requestedMatchesCurrent || requestedMatchesHistory
       ? structuredClone(record.source)
@@ -340,7 +436,7 @@ export class AgentRequestStore {
   prepare(input: PrepareAgentCommunicationInput): AgentCommunicationPreparation {
     const source = normalizedParty(input.source);
     const target = normalizedParty(input.target);
-    if (source.threadId === target.threadId) throw new Error("Agent request source and target task must be different.");
+    if (sameAgentParty(source, target)) throw new Error("Agent request source and target task must be different.");
     const responsePolicy = input.responsePolicy;
     if (responsePolicy !== "required" && responsePolicy !== "none") {
       throw new Error("responsePolicy must be required or none.");
@@ -354,6 +450,7 @@ export class AgentRequestStore {
     const nextAction = cleanText(input.nextAction, 4_000) || undefined;
     const deliveryId = randomUUID();
     let repliedRequest: AgentRequestRecord | undefined;
+    let repliedBefore: AgentRequestRecord | undefined;
     if (inReplyToRequestId) {
       repliedRequest = this.requests.get(inReplyToRequestId);
       if (!repliedRequest) throw new Error(`Agent request not found: ${inReplyToRequestId}`);
@@ -363,15 +460,17 @@ export class AgentRequestStore {
       if (repliedRequest.pendingResponseDeliveryId) {
         throw new Error(`Agent request already has a response delivery in progress: ${inReplyToRequestId}`);
       }
-      if (source.threadId !== repliedRequest.target.threadId || target.threadId !== repliedRequest.source.threadId) {
+      if (!sameAgentParty(source, repliedRequest.target) || !sameAgentParty(target, repliedRequest.source)) {
         throw new Error("Agent response must be sent from the original target task back to the original source task.");
       }
-      if (!workspaceMatches(source.workspace, repliedRequest.target.workspace)
-        || !workspaceMatches(target.workspace, repliedRequest.source.workspace)) {
+      if ((!source.endpoint || !target.endpoint || !repliedRequest.source.endpoint || !repliedRequest.target.endpoint)
+        && (!workspaceMatches(source.workspace, repliedRequest.target.workspace)
+          || !workspaceMatches(target.workspace, repliedRequest.source.workspace))) {
         throw new Error("Agent response workspace does not match the original request.");
       }
       if (!result) throw new Error("result is required when replying to an Agent request.");
       if (!nextAction) throw new Error("nextAction is required when replying to an Agent request.");
+      repliedBefore = structuredClone(repliedRequest);
       repliedRequest.pendingResponseDeliveryId = deliveryId;
       repliedRequest.updatedAt = nowIso(this.now);
     } else if (result || nextAction) {
@@ -398,7 +497,7 @@ export class AgentRequestStore {
       });
     }
     if (repliedRequest || requestId) {
-      this.persistMutations([
+      try { this.persistMutations([
         ...(repliedRequest ? [{
           action: "response_reserved",
           requestId: repliedRequest.id,
@@ -411,7 +510,11 @@ export class AgentRequestStore {
           afterStatus: "pending_delivery" as AgentRequestStatus,
           changes: [{ field: "created" }]
         }] : [])
-      ]);
+      ]); } catch (error) {
+        if (requestId) this.requests.delete(requestId);
+        if (repliedBefore) this.requests.set(repliedBefore.id, repliedBefore);
+        throw error;
+      }
     }
     return {
       deliveryId,
@@ -531,7 +634,12 @@ export class AgentRequestStore {
   }
 
   abort(preparation: AgentCommunicationPreparation): void {
-    let changed = false;
+    const endpointDelivery = this.deliveries.get(preparation.deliveryId);
+    if (endpointDelivery && endpointDelivery.state !== "prepared") throw new Error("Dispatched endpoint delivery cannot release its durable reservation.");
+    const before = [preparation.requestId, preparation.inReplyToRequestId]
+      .flatMap(id => id && this.requests.has(id) ? [[id, structuredClone(this.requests.get(id)!)] as const] : []);
+    let changed = !!endpointDelivery;
+    if (endpointDelivery) this.deliveries.delete(preparation.deliveryId);
     if (preparation.inReplyToRequestId) {
       const current = this.requests.get(preparation.inReplyToRequestId);
       if (current?.pendingResponseDeliveryId === preparation.deliveryId) {
@@ -549,16 +657,22 @@ export class AgentRequestStore {
       }
     }
     if (changed) {
-      this.persistMutations([{
-        action: "preparation_aborted",
-        requestId: preparation.inReplyToRequestId ?? preparation.requestId ?? preparation.deliveryId,
-        changes: [{ field: "delivery_reservation" }]
-      }]);
+      try {
+        this.persistMutations([{
+          action: "preparation_aborted",
+          requestId: preparation.inReplyToRequestId ?? preparation.requestId ?? preparation.deliveryId,
+          changes: [{ field: "delivery_reservation" }]
+        }]);
+      } catch (error) {
+        for (const [id, record] of before) this.requests.set(id, record);
+        if (endpointDelivery) this.deliveries.set(endpointDelivery.deliveryId, endpointDelivery);
+        throw error;
+      }
     }
   }
 
   recordTargetTurnEnded(threadId: string, workspace: string | undefined, turnId: string, endedAt = this.now()): AgentRequestRecord[] {
-    const id = cleanText(threadId, 100);
+    const id = cleanText(threadId, 4096);
     const normalizedTurnId = cleanText(turnId, 200);
     if (!id || !normalizedTurnId) return [];
     const timestamp = endedAt.toISOString();
@@ -641,6 +755,10 @@ export class AgentRequestStore {
     if (!record) throw new Error(`Agent request not found: ${requestId}`);
     if (record.status === "responded" || record.status === "cancelled") return structuredClone(record);
     const beforeStatus = record.status;
+    const before = structuredClone(record);
+    const affected = [...this.deliveries.values()].filter(delivery => delivery.preparation.requestId === record.id || delivery.preparation.inReplyToRequestId === record.id);
+    const deliveryBefore = affected.map(delivery => structuredClone(delivery));
+    for (const delivery of affected) delivery.state = "cancelled";
     const timestamp = nowIso(this.now);
     record.status = "cancelled";
     record.cancelledAt = timestamp;
@@ -649,12 +767,18 @@ export class AgentRequestStore {
     record.pendingResponseDeliveryId = undefined;
     record.pendingResponseEvidence = undefined;
     record.updatedAt = timestamp;
-    this.persistMutations([{
-      action: "cancelled",
-      requestId: record.id,
-      beforeStatus,
-      afterStatus: record.status
-    }]);
+    try {
+      this.persistMutations([{
+        action: "cancelled",
+        requestId: record.id,
+        beforeStatus,
+        afterStatus: record.status
+      }]);
+    } catch (error) {
+      this.requests.set(record.id, before);
+      for (const delivery of deliveryBefore) this.deliveries.set(delivery.deliveryId, delivery);
+      throw error;
+    }
     return structuredClone(record);
   }
 }

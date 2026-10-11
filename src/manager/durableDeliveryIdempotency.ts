@@ -36,6 +36,8 @@ export type DurableDeliveryOptions<TResult> = {
   deliveryId: unknown;
   payload: unknown;
   audit?: unknown;
+  /** Internal original-admission fence; never part of payload, audit or digest. */
+  requestAuthority?: () => void;
   deliver: () => Promise<TResult>;
   recover?: (error: unknown) => Promise<
     | { state: "completed"; result: TResult }
@@ -64,6 +66,8 @@ export type DurableDeliveryReconcileOptions<TResult> = {
   namespace: string;
   deliveryId: unknown;
   payload: unknown;
+  /** Nonserialized admission fence, checked before disclosure and durable commit. */
+  requestAuthority?: () => void;
   verify: (receipt: Readonly<DurableDeliveryReceipt<TResult>>) => Promise<DurableDeliveryVerification<TResult>>;
 };
 
@@ -75,13 +79,14 @@ const RECEIPT_HEARTBEAT_STATUS_INDEX = 1;
 const RECEIPT_HEARTBEAT_FAILURE_INDEX = 2;
 const RECEIPT_HEARTBEAT_STARTING = 0;
 const RECEIPT_HEARTBEAT_ACTIVE = 1;
+const RECEIPT_HEARTBEAT_FAILED = 2;
 const RECEIPT_HEARTBEAT_STOPPED = 3;
 const RECEIPT_HEARTBEAT_CONTROL_WORDS = 4;
 const RECEIPT_HEARTBEAT_WAIT_TIMEOUT_MS = 10_000;
 
 const RECEIPT_HEARTBEAT_WORKER_SOURCE = String.raw`
 const fs = require("node:fs");
-const { workerData } = require("node:worker_threads");
+const { workerData, parentPort } = require("node:worker_threads");
 const control = new Int32Array(workerData.control);
 const STOP_INDEX = 0;
 const STATUS_INDEX = 1;
@@ -102,6 +107,7 @@ const FAILURE_MUTATION_LOCKED = 7;
 function publishStatus(status) {
   Atomics.store(control, STATUS_INDEX, status);
   Atomics.notify(control, STATUS_INDEX);
+  parentPort.postMessage(status);
 }
 
 function fail(code) {
@@ -343,8 +349,10 @@ function reserveReceipt<TResult>(
   digest: string,
   executionId: string,
   leaseMs: number,
-  audit?: unknown
+  audit?: unknown,
+  requestAuthority?: () => void
 ): { created: boolean; receipt: DurableDeliveryReceipt<TResult> | null } {
+  requestAuthority?.();
   const filePath = durableDeliveryReceiptPath(rootDir, namespace, deliveryId);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const now = new Date().toISOString();
@@ -365,6 +373,7 @@ function reserveReceipt<TResult>(
   };
   let descriptor: number | undefined;
   try {
+    requestAuthority?.();
     descriptor = fs.openSync(filePath, "wx");
     fs.writeFileSync(descriptor, `${JSON.stringify(receipt, null, 2)}\n`, "utf8");
     fs.fsyncSync(descriptor);
@@ -517,9 +526,11 @@ export async function reconcileDurableDelivery<TResult>(
     ({ state, deliveryId, duplicate: true, reason });
   const uncertain = (reason: string) => pending("uncertain", reason);
   try {
+    options.requestAuthority?.();
     const digest = requestDigest(options.payload);
     const snapshot = readDurableDeliveryReceiptSnapshot<TResult>(options.rootDir, options.namespace, deliveryId);
     if (!snapshot) return uncertain("The delivery receipt is missing, unreadable or unstable; do not resend.");
+    options.requestAuthority?.();
     const current = snapshot.receipt;
     if (current.requestDigest !== digest) {
       return pending("conflict", "The deliveryId belongs to a different payload.");
@@ -533,12 +544,15 @@ export async function reconcileDurableDelivery<TResult>(
     }
     // Give the trusted verifier its own copy so it cannot mutate the CAS input.
     const verification = await options.verify(structuredClone(current));
+    options.requestAuthority?.();
     if (!verification || verification.state !== "completed" || verification.result === undefined) {
       return uncertain(verification?.state === "uncertain" && typeof verification.reason === "string"
         ? verification.reason : "Verification did not prove a completed delivery.");
     }
     return withReceiptMutationLock(options.rootDir, options.namespace, deliveryId, () => {
+      options.requestAuthority?.();
       const latest = readDurableDeliveryReceiptSnapshot<TResult>(options.rootDir, options.namespace, deliveryId);
+      options.requestAuthority?.();
       if (!latest) return uncertain("The receipt disappeared or became unreadable during verification.");
       if (latest.receipt.requestDigest !== digest) {
         return pending("conflict", "The receipt payload changed during verification.");
@@ -551,6 +565,7 @@ export async function reconcileDurableDelivery<TResult>(
         return pending("in_progress", "An active execution acquired this delivery during verification.");
       }
       if (latest.revision !== snapshot.revision) return uncertain("The receipt snapshot changed during verification.");
+      options.requestAuthority?.();
       const committed = writeReceipt(options.rootDir, options.namespace, {
         ...latest.receipt,
         state: "completed",
@@ -564,7 +579,9 @@ export async function reconcileDurableDelivery<TResult>(
         leaseDurationMs: undefined,
         renewal: undefined
       });
+      options.requestAuthority?.();
       const readback = readDurableDeliveryReceiptSnapshot<TResult>(options.rootDir, options.namespace, deliveryId);
+      options.requestAuthority?.();
       if (!readback || stableJson(readback.receipt) !== stableJson(JSON.parse(JSON.stringify(committed)))) {
         return uncertain("The reconciled receipt could not be verified after persistence; do not resend.");
       }
@@ -584,9 +601,12 @@ function claimReceipt<TResult>(input: Readonly<{
   executionId: string;
   leaseMs: number;
   allowUncertain: boolean;
+  requestAuthority?: () => void;
 }>): DurableDeliveryClaim<TResult> {
+  input.requestAuthority?.();
   return withReceiptMutationLock(input.rootDir, input.namespace, input.deliveryId, () => {
     const current = readDurableDeliveryReceipt<TResult>(input.rootDir, input.namespace, input.deliveryId);
+    input.requestAuthority?.();
     if (!current || current.requestDigest !== input.digest) return { claimed: false, receipt: current };
     if (current.state === "completed") return { claimed: false, receipt: current };
     if (current.state === "uncertain" && !input.allowUncertain) return { claimed: false, receipt: current };
@@ -614,15 +634,19 @@ function mutateOwnedReceipt<TResult>(input: Readonly<{
   deliveryId: string;
   digest: string;
   executionId: string;
+  requestAuthority?: () => void;
   mutate: (current: DurableDeliveryReceipt<TResult>) => DurableDeliveryReceipt<TResult> | null;
 }>): DurableDeliveryReceipt<TResult> | null {
+  input.requestAuthority?.();
   return withReceiptMutationLock(input.rootDir, input.namespace, input.deliveryId, () => {
     const current = readDurableDeliveryReceipt<TResult>(input.rootDir, input.namespace, input.deliveryId);
+    input.requestAuthority?.();
     if (!current
       || current.requestDigest !== input.digest
       || current.executionId !== input.executionId
       || current.state !== "sending") return null;
     const next = input.mutate(current);
+    input.requestAuthority?.();
     if (!next) {
       try {
         fs.unlinkSync(durableDeliveryReceiptPath(input.rootDir, input.namespace, input.deliveryId));
@@ -671,19 +695,32 @@ function heartbeatFailure(failure: number, phase: string): Error & { code: strin
   });
 }
 
-function waitForReceiptHeartbeatTransition(control: Int32Array, expected: number): number {
-  const deadline = Date.now() + RECEIPT_HEARTBEAT_WAIT_TIMEOUT_MS;
-  let status = Atomics.load(control, RECEIPT_HEARTBEAT_STATUS_INDEX);
-  while (status === expected) {
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) return status;
-    Atomics.wait(control, RECEIPT_HEARTBEAT_STATUS_INDEX, expected, Math.min(remaining, 250));
-    status = Atomics.load(control, RECEIPT_HEARTBEAT_STATUS_INDEX);
-  }
-  return status;
+function waitForReceiptHeartbeatTransition(worker: Worker, control: Int32Array, expected: number): Promise<number> {
+  const deadlineAt = Date.now() + RECEIPT_HEARTBEAT_WAIT_TIMEOUT_MS;
+  const current = (): number => Atomics.load(control, RECEIPT_HEARTBEAT_STATUS_INDEX);
+  if (current() !== expected) return Promise.resolve(current());
+  return new Promise(resolve => {
+    const finish = (status: number): void => {
+      clearTimeout(timer);
+      worker.off("message", onStatus);
+      worker.off("error", onFailure);
+      worker.off("exit", onExit);
+      resolve(Date.now() > deadlineAt ? RECEIPT_HEARTBEAT_FAILED : status);
+    };
+    const onStatus = (): void => {
+      if (current() !== expected) finish(current());
+    };
+    const onFailure = (): void => finish(RECEIPT_HEARTBEAT_FAILED);
+    const onExit = (): void => finish(current() === RECEIPT_HEARTBEAT_STOPPED ? RECEIPT_HEARTBEAT_STOPPED : RECEIPT_HEARTBEAT_FAILED);
+    const timer = setTimeout(onFailure, Math.max(0, deadlineAt - Date.now()));
+    worker.on("message", onStatus);
+    worker.once("error", onFailure);
+    worker.once("exit", onExit);
+    onStatus();
+  });
 }
 
-function startReceiptHeartbeat(input: Readonly<{
+async function startReceiptHeartbeat(input: Readonly<{
   rootDir: string;
   namespace: string;
   deliveryId: string;
@@ -692,7 +729,7 @@ function startReceiptHeartbeat(input: Readonly<{
   ownerHost: string;
   ownerPid: number;
   leaseMs: number;
-}>): () => void {
+}>): Promise<() => Promise<void>> {
   const receiptPath = durableDeliveryReceiptPath(input.rootDir, input.namespace, input.deliveryId);
   const intervalMs = Math.max(50, Math.floor(input.leaseMs / 3));
   const control = new Int32Array(new SharedArrayBuffer(
@@ -715,30 +752,30 @@ function startReceiptHeartbeat(input: Readonly<{
       version: RECEIPT_VERSION
     }
   });
-  worker.unref();
   worker.on("error", () => undefined);
 
-  const startupStatus = waitForReceiptHeartbeatTransition(control, RECEIPT_HEARTBEAT_STARTING);
+  const startupStatus = await waitForReceiptHeartbeatTransition(worker, control, RECEIPT_HEARTBEAT_STARTING);
   if (startupStatus !== RECEIPT_HEARTBEAT_ACTIVE) {
     Atomics.store(control, RECEIPT_HEARTBEAT_STOP_INDEX, 1);
     Atomics.notify(control, RECEIPT_HEARTBEAT_STOP_INDEX);
-    void worker.terminate().catch(() => undefined);
+    await worker.terminate();
     throw heartbeatFailure(
       Atomics.load(control, RECEIPT_HEARTBEAT_FAILURE_INDEX),
       startupStatus === RECEIPT_HEARTBEAT_STARTING ? "heartbeat startup" : "initial renewal"
     );
   }
 
-  let stopped = false;
+  worker.unref();
+  let stopFlight: Promise<void> | undefined;
   return () => {
-    if (stopped) return;
-    stopped = true;
-    Atomics.store(control, RECEIPT_HEARTBEAT_STOP_INDEX, 1);
-    Atomics.notify(control, RECEIPT_HEARTBEAT_STOP_INDEX);
-    const status = waitForReceiptHeartbeatTransition(control, RECEIPT_HEARTBEAT_ACTIVE);
-    if (status !== RECEIPT_HEARTBEAT_STOPPED) {
-      void worker.terminate().catch(() => undefined);
-    }
+    return stopFlight ??= (async () => {
+      worker.ref();
+      Atomics.store(control, RECEIPT_HEARTBEAT_STOP_INDEX, 1);
+      Atomics.notify(control, RECEIPT_HEARTBEAT_STOP_INDEX);
+      await waitForReceiptHeartbeatTransition(worker, control, RECEIPT_HEARTBEAT_ACTIVE);
+      await worker.terminate();
+      worker.unref();
+    })();
   };
 }
 
@@ -746,15 +783,21 @@ async function waitForTerminal<TResult>(
   rootDir: string,
   namespace: string,
   deliveryId: string,
-  timeoutMs: number
+  timeoutMs: number,
+  requestAuthority?: () => void
 ): Promise<DurableDeliveryReceipt<TResult> | null> {
   const deadline = Date.now() + Math.max(0, timeoutMs);
   while (Date.now() < deadline) {
+    requestAuthority?.();
     const receipt = readDurableDeliveryReceipt<TResult>(rootDir, namespace, deliveryId);
+    requestAuthority?.();
     if (!receipt || receipt.state === "completed" || receipt.state === "uncertain") return receipt;
     await new Promise(resolve => setTimeout(resolve, 10));
   }
-  return readDurableDeliveryReceipt<TResult>(rootDir, namespace, deliveryId);
+  requestAuthority?.();
+  const receipt = readDurableDeliveryReceipt<TResult>(rootDir, namespace, deliveryId);
+  requestAuthority?.();
+  return receipt;
 }
 
 function pendingOutcome<TResult>(
@@ -781,6 +824,7 @@ function settleOwnedResult<TResult>(
     deliveryId: receipt.deliveryId,
     digest,
     executionId,
+    requestAuthority: options.requestAuthority,
     mutate: current => retryable ? null : ({
       ...current,
       state: "completed",
@@ -805,6 +849,7 @@ function settleOwnedResult<TResult>(
       duplicate
     );
   }
+  options.requestAuthority?.();
   return { state: "completed", deliveryId: receipt.deliveryId, duplicate, result };
 }
 
@@ -821,6 +866,7 @@ function markOwnedUncertain<TResult>(
     deliveryId: receipt.deliveryId,
     digest,
     executionId,
+    requestAuthority: options.requestAuthority,
     mutate: current => ({
       ...current,
       state: "uncertain",
@@ -848,6 +894,7 @@ function releaseOwnedSending<TResult>(
     deliveryId: receipt.deliveryId,
     digest,
     executionId,
+    requestAuthority: options.requestAuthority,
     mutate: current => ({
       ...current,
       updatedAt: new Date().toISOString(),
@@ -871,14 +918,15 @@ async function executeClaimedDelivery<TResult>(input: Readonly<{
   recoveryError?: unknown;
 }>): Promise<DurableDeliveryOutcome<TResult>> {
   const { options, receipt, digest, executionId } = input;
-  let stopHeartbeat: () => void;
+  options.requestAuthority?.();
+  let stopHeartbeat: () => Promise<void>;
   try {
     const ownerHost = String(receipt.ownerHost || "");
     const ownerPid = Number(receipt.ownerPid);
     if (!ownerHost || !Number.isInteger(ownerPid) || ownerPid <= 0) {
       throw new Error("Durable delivery receipt has no valid execution owner.");
     }
-    stopHeartbeat = startReceiptHeartbeat({
+    stopHeartbeat = await startReceiptHeartbeat({
       rootDir: options.rootDir,
       namespace: options.namespace,
       deliveryId: receipt.deliveryId,
@@ -889,6 +937,7 @@ async function executeClaimedDelivery<TResult>(input: Readonly<{
       leaseMs: input.leaseMs
     });
   } catch (error) {
+    options.requestAuthority?.();
     const reason = error instanceof Error ? error.message : String(error);
     const retained = markOwnedUncertain(options, receipt, digest, executionId, reason);
     return pendingOutcome(
@@ -913,9 +962,12 @@ async function executeClaimedDelivery<TResult>(input: Readonly<{
   };
   const deliverOnce = async (duplicate: boolean): Promise<DurableDeliveryOutcome<TResult>> => {
     try {
+      options.requestAuthority?.();
       const result = await options.deliver();
+      options.requestAuthority?.();
       return settleOwnedResult(options, receipt, digest, executionId, result, duplicate);
     } catch (error) {
+      options.requestAuthority?.();
       const reason = error instanceof Error ? error.message : String(error);
       return uncertain(
         `${reason} The one authorized recovery retry did not produce a terminal receipt; do not resend automatically.`,
@@ -931,8 +983,11 @@ async function executeClaimedDelivery<TResult>(input: Readonly<{
       }
       let recovery: Awaited<ReturnType<NonNullable<DurableDeliveryOptions<TResult>["recover"]>>>;
       try {
+        options.requestAuthority?.();
         recovery = await options.recover(input.recoveryError);
+        options.requestAuthority?.();
       } catch (error) {
+        options.requestAuthority?.();
         const reason = error instanceof Error ? error.message : String(error);
         return uncertain(`${reason} Recovery could not determine the earlier delivery result.`, true);
       }
@@ -945,17 +1000,23 @@ async function executeClaimedDelivery<TResult>(input: Readonly<{
     }
 
     try {
+      options.requestAuthority?.();
       const result = await options.deliver();
+      options.requestAuthority?.();
       return settleOwnedResult(options, receipt, digest, executionId, result, false);
     } catch (error) {
+      options.requestAuthority?.();
       if (!options.recover) {
         const message = error instanceof Error ? error.message : String(error);
         return uncertain(`${message} The send result is uncertain; do not resend automatically.`, false);
       }
       let recovery: Awaited<ReturnType<NonNullable<DurableDeliveryOptions<TResult>["recover"]>>>;
       try {
+        options.requestAuthority?.();
         recovery = await options.recover(error);
+        options.requestAuthority?.();
       } catch (recoveryError) {
+        options.requestAuthority?.();
         const reason = recoveryError instanceof Error ? recoveryError.message : String(recoveryError);
         return uncertain(`${reason} Recovery could not determine the delivery result.`, false);
       }
@@ -967,16 +1028,18 @@ async function executeClaimedDelivery<TResult>(input: Readonly<{
       return uncertain(recovery.reason, false);
     }
   } catch (error) {
+    options.requestAuthority?.();
     const reason = error instanceof Error ? error.message : String(error);
     return uncertain(`${reason} The delivery owner failed before committing a terminal receipt.`, input.recoverFirst);
   } finally {
-    stopHeartbeat();
+    await stopHeartbeat();
   }
 }
 
 export async function executeDurableDelivery<TResult>(
   options: DurableDeliveryOptions<TResult>
 ): Promise<DurableDeliveryOutcome<TResult>> {
+  options.requestAuthority?.();
   const deliveryId = normalizeDurableDeliveryId(options.deliveryId);
   const digest = requestDigest(options.payload);
   const executionId = randomUUID();
@@ -988,8 +1051,10 @@ export async function executeDurableDelivery<TResult>(
     digest,
     executionId,
     leaseMs,
-    options.audit
+    options.audit,
+    options.requestAuthority
   );
+  options.requestAuthority?.();
   if (reservation.created) {
     return executeClaimedDelivery({
       options,
@@ -1012,8 +1077,10 @@ export async function executeDurableDelivery<TResult>(
       options.rootDir,
       options.namespace,
       deliveryId,
-      options.waitForCompletionMs ?? DEFAULT_WAIT_MS
+      options.waitForCompletionMs ?? DEFAULT_WAIT_MS,
+      options.requestAuthority
     ) || existing;
+    options.requestAuthority?.();
     if (existing.requestDigest !== digest) {
       return pendingOutcome(deliveryId, "conflict", "The deliveryId is already reserved for a different payload.");
     }
@@ -1035,8 +1102,10 @@ export async function executeDurableDelivery<TResult>(
     digest,
     executionId,
     leaseMs,
-    allowUncertain: existing.state === "uncertain" && options.recoverExistingUncertain === true
+    allowUncertain: existing.state === "uncertain" && options.recoverExistingUncertain === true,
+    requestAuthority: options.requestAuthority
   });
+  options.requestAuthority?.();
   if (!claim.claimed || !claim.receipt) {
     const current = claim.receipt;
     if (!current) return pendingOutcome(deliveryId, "uncertain", "The delivery receipt became unreadable while acquiring execution ownership.");

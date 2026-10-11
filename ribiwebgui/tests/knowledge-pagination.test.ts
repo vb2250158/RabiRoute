@@ -209,7 +209,7 @@ test("knowledge page requests bounded plan pages and progressively renders plans
   assert.match(page, /const planRenderLimit = ref\(8\)/);
   assert.match(page, /const planRenderStart = ref\(0\)/);
   assert.match(page, /const memoryRenderLimit = ref\(24\)/);
-  assert.match(page, /loadRoleKnowledgeFileCounts\(selectedRoleId\)/);
+  assert.match(page, /loadRoleKnowledgeFileCounts\(selectedRoleId, controller.signal\)/);
   assert.match(page, /loadPendingMemoryConsolidationRunCount\(expectedRoleId\)/);
   assert.doesNotMatch(page, /fetch\(managerResourceUrl\(`\/api\/roles\/\$\{encodeURIComponent\(expectedRoleId\)\}\/memory\/consolidation-runs/);
 

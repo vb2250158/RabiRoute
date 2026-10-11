@@ -46,6 +46,8 @@ const encoded = ${JSON.stringify(encoded)};
 const files = Object.fromEntries(Object.entries(encoded).map(([file, base64]) => [file, Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))]));
 const previewStarts = [];
 const runtimeStarts = [];
+const startsBeforeGestures = [];
+const speechTrace = [];
 let previewView;
 let runtimeView;
 let previewOpenBundleMs = 0;
@@ -62,9 +64,17 @@ function unstableSpeech(viewFor, starts, errorFirst = false) {
   return {
     startRecognition(request) {
       starts.push(Date.now());
+      speechTrace.push({event:'start',at:Date.now(),targetId:request.targetId,sessionId:request.sessionId});
+      setTimeout(() => {
+        speechTrace.push({event:'start-dispatch',at:Date.now(),targetId:request.targetId,sessionId:request.sessionId});
+        viewFor().getHostCapabilitiesTarget().dispatchEvent(new CustomEvent("speech.start", {
+          detail: { targetId: request.targetId, sessionId: request.sessionId }
+        }));
+      }, 0);
       setTimeout(() => {
         const target = viewFor().getHostCapabilitiesTarget();
         if (errorFirst && starts.length === 1) {
+          speechTrace.push({event:'error-dispatch',at:Date.now(),targetId:request.targetId,sessionId:request.sessionId});
           target.dispatchEvent(new CustomEvent("speech.error", {
             detail: {
               targetId: request.targetId,
@@ -80,8 +90,8 @@ function unstableSpeech(viewFor, starts, errorFirst = false) {
         }));
       }, 80);
     },
-    stopRecognition() {},
-    abortRecognition() {},
+    stopRecognition(request) {speechTrace.push({event:'stop',at:Date.now(),sessionId:request?.sessionId});},
+    abortRecognition(request) {speechTrace.push({event:'abort',at:Date.now(),sessionId:request?.sessionId});},
     speak() {}
   };
 }
@@ -122,6 +132,21 @@ try {
   runtimeView.startRendering();
   runtimeView.setInteractive(true);
   runtimeView.dispatchVoiceWakeup("leqi", Date.now());
+  speechTrace.push({event:'wake-returned',at:Date.now(),index:0,starts:runtimeStarts.length});
+  // The next user gesture follows an observed Page terminal callback, not an
+  // assumption that a browser-side host dispatch has already reached QuickJS.
+  const gestureCount = ${soakMode ? 5 : 2};
+  let gestureIndex = 0;
+  globalThis.__startupAfterSpeechTerminal = () => {
+    if (gestureIndex + 1 >= gestureCount) return;
+    const index = ++gestureIndex;
+    speechTrace.push({event:'page-terminal-observed',at:Date.now(),index});
+    setTimeout(() => {
+      startsBeforeGestures.push(runtimeStarts.length);
+      runtimeView.dispatchVoiceWakeup("leqi", Date.now());
+      speechTrace.push({event:'wake-returned',at:Date.now(),index,starts:runtimeStarts.length});
+    }, 500);
+  };
 
   setTimeout(() => {
     clearInterval(heartbeat);
@@ -129,6 +154,8 @@ try {
       ok: previewView.isRunning() && runtimeView.isRunning(),
       previewStarts: previewStarts.length,
       runtimeStarts: runtimeStarts.length,
+      startsBeforeGestures,
+      speechTrace,
       previewIntervals: previewStarts.slice(1).map((value, index) => value - previewStarts[index]),
       runtimeIntervals: runtimeStarts.slice(1).map((value, index) => value - runtimeStarts[index]),
       previewOpenBundleMs: Math.round(previewOpenBundleMs),
@@ -189,6 +216,19 @@ let server;
 let browser;
 try {
   await buildPackageStaging(stagingRoot);
+  if (process.env.AIUI_STARTUP_TRACE === "1") {
+    const file = path.join(stagingRoot, "pages/home/index.js");
+    let source = fs.readFileSync(file, "utf8");
+    for (const [marker, extra] of [
+      ['onVoiceWakeup(event) {', 'console.log("startup-page-wake", Date.now(), JSON.stringify({recognition:!!this.recognition,desired:this.data.transcriptionDesired,listening:this.data.transcriptionListening,busy:this.data.assistantModelBusy,speaking:this.data.agentSpeaking}));'],
+      ['onError: (error) => {', 'console.log("startup-page-error", Date.now(), String(error?.nativeCode || error?.code));'],
+      ['const finishRound = (outcome) => {', 'console.log("startup-page-finish", Date.now(), outcome, roundFinished, this.recognition===recognition);']
+    ]) {
+      if (!source.includes(marker)) fail("Missing startup diagnostic marker: " + marker);
+      source = source.replace(marker, marker + extra);
+    }
+    fs.writeFileSync(file, source);
+  }
   const encoded = collectBundleFiles(stagingRoot);
   server = await startServer(harnessHtml(encoded, testDurationMs));
   const address = server.address();
@@ -210,7 +250,11 @@ try {
     ]
   });
   const page = await browser.newPage({ viewport: { width: 480, height: 502 }, deviceScaleFactor: 1 });
-  page.on("console", (message) => logs.push(`${message.type()}: ${message.text()}`));
+  page.on("console", (message) => {
+    const text = message.text(); logs.push(`${message.type()}: ${text}`);
+    if (/\[RabiLink AIUI\] transcription-asr:(error|end)/.test(text))
+      void page.evaluate(() => globalThis.__startupAfterSpeechTerminal?.()).catch(error => pageErrors.push(String(error)));
+  });
   page.on("pageerror", (error) => pageErrors.push(error.stack || error.message));
   await page.goto(`http://127.0.0.1:${address.port}/`, { waitUntil: "networkidle" });
   await page.waitForFunction(() => globalThis.__startupSafety, null, { timeout: testDurationMs + 10000 });
@@ -228,17 +272,20 @@ try {
       heartbeatGapMs: heartbeatBudgetMs
     },
     errors: pageErrors,
-    relevantLogs: logs.filter((line) => /speech|recognition|error|failed/i.test(line)).slice(-80)
+    relevantLogs: logs.filter((line) => /speech|recognition|error|failed|page:on|唤醒|识别/i.test(line)).slice(-80),
+    consoleLogs: logs
   };
   fs.mkdirSync(path.dirname(reportPath), { recursive: true });
   fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
 
   const minimumRuntimeStarts = soakMode ? 5 : 2;
-  const maximumRuntimeStarts = soakMode ? 5 : 3;
+  const maximumRuntimeStarts = minimumRuntimeStarts;
   const startupSafe = result?.ok === true
     && result.previewStarts === 0
     && result.runtimeStarts >= minimumRuntimeStarts
     && result.runtimeStarts <= maximumRuntimeStarts
+    && result.startsBeforeGestures.length === minimumRuntimeStarts - 1
+    && result.startsBeforeGestures.every((count, index) => count === index + 1)
     && result.previewOpenBundleMs <= 1000
     && result.runtimeOpenBundleMs <= 1000
     && openBundleTotalMs <= 1400

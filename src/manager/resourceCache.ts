@@ -4,6 +4,8 @@ import { createHash, randomUUID } from "node:crypto";
 import type http from "node:http";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 import { withResourceCacheSettingsLock } from "./recordingArchiveBindings.js";
+import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
+import { localModelSettingsRequestAllowed } from "./speechModelSettingsAccess.js";
 
 const digest = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
 const validId = (id: string) => /^[a-f0-9]{64}$/.test(id);
@@ -21,7 +23,7 @@ export class ResourceCache {
     }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; return { directory: path.join(this.stateDir, "resource-cache") }; }
   }
-  private async atomic(file: string, body: Buffer) {
+  private async atomic(file: string, body: Buffer, authorize: () => void = () => {}) {
     const audit = (outcome: "started" | "committed" | "failed") => recordDataMutationAudit({
       group: "resource-cache", event: "resource_file_write", owner: "resource-cache",
       action: "write", target: { type: "resource-file", id: digest(file) },
@@ -29,11 +31,14 @@ export class ResourceCache {
     });
     audit("started");
     try {
+      authorize();
       await fs.mkdir(path.dirname(file), { recursive: true });
       const temporary = file + "." + randomUUID() + ".partial";
       try {
+        authorize();
         const handle = await fs.open(temporary, "wx");
-        try { await handle.writeFile(body); await handle.sync(); } finally { await handle.close(); }
+        try { authorize(); await handle.writeFile(body); await handle.sync(); } finally { await handle.close(); }
+        authorize();
         await fs.rename(temporary, file);
       } finally { await fs.rm(temporary, { force: true }); }
       audit("committed");
@@ -42,20 +47,26 @@ export class ResourceCache {
       throw error;
     }
   }
-  async configure(directory: unknown) {
+  async configure(directory: unknown, authorize: () => void = () => {}) {
+    authorize();
     if (typeof directory !== "string" || !path.isAbsolute(directory) || directory.length > 2048) throw new Error("请输入电脑上的绝对目录路径");
     const normalized = path.resolve(directory);
     await fs.mkdir(normalized, { recursive: true });
+    authorize();
     const probe = path.join(normalized, ".rabi-write-test-" + randomUUID());
-    try { await this.atomic(probe, Buffer.from("test")); } finally { await fs.rm(probe, { force: true }); }
+    try { await this.atomic(probe, Buffer.from("test"), authorize); } finally { await fs.rm(probe, { force: true }); }
+    authorize();
     await fs.mkdir(this.stateDir, { recursive: true });
+    authorize();
     return withResourceCacheSettingsLock(this.configFile(), async () => {
+      authorize();
       let previous: Record<string, unknown> = {};
       try {
         previous = JSON.parse(await fs.readFile(this.configFile(), "utf8"));
         if (!previous || typeof previous !== "object" || Array.isArray(previous)) throw new Error("Invalid resource settings");
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-      await this.atomic(this.configFile(), Buffer.from(JSON.stringify({ ...previous, directory: normalized })));
+      authorize();
+      await this.atomic(this.configFile(), Buffer.from(JSON.stringify({ ...previous, directory: normalized })), authorize);
       return this.settings();
     });
   }
@@ -87,9 +98,27 @@ export function resourceCacheHandler(store: ResourceCache, options: { local(requ
     const json = (status: number, data: unknown) => { response.writeHead(status,{ "content-type":"application/json" }); response.end(JSON.stringify(data)); };
     void (async () => {
       const settings = url.pathname === "/api/resource-cache/settings";
-      if (settings ? !options.local(request) || !!request.headers["x-rabilink-tunnel-local"] : request.headers["x-rabilink-resource-key"] !== options.tunnelKey()) { json(403,{ message:"Access denied" }); return; }
+      let principal: ReturnType<typeof assertTrustedLanAgentPrincipal>;
+      const settingsAuthorized = () => {
+        try {
+          const current = assertTrustedLanAgentPrincipal(request);
+          return current === principal && (Boolean(current)
+            || (options.local(request) && !request.headers["x-rabilink-tunnel-local"] && localModelSettingsRequestAllowed(request)));
+        } catch { return false; }
+      };
+      if (settings) {
+        try { principal = assertTrustedLanAgentPrincipal(request); } catch { json(403,{ message:"Access denied" }); return; }
+        if (!settingsAuthorized()) { json(403,{ message:"Access denied" }); return; }
+      } else if (request.headers["x-rabilink-resource-key"] !== options.tunnelKey()) { json(403,{ message:"Access denied" }); return; }
+      const authorizeSettings = () => {
+        if (!settingsAuthorized()) throw Object.assign(new Error("Access denied"), { status: 403 });
+      };
       if (request.method !== "GET" && options.readOnly()) { json(403,{ message:"Read only" }); return; }
-      if (settings && request.method === "GET") { json(200,await store.settings()); return; }
+      if (settings && request.method === "GET") {
+        const result = await store.settings();
+        authorizeSettings();
+        json(200,result); return;
+      }
       const match = /^\/api\/resource-cache\/data\/objects\/([a-f0-9]{64})$/.exec(url.pathname);
       const recording = url.pathname === "/api/resource-cache/data/recording-events" && !!options.receiveRecording;
       if (!settings && !match && !recording) { json(404,{ message:"Not found" }); return; }
@@ -103,8 +132,13 @@ export function resourceCacheHandler(store: ResourceCache, options: { local(requ
       for await (const chunk of request) { size += chunk.length; if(size > (settings ? 8192 : 1024*1024)) throw new Error("Request too large"); chunks.push(Buffer.from(chunk)); }
       const body = Buffer.concat(chunks);
       if (recording) { await options.receiveRecording!(owner, JSON.parse(body.toString())); json(200, { durable: true }); return; }
-      json(200,settings ? await store.configure(JSON.parse(body.toString()).directory) : await store.put(owner,match![1],body));
-    })().catch(error => { if (!response.headersSent) json((error as NodeJS.ErrnoException).code === "ENOENT" ? 404 : 400,{ message: error instanceof Error ? error.message : String(error) }); else response.destroy(); });
+      if (settings) {
+        authorizeSettings();
+        const result = await store.configure(JSON.parse(body.toString()).directory, authorizeSettings);
+        authorizeSettings();
+        json(200,result);
+      } else json(200,await store.put(owner,match![1],body));
+    })().catch(error => { if (!response.headersSent) json(error?.status === 403 ? 403 : (error as NodeJS.ErrnoException).code === "ENOENT" ? 404 : 400,{ message: error instanceof Error ? error.message : String(error) }); else response.destroy(); });
     return true;
   };
 }

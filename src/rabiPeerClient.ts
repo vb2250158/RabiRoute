@@ -1,16 +1,23 @@
 import { randomUUID } from "node:crypto";
-import { RabiPeerDirect } from "./rabiPeerDirect.js";
-import { openPeerPacket, sealPeerPacket, PEER_RPC_CAPABILITY, PEER_RPC_PATH,
-  type PeerIdentity, type PeerPacket, type PeerReply, type PeerRequest } from "./rabiPeerProtocol.js";
+import { openPeerPacket, sealPeerPacket,
+  type PeerPacket, type PeerReply, type PeerRequest } from "./rabiPeerProtocol.js";
 
 export type RabiPeer = { id: string; guid?: string; deviceKind?: string; online: boolean; capabilities: string[]; peerUrls: string[] };
 export type PeerCall = { targetDeviceId: string; capability: string; operation: string; input?: unknown };
-export type PeerTransport = "lan" | "p2p" | "relay";
 
-async function post(url: string, body: unknown, headers: Record<string, string>, timeoutMs: number, signal?: AbortSignal): Promise<PeerPacket> {
+async function post(url: string, body: unknown, headers: Record<string, string>, timeoutMs: number, signal?: AbortSignal,
+  authorize: () => void = () => {}): Promise<PeerPacket> {
+  const text = JSON.stringify(body);
+  authorize();
   const response = await fetch(url, { method: "POST", redirect: "error", headers: { "content-type": "application/json", ...headers },
-    body: JSON.stringify(body), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs) });
-  if (!response.ok) { await response.body?.cancel(); throw new Error(`Peer transport HTTP ${response.status}`); }
+    body: text, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs) })
+    .catch(error => { authorize(); throw error; });
+  // Keep response cleanup available even when the request lease expires at fetch completion.
+  try { authorize(); } catch (error) { await response.body?.cancel().catch(() => {}); throw error; }
+  if (!response.ok) {
+    try { await response.body?.cancel(); } finally { authorize(); }
+    throw new Error(`Peer transport HTTP ${response.status}`);
+  }
   const reader = response.body?.getReader();
   if (!reader) throw new Error("Empty peer reply.");
   const chunks: Buffer[] = [];
@@ -18,94 +25,41 @@ async function post(url: string, body: unknown, headers: Record<string, string>,
   try {
     while (true) {
       const result = await reader.read();
+      authorize();
       if (result.done) break;
       bytes += result.value.byteLength;
       if (bytes > 1_500_000) throw new Error("Peer response too large.");
       chunks.push(Buffer.from(result.value));
     }
     return JSON.parse(Buffer.concat(chunks).toString());
-  } finally { await reader.cancel().catch(() => {}); }
-}
-function lanUrl(raw: string): string {
-  const url = new URL(raw);
-  const octets = url.hostname.split(".").map(Number);
-  const [a, b] = octets;
-  const privateAddress = octets.length === 4 && octets.every(n => Number.isInteger(n) && n >= 0 && n <= 255)
-    && (a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254));
-  if (url.protocol !== "http:" || !privateAddress || url.username || url.password || url.pathname !== "/" || url.search || url.hash) throw new Error("Invalid peer LAN endpoint.");
-  return `${url.origin}${PEER_RPC_PATH}`;
+  } finally { await reader.cancel().catch(() => {}); authorize(); }
 }
 export class RabiPeerClient {
   constructor(private readonly options: {
-    peers(): Promise<RabiPeer[]>; relay(): { url: string; token: string };
-    direct: RabiPeerDirect;
+    relay(): { url: string; token: string };
   }) {}
   /** Signalling only: one authenticated exchange, never replay a tunnel allocation across routes. */
   async signal(call: PeerCall, signal?: AbortSignal): Promise<unknown> {
     if (call.capability !== "transport" || call.operation !== "tunnel") throw new Error("Invalid signalling operation.");
     const relay = this.options.relay();
+    const authorize = () => {
+      const current = this.options.relay();
+      if (signal?.aborted) throw new Error("Tunnel signalling cancelled.");
+      if (current.url !== relay.url || current.token !== relay.token) throw new Error("Tunnel signalling authority changed.");
+    };
+    authorize();
     const url = relay.url.replace(/\/+$/, "") + "/api/rabilink/peer/proxy";
+    let expectedInstance: string | undefined;
     const exchange = async (request: PeerRequest) => {
-      const packet = await post(url, { targetDeviceId: call.targetDeviceId, packet: sealPeerPacket(request, relay.token) }, { "x-rabilink-token": relay.token }, 5_000, signal);
+      const packet = await post(url, { targetDeviceId: call.targetDeviceId, packet: sealPeerPacket(request, relay.token) }, { "x-rabilink-token": relay.token }, 5_000, signal, authorize);
       const reply = openPeerPacket<PeerReply>(packet, relay.token);
-      if (reply.requestId !== request.requestId || reply.identity.deviceId !== call.targetDeviceId || !reply.ok) throw new Error(reply.error || "Tunnel signalling rejected.");
+      if (reply.requestId !== request.requestId || reply.identity?.deviceId !== call.targetDeviceId || !reply.identity.generation || !reply.identity.instanceId || request.generation && reply.identity.generation !== request.generation || expectedInstance && reply.identity.instanceId !== expectedInstance || !reply.ok) throw new Error(reply.error || "Tunnel signalling rejected.");
       return reply;
     };
     const base = { targetDeviceId: call.targetDeviceId, expiresAt: Date.now() + 60_000 };
     const described = await exchange({ ...base, requestId: randomUUID(), capability: "system", operation: "describe", input: {} });
+    expectedInstance = described.identity.instanceId;
     return (await exchange({ ...base, requestId: randomUUID(), generation: described.identity.generation,
       capability: call.capability, operation: call.operation, input: call.input })).data;
-  }
-  async call(call: PeerCall): Promise<{ transport: PeerTransport; reply: PeerReply }> {
-    if (!call || typeof call.targetDeviceId !== "string" || typeof call.capability !== "string" || typeof call.operation !== "string") throw new Error("Invalid peer call.");
-    const relay = this.options.relay();
-    const peer = (await this.options.peers()).find(item => item.id === call.targetDeviceId || item.guid === call.targetDeviceId);
-    if (!peer?.online || !peer.capabilities.includes(PEER_RPC_CAPABILITY)) throw new Error("Target is offline or does not support peer RPC.");
-    const targetDeviceId = peer.id;
-    const request = (capability: string, operation: string, input: unknown, generation?: string): PeerRequest => ({
-      requestId: randomUUID(), targetDeviceId, capability, operation, input, generation, expiresAt: Date.now() + 90_000
-    });
-    const decode = (packet: PeerPacket, sent: PeerRequest): PeerReply => {
-      const reply = openPeerPacket<PeerReply>(packet, relay.token);
-      if (reply.requestId !== sent.requestId || reply.identity?.deviceId !== targetDeviceId || !reply.identity.generation || !reply.identity.instanceId) throw new Error("Peer reply identity mismatch.");
-      if (sent.generation && sent.generation !== reply.identity.generation) throw new Error("Peer generation changed; discover again.");
-      return reply;
-    };
-    const relayExchange = (packet: PeerPacket) => post(`${relay.url.replace(/\/+$/, "")}/api/rabilink/peer/proxy`,
-      { targetDeviceId, packet }, { "x-rabilink-token": relay.token }, 30_000);
-    const describe = request("system", "describe", {});
-    let identity: PeerIdentity | undefined;
-    let selectedLan: string | undefined;
-    for (const address of peer.peerUrls.slice(0, 4)) {
-      try {
-        const url = lanUrl(address);
-        const reply = decode(await post(url, sealPeerPacket(describe, relay.token), {}, 2_000), describe);
-        if (!reply.ok) continue;
-        identity = reply.identity;
-        selectedLan = url;
-        break;
-      } catch { /* LAN discovery is read-only; use the next registered address. */ }
-    }
-    if (!identity) {
-      const reply = decode(await relayExchange(sealPeerPacket(describe, relay.token)), describe);
-      if (!reply.ok) throw new Error(reply.error || "Peer discovery failed.");
-      identity = reply.identity;
-    }
-    const sent = request(call.capability, call.operation, call.input ?? {}, identity.generation);
-    const packet = sealPeerPacket(sent, relay.token);
-    if (selectedLan) {
-      try { return { transport: "lan", reply: decode(await post(selectedLan, packet, {}, 10_000), sent) }; }
-      catch { /* Only registered read operations are exposed by this protocol version. */ }
-    }
-    try {
-      const result = await this.options.direct.exchange(packet, async input => {
-        const offer = request("transport", "offer", input, identity.generation);
-        const reply = decode(await relayExchange(sealPeerPacket(offer, relay.token)), offer);
-        if (!reply.ok) throw new Error(reply.error);
-        return reply.data as { sdp: string };
-      });
-      return { transport: "p2p", reply: decode(result, sent) };
-    } catch { /* Bounded P2P attempt; small read requests may use Relay. */ }
-    return { transport: "relay", reply: decode(await relayExchange(packet), sent) };
   }
 }

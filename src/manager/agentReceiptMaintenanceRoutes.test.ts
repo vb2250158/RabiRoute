@@ -36,7 +36,9 @@ test("verify and settle use distinct injected handlers and trusted source", asyn
   for (const action of ["verify", "settle"]) {
     const called: string[] = [];
     const handler = (name: string) => async (id: string, request: unknown, options: unknown) => {
-      called.push(name); assert.equal(id, originalRequest.deliveryId); assert.deepEqual(request, originalRequest); assert.deepEqual(options, { remoteSource: source });
+      called.push(name); assert.equal(id, originalRequest.deliveryId); assert.deepEqual(request, originalRequest);
+      const admission = options as { remoteSource: TrustedLanAgentSource; requestAuthority: () => void };
+      assert.deepEqual(admission.remoteSource, source); assert.equal(typeof admission.requestAuthority, "function"); admission.requestAuthority();
       return { statusCode: 403, body: { ok: false, errorCode: "TEST_FORBIDDEN" } };
     };
     const f = fixture({ originalRequest }, { verify: handler("verify"), settle: handler("settle") });

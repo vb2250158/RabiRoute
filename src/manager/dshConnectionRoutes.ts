@@ -1,9 +1,12 @@
 import type http from "node:http";
 import { DshConnectionStore, DshConnectionError, dshLocalOrigin } from "../dshConnectionStore.js";
 import { connectDshOwner, migrateDshOwner } from "../dshHttpAuth.js";
+import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
 
-/** Origin is mandatory: Relay strips it before forwarding to loopback. */
-export function dshConnectionRequestAllowed(request: Pick<http.IncomingMessage, "headers" | "socket">, mutation: boolean): boolean {
+/** Ordinary browsers require local Origin; enabled authenticated Agents use their issued principal. */
+export function dshConnectionRequestAllowed(request: http.IncomingMessage, mutation: boolean): boolean {
+  try { if (assertTrustedLanAgentPrincipal(request)) return true; }
+  catch { return false; }
   const loopback = (value: string) => ["127.0.0.1", "::1", "::ffff:127.0.0.1", "[::1]", "localhost"].includes(value);
   if (!loopback(request.socket.remoteAddress || "") || request.headers.forwarded || request.headers["x-forwarded-for"]
     || request.headers["sec-fetch-site"] === "cross-site") return false;
@@ -43,16 +46,22 @@ export async function handleDshConnectionRequest(request: http.IncomingMessage, 
   signal.throwIfAborted();
   const mutation = request.method !== "GET";
   if (url.pathname.endsWith("/connections") && mutation) throw new DshConnectionError("Unsupported DSH connection operation.", 405);
-  if (!dshConnectionRequestAllowed(request, mutation)) throw new DshConnectionError("Open the local RabiRoute console on this computer to manage DSH authorization.", 403);
+  const assertAuthorized = () => {
+    signal.throwIfAborted();
+    if (!dshConnectionRequestAllowed(request, mutation)) throw new DshConnectionError("DSH connection management requires local browser authorization or a current enabled Agent principal.", 403);
+  };
+  assertAuthorized();
   if (mutation && !/^application\/json(?:;|$)/i.test(String(request.headers["content-type"] || ""))) throw new DshConnectionError("JSON content type is required.", 415);
   if (request.method === "GET") {
     const metadata = store.readMetadata();
+    assertAuthorized();
     if (url.pathname.endsWith("/connections")) return { ok: true, revision: metadata.revision, endpoints: metadata.connections };
     const origin = dshLocalOrigin(url.searchParams.get("baseUrl") || "");
     return { ok: true, revision: metadata.revision, connection: metadata.connections.find(row => row.baseUrl === origin)
       || { baseUrl: origin, state: "not_connected" } };
   }
   const body = await readBody(request, signal);
+  assertAuthorized();
   if (request.method === "POST") {
     if (Object.keys(body).some(key => !["launchUrl", "baseUrl", "expectedRevision"].includes(key))
       || ("launchUrl" in body) === ("baseUrl" in body)) throw new DshConnectionError("Provide one DSH login link or existing connection address.");
@@ -61,15 +70,16 @@ export async function handleDshConnectionRequest(request: http.IncomingMessage, 
       ? await migrateDshOwner(body.baseUrl, Number(body.expectedRevision), store, signal, {
         hostname: new URL(`http://${request.headers.host}`).hostname,
         cookieHeader: request.headers.cookie
-      })
-      : await connectDshOwner(body.launchUrl, Number(body.expectedRevision), store, signal);
+      }, assertAuthorized)
+      : await connectDshOwner(body.launchUrl, Number(body.expectedRevision), store, signal, assertAuthorized);
+    assertAuthorized();
     return { ok: true, revision: connection.revision, connection };
   }
   if (request.method === "DELETE") {
     if (typeof body.baseUrl !== "string" || !Number.isSafeInteger(body.expectedRevision)
       || Object.keys(body).some(key => !["baseUrl", "expectedRevision"].includes(key))) throw new DshConnectionError("DSH connection address and current revision are required.");
     signal.throwIfAborted();
-    store.disconnect(body.baseUrl, Number(body.expectedRevision));
+    store.disconnect(body.baseUrl, Number(body.expectedRevision), assertAuthorized);
     return { ok: true, revision: store.readMetadata().revision };
   }
   throw new DshConnectionError("Unsupported DSH connection operation.", 405);

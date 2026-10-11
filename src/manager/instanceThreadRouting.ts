@@ -5,6 +5,7 @@ import { normalizeAgentInstanceBinding } from "../shared/agentInstance.js";
 export type InstanceThreadTransport = {
   instances: () => AgentInstance[];
   manage: (instanceId: string, params: Record<string, unknown>) => Promise<unknown>;
+  endpointDelivery?: (request: AgentThreadRequest) => Promise<AgentThreadRequestResult>;
 };
 
 /** Resolve identity before any local provider lookup, including when the remote computer is offline. */
@@ -34,6 +35,10 @@ export async function routeInstanceThread(request: AgentThreadRequest, transport
   const provider = agent.provider === "codex-desktop" ? "codex" : agent.provider;
   if (request.agentAdapter && request.agentAdapter !== provider) throw new Error("Task provider does not match its instance Agent.");
   if (request.imagePaths?.length) throw new Error("Local image paths cannot be used on another instance.");
+  if (request.action === "send" || request.action === "reconcile_delivery") {
+    if (!transport.endpointDelivery) throw new Error("Remote delivery requires the Manager-owned authenticated endpoint pipeline.");
+    return transport.endpointDelivery({ ...request, instanceBinding: binding });
+  }
   const { instanceBinding: _binding, ...params } = request;
   const result = await transport.manage(instance.instanceId, { ...params, agentId: agent.agentId, agentAdapter: provider }) as AgentThreadRequestResult;
   if (!result || !Number.isInteger(result.statusCode) || !result.data) throw new Error("The instance returned an invalid task result.");

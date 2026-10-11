@@ -33,6 +33,8 @@ export class RelayProxyRequestQueue {
       method: String(input.method || "GET").toUpperCase(),
       path: input.path || "/",
       headers: { ...(input.headers || {}) },
+      expectedWorkerFencing: input.expectedWorkerFencing === true,
+      nonReplayable: !['GET', 'HEAD', 'OPTIONS'].includes(String(input.method || 'GET').toUpperCase()),
       bodyBase64: input.bodyBase64 || "",
       response: null,
       error: ""
@@ -61,6 +63,8 @@ export class RelayProxyRequestQueue {
       method: request.method,
       path: request.path,
       headers: request.headers,
+      expectedWorkerFencing: request.expectedWorkerFencing === true,
+      nonReplayable: request.nonReplayable === true,
       bodyBase64: request.bodyBase64,
       error: request.error || ""
     };
@@ -74,6 +78,11 @@ export class RelayProxyRequestQueue {
       if (claimed.length >= limit) break;
       if (!predicate(request)) continue;
       if (request.status === "leased" && request.leaseUntil <= now) {
+        if (request.nonReplayable) {
+          request.status = 'failed'; request.error = 'TRANSPORT_OUTCOME_UNCERTAIN'; request.updatedAt = now; request.bodyBase64 = '';
+          this.#finishAllCompletionWaiters(request);
+          continue;
+        }
         request.status = "queued";
         request.leaseUntil = 0;
       }

@@ -6,6 +6,8 @@ import test from "node:test";
 import { SpeechModelSettingsStore, SpeechModelSettingsError, validateModelRoot } from "./speechModelSettings.js";
 import { localModelSettingsRequestAllowed } from "./speechModelSettingsAccess.js";
 import type { IncomingMessage } from "node:http";
+import { LanAgentAuthority } from "./lanAgentAuthority.js";
+import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
 
 test("model settings persist revisions, clear to environment fallback, and never create the target", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "speech-settings-"));
@@ -40,8 +42,28 @@ test("Windows path validation uses fixed local drive and protects install/source
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test("public settings accept only ingress-authenticated enabled Agents and cannot fall back after disable-enable", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "settings-agent-authority-"));
+  try {
+    const authority = new LanAgentAuthority({ statePath: path.join(root, "authority.json") });
+    const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "fixture-node");
+    authority.registerAgentCatalog(credential.token, [{ agentId: "fixture-agent", provider: "codex" }]);
+    const socket = { remoteAddress: "192.0.2.1" };
+    const request = { method: "GET", url: "/api/speech/settings", socket,
+      headers: { host: "manager.example", authorization: `Bearer ${credential.token}`, "x-rabiroute-agent-id": "fixture-agent" } } as unknown as IncomingMessage;
+    assert.equal(localModelSettingsRequestAllowed(request), false);
+    assert.equal(evaluateLanAgentRequest(request, authority, true).kind, "agent");
+    assert.equal(localModelSettingsRequestAllowed(request), true);
+    authority.setAgentEnabled("fixture-node", "fixture-agent", false);
+    authority.setAgentEnabled("fixture-node", "fixture-agent", true);
+    socket.remoteAddress = "127.0.0.1";
+    request.headers.host = "127.0.0.1:1234";
+    assert.equal(localModelSettingsRequestAllowed(request), false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test("settings access rejects LAN, rebinding, cross-origin and forwarded requests", () => {
-  const request = (remoteAddress: string, headers: IncomingMessage["headers"]) => ({ socket: { remoteAddress }, headers }) as Pick<IncomingMessage, "socket" | "headers">;
+  const request = (remoteAddress: string, headers: IncomingMessage["headers"]) => ({ socket: { remoteAddress }, headers }) as unknown as IncomingMessage;
   assert.equal(localModelSettingsRequestAllowed(request("127.0.0.1", { host: "127.0.0.1:1234", origin: "http://127.0.0.1:1234" })), true);
   assert.equal(localModelSettingsRequestAllowed(request("192.0.2.1", { host: "127.0.0.1:1234" })), false);
   assert.equal(localModelSettingsRequestAllowed(request("127.0.0.1", { host: "attacker.example" })), false);

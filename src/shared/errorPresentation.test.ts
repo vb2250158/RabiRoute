@@ -48,3 +48,12 @@ test("DSH RPC transport failures take precedence over HTTP 400 validation fallba
 test("localized errors do not duplicate an already rendered response", () => {
   assert.equal(presentError("original", { errorMessages: { "zh-CN": "服务忙", en: "Busy" } }, "en"), "Busy");
 });
+
+test("read worker recovery has actionable localized text while preserving raw diagnostics", () => {
+  const message = "Manager read worker termination is still in progress; retry shortly.";
+  const response = errorResponsePresentation({ code: -1, message }, 503) as Record<string, any>;
+  assert.equal(response.message, message);
+  assert.match(response.errorMessages["zh-CN"], /读取服务正在恢复，请稍后重试/);
+  assert.doesNotMatch(response.errorMessages["zh-CN"], /termination/);
+  assert.ok(response.errorMessages.en.includes(message));
+});

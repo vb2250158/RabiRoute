@@ -7,8 +7,8 @@ android {
         applicationId "com.rabi.link.glass.video"
         minSdk 31
         targetSdk 34
-        versionCode 1
-        versionName "0.1.0"
+        versionCode 4
+        versionName "0.1.3"
     }
     def restoredKey = rootProject.file("secrets/rokid/signing/debug.keystore")
     signingConfigs {

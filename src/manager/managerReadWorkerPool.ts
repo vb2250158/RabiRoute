@@ -113,6 +113,7 @@ type ActiveRead = {
   timer: NodeJS.Timeout;
   abortListener?: () => void;
   settled: boolean;
+  dispatched: boolean;
 };
 
 type WorkerSlot = {
@@ -120,6 +121,7 @@ type WorkerSlot = {
   active?: ActiveRead;
   closed: boolean;
   terminating: boolean;
+  ready: boolean;
   closedPromise: Promise<void>;
   resolveClosed(): void;
   terminationFlight?: Promise<boolean>;
@@ -185,7 +187,7 @@ function unrefWorker(worker: ManagerReadWorkerChild): void {
 
 export class ManagerReadWorkerPool {
   private static readonly instances = new Set<ManagerReadWorkerPool>();
-  // Read workers run below normal priority and never own message delivery. Keep
+  // Interactive readers use normal priority and never own message delivery. Keep
   // enough lanes for a visible knowledge page while a background catalog refresh
   // and an unrelated diagnostic are in flight.
   private static readonly globalMaxConcurrency = 6;
@@ -221,7 +223,7 @@ export class ManagerReadWorkerPool {
     this.forceTerminationTimeoutMs = positiveInteger(options.forceTerminationTimeoutMs, 5_000);
     this.workerFactory = options.workerFactory ?? spawnManagerReadWorker;
     this.setWorkerPriority = options.setWorkerPriority
-      ?? ((pid) => os.setPriority(pid, os.constants.priority.PRIORITY_BELOW_NORMAL));
+      ?? ((pid) => os.setPriority(pid, os.constants.priority.PRIORITY_NORMAL));
     ManagerReadWorkerPool.instances.add(this);
   }
 
@@ -668,6 +670,7 @@ export class ManagerReadWorkerPool {
       worker,
       closed: false,
       terminating: false,
+      ready: false,
       closedPromise,
       resolveClosed
     };
@@ -739,7 +742,15 @@ export class ManagerReadWorkerPool {
         }
       : undefined;
     if (abortListener) pending.signal!.addEventListener("abort", abortListener, { once: true });
-    slot.active = { pending, requestId, startedAt, timer, abortListener, settled: false };
+    slot.active = { pending, requestId, startedAt, timer, abortListener, settled: false, dispatched: false };
+    this.dispatchActive(slot);
+  }
+
+  private dispatchActive(slot: WorkerSlot): void {
+    const current = slot.active;
+    if (!slot.ready || slot.closed || slot.terminating || !current || current.settled || current.dispatched) return;
+    current.dispatched = true;
+    const { pending, requestId } = current;
     try {
       slot.worker.send(
         { requestId, task: pending.task } satisfies ManagerReadWorkerRequest,
@@ -757,6 +768,12 @@ export class ManagerReadWorkerPool {
   }
 
   private handleWorkerMessage(slot: WorkerSlot, message: ManagerReadWorkerMessage): void {
+    if ("type" in message) {
+      if (slot.closed || slot.terminating) return;
+      slot.ready = true;
+      this.dispatchActive(slot);
+      return;
+    }
     const current = slot.active;
     if (slot.terminating || !current || current.settled || current.requestId !== message.requestId) return;
     if (message.ok) this.finish(slot, undefined, message.value);

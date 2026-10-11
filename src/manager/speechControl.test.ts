@@ -88,7 +88,7 @@ test("speech personas consume immutable route catalog voice and avatar metadata"
     voiceStyleSummary: "calm"
   }]);
   const source = fs.readFileSync(new URL("./speechControl.ts", import.meta.url), "utf8");
-  const personaSource = source.slice(source.indexOf("  personas():"), source.indexOf("  async playbackStatus"));
+  const personaSource = source.slice(source.indexOf("  personas("), source.indexOf("  async playbackStatus"));
   assert.doesNotMatch(personaSource, /fs\.|path\.|readdirSync|readFileSync|existsSync/);
 });
 

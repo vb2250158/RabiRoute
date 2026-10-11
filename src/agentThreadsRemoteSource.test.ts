@@ -40,6 +40,55 @@ test("trusted remote source bypasses local reads even with an identical local ta
   assert.equal(history?.messageSource?.type === "agent" && history.messageSource.sessionId, namespace);
 });
 
+test("an approved remote endpoint lets the remote source require a formal reply", async () => {
+  const { reads, sends, driver } = fixture();
+  const endpoint = {
+    kind: "instance" as const,
+    managerInstanceId: "manager-under-test",
+    instanceId: remote.nodeId,
+    nodeId: remote.nodeId,
+    agentId: remote.agentId,
+    provider: "codex" as const,
+    sessionId: remote.sessionId,
+    authorizationIncarnation: "incarnation-1"
+  };
+  let constructed = 0;
+  // Reaching the request-tracking requirement proves the lease-carrying endpoint replaced
+  // the flat "remote sources cannot ask for a reply" refusal.
+  await assert.rejects(
+    handleAgentThreadRequest({ ...request, responsePolicy: "required", responseInstruction: "Reply with the outcome." }, {
+      allowedWorkspaces: [process.cwd()],
+      remoteSource: remote,
+      remoteEndpoint: (nodeId, agentId, sessionId) => {
+        constructed += 1;
+        assert.equal(nodeId, remote.nodeId);
+        assert.equal(agentId, remote.agentId);
+        assert.equal(sessionId, remote.sessionId);
+        return endpoint;
+      }
+    }, driver),
+    /Agent request tracking is unavailable/
+  );
+  assert.equal(constructed, 1);
+  assert.deepEqual(reads, []);
+  assert.deepEqual(sends, []);
+});
+
+test("a revoked remote endpoint keeps refusing a formal reply", async () => {
+  const { reads, sends, driver } = fixture();
+  await assert.rejects(
+    handleAgentThreadRequest({ ...request, responsePolicy: "required" }, {
+      allowedWorkspaces: [process.cwd()],
+      remoteSource: remote,
+      // The Manager's constructor throws once the lease is revoked or unapproved.
+      remoteEndpoint: () => { throw new Error("Original remote endpoint is disabled, revoked or unapproved."); }
+    }, driver),
+    /disabled, revoked or unapproved/
+  );
+  assert.deepEqual(reads, []);
+  assert.deepEqual(sends, []);
+});
+
 test("remote source mismatches and unsupported reply contracts fail before local reads or delivery", async () => {
   for (const patch of [
     { sourceThreadId: "other-session" },
@@ -76,7 +125,11 @@ test("HTTP route takes remoteSource exclusively from request context, not body o
       readJsonBody: async () => ({ ...request, remoteSource: remote }),
       jsonResponse: () => {},
       applyManagedAgentThreadDefaults: (body: AgentThreadRequest) => body,
-      agentThreadRequestOptions: () => ({ allowedWorkspaces: [], remoteSource: remote }),
+      // The real Manager merges the route's overrides over its own defaults. The stub must
+      // do the same, otherwise a leaked default would be indistinguishable from the truth.
+      agentThreadRequestOptions: (_body: unknown, extra: { remoteSource?: unknown } = {}) => ({
+        allowedWorkspaces: [], remoteSource: remote, ...extra
+      }),
       getTrustedRemoteSource: (value: http.IncomingMessage) => { assert.equal(value, incoming); return trusted; },
       handleAgentThreadRequest: async (_body: unknown, options: { remoteSource?: unknown }) => {
         captured = options.remoteSource; return { statusCode: 200, data: {} };

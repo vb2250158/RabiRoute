@@ -1,4 +1,7 @@
 import { renderAgentReplyParameters } from "./agentRequests/replyParameters.js";
+import { executeEndpointAgentDelivery, type EndpointDeliveryOptions, type PreparedEndpointDelivery, type EndpointDeliveryReceipt } from "./agentRequests/endpointDelivery.js";
+import { agentDeliveryPromptHash } from "./agentRequests/store.js";
+export { executeEndpointOnOwner } from "./agentRequests/ownerExecution.js";
 import { AgentReplyStateError } from "./agentRequests/replyError.js";
 import { promptConfirmsDelivery } from "./agentRequests/rolloutReceipt.js";
 import type { AgentInstanceBinding } from "./shared/agentInstance.js";
@@ -16,10 +19,8 @@ import {
   type CodexThreadCreateResult,
   type CodexTurnSandbox
 } from "./codexRuntime.js";
-import {
-  isCodexTaskId,
-  sameCodexWorkspace
-} from "./codexTaskIdentity.js";
+import { isCodexTaskId } from "./codexTaskIdentity.js";
+import type { AgentRequestEndpoint } from "./agentRequests/endpoint.js";
 import {
   codexDesktopDeliveryReceiptConfirmed,
   openCodexDesktopThread
@@ -187,7 +188,16 @@ export type AgentThreadRemoteSource = {
 };
 
 export type AgentThreadRequestOptions = {
+  endpointDelivery?: EndpointDeliveryOptions;
+  /** Original HTTP admission fence, captured by the Manager route, never by request JSON. */
+  requestAuthority?: () => void;
   remoteSource?: AgentThreadRemoteSource;
+  /**
+   * Manager-owned constructor for a remote source's durable endpoint. It carries the
+   * original authorization lease, so a cross-instance reply is routed through the same
+   * approval and revocation fence instead of one invented here.
+   */
+  remoteEndpoint?: (nodeId: string, agentId: string, sessionId: string) => AgentRequestEndpoint;
   onChatHistoryDelivery?: (request: AgentThreadRequest, result: AgentThreadRequestResult) => Promise<void>;
   allowedWorkspaces: string[];
   defaultWorkspace?: string;
@@ -537,21 +547,10 @@ export function resolveAgentThreadWorkspaceForTest(
   requestedWorkspace: unknown,
   options: AgentThreadRequestOptions
 ): string {
-  const allowed = options.allowedWorkspaces
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .map((item) => path.resolve(item));
-  if (allowed.length === 0) {
-    throw new Error("No Codex workspaces are configured for Agent thread creation.");
-  }
-
+  // A workspace is execution context, never an API authorization boundary.
   const requested = typeof requestedWorkspace === "string" && requestedWorkspace.trim()
     ? path.resolve(requestedWorkspace.trim())
-    : path.resolve(options.defaultWorkspace?.trim() || allowed[0]);
-  const requestedCanonical = canonicalWorkspace(requested);
-  if (!allowed.some((item) => canonicalWorkspace(item) === requestedCanonical)) {
-    throw new Error(`Workspace is not configured for Agent thread creation: ${requested}`);
-  }
+    : path.resolve(options.defaultWorkspace?.trim() || process.cwd());
   if (!fs.existsSync(requested) || !fs.statSync(requested).isDirectory()) {
     throw new Error(`Workspace does not exist or is not a directory: ${requested}`);
   }
@@ -610,6 +609,12 @@ function listAgentThreads(query: string, limit: number, indexPath: string): Agen
     .slice(0, limit);
 }
 
+export async function readAgentEndpointSummary(provider: AgentAdapterType, sessionId: string, options: AgentThreadRequestOptions): Promise<AgentThreadSummary> {
+  const thread = await readAgentThreadForAdapter(threadAgentAdapter({ agentAdapter: provider }), sessionId, options, defaultDriver);
+  if (!thread.summary) throw new Error("Exact endpoint owner metadata is unavailable.");
+  return thread.summary;
+}
+
 function threadSummary(value: unknown): AgentThreadSummary | null {
   if (!value || typeof value !== "object") return null;
   const item = value as Record<string, unknown>;
@@ -648,6 +653,7 @@ async function resolveAgentThreadSendSource(
     workspace?: string;
     nodeId?: string;
     agentId?: string;
+    endpoint?: AgentRequestEndpoint;
   };
 } | null> {
   const remote = options.remoteSource;
@@ -664,9 +670,12 @@ async function resolveAgentThreadSendSource(
     if (remote.provider !== "codex" && remote.provider !== "dsh") {
       throw new Error("Invalid trusted remote source provider.");
     }
-    // Instance dispatch currently has no durable, authenticated reply route for this namespace.
-    if (request.responsePolicy !== "none" || request.inReplyToRequestId) {
-      throw new Error("Trusted remote source requires responsePolicy=none; cross-instance formal replies are not supported.");
+    // A formal reply needs a durable endpoint that still carries the original authorization
+    // lease. Without one, or once it is revoked, the reply stays refused instead of unpointed.
+    const needsReplyRoute = request.responsePolicy !== "none" || Boolean(request.inReplyToRequestId);
+    const endpoint = needsReplyRoute ? options.remoteEndpoint?.(nodeId, agentId, sessionId) : undefined;
+    if (needsReplyRoute && !endpoint) {
+      throw new Error("Trusted remote source reply requires an approved, unrevoked remote endpoint.");
     }
     const agentType = normalizeAgentThreadSourceType(requiredText(request.sourceAgentType, "sourceAgentType", 40));
     const threadId = `instance-${createHash("sha256").update(JSON.stringify([nodeId, agentId, sessionId])).digest("hex")}`;
@@ -688,6 +697,7 @@ async function resolveAgentThreadSendSource(
         threadId,
         threadName: sessionName,
         ...(remote.workspace ? { workspace: remote.workspace } : {}),
+        ...(endpoint ? { endpoint } : {}),
         nodeId,
         agentId
       }
@@ -947,6 +957,9 @@ async function executeAgentThreadRequest(
   driver: AgentThreadDriver = defaultDriver
 ): Promise<AgentThreadRequestResult> {
   const action = request.action;
+  if (options.endpointDelivery && (action === "send" || action === "reconcile_delivery")) {
+    return executeEndpointAgentDelivery(request, options.endpointDelivery);
+  }
   if (action === "list") {
     const agentAdapter = threadAgentAdapter(request);
     const query = optionalText(request.query, "query", maxQueryLength);
@@ -1032,9 +1045,8 @@ async function executeAgentThreadRequest(
     if (thread.archived) {
       throw new Error(`Agent ${agentAdapter === "dsh" ? "session" : "task"} is archived: ${threadId}`);
     }
-    if (agentAdapter === "dsh" && (!thread.cwd || canonicalWorkspace(thread.cwd) !== canonicalWorkspace(cwd))) {
-      throw new Error(`Agent ${agentAdapter === "dsh" ? "session" : "task"} belongs to another workspace: ${thread.cwd || "unknown"}`);
-    }
+    // A session's directory is identity detail, not an admission gate: an enabled
+    // Agent may drive any loaded session unless a limit is configured explicitly.
     if (agentAdapter === "workbuddy") {
       throw new Error("Opening a WorkBuddy task happens inside the WorkBuddy app; the bridge cannot open one.");
     }
@@ -1073,18 +1085,6 @@ async function executeAgentThreadRequest(
         baseUrl: dshBaseUrlFor(options),
         agentPreset: options.dshAgentPreset
       });
-      if (resolution.kind === "workspace-mismatch") {
-        return {
-          statusCode: 409,
-          data: {
-            action,
-            agentAdapter,
-            resolution: resolution.kind,
-            message: `DSH 会话属于另一个工作目录。会话：${resolution.thread.cwd}; 配置：${requestedWorkspace}`,
-            thread: resolution.thread
-          }
-        };
-      }
       if (resolution.kind === "ambiguous") {
         return {
           statusCode: 409,
@@ -1225,20 +1225,6 @@ async function executeAgentThreadRequest(
             resolution: resolution.kind,
             message: `存在 ${resolution.candidates.length} 个同名 DSH 会话，最后更新时间并列，请选择具体会话。`,
             candidates: resolution.candidates,
-            sandbox,
-            ...(messageSource ? { messageSource } : {})
-          }
-        };
-      }
-      if (resolution.kind === "workspace-mismatch") {
-        return {
-          statusCode: 409,
-          data: {
-            action,
-            agentAdapter,
-            resolution: resolution.kind,
-            message: `DSH 会话属于另一个工作目录。会话：${resolution.thread.cwd}; 配置：${cwd}`,
-            thread: resolution.thread,
             sandbox,
             ...(messageSource ? { messageSource } : {})
           }
@@ -1420,11 +1406,11 @@ async function executeAgentThreadRequest(
     if (sendSource && inReplyToRequestId && options.agentRequests) {
       const pending = options.agentRequests.get(inReplyToRequestId);
       if (pending?.status === "pending_delivery") {
+        // Identity binding is what protects the reply; the participants' directories are
+        // identity detail, so a cross-directory reply is not refused by default.
         const reason = !agentAdapterSupportsReceiptRecovery(pending.target.agentAdapter) ? "delivery_receipt_adapter_not_supported"
           : pending.target.threadId !== sendSource.source.threadId ? "reply_sender_does_not_match_original_target"
           : pending.source.threadId !== threadId ? "reply_destination_does_not_match_original_source"
-          : !sameCodexWorkspace(pending.target.workspace || "", sendSource.source.workspace || "") ? "reply_sender_workspace_mismatch"
-          : !sameCodexWorkspace(pending.source.workspace || "", cwd) ? "reply_destination_workspace_mismatch"
           : undefined;
         if (reason) throw new AgentReplyStateError(pending, reason);
         let confirmed: boolean;
@@ -1474,13 +1460,14 @@ async function executeAgentThreadRequest(
       if (resolution.kind === "ambiguous") {
         throw new Error(`DSH session name is ambiguous: ${title}`);
       }
-      if (resolution.kind === "workspace-mismatch") {
-        throw new Error(`DSH session belongs to another workspace: ${resolution.thread.cwd || "unknown"}`);
-      }
       if (resolution.kind === "missing") {
         throw new Error(`DSH session could not be resolved: ${title}`);
       }
-      targetResolution = resolution;
+      // A session's directory is identity detail, not an admission gate: an enabled
+      // Agent may drive any loaded session unless a limit is configured explicitly.
+      targetResolution = resolution.kind === "workspace-mismatch"
+        ? { kind: "id", thread: resolution.thread }
+        : resolution;
       threadId = resolution.thread.id;
       cwd = resolveAgentThreadWorkspaceForTest(resolution.thread.cwd || cwd, options);
     } else if (requestedTitle && !isDshSessionId(threadId)) {
@@ -1550,16 +1537,15 @@ async function executeAgentThreadRequest(
         baseUrl: dshBaseUrlFor(options),
         agentPreset: options.dshAgentPreset
       });
-      if (resolution.kind === "workspace-mismatch") {
-        throw new Error(`DSH session belongs to another workspace: ${resolution.thread.cwd || "unknown"}`);
-      }
       if (resolution.kind === "missing") {
         throw new Error(`DSH session could not be resolved: ${threadId}`);
       }
       if (resolution.kind === "ambiguous") {
         throw new Error(`DSH session name is ambiguous: ${threadId}`);
       }
-      targetResolution = resolution;
+      targetResolution = resolution.kind === "workspace-mismatch"
+        ? { kind: "id", thread: resolution.thread }
+        : resolution;
       threadId = resolution.thread.id;
     }
     if (sendSource) {
@@ -1602,7 +1588,8 @@ async function executeAgentThreadRequest(
               threadId: sendSource.source.threadId,
               agentType: sendSource.source.agentType,
               threadName: sendSource.source.threadName,
-              workspace: sendSource.source.workspace
+              workspace: sendSource.source.workspace,
+              ...(sendSource.source.endpoint ? { endpoint: sendSource.source.endpoint } : {})
             },
             target: {
               agentAdapter: targetAgentAdapter,

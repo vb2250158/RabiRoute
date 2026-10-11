@@ -18,6 +18,14 @@ Reset preserves the saved name, server URL, application token, connection ID, Ro
 
 Pinned trust for the old public key is not automatically replaced. If another device reports an identity change, verify and re-establish that connection; reset never expands existing service grants. If both PCs still share the same local connection ID, set and save distinct values. Instance ID reset preserves this field.
 
+## Authorized remote Agent access
+
+A remote Agent authenticated by Manager, with an active node and Agent authorization and LAN admission enabled, can submit resets and read operation status on the same basis as local access, without an additional provider restriction. The API still requires explicit confirmation, the current instance ID and a fixed operation ID. The installed Host remains the executor; clients cannot supply commands or file paths.
+
+Requests without a remote Agent principal must use the strict local entry: a loopback connection, localhost / a loopback IP at the current port, same-origin requests, and no forwarding, Relay or tunnel markers. Invalid, disabled or revoked credentials cannot fall back to local authority. Disabling the Agent or admission while a request waits invalidates that original request; re-enabling it does not restore the request.
+
+Authorization loss returns `403` without operation data or sensitive receipt headers. `commitState: not_started` means the reset request file has not been written by this request. If a file write or Host call has already started, the result is `unknown`: it does not prove that no reset occurred and must not trigger automatic resubmission. After restoring authorization and rediscovering the current application address, read status using the original operation ID before deciding what to do next.
+
 ## Prevent another copied identity
 
 After upgrade, the application records local ownership of the identity. Startup rejects an identity when configuration carrying this marker, or its entire data directory, is copied to another PC. Do not delete the marker to bypass the check. When moving personas and history, preserve the new PC's own configuration and connection key.

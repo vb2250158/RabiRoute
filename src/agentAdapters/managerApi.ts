@@ -602,7 +602,12 @@ export async function scanAgentAdapters(
     },
     dsh: dshAgent,
     workbuddy: workbuddyAgent,
-    antigravity: antigravityAgent
+    antigravity: antigravityAgent,
+    deviceAgent: {
+      ...agentScanManifestFields("deviceAgent"),
+      installed: false,
+      warnings: ["实验接入：请从设备 Agent 目录选择已绑定的设备。设备执行模型、语音和工具；PC 只投递消息并记录回执。真机唤醒与执行尚需验收。"]
+    }
   };
 
   return {

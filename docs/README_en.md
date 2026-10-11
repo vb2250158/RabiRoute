@@ -57,6 +57,9 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Pipeline presets](pipeline-presets_en.md) — Agent-session defaults, explicit external targets, and Outbox statuses; FenneNote output is archival compatibility only.
 - [Agent Adapter Integration Lessons](agent-adapter-integration-lessons_en.md) — **Current guide** for duplicate sessions, missing tools, inverted ownership, desktop startup dependencies, and verification.
 - [Standard Agent Adapter Requirements](agent-adapter-standard-requirements_en.md) — **Current guide** for discovery, authentication, tasks, idempotent creation, delivery, results, tools, lifecycle, UI, security, and acceptance.
+- [Device Agent adapter contract](device-agent-adapter_en.md) — **Experimental**. Configure glasses as a Route handler, execute on the glasses model, and verify the PC queue, original deliveries, and response receipts.
+- [Delegating a glasses connection to the phone](device-peer-connection_en.md) — **Experimental**. Verify device credentials, independent keys, and a short connection lease so forwarded requests retain the glasses identity.
+- [Exact Agent delivery and formal replies](agent-endpoint-delivery_en.md) — **Experimental**. Verify source and target owners, original delivery receipts, and required replies; handle timeouts and revoked identities.
 - [Codex Desktop Agent Integration and Acceptance Contract](codex-desktop-agent-acceptance_en.md) — **Current fact** for stable IDs, side-effect-free scanning, automatic initialization, the Desktop owner boundary, and metadata bootstrap gates.
 - [Rabi Codex Context plugin](rabi-codex-context-plugin_en.md) — **Unified Manager version** where hooks only forward real Codex session events and inject Rabi PC-owned persona, plan, memory, and skill context.
 - [Persona data synchronization retirement](persona-data-sync_en.md) — **Retired**. Automatic/manual synchronization and synchronization APIs are no longer provided. Use existing RabiLink remote persona, Agent, and data access without replication; historical data is retained.
@@ -98,7 +101,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Local speech model downloads](local-speech-model-downloads_en.md) — use Model Management for on-demand weights and review each TTS/ASR model's source, isolated runtime, and validation requirements.
 - [RabiSpeech performance report](rabispeech-performance-report_en.md) — six TTS and five main ASR models, cold/warm timing, quality indicators, hardware, and CUDA issues.
 - [Speech servers and generic tunnels](rabilink-peer-tunnel_en.md) — Select a remote speech server and inspect presence, actual transport and round-trip latency.
-- [Cross-PC API calls](rabilink-peer-rpc_en.md) — Query another PC in the same application by device ID and inspect the actual LAN, P2P or Relay result.
+- [Device discovery and connection signalling](rabilink-peer-rpc_en.md) — Find PCs in the same application and understand connection handshakes; use [generic tunnels](rabilink-peer-tunnel_en.md) for all API reads, writes and streaming requests.
 - [RabiLink Relay](rabilink-relay-server_en.md)
 - [RabiLink Cloudflare Worker](rabilink-relay-cloudflare-worker_en.md)
 - [RabiLink glasses three-route comparison](rabilink-glasses-route-comparison_en.md) — host, lifecycle, device capability, release cost, and current guidance for native Lingzhu agent, AIUI, and native app routes.
@@ -111,14 +114,14 @@ This directory contains current guides, experimental integrations, designs, rese
 - [AIUI-to-phone/native-glasses parity checklist](rabilink-aiui-native-parity_en.md) — migration status separated by code, automation, and real-device evidence.
 - [AIUI phone/device profile HTTP](aiui-agent-profile-http_en.md) — **Experimental** phone settings, device ownership, revision conflicts and application receipts; end-to-end acceptance pending.
 - [AIUI profile lifecycle](../apps/rabilink-aiui/docs/agent-profile-runtime_en.md) — Cache, deferred application after the current turn, and model status.
-- [AIUI tool contract review](../apps/rabilink-aiui/docs/agent-tool-contract_en.md) — Official tool events and the unverified result-continuation interface.
+- [AIUI tool contract review](../apps/rabilink-aiui/docs/agent-tool-contract_en.md) — Model and tool events, continuation contracts, and acceptance boundaries.
 - [Independent RabiPC knowledge MCP](../apps/rabi-mcp/README_en.md) — HTTP/stdio tools for independent MCP clients; RabiLink uses built-in Manager calls without deploying this service.
 - [Local knowledge bridge settings](user-guide/knowledge-bridge-settings_en.md) — Use PC knowledge tools after connecting, and distinguish service readiness from business results.
 - [Phone knowledge permissions](knowledge-grant-phone-ui_en.md) — Migrate away from the retired knowledge-grant editor.
 - [PC knowledge bridge configuration](rabilink-knowledge-runtime_en.md) — Existing Manager knowledge APIs, application authentication and readiness checks.
 - [Knowledge write receipt lookup](rabilink-knowledge-operation-receipts_en.md) — Query persisted receipts with the original operation key and actual device credentials; unknown outcomes are never replayed.
-- [Historical AIUI Agent acceptance](aiui-agent-acceptance_en.md) — Maintenance: distinguish build, runtime and device evidence; track unfinished capabilities and acceptance criteria.
-- [AIUI single-step knowledge tools](../apps/rabilink-aiui/docs/knowledge-single-step_en.md) — Read-only tools, explicit role selection, actual results and no automatic model continuation.
+- [New AIUI Agent acceptance](aiui-agent-acceptance_en.md) — Maintenance: verify builds, runtime, hardware wake, and voice interaction against the new contract; track pending criteria.
+- [AIUI generic API transport](../apps/rabilink-aiui/docs/generic-api-transport_en.md) — Public APIs, target computers, persona ownership and verified transport scope.
 - [RabiLink AIUI residency boundaries](rabilink-aiui-residency-plan_en.md)
 - [RabiLink proactive-intelligence requirements](rabilink-active-intelligence-requirements_en.md) — target contract and implementation tracker for user state, scenario recognition, plan/memory closure after group-message recall, and intervention decisions.
 - [RabiLink native app design](rabilink-glasses-app-design_en.md)

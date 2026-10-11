@@ -39,6 +39,7 @@ export class PeerConnections extends EventEmitter {
       this.entries.set(peer.id, entry);
     }
     Object.assign(entry.status, { name: peer.name, online: peer.online, supported: peer.supported, trusted: peer.trusted });
+    if ((!peer.supported || !peer.trusted) && entry.session) entry.session.close();
     return entry;
   }
   private publish(status: PeerConnectionStatus) { this.emit("status", { ...status }); }
@@ -84,8 +85,10 @@ export class PeerConnections extends EventEmitter {
         try {
           const session = await this.connect(peer, transport, signal);
           if (signal.aborted) { session.close(); throw new Error("Tunnel attempt expired."); }
+          if (!entry.status.trusted || !entry.status.supported) { session.close(); throw new TunnelDenied("peer_upgrade_or_trust_required"); }
           try { await this.measure(session, entry.status); } catch (error) { session.close(); throw error; }
           if (signal.aborted) { session.close(); throw new Error("Tunnel attempt expired."); }
+          if (!entry.status.trusted || !entry.status.supported) { session.close(); throw new TunnelDenied("peer_upgrade_or_trust_required"); }
           entry.session = session; this.own(session, peer.id);
           Object.assign(entry.status, { state: "connected", online: true, transport, error: undefined }); this.publish(entry.status);
           session.once("close", () => {
@@ -104,7 +107,7 @@ export class PeerConnections extends EventEmitter {
   }
   async reconsider(peer: TunnelCandidate) {
     const entry = this.entry(peer), previous = entry.session;
-    if (!previous || previous.closed || entry.status.transport === "lan" || this.upgrading.has(peer.id) || this.active >= 2) return;
+    if (!peer.trusted || !peer.supported || !previous || previous.closed || entry.status.transport === "lan" || this.upgrading.has(peer.id) || this.active >= 2) return;
     this.upgrading.add(peer.id); this.active++;
     try {
       const transports = entry.status.transport === "p2p" ? ["lan"] as const : ["lan", "p2p"] as const;

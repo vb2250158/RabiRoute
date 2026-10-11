@@ -20,7 +20,6 @@ async function fixture(t: test.TestContext, available = true, savedGuid = expect
         status: async id => id === operationId ? { operationId: id, state: "queued" } : undefined
       },
       currentGuid: () => savedGuid,
-      trustedRemote: request => request.headers["x-test-remote-agent"] === "true",
       readJson: async (request, maximum) => {
         let body = "";
         for await (const chunk of request) { body += chunk; if (body.length > maximum) throw new Error("too large"); }
@@ -69,12 +68,13 @@ test("local authority permits localhost and bracketed IPv6 only at the current b
   assert.equal(await f.requestAuthority("localhost:1", "http://localhost:1"), 403);
 });
 
-test("reset rejects cross-origin, Relay, P2P and trusted remote Agent requests", async t => {
+test("local fallback rejects cross-origin, Relay, P2P and unadmitted Agent requests", async t => {
   const f = await fixture(t);
   const headerCases: Record<string, string>[] = [
     { origin: "https://other.example.test" }, { "sec-fetch-site": "cross-site" },
     { "x-rabilink-tunnel-local": "generation" }, { "x-rabiroute-relay-proxy": "1" },
-    { "x-rabiroute-peer-proxy": "1" }, { "x-test-remote-agent": "true" },
+    { "x-rabiroute-peer-proxy": "1" }, { "x-rabiroute-agent-id": "agent" },
+    { authorization: "Bearer lan1:invalid" }, { "x-rabiroute-webgui-token": "lan1:invalid" },
     { "x-forwarded-for": "192.0.2.10" },
     { host: "rebound.example.test", origin: "http://rebound.example.test", "sec-fetch-site": "same-origin" },
     { host: "localhost:1", origin: "http://localhost:1", "sec-fetch-site": "same-origin" },

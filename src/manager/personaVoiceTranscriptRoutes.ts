@@ -6,13 +6,16 @@ import {
   type PersonaVoiceSpeakerClassification
 } from "../personaVoiceTranscriptView.js";
 import { managerReadWorkerPool, ManagerReadWorkerError } from "./managerReadWorkerPool.js";
+import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
 
 export type PersonaVoiceTranscriptRouteContext = {
   roleDir(roleId: string): string;
   query?(roleDir: string, query: PersonaVoiceTranscriptQuery, signal: AbortSignal): Promise<PersonaVoiceTranscriptQueryResult>;
 };
 
-function jsonResponse(response: http.ServerResponse, status: number, body: unknown): void {
+function jsonResponse(request: http.IncomingMessage, response: http.ServerResponse, status: number, body: unknown): void {
+  try { assertTrustedLanAgentPrincipal(request); }
+  catch { status = 403; body = { code: -1, error: "LAN_AGENT_AUTHORIZATION_REVOKED" }; }
   body = errorResponsePresentation(body, status);
   if (response.destroyed || response.writableEnded) return;
   response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
@@ -29,7 +32,7 @@ export function handlePersonaVoiceTranscriptApi(
   if (!match) return false;
   try {
     if (request.method !== "GET") {
-      jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
+      jsonResponse(request, response, 405, { code: -1, message: "Method not allowed." });
       return true;
     }
     const roleDir = context.roleDir(decodeURIComponent(match[1]));
@@ -56,7 +59,7 @@ export function handlePersonaVoiceTranscriptApi(
       ?? ((targetRoleDir: string, targetQuery: PersonaVoiceTranscriptQuery, signal: AbortSignal) =>
         managerReadWorkerPool.queryPersonaVoiceTranscripts(targetRoleDir, targetQuery, { signal }));
     void execute(roleDir, query, abortController.signal)
-      .then(result => jsonResponse(response, 200, {
+      .then(result => jsonResponse(request, response, 200, {
         code: 0,
         data: {
           identityPath: "voice/voice-identities.jsonl",
@@ -69,11 +72,11 @@ export function handlePersonaVoiceTranscriptApi(
         const status = error instanceof ManagerReadWorkerError && error.code === "busy" ? 503
           : error instanceof ManagerReadWorkerError && error.code === "timeout" ? 504
             : 400;
-        jsonResponse(response, status, { code: -1, message: error instanceof Error ? error.message : String(error) });
+        jsonResponse(request, response, status, { code: -1, message: error instanceof Error ? error.message : String(error) });
       });
     return true;
   } catch (error) {
-    jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
+    jsonResponse(request, response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
     return true;
   }
 }

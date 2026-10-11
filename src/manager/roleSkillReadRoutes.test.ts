@@ -8,11 +8,8 @@ import { parseRoleKnowledgeResourceRoute } from "./roleKnowledgeRoute.js";
 import { respondRoleSkillRead } from "./roleSkillReadRoutes.js";
 import { managerReadHttpResponse } from "./managerReadHttpResponse.js";
 import { ManagerReadWorkerError } from "./managerReadWorkerPool.js";
-import { remoteAgentTargetKey } from "../shared/routeAgentTargets.js";
 
 const principal = { kind: "agent", nodeId: "node-one", agentId: "agent-one" } as const;
-const binding = { instanceId: principal.nodeId, agentId: principal.agentId };
-const definitions = [{ persona: "persona-one", remoteAgentTargets: [{ ...binding, id: remoteAgentTargetKey(binding), provider: "codex" as const }] }];
 const json = (response: http.ServerResponse, status: number, body: unknown) => {
   response.writeHead(status, { "content-type": "application/json" });
   response.end(JSON.stringify(body));
@@ -35,7 +32,7 @@ test("authenticated HTTP reads another persona without binding; aliases, detail 
   const listenerCounts: Array<[number, number]> = [];
   const base = await serve(context, (request, response) => {
     const pathname = new URL(request.url!, "http://fixture.invalid").pathname;
-    const access = authorizeLanAgentRoleSkillRequest(principal, request.method, pathname, definitions, definition => definition.persona);
+    const access = authorizeLanAgentRoleSkillRequest(principal, request.method, pathname);
     if (!access.allowed) { json(response, access.status, { code: -1, error: access.error }); return; }
     const route = parseRoleKnowledgeResourceRoute(pathname);
     assert.ok(route && route.resource === "skills");
@@ -55,7 +52,7 @@ test("authenticated HTTP reads another persona without binding; aliases, detail 
     for (const suffix of ["/skills", "/skills/example"]) {
       const response = await fetch(`${base}${prefix}/other-persona${suffix}`, { signal: AbortSignal.timeout(2000) });
       assert.equal(response.status, 200);
-      await response.arrayBuffer();
+      assert.equal((await response.json()).code, 0);
     }
   }
   assert.equal(reads, 4);
@@ -150,7 +147,9 @@ test("already aborted request or destroyed response never starts a read", async 
 
 test("Manager wires role guard before reads and moves list and detail to the interactive pool", async () => {
   const source = await fs.readFile(new URL("./controlPlaneRoutes.ts", import.meta.url), "utf8");
-  assert.match(source, /if \(lanAgentAccess\.kind === "agent"\) \{\s*const skillAccess = authorizeLanAgentRoleSkillRequest\(/);
+  const ingress = source.slice(source.indexOf('if (lanAgentAccess.kind === "agent")'), source.indexOf('guardRequestBodyDeadline(request, response'));
+  assert.match(ingress, /assertResponseAuthority = \(\) => \{ assertTrustedLanAgentPrincipal\(request\); \}/);
+  assert.match(ingress, /authorizeLanAgentRoleSkillRequest\(\s*lanAgentAccess, request\.method, pathname\s*\)/);
   assert.match(source, /if \(!skillAccess\.allowed\) \{\s*jsonResponse\(response, skillAccess\.status,[\s\S]*?return;/);
   const branch = source.slice(source.indexOf('if (request.method === "GET" && resource === "skills")'), source.indexOf('if (request.method === "GET" && resource === "memory" && !itemId)'));
   assert.match(branch, /respondRoleSkillRead\(request, response, roleDir, itemId/);

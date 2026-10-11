@@ -36,6 +36,85 @@ test("credentials persist across restart; tickets do not; unregistered Agent IDs
   if (process.platform !== "win32") assert.equal(fs.statSync(statePath).mode & 0o777, 0o600);
 });
 
+test("request leases persist across restart and no-ops, but disable-enable ABA fences old requests", t => {
+  const { authority, statePath } = fixture(t);
+  const { token } = enroll(authority);
+  authority.registerAgentCatalog(token, [{ agentId: "agent-a", provider: "custom-provider" }]);
+  const lease = authority.acquireAuthorizationLease(token, "agent-a");
+  assert.ok(lease);
+  assert.equal(lease.binding?.sessionId, undefined);
+  const restarted = new LanAgentAuthority({ statePath });
+  assert.doesNotThrow(() => restarted.assertAuthorizationLease(token, lease));
+  restarted.registerAgentCatalog(token, [{ agentId: "agent-a", provider: "custom-provider" }]);
+  restarted.setAgentEnabled("node-a", "agent-a", true);
+  assert.doesNotThrow(() => authority.assertAuthorizationLease(token, lease));
+  restarted.setAgentEnabled("node-a", "agent-a", false);
+  restarted.setAgentEnabled("node-a", "agent-a", true);
+  assert.throws(() => authority.assertAuthorizationLease(token, lease), /revoked or replaced/);
+  const fresh = restarted.acquireAuthorizationLease(token, "agent-a");
+  assert.ok(fresh);
+  assert.notEqual(fresh.incarnation, lease.incarnation);
+  restarted.revokeNode("node-a");
+  const replacement = enroll(restarted);
+  restarted.registerAgentCatalog(replacement.token, [{ agentId: "agent-a", provider: "custom-provider" }]);
+  assert.throws(() => restarted.assertAuthorizationLease(token, fresh), /revoked or replaced/);
+  assert.throws(() => restarted.assertAuthorizationLease(replacement.token, fresh), /revoked or replaced/);
+});
+
+test("catalog and CAS binding replacement invalidate captured source identity", t => {
+  const { authority } = fixture(t);
+  const { token } = enroll(authority);
+  const binding = { agentId: "agent-a", provider: "dsh", sessionId: "session-a" };
+  authority.registerAgentCatalog(token, [binding]);
+  const original = authority.acquireAuthorizationLease(token, "agent-a")!;
+  authority.approveAgentBinding("node-a", { ...binding, sessionId: "session-b" });
+  assert.throws(() => authority.assertAuthorizationLease(token, original), /revoked or replaced/);
+  const rebound = authority.acquireAuthorizationLease(token, "agent-a")!;
+  authority.mutateAgentAuthorization({ nodeId: "node-a", agentId: "agent-a", enabled: true,
+    binding, expectedRevision: authority.getSnapshot().revision, idempotencyKey: "fixture-lease-rebind" });
+  assert.throws(() => authority.assertAuthorizationLease(token, rebound), /revoked or replaced/);
+  const restored = authority.acquireAuthorizationLease(token, "agent-a")!;
+  authority.registerAgentCatalog(token, [{ ...binding, managedSessionIds: ["session-child"] }]);
+  assert.throws(() => authority.assertAuthorizationLease(token, restored), /revoked or replaced/);
+});
+
+test("atomic approve-and-enable rotates already-enabled binding replacements but preserves identical no-ops", t => {
+  const { authority, statePath } = fixture(t);
+  const { token } = enroll(authority);
+  const binding = { agentId: "agent-a", provider: "dsh", sessionId: "session-a", managedSessionIds: ["child-a"] };
+  authority.registerAgentCatalog(token, [binding]);
+  const lease = authority.acquireAuthorizationLease(token, "agent-a")!;
+  const revision = authority.getSnapshot().revision;
+  authority.approveAndEnableAgent("node-a", binding, revision);
+  assert.equal(authority.getSnapshot().revision, revision);
+  assert.doesNotThrow(() => authority.assertAuthorizationLease(token, lease));
+  authority.approveAndEnableAgent("node-a", { ...binding, sessionId: "session-b", managedSessionIds: [] }, revision);
+  assert.throws(() => authority.assertAuthorizationLease(token, lease), /revoked or replaced/);
+  const rebound = authority.acquireAuthorizationLease(token, "agent-a")!;
+  authority.approveAndEnableAgent("node-a", binding, authority.getSnapshot().revision);
+  assert.throws(() => new LanAgentAuthority({ statePath }).assertAuthorizationLease(token, rebound), /revoked or replaced/);
+  assert.throws(() => authority.assertAuthorizationLease(token, lease), /revoked or replaced/);
+});
+
+test("legacy incarnations survive reads and malformed persisted incarnations fail closed", t => {
+  const { authority, statePath } = fixture(t);
+  const { token } = enroll(authority);
+  authority.setAgentEnabled("node-a", "agent-a", true);
+  const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  delete state.nodes[0].authorizationIncarnation;
+  fs.writeFileSync(statePath, JSON.stringify(state));
+  const lease = authority.acquireAuthorizationLease(token, "agent-a")!;
+  assert.doesNotThrow(() => new LanAgentAuthority({ statePath }).assertAuthorizationLease(token, lease));
+  authority.setAgentEnabled("node-a", "agent-a", false);
+  authority.setAgentEnabled("node-a", "agent-a", true);
+  assert.throws(() => authority.assertAuthorizationLease(token, lease), /revoked or replaced/);
+  for (const invalid of ["", "a".repeat(63), "A".repeat(64), 123, null]) {
+    state.nodes[0].authorizationIncarnation = invalid;
+    fs.writeFileSync(statePath, JSON.stringify(state));
+    assert.throws(() => new LanAgentAuthority({ statePath }), /Invalid LAN agent authority node/);
+  }
+});
+
 test("download validation is repeatable; enrollment consumes ticket exactly once", t => {
   const { authority } = fixture(t);
   const { ticket } = authority.issueBootstrapTicket();

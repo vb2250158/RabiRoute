@@ -1,5 +1,5 @@
 import type http from "node:http";
-import type { LanAgentRegistry } from "./lanAgentRegistry.js";
+import { LanAgentNodeNameConflictError, type LanAgentRegistry } from "./lanAgentRegistry.js";
 import type { LanAgentReleaseStore } from "./lanAgentReleaseStore.js";
 import type { InstanceAgent } from "../shared/agentInstance.js";
 import type { LanAgentAuthority } from "./lanAgentAuthority.js";
@@ -130,6 +130,19 @@ export function handleLanAgentApi(
     const authorization = context.authority?.getSnapshot();
     if (authorization) response.setHeader("etag", `"${authorization.revision}"`);
     context.jsonResponse(response, 200, { code: 0, instances: context.registry.listInstances(context.localAgents?.()), authorization });
+    return true;
+  }
+  const nameMatch = requestUrl.pathname.match(/^\/api\/lan-agent\/instances\/([^/]+)\/name$/);
+  if (request.method === "PUT" && nameMatch) {
+    if (!context.isManagementRequestAuthorized(request, requestUrl)) {
+      agentUnauthorized(response, context, "LAN_AGENT_MANAGEMENT_AUTH_REQUIRED");
+      return true;
+    }
+    void context.readJsonBody<Record<string, unknown>>(request).then(body => {
+      if (typeof body?.expectedName !== "string") throw new Error("请先读取节点当前名称，再提交 expectedName。");
+      const result = context.registry.setNodeName(decodeURIComponent(nameMatch[1]!), body.name, body.expectedName);
+      context.jsonResponse(response, 200, { code: 0, result });
+    }).catch(error => context.jsonResponse(response, error instanceof LanAgentNodeNameConflictError ? 409 : 400, { code: -1, message: errorMessage(error) }));
     return true;
   }
   const grantMatch = requestUrl.pathname.match(/^\/api\/lan-agent\/instances\/([^/]+)\/agents\/([^/]+)\/authorization$/);

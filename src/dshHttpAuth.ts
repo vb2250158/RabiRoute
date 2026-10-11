@@ -6,6 +6,7 @@ import { DshConnectionStore, DshConnectionError, dshLocalOrigin, type DshSession
 import { createHash, randomUUID } from "node:crypto";
 
 const cookies = new Map<string, { value: string; expires: number }>();
+// Only legacy calls without request-scoped authority may share an exchange.
 const pending = new Map<string, Promise<string>>();
 let connectionStore: DshConnectionStore | undefined;
 function currentConnectionStore(): DshConnectionStore {
@@ -46,18 +47,26 @@ async function launchLogFor(origin: string): Promise<string | undefined> {
   return logPath;
 }
 
-async function exchange(origin: string, logPath: string, strict = false, signal?: AbortSignal): Promise<DshSessionCredential> {
+async function exchange(origin: string, logPath: string, strict = false, signal?: AbortSignal, assertAuthorized?: () => void | Promise<void>): Promise<DshSessionCredential> {
+  await assertAuthorized?.();
   let tail: string;
   try {
     const file = await fs.open(logPath, 'r');
     try {
+      await assertAuthorized?.();
       const stat = await file.stat();
+      await assertAuthorized?.();
       const length = Math.min(stat.size, 256 * 1024);
       const buffer = Buffer.alloc(length);
       const result = await file.read(buffer, 0, length, stat.size - length);
+      await assertAuthorized?.();
       tail = buffer.subarray(0, result.bytesRead).toString('utf8');
     } finally { await file.close(); }
-  } catch { throw new Error('DSH launch log is unreadable; configure the current owner launch log.'); }
+  } catch {
+    await assertAuthorized?.();
+    throw new Error('DSH launch log is unreadable; configure the current owner launch log.');
+  }
+  await assertAuthorized?.();
   let launch: URL | undefined;
   for (const match of tail.matchAll(/dsh web: (https?:\/\/[^\s<>"']+)/g)) {
     try {
@@ -68,15 +77,21 @@ async function exchange(origin: string, logPath: string, strict = false, signal?
     } catch { /* Ignore unrelated or malformed log entries without echoing them. */ }
   }
   if (!launch) throw new Error('DSH current launch URL is absent from the configured log.');
-  const credential = await exchangeLaunchUrl(launch, strict, signal);
+  const credential = await exchangeLaunchUrl(launch, strict, signal, assertAuthorized);
+  await assertAuthorized?.();
   cookies.set(`${origin}\n${logPath}`, { value: credential.cookie, expires: Math.min(credential.expiresAt, Date.now() + 5 * 60 * 1000) });
   return credential;
 }
 
-async function exchangeLaunchUrl(launch: URL, strict = false, signal?: AbortSignal): Promise<DshSessionCredential> {
+async function exchangeLaunchUrl(launch: URL, strict = false, signal?: AbortSignal, assertAuthorized?: () => void | Promise<void>): Promise<DshSessionCredential> {
+  await assertAuthorized?.();
   let response: Response;
   try { response = await fetch(launch, { redirect: 'manual', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10000)]) : AbortSignal.timeout(10000) }); }
-  catch { throw new Error('DSH authentication exchange failed; no RPC was sent.'); }
+  catch {
+    await assertAuthorized?.();
+    throw new Error('DSH authentication exchange failed; no RPC was sent.');
+  }
+  await assertAuthorized?.();
   if (response.status !== 303 || response.headers.get('location') !== '/') throw new Error('DSH authentication exchange rejected; reopen the current owner launch URL.');
   const values = response.headers.getSetCookie();
   const valid = values.filter(value => /^dsh-auth-[A-Za-z0-9_-]+=[A-Za-z0-9_.-]+;/.test(value) && /;\s*HttpOnly(?:;|$)/i.test(value) && /;\s*Path=\/(?:;|$)/i.test(value));
@@ -101,8 +116,9 @@ async function exchangeLaunchUrl(launch: URL, strict = false, signal?: AbortSign
   return { cookie: valid[0].split(';', 1)[0], expiresAt: expires };
 }
 
-/** Explicit local-user authorization. The launch URL is never persisted or returned. */
-export async function connectDshOwner(launchUrl: unknown, expectedRevision: number, store = new DshConnectionStore(), signal?: AbortSignal) {
+/** Explicit authorized connection management. The launch URL is never persisted or returned. */
+export async function connectDshOwner(launchUrl: unknown, expectedRevision: number, store = new DshConnectionStore(), signal?: AbortSignal, assertAuthorized?: () => void) {
+  assertAuthorized?.();
   if (typeof launchUrl !== 'string' || launchUrl.length > 8192) throw new DshConnectionError('Provide the current DSH login link.');
   let launch: URL;
   try { launch = new URL(launchUrl.trim()); } catch { throw new DshConnectionError('DSH login link is invalid.'); }
@@ -112,10 +128,12 @@ export async function connectDshOwner(launchUrl: unknown, expectedRevision: numb
   }
   const origin = dshLocalOrigin(launch.origin);
   if (store.readMetadata().revision !== expectedRevision) throw new DshConnectionError('DSH connections changed; refresh before retrying.', 409);
-  const credential = await exchangeLaunchUrl(launch, true, signal);
-  await verifyDshCredential(origin, credential.cookie, signal);
+  const credential = await exchangeLaunchUrl(launch, true, signal, assertAuthorized);
+  assertAuthorized?.();
+  await verifyDshCredential(origin, credential.cookie, signal, assertAuthorized);
   signal?.throwIfAborted();
-  store.connect(origin, credential, expectedRevision);
+  assertAuthorized?.();
+  store.connect(origin, credential, expectedRevision, assertAuthorized);
   return { baseUrl: origin, state: 'connected', expiresAt: credential.expiresAt, revision: store.readMetadata().revision };
 }
 
@@ -142,10 +160,11 @@ function browserDshCredential(origin: string, browser?: { hostname: string; cook
 
 /** Explicit connect: reuse saved or browser login; blocked records never fall back to logs. */
 export async function migrateDshOwner(baseUrl: string, expectedRevision: number, store = new DshConnectionStore(), signal?: AbortSignal,
-  browser?: { hostname: string; cookieHeader?: string }) {
+  browser?: { hostname: string; cookieHeader?: string }, assertAuthorized?: () => void) {
+  assertAuthorized?.();
   const origin = dshLocalOrigin(baseUrl);
   if (store.readMetadata().revision !== expectedRevision) throw new DshConnectionError('DSH connections changed; refresh before retrying.', 409);
-  const saved = store.resolve(origin);
+  const saved = store.resolve(origin, Date.now(), assertAuthorized);
   let credential: DshSessionCredential;
   if (saved?.state === 'connected') credential = saved;
   else {
@@ -154,28 +173,36 @@ export async function migrateDshOwner(baseUrl: string, expectedRevision: number,
     else {
       if (saved) throw new DshConnectionError('Reconnect using the current DSH login link.', 401);
       const logPath = await launchLogFor(origin);
+      assertAuthorized?.();
       if (!logPath) throw new DshConnectionError('Log in to DSH in this browser or provide the current login link.', 401);
-      credential = await exchange(origin, logPath, true, signal);
+      credential = await exchange(origin, logPath, true, signal, assertAuthorized);
     }
   }
-  try { await verifyDshCredential(origin, credential.cookie, signal); }
+  try { await verifyDshCredential(origin, credential.cookie, signal, assertAuthorized); }
   catch (error) {
-    if (saved?.state === 'connected' && error instanceof DshConnectionError && error.status === 401) store.invalidate(origin, credential.cookie);
+    assertAuthorized?.();
+    if (saved?.state === 'connected' && error instanceof DshConnectionError && error.status === 401) store.invalidate(origin, credential.cookie, assertAuthorized);
     throw error;
   }
   signal?.throwIfAborted();
-  store.connect(origin, credential, expectedRevision);
+  assertAuthorized?.();
+  store.connect(origin, credential, expectedRevision, assertAuthorized);
   return { baseUrl: origin, state: 'connected', expiresAt: credential.expiresAt, revision: store.readMetadata().revision };
 }
 
-async function verifyDshCredential(origin: string, cookie: string, signal?: AbortSignal): Promise<void> {
+async function verifyDshCredential(origin: string, cookie: string, signal?: AbortSignal, assertAuthorized?: () => void): Promise<void> {
+  assertAuthorized?.();
   const rpcId = randomUUID();
   let response: Response;
   try {
     response = await fetch(`${origin}/api/session/list`, { method: 'POST', redirect: 'manual', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10000)]) : AbortSignal.timeout(10000),
       headers: { 'content-type': 'application/json', cookie },
       body: JSON.stringify({ type: 'client-request', rpcId, method: 'session/list', payload: { args: { _request: {} } } }) });
-  } catch { throw new DshConnectionError('DSH connection verification failed; no task message was sent.', 502); }
+  } catch {
+    assertAuthorized?.();
+    throw new DshConnectionError('DSH connection verification failed; no task message was sent.', 502);
+  }
+  assertAuthorized?.();
   if (response.status === 401) throw new DshConnectionError('DSH rejected connection verification; reconnect using the current login link.', 401);
   if (!response.ok) throw new DshConnectionError('DSH session API verification failed; saved authorization was not changed.', 502);
   const reader = response.body?.getReader();
@@ -185,6 +212,7 @@ async function verifyDshCredential(origin: string, cookie: string, signal?: Abor
   try {
     for (;;) {
       const { done, value } = await reader.read();
+      assertAuthorized?.();
       if (done) break;
       length += value.byteLength;
       if (length > 8 * 1024 * 1024) {
@@ -204,18 +232,26 @@ async function verifyDshCredential(origin: string, cookie: string, signal?: Abor
 }
 
 /** Authenticate before dispatch. Never retry an RPC, including after a 401. */
-export async function dshAuthenticatedFetch(baseUrl: string, method: string, body: string): Promise<Response> {
+export async function dshAuthenticatedFetch(baseUrl: string, method: string, body: string, assertAuthorized?: () => void | Promise<void>): Promise<Response> {
+  await assertAuthorized?.();
   const origin = originOf(baseUrl);
   if (!/^[A-Za-z][A-Za-z0-9]*(?:[./][A-Za-z][A-Za-z0-9]*)+$/.test(method)) throw new Error('DSH RPC method is invalid.');
   const saved = currentConnectionStore().resolve(origin);
   if (saved && saved.state !== 'connected') throw new DshConnectionError('DSH authorization is expired or disconnected; reconnect in WebGUI.', 401);
-  const logPath = saved ? undefined : await launchLogFor(origin);
+  let logPath: string | undefined;
+  try { logPath = saved ? undefined : await launchLogFor(origin); }
+  catch (error) { await assertAuthorized?.(); throw error; }
+  await assertAuthorized?.();
   let cookie: string | undefined = saved?.cookie;
   if (logPath) {
     const cacheKey = `${origin}\n${logPath}`;
     const cached = cookies.get(cacheKey);
     if (cached && cached.expires > Date.now()) cookie = cached.value;
-    else {
+    else if (assertAuthorized) {
+      // A revoked caller must neither populate a shared exchange nor poison another caller.
+      cookie = (await exchange(origin, logPath, false, undefined, assertAuthorized)).cookie;
+      await assertAuthorized();
+    } else {
       let work = pending.get(cacheKey);
       if (!work) {
         work = exchange(origin, logPath).then(credential => credential.cookie);
@@ -231,13 +267,18 @@ export async function dshAuthenticatedFetch(baseUrl: string, method: string, bod
     throw new DshConnectionError('DSH authorization changed; refresh the connection before sending.', 409);
   }
   if (current?.state === 'connected') cookie = current.cookie;
+  await assertAuthorized?.();
   let response: Response;
   try {
     response = await fetch(`${origin}/api/${method}`, {
       method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(30000),
       headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) }, body
     });
-  } catch { throw new Error('DSH RPC transport failed; result may be unknown, check the original receipt before retrying.'); }
+  } catch {
+    await assertAuthorized?.();
+    throw new Error('DSH RPC transport failed; result may be unknown, check the original receipt before retrying.');
+  }
+  await assertAuthorized?.();
   if (response.status === 401) {
     if (current?.state === 'connected' && cookie) currentConnectionStore().invalidate(origin, cookie);
     if (logPath && cookies.get(`${origin}\n${logPath}`)?.value === cookie) cookies.delete(`${origin}\n${logPath}`);

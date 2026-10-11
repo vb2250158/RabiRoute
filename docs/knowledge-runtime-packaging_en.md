@@ -1,27 +1,15 @@
-# Knowledge runtime packaging closure
+<!-- docs-language-switch -->
+<div align="center">
+English | <a href="./knowledge-runtime-packaging.md">简体中文</a>
+</div>
+<!-- /docs-language-switch -->
 
-English | [简体中文](knowledge-runtime-packaging.md)
+# Retired knowledge integration
 
-This page describes the 0.3.22 release layout and closure checks. Passing scripts and guard tests does not establish installation, Host health or physical-device business acceptance.
+The old knowledge bridge, intent queue, per-tool grants and phone grant editor are retired. This page preserves a documentation link; it does not describe a supported runtime or configuration path. Old business configuration is not migrated.
 
-## PC packages and developer candidates
+Use the target PC's [Manager interfaces](rabi-agent-interfaces_en.md) through the [generic API transport](../apps/rabilink-aiui/docs/generic-api-transport_en.md). Enabled authenticated Agents have the same API access as local callers, without workspace, persona or Route grants. Bindings only select automatic delivery targets. Relay handles connections, authentication and opaque transport.
 
-The stable knowledge implementation lives in `packages/rabi-knowledge-contract/{schema,tools,receipt}.mjs`. Manager's `rabiLinkKnowledgeDirect` calls existing Manager knowledge APIs and reuses tool mapping and receipt validation, without starting an external MCP service or configuring a knowledge URL or secret. Imports from compiled `dist/manager/` resolve to `packages/rabi-knowledge-contract/` at the installation root. TypeScript does not copy these files.
+Knowledge, persona, Skill and message state remain on the owning PC. Preserve each endpoint's actual revision, identity and receipt contract. For uncertain writes, read back the original resource or receipt; do not change the key or replay the write automatically.
 
-Windows release explicitly requires the three shared modules and the thin `apps/rabi-mcp/lib/{knowledge-tools,knowledge-receipt}.mjs` wrappers, failing on missing source. The independent MCP application reuses the same implementation; wrappers must not retain duplicated legacy tool logic. Root production dependencies use locked `npm ci --omit=dev --ignore-scripts`; dependency installation does not start an MCP service.
-
-Developer candidates also verify and overwrite these five files. An existing independent MCP application receives updated wrappers. When the base lacks that application, the shared files and wrappers still form an importable closure without creating an otherwise absent caller. The base remains unchanged, and missing source fails before staging.
-
-## Relay layout and migration
-
-`scripts/rabilink-relay-runtime-files.json` contains repository-relative paths for the entry and recursive static relative dependencies. It includes runtime modules under `scripts/`, helpers under `scripts/lib/`, and the three shared contract modules. Knowledge authentication uses `scripts/rabilink-knowledge-access.mjs`; the grant and grant-UI modules are retired.
-
-The manifest drives staging, backups and post-extraction missing-file checks. Archives preserve `scripts/`, `scripts/lib/` and `packages/rabi-knowledge-contract/`. The entry is `node scripts/rabilink-relay-server.mjs`, rather than a flattened root module. Deployment backs up the legacy flat manifest and known historical files, installs the new layout, removes the backed-up flat entries and grant modules, and records the migration. Configuration and business data remain intact. Remote installation recursively copies the reviewed staged archive.
-
-## Provenance and checks
-
-The generic Windows `Copy-TrackedTree` includes tracked files only. The five knowledge modules, release-list validation helper and reviewed Relay manifest entries are explicit required exceptions. Snapshots without Git may use a `-TrackedFilesManifest` of paths and hashes. Only this stable shared-module set is accepted; it does not permit arbitrary packages, untracked files or runtime data, and hashes do not establish provenance authorization.
-
-The Chinese/English contracts for device profile HTTP, knowledge-operation receipts and legacy phone-page migration are required documents. Linked targets are not copied recursively; consult the source repository for the full index.
-
-Run `node --test scripts/runtime-package-closure.test.mjs scripts/developer-channel.test.mjs scripts/windows-release-optional-speech.test.mjs` to check static closure, actual candidate-wrapper imports, base protection, missing-source rejection and release-path limits. Scripts accessing Manager also run `node --test scripts/dynamic-manager-active-truth.test.mjs`. New or dynamic runtime dependencies require manifest and check updates. Complete-package startup, installation-directory imports, managed Host health and dual-device business acceptance each require their own evidence.
+See [AIUI acceptance](aiui-agent-acceptance_en.md) and [Relay deployment](rabilink-relay-server_en.md) for current implementation and outstanding checks. No old knowledge URL, MCP secret or permission form is required.

@@ -55,6 +55,10 @@ test("Windows release explicitly includes required discovery and Agent transport
       "packages/rabi-knowledge-contract/schema.mjs",
       "packages/rabi-knowledge-contract/tools.mjs",
       "packages/rabi-knowledge-contract/receipt.mjs",
+      "packages/rabi-api-contract/request.mjs",
+      "packages/rabilink-agent-contract/profile.mjs",
+      "packages/rabilink-agent-contract/state.mjs",
+      "packages/rabilink-agent-contract/persona.mjs",
       "apps/rabi-mcp/lib/knowledge-tools.mjs",
       "apps/rabi-mcp/lib/knowledge-receipt.mjs",
       "scripts/lib/release-tracked-manifest.ps1",
@@ -87,7 +91,7 @@ test("Windows PowerShell 5.1 can parse every release path without a source-code 
   assert.match(releaseScript, /\$versionLogBaseName \+ "_en\.md"/);
 });
 
-test("tracked release manifests accept only the stable knowledge runtime files", {
+test("tracked release manifests accept only the stable shared runtime contracts", {
   skip: process.platform !== "win32",
 }, () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-knowledge-manifest-"));
@@ -97,6 +101,10 @@ test("tracked release manifests accept only the stable knowledge runtime files",
     "packages/rabi-knowledge-contract/schema.mjs",
     "packages/rabi-knowledge-contract/tools.mjs",
     "packages/rabi-knowledge-contract/receipt.mjs",
+    "packages/rabi-api-contract/request.mjs",
+    "packages/rabilink-agent-contract/profile.mjs",
+    "packages/rabilink-agent-contract/state.mjs",
+    "packages/rabilink-agent-contract/persona.mjs",
     "apps/rabi-mcp/lib/knowledge-tools.mjs",
     "apps/rabi-mcp/lib/knowledge-receipt.mjs"
   ];
@@ -109,13 +117,16 @@ test("tracked release manifests accept only the stable knowledge runtime files",
   const run = entries => {
     fs.writeFileSync(manifestFile, JSON.stringify({ version: 1, files: entries }));
     const quote = value => "'" + value.replaceAll("'", "''") + "'";
-    return spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", `$ErrorActionPreference='Stop'; . ${quote(helper)}; $manifestEntries = Read-ReleaseTrackedManifest ${quote(manifestFile)} ${quote(root)}; if ($manifestEntries.Count -ne ${entries.length}) { throw 'Unexpected entry count' }`], { encoding: "utf8" });
+    const env = { ...process.env };
+    // Windows PowerShell must initialize its own module path rather than inherit PowerShell 7 modules.
+    delete env.PSModulePath;
+    return spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", `$ErrorActionPreference='Stop'; . ${quote(helper)}; $manifestEntries = Read-ReleaseTrackedManifest ${quote(manifestFile)} ${quote(root)}; if ($manifestEntries.Count -ne ${entries.length}) { throw 'Unexpected entry count' }`], { encoding: "utf8", env });
   };
   try {
     const accepted = known.map(entry);
     const result = run(accepted);
     assert.equal(result.status, 0, result.stderr || result.stdout);
-    for (const denied of ["packages/unknown-owner/schema.mjs", "packages/rabi-knowledge-contract/private.mjs", "apps/rabi-mcp/lib/knowledge-http-client.mjs"]) {
+    for (const denied of ["packages/unknown-owner/schema.mjs", "packages/rabi-knowledge-contract/private.mjs", "packages/rabi-api-contract/private.mjs", "packages/rabilink-agent-contract/private.mjs", "apps/rabi-mcp/lib/knowledge-http-client.mjs"]) {
       const rejected = run([entry(denied)]);
       assert.notEqual(rejected.status, 0, denied);
       assert.match(rejected.stderr + rejected.stdout, /Unsafe or duplicate tracked path/);

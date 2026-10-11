@@ -9,15 +9,22 @@ import { handleQqMessageRoutes } from "./qqMessageRoutes.js";
 import { qqMessageMedia, readQqMedia, QQ_MEDIA_MAX_BYTES, qqRead } from "./qqMessageMedia.js";
 import type { GatewayDefinition } from "../shared/gatewayConfigModel.js";
 import { authorizeAgentApiOperation } from "./agentApiPolicy.js";
+import { LanAgentAuthority } from "./lanAgentAuthority.js";
+import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
+import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 
 const definition = { id: "test-route", enabled: true, messageAdapters: ["napcat"],
   napcatInstances: [{ id: "test-instance", enabled: true, httpUrl: "http://127.0.0.1:12345", accessToken: "test-secret" }] } as GatewayDefinition;
 const row = { message_id: 123, message_type: "group", group_id: "456", time: 100, user_id: "789",
   message: [{ type: "text", data: { text: "hello" } }, { type: "video", data: { file: "abc.mp4", url: "https://media.qq.com/private-key", thumb: "cover.png" } }] };
 const envelope = (data: unknown) => Response.json({ status: "ok", retcode: 0, data });
-async function serve(transport: typeof fetch, options: { local?: boolean; route?: () => GatewayDefinition | undefined } = {}) {
+async function serve(transport: typeof fetch, options: { local?: boolean; route?: () => GatewayDefinition | undefined; authority?: LanAgentAuthority;
+  connection?: (request: http.IncomingMessage) => (() => void) | undefined } = {}) {
   const server = http.createServer((request, response) => {
     const url = new URL(request.url!, "http://127.0.0.1");
+    if (options.authority) evaluateLanAgentRequest(request, options.authority, true);
+    const connectionAuthority = options.connection?.(request);
+    if (connectionAuthority) markAuthenticatedConnectionRequest(request, connectionAuthority);
     if (!handleQqMessageRoutes(request, url, response, { local: () => options.local !== false,
       route: options.route ?? (() => definition), transport,
       json: (reply, status, body) => { reply.writeHead(status, { "content-type": "application/json" }); reply.end(JSON.stringify(body)); }
@@ -104,6 +111,57 @@ test("remote, relay, duplicate and arbitrary-url requests never reach OneBot", a
     }
     assert.equal(calls, 0);
   } finally { await remote.close(); await local.close(); }
+});
+
+test("enabled authenticated Agent reads public QQ without a Route owner grant and revocation withholds awaited data", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "qq-agent-authority-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const authority = new LanAgentAuthority({ statePath: path.join(root, "authority.json") });
+  const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "fixture-node");
+  authority.registerAgentCatalog(credential.token, [{ agentId: "fixture-agent", provider: "codex" }]);
+  const headers = { authorization: `Bearer ${credential.token}`, "x-rabiroute-agent-id": "fixture-agent" };
+  let revoke = false;
+  let calls = 0;
+  const app = await serve(async () => {
+    calls++;
+    if (revoke) authority.setAgentEnabled("fixture-node", "fixture-agent", false);
+    return envelope(row);
+  }, { local: false, authority });
+  try {
+    assert.equal((await fetch(app.base + "/api/agent/qq/messages/123" + query, { headers })).status, 200);
+    assert.equal((await fetch(app.base + "/api/agent/qq/messages/123" + query, { headers: { "x-rabiroute-agent-id": "fixture-agent" } })).status, 403);
+    assert.equal(calls, 1);
+    revoke = true;
+    const result = await fetch(app.base + "/api/agent/qq/messages/123" + query, { headers });
+    assert.equal(result.status, 403);
+    assert.equal((await result.json()).errorCode, "QQ_READ_AUTHORIZATION_REVOKED");
+    assert.equal(calls, 2);
+  } finally { await app.close(); }
+});
+
+test("verified Relay and Peer connections read the same QQ API; spoofed headers and revoked leases withhold results", async () => {
+  for (const proxyHeader of ["x-rabiroute-relay-proxy", "x-rabiroute-peer-proxy"]) {
+    let enabled = true;
+    let revokeDuringRead = false;
+    let calls = 0;
+    const app = await serve(async () => {
+      calls++;
+      if (revokeDuringRead) enabled = false;
+      return envelope(row);
+    }, { local: false, connection: request => request.headers.authorization === "Bearer fixture-verified-connection"
+      ? () => { if (!enabled) throw new Error("Connection revoked."); } : undefined });
+    const headers = { authorization: "Bearer fixture-verified-connection", "x-rabilink-tunnel-local": "fixture-generation", [proxyHeader]: "1" };
+    try {
+      assert.equal((await fetch(app.base + "/api/agent/qq/messages/123" + query, { headers: { "x-rabilink-tunnel-local": "fixture-generation", [proxyHeader]: "1" } })).status, 403);
+      assert.equal(calls, 0);
+      assert.equal((await fetch(app.base + "/api/agent/qq/messages/123" + query, { headers })).status, 200);
+      revokeDuringRead = true;
+      const result = await fetch(app.base + "/api/agent/qq/messages/123" + query, { headers });
+      assert.equal(result.status, 403);
+      assert.equal((await result.json()).errorCode, "QQ_READ_AUTHORIZATION_REVOKED");
+      assert.equal(calls, 2);
+    } finally { await app.close(); }
+  }
 });
 
 test("route changes while reading withhold the result", async () => {

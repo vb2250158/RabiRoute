@@ -304,8 +304,9 @@ class RabiRecordingHubActivity : Activity() {
                     .setPositiveButton("完成",null).show()
             },
             card("glasses","眼镜",when { audioSource == "glasses" -> "正在收音"; RabiConversationService.currentVideo()?.receiving == true -> "正在接收画面"; authorized -> "已授权 · 暂无音视频"; else -> "待连接" }) {
-                AlertDialog.Builder(this).setTitle("眼镜").setItems(if(RabiConversationService.currentVideo() != null) arrayOf("连接与授权","视频开播步骤") else arrayOf("连接与授权")) { _, index ->
-                    if(index == 1) showStreamGuide()
+                AlertDialog.Builder(this).setTitle("眼镜").setItems(if(RabiConversationService.currentVideo() != null) arrayOf("眼镜设置","连接与授权","视频开播步骤") else arrayOf("眼镜设置","连接与授权")) { _, index ->
+                    if(index == 0) com.rabi.link.AiuiGlassesSettingsDialog.show(this)
+                    else if(index == 2) showStreamGuide()
                     else if(settings().running) toast("请先关闭顶部记录开关，再管理眼镜连接")
                     else startActivity(Intent(this,RokidProbeActivity::class.java))
                 }.show()

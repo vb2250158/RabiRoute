@@ -126,7 +126,8 @@ test("authenticated discovery and receipt lookup reuse connection auth and retai
   assert.equal(lookups, 1); assert.equal(reads, 0);
   for (const suffix of ["/capabilities", "/action-requests?idempotencyKey=x"]) handleXiaomiHomeManagerApi(request({}, "GET", "192.168.0.20"), new URL(`http://localhost/api/agent/xiaomi-home${suffix}`), {} as http.ServerResponse, ctx);
   await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(responses.slice(-2).map(item => item.status), [200, 200]);
+  // A WebGUI callback alone is not an admitted Agent principal for public actions.
+  assert.deepEqual(responses.slice(-2).map(item => item.status), [403, 403]);
   ctx.controlPlaneAccessAllowed = () => false;
   handleXiaomiHomeManagerApi(request({}, "GET", "192.168.0.20"), new URL("http://localhost/api/agent/xiaomi-home/capabilities"), {} as http.ServerResponse, ctx);
   assert.equal(responses.at(-1)?.status, 403);
@@ -222,8 +223,8 @@ test("Xiaomi Home authenticated LAN actions proceed to the same request contract
     {} as http.ServerResponse,
     routeContext
   );
-  assert.deepEqual(responses.map(item => item.status), [403, 400]);
-  assert.equal(responses[1]?.body.error.code, "xiaomi_home_lifecycle_fence_required");
+  assert.deepEqual(responses.map(item => item.status), [403, 403]);
+  assert.equal(responses[1]?.body.error.code, "xiaomi_home_loopback_required");
 });
 
 test("Xiaomi Home settings mutation rejects a missing lifecycle fence before reading the body", () => {

@@ -31,14 +31,25 @@ export type LanAgentAuthorityOptions = {
   maxBootstrapTickets?: number;
 };
 
-type NodeGrant = { nodeId: string; secretHash: string; enabledAgentIds: string[]; disabledAgentIds?: string[]; agentBindings?: LanAgentApprovedBinding[] };
+export type LanAgentAuthorizationLease = Readonly<{ nodeId: string; agentId: string; incarnation: string; binding?: LanAgentApprovedBinding }>;
+type NodeGrant = { nodeId: string; secretHash: string; enabledAgentIds: string[]; disabledAgentIds?: string[]; agentBindings?: LanAgentApprovedBinding[]; authorizationIncarnation?: string };
+
+/** Every effective node policy change invalidates requests issued before it, including disable/enable ABA. */
+function rotateAuthorizationIncarnation(node: NodeGrant): void {
+  node.authorizationIncarnation = randomBytes(32).toString("hex");
+}
 
 function setNodeAgentEnabled(node: NodeGrant, agentId: string, enabled: boolean): void {
   const disabled = node.disabledAgentIds ?? [];
   if (!enabled && !disabled.includes(agentId) && disabled.length >= MAX_AGENTS_PER_NODE) throw new Error("Agent disable capacity reached.");
   if (enabled && !node.enabledAgentIds.includes(agentId) && node.enabledAgentIds.length >= MAX_AGENTS_PER_NODE) throw new Error("Agent grant capacity reached.");
-  node.disabledAgentIds = enabled ? disabled.filter(id => id !== agentId) : [...new Set([...disabled, agentId])];
-  node.enabledAgentIds = enabled ? [...new Set([...node.enabledAgentIds, agentId])] : node.enabledAgentIds.filter(id => id !== agentId);
+  const disabledAgentIds = enabled ? disabled.filter(id => id !== agentId) : [...new Set([...disabled, agentId])];
+  const enabledAgentIds = enabled ? [...new Set([...node.enabledAgentIds, agentId])] : node.enabledAgentIds.filter(id => id !== agentId);
+  if (JSON.stringify(disabled) === JSON.stringify(disabledAgentIds)
+    && JSON.stringify(node.enabledAgentIds) === JSON.stringify(enabledAgentIds)) return;
+  node.disabledAgentIds = disabledAgentIds;
+  node.enabledAgentIds = enabledAgentIds;
+  rotateAuthorizationIncarnation(node);
 }
 export type LanAgentAuthorizationMutation = {
   nodeId: string; agentId: string; enabled: boolean; binding?: LanAgentApprovedBinding;
@@ -116,7 +127,8 @@ function loadState(statePath: string): AuthorityState {
         || node.disabledAgentIds.length > MAX_AGENTS_PER_NODE || !node.disabledAgentIds.every(validId)
         || new Set(node.disabledAgentIds).size !== node.disabledAgentIds.length
         || node.disabledAgentIds.some(id => (node.enabledAgentIds as string[]).includes(id))))
-      || Object.keys(node).some(key => !["nodeId", "secretHash", "enabledAgentIds", "disabledAgentIds", "agentBindings"].includes(key))) {
+      || (node.authorizationIncarnation !== undefined && (typeof node.authorizationIncarnation !== "string" || !/^[a-f0-9]{64}$/.test(node.authorizationIncarnation)))
+      || Object.keys(node).some(key => !["nodeId", "secretHash", "enabledAgentIds", "disabledAgentIds", "agentBindings", "authorizationIncarnation"].includes(key))) {
       throw new Error("Invalid LAN agent authority node.");
     }
     seen.add(node.nodeId);
@@ -137,7 +149,8 @@ function loadState(statePath: string): AuthorityState {
       ?? (agentBindings ?? []).filter(binding => !(node.enabledAgentIds as string[]).includes(binding.agentId)).map(binding => binding.agentId);
     return { nodeId: node.nodeId, secretHash: node.secretHash, enabledAgentIds: [...node.enabledAgentIds],
       disabledAgentIds: [...disabledAgentIds],
-      ...(agentBindings !== undefined ? { agentBindings } : {}) };
+      ...(agentBindings !== undefined ? { agentBindings } : {}),
+      ...(node.authorizationIncarnation !== undefined ? { authorizationIncarnation: node.authorizationIncarnation as string } : {}) };
   });
   let mutationReceipts: MutationReceipt[] | undefined;
   if (parsed.mutationReceipts !== undefined) {
@@ -252,6 +265,7 @@ export class LanAgentAuthority {
         && JSON.stringify(node.enabledAgentIds) === JSON.stringify(enabledAgentIds)) return false;
       node.agentBindings = bindings;
       node.enabledAgentIds = enabledAgentIds;
+      rotateAuthorizationIncarnation(node);
       return true;
     });
   }
@@ -261,6 +275,36 @@ export class LanAgentAuthority {
     if (!validId(agentId)) return null;
     const node = this.authenticatedNode(token);
     return node?.enabledAgentIds.includes(agentId) ? { nodeId: node.nodeId } : null;
+  }
+
+  /** Capture credential and policy together from one authoritative read. No session is required for management authority. */
+  acquireAuthorizationLease(token: string, agentId: string): LanAgentAuthorizationLease | null {
+    if (!validId(agentId)) return null;
+    const node = this.authenticatedNode(token);
+    if (!node?.enabledAgentIds.includes(agentId)) return null;
+    const binding = node.agentBindings?.find(item => item.agentId === agentId);
+    // Legacy policy has a deterministic incarnation until its first effective mutation.
+    const incarnation = node.authorizationIncarnation ?? hashSecret(JSON.stringify(node));
+    return Object.freeze({ nodeId: node.nodeId, agentId, incarnation,
+      ...(binding ? { binding: copyBinding(binding) } : {}) });
+  }
+
+  /** Recheck the original credential, enabled grant and incarnation; a new token or re-enable cannot revive an old request. */
+  assertAuthorizationLease(token: string, lease: LanAgentAuthorizationLease): void {
+    const current = this.acquireAuthorizationLease(token, lease.agentId);
+    if (!current || current.nodeId !== lease.nodeId || current.incarnation !== lease.incarnation) {
+      this.reject("revalidate-request", "Remote Agent authorization was revoked or replaced.");
+    }
+  }
+
+  /** Manager-only original endpoint grant; never exposed in public catalog DTOs. */
+  getEndpointAuthorization(nodeId: string, agentId: string): LanAgentAuthorizationLease | null {
+    if (!validId(nodeId) || !validId(agentId)) return null;
+    const node = this.readState().nodes.find(item => item.nodeId === nodeId);
+    if (!node?.enabledAgentIds.includes(agentId)) return null;
+    const binding = node.agentBindings?.find(item => item.agentId === agentId);
+    return Object.freeze({ nodeId, agentId, incarnation: node.authorizationIncarnation ?? hashSecret(JSON.stringify(node)),
+      ...(binding ? { binding: copyBinding(binding) } : {}) });
   }
 
   /** Detached, secret-free view for trusted Manager UI/registry projections. */
@@ -296,6 +340,7 @@ export class LanAgentAuthority {
       if (index >= 0 && JSON.stringify(bindings[index]) === JSON.stringify(binding)) return false;
       if (index < 0 && bindings.length >= MAX_AGENTS_PER_NODE) this.reject("approve-agent-binding", "Agent binding capacity reached.");
       node.agentBindings = index < 0 ? [...bindings, binding] : bindings.map((item, i) => i === index ? binding : item);
+      rotateAuthorizationIncarnation(node);
       return true;
     });
   }
@@ -341,7 +386,10 @@ export class LanAgentAuthority {
         const bindings = node.agentBindings ?? [];
         const index = bindings.findIndex(item => item.agentId === input.agentId);
         if (index < 0 && bindings.length >= MAX_AGENTS_PER_NODE) this.reject(action, "Agent binding capacity reached.");
-        node.agentBindings = index < 0 ? [...bindings, binding] : bindings.map((item, i) => i === index ? binding! : item);
+        if (index < 0 || JSON.stringify(bindings[index]) !== JSON.stringify(binding)) {
+          node.agentBindings = index < 0 ? [...bindings, binding] : bindings.map((item, i) => i === index ? binding! : item);
+          rotateAuthorizationIncarnation(node);
+        }
       }
       setNodeAgentEnabled(node, input.agentId, input.enabled);
       const revision = stateRevision(state);
@@ -379,6 +427,7 @@ export class LanAgentAuthority {
       // Replacement, not merge: omitted managed sessions revoke previously approved claims.
       node.agentBindings = index < 0 ? [...bindings, binding] : bindings.map((item, i) => i === index ? binding : item);
       setNodeAgentEnabled(node, binding.agentId, true);
+      rotateAuthorizationIncarnation(node);
       return true;
     });
   }

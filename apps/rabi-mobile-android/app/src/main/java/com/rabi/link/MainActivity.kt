@@ -35,7 +35,8 @@ import com.rabi.link.modules.conversation.RabiPhoneAudioCapture
 class MainActivity : Activity() {
     private val requestPhoneMedia = 9032
     private val requestNotifications = 9033
-    private val sdk = RabiRouteSdk()
+    private val managerTransport = lazy { com.rabi.link.transport.RabiManagerHttpTransport(applicationContext) }
+    private val sdk by lazy { RabiRouteSdk(managerTransport = managerTransport.value) }
     private val discoverySdk = RabiRouteSdk(timeoutMs = 160)
     private val pcs = mutableListOf<RabiLinkPc>()
     private val discoveredManagers = mutableListOf<RabiInstance>()
@@ -423,6 +424,7 @@ class MainActivity : Activity() {
             val savedTarget = RabiConversationTarget.load(this)
             val migrationTarget = enabled.firstOrNull { it.id == savedTarget }?.id ?: enabled.singleOrNull()?.id.orEmpty()
             RabiChatStore(this).migrateLegacyMessages(migrationTarget)
+            syncAiuiChatHistory()
             if (screen == Screen.CONVERSATIONS) renderConversationList()
             if (screen == Screen.CHAT) renderChat()
         }, error = { error ->
@@ -669,7 +671,30 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun syncAiuiChatHistory() {
+        val connection = RabiLinkRelaySettings.load(this)
+        if (!connection.configured) return
+        val client = AiuiGlassesClient(this, connection)
+        val routeIds = availableRoutes.groupBy { it.agentRoleId }.mapNotNull { (role, routes) -> routes.singleOrNull()?.let { role to it.id } }.toMap()
+        val source = com.rabi.link.recording.TargetWorkerIdentity.load(this, connection.baseUrl, connection.token)
+        runAsync({ client.use { it.history(routeIds,source) } }, { messages ->
+            val current = RabiLinkRelaySettings.load(this)
+            if(current.baseUrl != connection.baseUrl || current.token != connection.token) return@runAsync
+            val store = RabiChatStore(this)
+            val titles = getSharedPreferences("aiui_history_titles:" + client.scope, MODE_PRIVATE).edit()
+            for(message in messages) {
+                val timestamp = runCatching { java.time.Instant.parse(message.receivedAt).toEpochMilli() }.getOrDefault(System.currentTimeMillis())
+                store.appendRecorded(message.id,message.role,"aiui",message.text,"","text/plain",message.conversationId,"",message.id,"recorded","",timestamp)
+                titles.putString(message.conversationId,message.name)
+            }
+            check(titles.commit())
+            if(screen == Screen.CONVERSATIONS) renderConversationList()
+            if(screen == Screen.CHAT) renderChat()
+        }, error = { if(screen == Screen.CHAT) Toast.makeText(this,"眼镜聊天记录暂未同步，已保留本机记录",Toast.LENGTH_SHORT).show() })
+    }
+
     private fun routeTitle(routeId: String): String = availableRoutes.firstOrNull { it.id == routeId }?.let(::personaTitle)
+        ?: getSharedPreferences("aiui_history_titles:"+AiuiGlassesClient.accountScope(RabiLinkRelaySettings.load(this)), MODE_PRIVATE).getString(routeId,null)
         ?: if (routeId == RabiConversationRules.LEGACY_CONVERSATION_ID) "Rabi（旧会话）" else "Rabi"
 
     private fun routeStatus(route: RabiRouteInfo?): String = when {
@@ -737,7 +762,7 @@ class MainActivity : Activity() {
     private fun formatMessageTime(createdAt: Long): String = if (createdAt <= 0) "" else SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(createdAt))
     private fun formatListTime(createdAt: Long): String = if (createdAt <= 0) "" else SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(createdAt))
     private fun messageKindLabel(kind: String): String = when (kind) {
-        "voice" -> "语音转写"; "tts" -> "语音回复"; "image" -> "图片"; "video" -> "视频"
+        "aiui" -> "眼镜 AIUI"; "voice" -> "语音转写"; "tts" -> "语音回复"; "image" -> "图片"; "video" -> "视频"
         "audio-file" -> "音频文件"; "file" -> "文件"; "configuration" -> "配置请求"; else -> ""
     }
 
@@ -1269,4 +1294,8 @@ class MainActivity : Activity() {
     private fun full(l: Int, t: Int, r: Int, b: Int) = LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(l), dp(t), dp(r), dp(b)) }
     private fun panel(color: Int, stroke: Int, radius: Int) = RabiMobileUi.panel(this, color, stroke, radius)
     private fun dp(value: Int) = RabiMobileUi.dp(this, value)
+    override fun onDestroy() {
+        if(managerTransport.isInitialized()) managerTransport.value.close()
+        super.onDestroy()
+    }
 }

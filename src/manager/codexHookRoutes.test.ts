@@ -8,8 +8,12 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { CodexHookContextService } from "./codexHookContext.js";
 import { handleCodexHookApi } from "./codexHookRoutes.js";
+import { LanAgentAuthority } from "./lanAgentAuthority.js";
+import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
+import { assertLanAgentBodyAuthority, registerLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
 
-async function fixture(planStorageReady: () => boolean = () => true) {
+async function fixture(planStorageReady: () => boolean = () => true,
+  beforeRequest?: (request: http.IncomingMessage, response: http.ServerResponse) => boolean) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-codex-hook-api-"));
   const roleDir = path.join(root, "roles", "YeYu");
   fs.mkdirSync(roleDir, { recursive: true });
@@ -20,6 +24,7 @@ async function fixture(planStorageReady: () => boolean = () => true) {
     planStorageReady
   });
   const server = http.createServer((request, response) => {
+    if (beforeRequest && !beforeRequest(request, response)) return;
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
     if (!handleCodexHookApi(request, requestUrl, response, service)) {
       response.writeHead(404).end();
@@ -30,10 +35,50 @@ async function fixture(planStorageReady: () => boolean = () => true) {
   if (!address || typeof address === "string") throw new Error("Test server did not expose a TCP port.");
   return {
     root,
+    service,
     baseUrl: `http://127.0.0.1:${address.port}`,
     close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
   };
 }
+
+test("authenticated remote Hook management needs no binding; source events and delayed writes retain authority", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-hook-authority-"));
+  const authority = new LanAgentAuthority({ statePath: path.join(root, "authority.json") });
+  const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "remote-node");
+  authority.registerAgentCatalog(credential.token, [{ agentId: "worker", provider: "dsh", sessionId: "own-session" }]);
+  authority.setAgentEnabled("remote-node", "worker", true);
+  let observed: (() => void) | undefined;
+  const app = await fixture(() => true, (request, response) => {
+    const access = evaluateLanAgentRequest(request, authority, true);
+    if (access.kind !== "agent") { response.writeHead(403).end(); return false; }
+    registerLanAgentBodyGuard(request, body => assertLanAgentBodyAuthority(new URL(request.url!, "http://fixture.invalid").pathname,
+      body, assertTrustedLanAgentPrincipal(request)?.binding));
+    observed?.();
+    return true;
+  });
+  t.after(async () => { await app.close(); fs.rmSync(app.root, { recursive: true, force: true }); fs.rmSync(root, { recursive: true, force: true }); });
+  const headers = { authorization: `Bearer ${credential.token}`, "x-rabiroute-agent-id": "worker", "content-type": "application/json" };
+  const managed = await fetch(`${app.baseUrl}/api/codex-hook/sessions/another-target`, { method: "PUT", headers, body: JSON.stringify({ roleId: "YeYu" }) });
+  assert.equal(managed.status, 200);
+  const hookBody = { hook_event_name: "SessionStart", session_id: "own-session", agentType: "dsh" };
+  assert.equal((await fetch(`${app.baseUrl}/api/codex-hook/context`, { method: "POST", headers, body: JSON.stringify(hookBody) })).status, 200);
+  assert.equal((await fetch(`${app.baseUrl}/api/codex-hook/context`, { method: "POST", headers, body: JSON.stringify({ ...hookBody, session_id: "foreign" }) })).status, 400);
+  assert.equal((await fetch(`${app.baseUrl}/api/codex-hook/context`, { method: "POST", headers, body: JSON.stringify({ ...hookBody, agentType: "codex" }) })).status, 400);
+
+  const started = new Promise<void>(resolve => { observed = resolve; });
+  let writer!: http.ClientRequest;
+  const result = new Promise<number | undefined>((resolve, reject) => {
+    writer = http.request(`${app.baseUrl}/api/codex-hook/sessions/revoked-target`, { method: "PUT", headers }, response => {
+      response.resume(); response.on("end", () => resolve(response.statusCode));
+    });
+    writer.on("error", reject); writer.write('{"roleId":');
+  });
+  await started;
+  authority.setAgentEnabled("remote-node", "worker", false);
+  writer.end('"YeYu"}');
+  assert.equal(await result, 400);
+  assert.equal(app.service.getBinding("revoked-target"), null);
+});
 
 test("Codex Stop HTTP hook returns recovery gate 503 while ordinary context remains available", async (t) => {
   const app = await fixture(() => false);

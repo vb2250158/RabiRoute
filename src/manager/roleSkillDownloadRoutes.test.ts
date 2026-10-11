@@ -9,13 +9,12 @@ import test, { type TestContext } from "node:test";
 import { authorizeAgentApiOperation } from "./agentApiPolicy.js";
 import { parseRoleSkillDownloadRoute } from "./roleKnowledgeRoute.js";
 import { authorizeLanAgentRoleSkillRequest } from "./lanAgentRoleSkillAccess.js";
-import { remoteAgentTargetKey } from "../shared/routeAgentTargets.js";
 import { handleRoleSkillDownloadApi, RoleSkillDownloadAdmission, type RoleSkillArchiveReply } from "./roleSkillDownloadRoutes.js";
 import { ManagerReadWorkerPool, ManagerReadWorkerError } from "./managerReadWorkerPool.js";
+import { LanAgentAuthority } from "./lanAgentAuthority.js";
+import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
 
 const principal = { kind: "agent", nodeId: "fixture-node", agentId: "fixture-agent" } as const;
-const binding = { instanceId: principal.nodeId, agentId: principal.agentId };
-const definitions = [{ persona: "example", remoteAgentTargets: [{ ...binding, id: remoteAgentTargetKey(binding), provider: "codex" as const }] }];
 const json = (res: http.ServerResponse, status: number, body: unknown) => {
   res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(body));
 };
@@ -51,6 +50,9 @@ test("authenticated worker HTTP ZIP needs no persona binding, preserves aliases 
   const f = await fixture(t);
   const pool = new ManagerReadWorkerPool({ maxConcurrency: 1, maxQueue: 1, timeoutMs: 5000 });
   t.after(() => pool.stop());
+  const authority = new LanAgentAuthority({ statePath: path.join(path.dirname(f.roleDir), "authority.json") });
+  const credential = authority.enroll(authority.issueBootstrapTicket().ticket, principal.nodeId);
+  authority.registerAgentCatalog(credential.token, [{ agentId: principal.agentId, provider: "codex" }]);
   let reads = 0;
   let cleanupErrors = 0;
   const base = await serve(t, (request, response) => {
@@ -60,9 +62,13 @@ test("authenticated worker HTTP ZIP needs no persona binding, preserves aliases 
         health: { live: true, requiredReady: true, state: "healthy" } });
       return;
     }
+    if (request.headers["x-rabiroute-agent-id"] !== undefined) {
+      const access = evaluateLanAgentRequest(request, authority, true);
+      if (access.kind !== "agent") { json(response, 403, { code: -1 }); return; }
+    }
     const policy = authorizeAgentApiOperation(request.method!, request.url!);
     if (!policy.allowed) { json(response, 403, { code: -1 }); return; }
-    const guard = authorizeLanAgentRoleSkillRequest(principal, request.method, url.pathname, definitions, item => item.persona);
+    const guard = authorizeLanAgentRoleSkillRequest(principal, request.method, url.pathname);
     if (!guard.allowed) { json(response, guard.status, { code: -1, error: guard.error }); return; }
     if (!handleRoleSkillDownloadApi(request, url.pathname, response, {
       ...f, roleDirectory: () => f.roleDir, json, reportCleanupError: () => { cleanupErrors++; },
@@ -73,11 +79,13 @@ test("authenticated worker HTTP ZIP needs no persona binding, preserves aliases 
     })) json(response, 404, {});
   });
   for (const prefix of ["/api/roles", "/roles"]) {
-    const denied = await fetch(`${base}${prefix}/other/skills/selected/download`);
-    assert.equal(denied.status, 200); await denied.arrayBuffer();
+    const unbound = await fetch(`${base}${prefix}/other/skills/selected/download`);
+    const bytes = Buffer.from(await unbound.arrayBuffer());
+    assert.equal(unbound.status, 200, bytes.toString("utf8"));
+    assert.equal(bytes.readUInt32LE(), 0x04034b50);
   }
-  await cleaned(f.temporaryRoot);
   assert.equal(reads, 2);
+  await cleaned(f.temporaryRoot);
   assert.deepEqual(await fs.readdir(f.temporaryRoot), []);
   for (const prefix of ["/api/roles", "/roles"]) {
     const response = await fetch(`${base}${prefix}/example/skills/selected/download`);
@@ -98,11 +106,11 @@ test("authenticated worker HTTP ZIP needs no persona binding, preserves aliases 
   const configPath = path.join(path.dirname(f.roleDir), "connector.json");
   const outputPath = path.join(path.dirname(f.roleDir), "selected.zip");
   const receiptPath = path.join(path.dirname(f.roleDir), "receipt.json");
-  await fs.writeFile(configPath, JSON.stringify({ managerUrl: base, nodeCredential: "fixture-only-credential", agents: [{ agentId: principal.agentId }] }));
+  await fs.writeFile(configPath, JSON.stringify({ managerUrl: base, nodeCredential: credential.token, agents: [{ agentId: principal.agentId }] }));
   const cliArgs = ["--api", "GET", "/api/roles/example/skills/selected/download", "--agent", principal.agentId, "--output", outputPath];
   const command = "const {runManagerCommand}=await import(process.argv[1]);const receipt=await runManagerCommand(JSON.parse(process.argv[2]),process.argv[3]);const fs=await import('node:fs/promises');await fs.writeFile(process.argv[4],JSON.stringify(receipt));";
   const child = spawn(process.execPath, ["--input-type=module", "--eval", command,
-    new URL("../../apps/rabi-agent/lib/manager-cli.mjs", import.meta.url).href, JSON.stringify(cliArgs), configPath, receiptPath], { stdio: "ignore" });
+    new URL("../../apps/rabi-agent/lib/manager-cli.mjs", import.meta.url).href, JSON.stringify(cliArgs), configPath, receiptPath], { stdio: "inherit" });
   t.after(() => { if (child.exitCode === null) child.kill(); });
   await new Promise<void>((resolve, reject) => {
     child.once("error", reject);
@@ -125,7 +133,7 @@ test("invalid download paths fail before role resolution or temporary creation i
   const base = await serve(t, (request, response) => {
     const pathname = request.url!;
     if (!localMode) {
-      const access = authorizeLanAgentRoleSkillRequest(principal, request.method, pathname, definitions, item => item.persona);
+      const access = authorizeLanAgentRoleSkillRequest(principal, request.method, pathname);
       if (!access.allowed) { json(response, access.status, { error: access.error }); return; }
     }
     handleRoleSkillDownloadApi(request, pathname, response, {
@@ -154,7 +162,7 @@ test("invalid download paths fail before role resolution or temporary creation i
   });
 });
 
-test("download policy denies encoded paths, queries, other methods; persona guard covers download", () => {
+test("download policy denies encoded paths, queries and other methods without Route grants", () => {
   for (const prefix of ["/api/roles", "/roles"]) {
     assert.equal(authorizeAgentApiOperation("GET", `${prefix}/example/skills/selected/download`).allowed, true);
     for (const id of ["..%2fother", "C%3a%5cother", "%2fetc%2fpasswd", "%252e%252e", "bad%00id"]) {
@@ -162,7 +170,7 @@ test("download policy denies encoded paths, queries, other methods; persona guar
     }
     assert.equal(authorizeAgentApiOperation("POST", `${prefix}/example/skills/selected/download`).allowed, false);
     assert.equal(authorizeAgentApiOperation("GET", `${prefix}/example/skills/selected/download?file=x`).allowed, false);
-    assert.equal(authorizeLanAgentRoleSkillRequest({ ...principal, nodeId: "other-node" }, "GET", `${prefix}/example/skills/selected/download`, definitions, item => item.persona).allowed, true);
+    assert.equal(authorizeLanAgentRoleSkillRequest({ ...principal, nodeId: "other-node" }, "GET", `${prefix}/example/skills/selected/download`).allowed, true);
   }
 });
 

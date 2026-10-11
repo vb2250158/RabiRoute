@@ -50,6 +50,42 @@ test("memory update and touch publish point reads without full catalog recapture
   assert.equal(catalogReads, 0);
 });
 
+for (const command of ["create", "update"] as const) {
+  test(`original authority is rechecked after revision await before ${command} mutation`, async t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "role-storage-authority-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const identity = { applicationGenerationId: "authority-generation", managerInstanceId: "authority-instance" };
+    let revoked = false;
+    let checks = 0;
+    let mutations = 0;
+    const authorize = () => { checks++; if (revoked) throw new Error("private authorization diagnostic"); };
+    const readPool = {} as NonNullable<RoleStorageApplicationOptions["readPool"]>;
+    const mutationPool = {
+      status: () => identity, stop: async () => undefined,
+      createPlan: async () => { mutations++; throw new Error("unexpected mutation"); },
+      updatePlan: async () => { mutations++; throw new Error("unexpected mutation"); }
+    } as unknown as NonNullable<RoleStorageApplicationOptions["mutationPool"]>;
+    const application = new RoleStorageApplication({ rolesRoot: root, ...identity, readPool, catalogReadPool: readPool, mutationPool });
+    t.after(() => application.stop());
+    const context = { idempotencyKey: `authority-${command}`, expectedRevision: command === "create" ? null : "revision-one", authorize };
+    const result = command === "create"
+      ? application.commands.createPlan("Example", { id: "one", title: "Example", focus: "Test", status: "分析中", currentStepId: "verify", steps: [{ id: "verify", title: "Verify" }], keywords: [] }, context)
+      : application.commands.updatePlan("Example", "one", { title: "Updated" }, context);
+    revoked = true;
+    await assert.rejects(result, (error: unknown) => {
+      assert.ok(error instanceof RoleStorageApplicationError);
+      assert.equal(error.statusCode, 403);
+      assert.equal(error.code, "authorization_revoked");
+      assert.equal(error.commitState, "not_started");
+      assert.equal(error.operationId, `authority-${command}`);
+      assert.doesNotMatch(error.message, /private authorization diagnostic/);
+      return true;
+    });
+    assert.equal(checks, 2);
+    assert.equal(mutations, 0);
+  });
+}
+
 async function mapWithConcurrency<T, R>(
   values: readonly T[],
   concurrency: number,

@@ -6,7 +6,7 @@ English | <a href="./local-speech-model-downloads.md">简体中文</a>
 
 # RabiSpeech local model downloads and setup
 
-This guide covers local models only. Paid speech APIs are archived. Installation and downloads reuse Manager connection authentication; no caller can mutate the model allowlist.
+This guide covers local models only. Paid speech APIs are archived. Installation and downloads reuse Manager connection authentication. When remote Agent access is enabled, an authenticated, enabled Agent may request installation, downloads, and directory settings with local-equivalent permissions; unauthenticated or disabled remote callers cannot. No caller can modify the model allowlist through these endpoints.
 
 ## On-demand downloads from Model Management
 
@@ -22,7 +22,7 @@ Existing models are checked read-only in the download root and model locations f
 
 Expand **Model directory** to configure one root. Saving an empty value restores the default, including an existing `RABISPEECH_MODEL_ROOT` environment override. An explicit local absolute path overrides that default; the UI displays the effective directory. Detection and subsequent UI downloads share this root and the catalog's `tts/`, `asr/`, and `speaker/` subpaths. Changing it never moves or deletes models, and separately configured worker locations remain discoverable.
 
-Directory settings are accessible through the local WebGUI or an authenticated remote connection and persist in `data/speech/model-directory-settings.json` under the installation state root, outside release payloads. Changes are rejected during install/download jobs; concurrent edits require refresh rather than silent overwrite. Network paths, drive roots, installation trees, and source worktrees are not accepted as custom roots.
+Directory settings are accessible through the local WebGUI, an authenticated remote connection, or an authenticated, enabled remote Agent entrypoint and persist in `data/speech/model-directory-settings.json` under the installation state root, outside release payloads. Changes are rejected during install/download jobs; concurrent edits require refresh rather than silent overwrite. Network paths, drive roots, installation trees, and source worktrees are not accepted as custom roots.
 
 The page and command line share the allowlist in `plugin-adapters/rabi-speech/model-catalog.json`. Downloads cannot supply arbitrary repositories or URLs; the root is changed only through the separately validated settings endpoint. CLI calls still use an explicit `--root`. Licensed ONNX-VITS packages remain manual imports.
 
@@ -33,6 +33,7 @@ To reuse an existing isolated environment, configure the model's real `command`,
 FireRedASR2-AED detection requires the four nonempty official files `model.pth.tar`, `cmvn.ark`, `dict.txt`, and `train_bpe1000.model`; the officially empty `config.yaml` is not a missing-file signal. Optional SenseVoice `emotion`, `emotion_labels`, `audio_events`, `raw_tags`, and utterance `confidence` are preserved in detailed transcriptions, saved records, and recent microphone results. The page displays them separately from recognized text. Missing metadata is never inferred, and utterance confidence is not converted into per-word probabilities.
 
 **Enable ASR streaming** uses host capture, speech detection, and silence-based segmentation, then displays each completed segment. A model's streaming capability does not guarantee incremental word updates from the configured worker; verify its actual backend. Start with manual file transcription to test a model without resident microphone capture or sending test text to an Agent.
+Requests retain their original authenticated authority and recheck it after body reads, queue waits and asynchronous operations, before actual action dispatch, and before response publication. Disabling and re-enabling an Agent or remote access, replacing a session binding, or reenrolling a node does not reauthorize an old request. Event streams check every outgoing chunk and terminate on revocation; stale queued start/stop requests never dispatch. An accepted installation/download job is owned by its independent Manager job identity, not its originating HTTP request, so request completion or subsequent revocation does not stop it; Manager shutdown still does. Read-only mode, fixed scripts and arguments, the model allowlist, and local-directory validation remain enforced.
 
 ## Private runtime layout
 

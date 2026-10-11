@@ -2,14 +2,8 @@
 import { attachTunnelBroker } from "./lib/rabilink-tunnel-broker.mjs";
 import { createPcPairingService, findPcCredential, assertPcPairingCsrf } from './rabilink-pc-pairing.mjs';
 import { pcPairingPanelHtml, pcPairingBrowserScript } from './rabilink-pc-pairing-ui.mjs';
-import { orderedAsrWorkers, selectAsrWorker, validateAsrPriority } from "./lib/rabilink-asr-priority.mjs";
-import { createAgentProfileService } from './rabilink-agent-profile.mjs';
-import { createProfileReceiptPolicy } from './rabilink-agent-profile-ui-receipt.mjs';
-import { createProfileSkillsEditor } from './rabilink-profile-skills-editor.mjs';
-import { createProfileMcpEditor } from './rabilink-profile-mcp-editor.mjs';
-import { normalizeAgentProfileState, assertProfileManagementCsrf } from './rabilink-agent-profile-state.mjs';
-import { authorizeKnowledgeRequest, rejectReservedKnowledgePath } from './rabilink-knowledge-access.mjs';
-import { normalizeKnowledgeIntents, knowledgeOutcome, readKnowledgeOperation } from './rabilink-knowledge-operations.mjs';
+import { API_METHODS, apiRequestHeaderAllowed, validateApiRequest } from '../packages/rabi-api-contract/request.mjs';
+import { createDeviceApiService } from './rabilink-device-api.mjs';
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -40,18 +34,11 @@ const dataDir = path.resolve(process.env.RABILINK_RELAY_DATA_DIR || path.join(pr
 const eventLogPath = path.join(dataDir, "events.jsonl");
 const accountLogDir = path.join(dataDir, "account-logs");
 const deviceLogDir = path.join(dataDir, "device-logs");
-const mobileProofDir = path.join(dataDir, "mobile-proofs");
-const mobileDeviceStatusDir = path.join(dataDir, "mobile-device-status");
 const deviceMediaDir = path.join(dataDir, "device-media");
 const deviceMediaMaxBytes = clamp(Number(process.env.RABILINK_RELAY_DEVICE_MEDIA_MAX_BYTES || 64 * 1024 * 1024), 1024 * 1024, 512 * 1024 * 1024);
 const deviceMediaTtlMs = clamp(Number(process.env.RABILINK_RELAY_DEVICE_MEDIA_TTL_MS || 7 * 24 * 60 * 60 * 1000), 60 * 60 * 1000, 30 * 24 * 60 * 60 * 1000);
 let deviceMediaCleanupTimer = null;
 let deviceMediaCleanupDeadline = 0;
-const mobileDeviceStatusStaleMs = clamp(
-  Number(process.env.RABILINK_RELAY_MOBILE_DEVICE_STATUS_STALE_MS || 3 * 60 * 1000),
-  60000,
-  15 * 60 * 1000
-);
 const accountLogMaxRows = clamp(Number(process.env.RABILINK_RELAY_ACCOUNT_LOG_MAX_ROWS || 300), 50, 2000);
 const deviceLogMaxRows = clamp(Number(process.env.RABILINK_RELAY_DEVICE_LOG_MAX_ROWS || 5000), 100, 50000);
 const deviceBindingClaimTtlMs = clamp(Number(process.env.RABILINK_RELAY_DEVICE_BINDING_CLAIM_TTL_MS || 10 * 60 * 1000), 60000, 60 * 60 * 1000);
@@ -86,34 +73,12 @@ const speechOpenApiFileCandidates = [
   path.join(process.cwd(), "examples", "rabilink-relay", "rabilink-speech-api.openapi.json")
 ].filter(Boolean);
 const sensitiveEventKeyPattern = /token|authorization|cookie|password|secret|text|message|content|raw|headers|body|response|reply/i;
-const portablePresentationValues = new Set(["text", "tts", "notification", "haptic"]);
-const portablePriorityValues = new Set(["quiet", "normal", "urgent"]);
-const portableHealthMetricValues = new Set(["heart_rate", "sleep_session", "sleep_stage", "sleep_state"]);
 const speechProxyPrefix = "/api/rabilink/speech";
-const speechProxyPaths = new Map([
-  ["GET /health", "/health"],
-  ["GET /v1/models", "/v1/models"],
-  ["GET /v1/capabilities", "/v1/capabilities"],
-  ["GET /v1/audio-streams", "/v1/audio-streams"],
-  ["GET /v1/microphone/status", "/v1/microphone/status"],
-  ["GET /v1/records", "/v1/records"],
-  ["POST /v1/audio/speech", "/v1/audio/speech"],
-  ["POST /v1/audio/transcriptions", "/v1/audio/transcriptions"],
-  ["POST /v1/audio-streams/rabilink/start", "/v1/audio-streams/rabilink/start"],
-  ["POST /v1/audio-streams/rabilink/chunk", "/v1/audio-streams/rabilink/chunk"],
-  ["POST /v1/audio-streams/rabilink/keepalive", "/v1/audio-streams/rabilink/keepalive"],
-  ["POST /v1/audio-streams/rabilink/stop", "/v1/audio-streams/rabilink/stop"],
-  ["POST /messages", "/api/speech/messages"],
-  ["POST /api/v1/services/audio/tts/SpeechSynthesizer", "/api/v1/services/audio/tts/SpeechSynthesizer"],
-  ["POST /api/v1/services/audio/asr/transcription", "/api/v1/services/audio/asr/transcription"]
-]);
 const webguiEventStreamPaths = new Set(["/api/events", "/api/speech/events"]);
 
 fs.mkdirSync(dataDir, { recursive: true });
 fs.mkdirSync(accountLogDir, { recursive: true });
 fs.mkdirSync(deviceLogDir, { recursive: true });
-fs.mkdirSync(mobileProofDir, { recursive: true });
-fs.mkdirSync(mobileDeviceStatusDir, { recursive: true });
 fs.mkdirSync(deviceMediaDir, { recursive: true });
 scheduleDeviceMediaCleanup(cleanupExpiredDeviceMedia());
 if (!hasEnabledRabiLinkApps()) {
@@ -633,19 +598,18 @@ function normalizeDeviceBinding(binding) {
   const serialHash = String(binding.serialHash || "").trim();
   if (!serialHash) return null;
   return {
+    ...structuredClone(binding),
     id: String(binding.id || randomId("glasses")).trim(),
     serialHash,
     serialPreview: String(binding.serialPreview || "已绑定眼镜").trim(),
     enabled: binding.enabled !== false,
     credentialHash: String(binding.credentialHash || "").trim(),
+    // Connection owner metadata only; no persona or business revision determines transport routing.
+    connectionTargetDeviceId: String(binding.connectionTargetDeviceId || "").trim(),
     createdAt: String(binding.createdAt || nowIso()),
     updatedAt: String(binding.updatedAt || binding.createdAt || nowIso()),
     claimedAt: String(binding.claimedAt || ""),
-    claimExpiresAt: String(binding.claimExpiresAt || ""),
-    ...(binding.knowledgeIntents === undefined ? {} : { knowledgeIntents: normalizeKnowledgeIntents(binding.knowledgeIntents) }),
-    // Retained historical receipts only; application membership owns current access.
-    ...(binding.knowledgeGrantState === undefined ? {} : { knowledgeGrantState: structuredClone(binding.knowledgeGrantState) }),
-    ...(binding.agentProfileState === undefined ? {} : { agentProfileState: normalizeAgentProfileState(binding.agentProfileState) })
+    claimExpiresAt: String(binding.claimExpiresAt || "")
   };
 }
 
@@ -758,6 +722,7 @@ function normalizeStoredWorker(worker) {
   if (!id) return null;
   const time = String(worker?.lastSeenAt || worker?.firstSeenAt || nowIso());
   return {
+    ...structuredClone(worker),
     id,
     guid: String(worker?.guid || "").trim(),
     name: String(worker?.name || id).trim() || id,
@@ -780,6 +745,7 @@ function readAppStore() {
     if (raw.pcPairings !== undefined && !Array.isArray(raw.pcPairings)) throw new Error('Invalid stored PC pairings.');
     if (raw.pcPairingTickets !== undefined && !Array.isArray(raw.pcPairingTickets)) throw new Error('Invalid stored PC tickets.');
     return {
+      ...raw,
       accounts: Array.isArray(raw.accounts) ? raw.accounts : [],
       apps: Array.isArray(raw.apps)
         ? raw.apps.map((app) => ({
@@ -787,8 +753,9 @@ function readAppStore() {
           enabled: app.enabled !== false,
           tokenPreview: app.tokenPreview || rabiLinkTokenPreview(app.token),
           targetDeviceId: String(app.targetDeviceId || "").trim(),
+          connectionOwnerDeviceId: String(app.connectionOwnerDeviceId || "").trim(),
           deviceBindings: Array.isArray(app.deviceBindings)
-            ? app.deviceBindings.map(normalizeDeviceBinding).filter(Boolean)
+            ? app.deviceBindings.map(binding => binding && normalizeDeviceBinding({ ...binding, connectionTargetDeviceId: binding.connectionTargetDeviceId || "" })).filter(Boolean)
             : []
         }))
         : [],
@@ -808,7 +775,7 @@ function writeAppStore(store) {
   let descriptor;
   try {
     descriptor = fs.openSync(temporary, 'wx', 0o600);
-    fs.writeFileSync(descriptor, JSON.stringify({ accounts: store.accounts, apps: store.apps, workers: store.workers || [], pcPairings: store.pcPairings || [], pcPairingTickets: store.pcPairingTickets || [] }, null, 2), 'utf8');
+    fs.writeFileSync(descriptor, JSON.stringify({ ...store, accounts: store.accounts, apps: store.apps, workers: store.workers || [], pcPairings: store.pcPairings || [], pcPairingTickets: store.pcPairingTickets || [] }, null, 2), 'utf8');
     fs.fsyncSync(descriptor);
     fs.closeSync(descriptor); descriptor = undefined;
     fs.renameSync(temporary, appStorePath);
@@ -818,7 +785,42 @@ function writeAppStore(store) {
   }
 }
 
-const agentProfileService = createAgentProfileService({ readStore: readAppStore, writeStore: writeAppStore });
+const deviceApiService = createDeviceApiService({
+  load(scope) {
+    const file = path.join(dataDir, 'api-operations', scope + '.json');
+    recoverInterruptedFileReplacement(file);
+    return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : [];
+  },
+  save(scope, rows) {
+    const file = path.join(dataDir, 'api-operations', scope + '.json');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const temporary = file + '.' + randomUUID() + '.tmp';
+    fs.writeFileSync(temporary, JSON.stringify(rows));
+    replaceFileSync(temporary, file);
+  },
+  async dispatch(identity, packet, nonReplayable) {
+    const app = readAppStore().apps.find(item => item.id === identity.appId && item.enabled !== false);
+    if (!app) throw new Error('API_CONNECTION_CHANGED');
+    const worker = mobileWorkerTarget(app, new URL('http://request.invalid'), { targetDeviceId: identity.targetDeviceId });
+    const request = createMobileWebguiRequest(app, worker, packet.method, packet.path, packet.body ?? null);
+    request.headers = { accept: 'application/json', ...packet.headers };
+    if (packet.body !== undefined && !request.headers['content-type']) request.headers['content-type'] = 'application/json; charset=utf-8';
+    if (packet.bodyBase64 !== undefined) request.bodyBase64 = packet.bodyBase64;
+    request.nonReplayable = nonReplayable;
+    request.publicApiTransport = true;
+    request.deviceApi = { appId: identity.appId, bindingId: identity.bindingId, targetDeviceId: identity.targetDeviceId, authenticatedAt: identity.authenticatedAt };
+    request.deviceApiCredentialHash = identity.credentialHash;
+    const finished = await waitForWebguiRequest(request, webguiRequestWaitMs);
+    if (finished.status !== 'done' || !finished.response) return { structuredContent: { ok: false, uncertain: nonReplayable, code: 'API_TRANSPORT_UNCONFIRMED', operationId: packet.operationId } };
+    const response = finished.response;
+    const raw = Buffer.from(response.bodyBase64 || '', 'base64');
+    let data; try { data = JSON.parse(raw.toString('utf8')); } catch { data = { bodyBase64: raw.toString('base64'), contentType: response.headers?.['content-type'] || '' }; }
+    const statusCode = Number(response.statusCode);
+    const outcome = statusCode >= 200 && statusCode < 300;
+    return { structuredContent: { ok: outcome, uncertain: nonReplayable && statusCode >= 500, statusCode,
+      operationId: packet.operationId, headers: Object.fromEntries(Object.entries(response.headers || {}).filter(([name, value]) => apiRequestHeaderAllowed(name) && typeof value === 'string' && !/[\r\n\0]/.test(value)).map(([name, value]) => [name.toLowerCase(), value])), data } };
+  }
+});
 const pcPairingService = createPcPairingService({ readStore: readAppStore, writeStore: writeAppStore,
   onEvent: (event, details) => writeEvent(event, details) });
 const pcPairingRequestWindows = new Map();
@@ -888,11 +890,13 @@ function publicApp(app, options = {}) {
     token: options.revealToken ? app.token : undefined,
     notes: app.notes || "",
     targetDeviceId: app.targetDeviceId || "",
+    connectionOwnerDeviceId: app.connectionOwnerDeviceId || "",
     pcCredentials: (app.pcCredentials || []).map(({ id, deviceId, deviceGuid, deviceName, enabled, createdAt, appTokenHash }) =>
       ({ id, deviceId, deviceGuid, deviceName, enabled: enabled !== false && appTokenHash === sha256(app.token), createdAt })),
     deviceBindings: (app.deviceBindings || []).map((binding) => ({
       id: binding.id,
       serialPreview: binding.serialPreview,
+      connectionTargetDeviceId: binding.connectionTargetDeviceId || "",
       enabled: binding.enabled !== false,
       claimed: Boolean(binding.credentialHash),
       claimedAt: binding.claimedAt || "",
@@ -1562,28 +1566,17 @@ function portableDeviceKind(value, fallback = "") {
   return kind;
 }
 
-function portableTransport(value, fallback = "") {
-  const transport = stringValue(value || fallback).toLowerCase();
-  if (!transport) return "";
-  if (!/^[a-z0-9][a-z0-9._-]{0,47}$/.test(transport)) {
-    throw portableRequestError("transport must be a short transport identifier such as aiui-phone-proxy or wear-data-layer.");
-  }
-  return transport;
-}
-
 function portableTargetEnvelope(candidate, root = {}) {
   const targetDeviceIdsValue = candidate?.targetDeviceIds === undefined ? root?.targetDeviceIds : candidate.targetDeviceIds;
   const targetDeviceKindsValue = candidate?.targetDeviceKinds === undefined ? root?.targetDeviceKinds : candidate.targetDeviceKinds;
   const presentationValue = candidate?.presentation === undefined ? root?.presentation : candidate.presentation;
   const priorityValue = candidate?.priority === undefined ? root?.priority : candidate.priority;
   const priority = stringValue(priorityValue || "normal").toLowerCase();
-  if (!portablePriorityValues.has(priority)) {
-    throw portableRequestError("priority must be quiet, normal, or urgent.");
-  }
+  if (priority.length > 128) throw portableRequestError('priority transport label exceeds 128 characters.');
   return {
     targetDeviceIds: portableStringList(targetDeviceIdsValue, "targetDeviceIds"),
     targetDeviceKinds: portableStringList(targetDeviceKindsValue, "targetDeviceKinds", { lowercase: true }),
-    presentation: portableStringList(presentationValue, "presentation", { lowercase: true, allowed: portablePresentationValues }),
+    presentation: portableStringList(presentationValue, "presentation", { lowercase: true }),
     priority
   };
 }
@@ -1593,8 +1586,8 @@ function portableEnvelopeForResponse(message) {
   return {
     targetDeviceIds: persistedPortableStringList(message?.targetDeviceIds),
     targetDeviceKinds: persistedPortableStringList(message?.targetDeviceKinds, { lowercase: true }),
-    presentation: persistedPortableStringList(message?.presentation, { lowercase: true, allowed: portablePresentationValues }),
-    priority: portablePriorityValues.has(priority) ? priority : "normal",
+    presentation: persistedPortableStringList(message?.presentation, { lowercase: true }),
+    priority: priority.slice(0, 128) || "normal",
     routeProfileId: stringValue(message?.routeProfileId).slice(0, 160),
     attachments: portableAttachments(message?.attachments)
   };
@@ -1606,7 +1599,7 @@ function portableAttachments(value) {
     if (!item || typeof item !== "object") return null;
     const downloadPath = stringValue(item.downloadPath);
     if (!/^\/api\/rabilink\/devices\/media\/[^/?]+/.test(downloadPath)) return null;
-    const kind = ["image", "video", "audio", "file"].includes(stringValue(item.kind)) ? stringValue(item.kind) : "file";
+    const kind = stringValue(item.kind).slice(0, 128) || "file";
     return {
       id: stringValue(item.id).slice(0, 160), kind,
       fileName: safeMediaName(item.fileName || "attachment.bin"),
@@ -1620,69 +1613,6 @@ function portableDeviceIdentity(url, fallbackKind = "") {
   return {
     deviceId: stringValue(url.searchParams.get("deviceId")),
     deviceKind: portableDeviceKind(url.searchParams.get("deviceKind"), fallbackKind)
-  };
-}
-
-function portableHealthNumber(value, minimum, maximum) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return undefined;
-  return Math.min(maximum, Math.max(minimum, number));
-}
-
-function portableHealthPolicy(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const policy = {};
-  if (typeof value.enabled === "boolean") policy.enabled = value.enabled;
-  if (value.heartRateHighBpm != null) policy.heartRateHighBpm = portableHealthNumber(value.heartRateHighBpm, 40, 240);
-  if (value.heartRateLowBpm != null) policy.heartRateLowBpm = portableHealthNumber(value.heartRateLowBpm, 0, 150);
-  if (value.heartRateAlertCooldownMinutes != null) policy.heartRateAlertCooldownMinutes = portableHealthNumber(value.heartRateAlertCooldownMinutes, 1, 1440);
-  if (typeof value.sleepStateAlertEnabled === "boolean") policy.sleepStateAlertEnabled = value.sleepStateAlertEnabled;
-  if (value.heartRateStaleAfterMinutes != null) policy.heartRateStaleAfterMinutes = portableHealthNumber(value.heartRateStaleAfterMinutes, 1, 1440);
-  if (value.sleepStateStaleAfterMinutes != null) policy.sleepStateStaleAfterMinutes = portableHealthNumber(value.sleepStateStaleAfterMinutes, 1, 2880);
-  return Object.fromEntries(Object.entries(policy).filter(([, item]) => item !== undefined));
-}
-
-function portableHealthSample(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const metric = stringValue(value.metric || value.type || value.kind).toLowerCase().replace(/[.\s-]+/g, "_");
-  if (!portableHealthMetricValues.has(metric)) return null;
-  const sample = {
-    id: stringValue(value.id || value.sampleId).slice(0, 160),
-    metric,
-    recordedAt: stringValue(value.recordedAt || value.time || value.timestamp).slice(0, 64),
-    startAt: stringValue(value.startAt || value.startTime || value.time || value.timestamp).slice(0, 64),
-    endAt: stringValue(value.endAt || value.endTime).slice(0, 64),
-    source: stringValue(value.source).slice(0, 64)
-  };
-  if (metric === "heart_rate") {
-    const bpm = portableHealthNumber(value.value ?? value.bpm ?? value.heartRateBpm, 1, 300);
-    if (bpm === undefined) return null;
-    sample.value = Math.round(bpm);
-    sample.unit = "bpm";
-  }
-  if (metric === "sleep_state" || metric === "sleep_session") {
-    const state = stringValue(value.sleepState || value.state).toLowerCase();
-    if (["sleeping", "awake", "unknown"].includes(state)) sample.sleepState = state;
-  }
-  if (metric === "sleep_stage") {
-    const stage = stringValue(value.sleepStage || value.stage).toLowerCase();
-    sample.sleepStage = ["awake", "light", "deep", "rem", "unknown"].includes(stage) ? stage : "unknown";
-  }
-  return Object.fromEntries(Object.entries(sample).filter(([, item]) => item !== "" && item !== undefined));
-}
-
-function portableHealthPayload(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const samples = (Array.isArray(value.samples) ? value.samples : [])
-    .slice(0, 1000)
-    .map(portableHealthSample)
-    .filter(Boolean);
-  if (!samples.length) return undefined;
-  const policy = portableHealthPolicy(value.policy);
-  return {
-    schemaVersion: 1,
-    samples,
-    ...(policy && Object.keys(policy).length ? { policy } : {})
   };
 }
 
@@ -1718,51 +1648,16 @@ function extractText(body) {
   return "";
 }
 
-function normalizeText(text) {
-  return text.replace(/\s+/g, " ").trim();
-}
-
 function taskForResponse(task) {
-  const input = task.raw && typeof task.raw === "object" ? task.raw : {};
   return {
-    id: task.id,
-    status: task.status,
-    createdAt: task.createdAt,
-    updatedAt: task.updatedAt,
-    expiresAt: task.expiresAt,
-    attempts: task.attempts,
-    text: task.text,
-    normalizedText: task.normalizedText,
-    appId: task.appId || "",
-    appName: task.appName || "",
-    targetDeviceId: task.targetDeviceId || "",
-    source: task.source,
-    type: stringValue(input.type || "rabilink"),
-    deliveryMode: stringValue(input.deliveryMode),
-    reviewRequested: input.reviewRequested === true,
-    configurationRequested: input.configurationRequested === true,
-    explicitPreference: input.explicitPreference === true,
-    preferenceKind: stringValue(input.preferenceKind),
-    preferenceValue: stringValue(input.preferenceValue),
-    proactivityPreference: stringValue(input.proactivityPreference),
-    channelType: stringValue(input.channelType),
-    sender: stringValue(input.sender),
-    clientMessageId: stringValue(input.clientMessageId || input.segmentId),
-    sessionId: stringValue(input.sessionId || input.conversationId),
-    routeProfileId: stringValue(input.routeProfileId),
-    sequence: Number.isFinite(Number(input.sequence)) ? Number(input.sequence) : 0,
-    capturedAt: Number.isFinite(Number(input.capturedAt || input.createdAt)) ? Number(input.capturedAt || input.createdAt) : 0,
-    sourceDeviceId: stringValue(input.sourceDeviceId || input.deviceId),
-    sourceDeviceName: stringValue(input.sourceDeviceName || input.deviceName),
-    sourceDeviceKind: stringValue(input.sourceDeviceKind || input.deviceKind).toLowerCase(),
-    transport: stringValue(input.transport || input.sourceTransport).toLowerCase(),
-    attachments: Array.isArray(input.attachments) ? input.attachments.slice(0, 8) : [],
-    health: portableHealthPayload(input.health),
-    processingPolicy: stringValue(input.processingPolicy),
-    messageCount: task.messages.length,
-    nextMessageSeq: task.nextMessageSeq,
-    replyText: task.replyText || "",
-    error: task.error || ""
+    id: task.id, status: task.status, createdAt: task.createdAt, updatedAt: task.updatedAt,
+    expiresAt: task.expiresAt, attempts: task.attempts,
+    appId: task.appId || '', appName: task.appName || '', targetDeviceId: task.targetDeviceId || '',
+    inputFormat: task.inputFormat || 'opaque-v1', ingressPath: task.ingressPath || '',
+    expectedWorkerFencing: task.expectedWorkerFencing === true,
+    source: task.source, raw: task.raw,
+    messageCount: task.messages.length, nextMessageSeq: task.nextMessageSeq,
+    replyText: task.replyText || '', error: task.error || ''
   };
 }
 
@@ -1870,12 +1765,7 @@ function handleDeviceMediaDownload(req, url, res) {
 
 function createTask(raw, req, auth = { app: null }) {
   loadRelayRuntimeState();
-  const text = extractText(raw);
-  if (!text) {
-    const error = new Error("Missing text/message/query/content in request body.");
-    error.statusCode = 400;
-    throw error;
-  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw Object.assign(new Error('Transport input must be a JSON object.'), { statusCode: 400 });
   const now = Date.now();
   const task = {
     id: `rabilink-relay-${now}-${randomUUID().slice(0, 8)}`,
@@ -1885,16 +1775,16 @@ function createTask(raw, req, auth = { app: null }) {
     expiresAt: now + taskTtlMs,
     leaseUntil: 0,
     attempts: 0,
-    text,
-    normalizedText: normalizeText(text),
+    inputFormat: 'opaque-v1',
+    ingressPath: new URL(req.url || '/', 'http://transport.invalid').pathname,
+    expectedWorkerFencing: Boolean(req.headers['x-rabilink-expected-worker-id'] && req.headers['x-rabilink-expected-worker-id'] === auth.app?.targetDeviceId),
     appId: auth.app?.id || "",
     appName: auth.app?.name || "",
     targetDeviceId: auth.app?.targetDeviceId || "",
     source: {
       userAgent: String(req.headers["user-agent"] || ""),
       ip: String(req.socket.remoteAddress || ""),
-      rokidRequestId: stringValue(raw?.requestId || raw?.id || raw?.messageId),
-      sender: stringValue(raw?.sender || raw?.user || raw?.deviceId),
+      connectionDeviceId: auth.deviceBinding?.id || '$application',
       appId: auth.app?.id || "",
       appName: auth.app?.name || "",
       targetDeviceId: auth.app?.targetDeviceId || ""
@@ -1938,7 +1828,8 @@ function webguiRequestForResponse(request) {
     headers: request.headers,
     bodyBase64: request.bodyBase64 || "",
     error: request.error || "",
-    ...(request.knowledge ? { knowledge: request.knowledge, nonReplayable: request.nonReplayable === true } : {})
+    ...(request.publicApiTransport === true ? { publicApiTransport: true } : {}),
+        ...(request.deviceApi ? { nonReplayable: request.nonReplayable === true, connectionIdentity: { appId: request.deviceApi.appId, deviceId: request.deviceApi.bindingId, authenticatedAt: request.deviceApi.authenticatedAt } } : {})
   };
 }
 
@@ -1993,24 +1884,17 @@ function claimWebguiRequests(limit, deviceId, appId = "", deviceGuid = "") {
     if (result.length >= limit) break;
     if (!canWorkerClaimWebguiRequest(request, appId, deviceId, deviceGuid)) continue;
     if (request.status === "leased" && request.leaseUntil <= now) {
-      if (request.nonReplayable) { request.status = 'failed'; request.error = 'KNOWLEDGE_OUTCOME_UNCERTAIN'; finishWebguiWaiters(request); continue; }
+      if (request.nonReplayable) { request.status = 'failed'; request.error = 'API_OUTCOME_UNCERTAIN'; finishWebguiWaiters(request); continue; }
       request.status = "queued";
       request.leaseUntil = 0;
     }
     if (request.status !== "queued") continue;
-    if (request.knowledge) {
-      try {
-        const currentApp = readAppStore().apps.find(a => a.id === request.appId && a.enabled !== false);
-        const currentBinding = currentApp?.deviceBindings?.find(b => b.id === request.knowledge.deviceBindingId && b.enabled !== false);
-        if (!currentBinding || currentBinding.credentialHash !== request.knowledgeCredentialHash || currentApp.ownerAccountId !== request.knowledge.ownerAccountId
-          || request.knowledge.appId !== request.appId || request.knowledge.targetDeviceId !== request.targetDeviceId) throw new Error('KNOWLEDGE_ACCESS_REVOKED');
-        const currentWorker = { id: request.targetDeviceId, appId: request.appId };
-        const authorized = authorizeKnowledgeRequest(currentApp, currentBinding, currentWorker, JSON.parse(Buffer.from(request.bodyBase64, 'base64').toString('utf8')));
-        request.knowledge = authorized.metadata;
-      } catch {
-        request.status = 'failed'; request.error = 'KNOWLEDGE_ACCESS_REVOKED';
-        request.response = { statusCode: 403, bodyBase64: Buffer.from(JSON.stringify({ ok: false, code: 'KNOWLEDGE_ACCESS_REVOKED', uncertain: false })).toString('base64') };
-        finishWebguiWaiters(request); continue;
+    if (request.deviceApi) {
+      const app = readAppStore().apps.find(item => item.id === request.deviceApi.appId && item.enabled !== false);
+      const member = app?.deviceBindings?.find(item => item.id === request.deviceApi.bindingId && item.enabled !== false);
+      const currentCredential = request.deviceApi.bindingId === '$application' ? app && sha256(app.token) : member?.credentialHash;
+      if (!app || !mobileWorkersForApp(app).some(worker => worker.id === request.targetDeviceId) || currentCredential !== request.deviceApiCredentialHash) {
+        request.status = 'failed'; request.error = 'API_CONNECTION_REVOKED'; finishWebguiWaiters(request); continue;
       }
     }
     request.status = "leased";
@@ -2152,7 +2036,7 @@ function normalizeProxyResponseHeaders(headers) {
 }
 
 function createWebguiRequest(req, target, localPath, rawBody) {
-  rejectReservedKnowledgePath(localPath);
+  if (localPath.startsWith('/__rabilink/')) { const error = new Error('Reserved transport path'); error.statusCode = 403; throw error; }
   const now = Date.now();
   const request = {
     id: `rabilink-webgui-${now}-${randomUUID().slice(0, 8)}`,
@@ -2192,7 +2076,7 @@ function createWebguiRequest(req, target, localPath, rawBody) {
 }
 
 function createMobileWebguiRequest(app, worker, method, localPath, body = null, mutationHeaders = {}) {
-  rejectReservedKnowledgePath(localPath);
+  if (localPath.startsWith('/__rabilink/')) { const error = new Error('Reserved transport path'); error.statusCode = 403; throw error; }
   const now = Date.now();
   const bodyBuffer = body == null ? Buffer.alloc(0) : Buffer.from(JSON.stringify(body), "utf8");
   const request = {
@@ -2268,6 +2152,7 @@ function createSpeechRequest(req, auth, worker, localPath, rawBody) {
     method: req.method,
     path: localPath,
     headers: normalizeProxyRequestHeaders(req.headers),
+    expectedWorkerFencing: Boolean(req.headers["x-rabilink-expected-worker-id"]),
     bodyBase64: Buffer.isBuffer(rawBody) && rawBody.length > 0 ? rawBody.toString("base64") : ""
   });
   writeEvent("speech_request_created", speechRequestForLog(request));
@@ -2316,33 +2201,23 @@ function sendSpeechProxyResponse(res, request) {
 async function handleSpeechProxy(req, url, res) {
   const auth = authorizeRabiLinkRequest(req, url, {});
   if (!auth.ok) return sendRabiLinkAuthError(res, auth);
-  if (auth.deviceBinding) {
-    return sendJson(res, 403, { code: -1, ok: false, message: "Speech API requires the RabiLink application token." });
-  }
   const worker = requireRokidAppTarget(auth, "speech");
   const expectedWorker = stringValue(req.headers["x-rabilink-expected-worker-id"]);
   if (expectedWorker && expectedWorker !== worker.id) {
     return sendJson(res, 409, { ok: false, message: "Frozen speech target worker changed; request was not queued." });
   }
   const suffix = url.pathname.slice(speechProxyPrefix.length) || "/";
-  const localPathname = speechProxyPaths.get(`${String(req.method || "GET").toUpperCase()} ${suffix}`);
-  if (!localPathname) {
-    return sendJson(res, 404, { code: -1, ok: false, message: "RabiSpeech proxy path is not enabled." });
-  }
+  const method = String(req.method || 'GET').toUpperCase();
+  if (!API_METHODS.includes(method)) return sendJson(res, 405, { code: 'TRANSPORT_METHOD_INVALID' });
+  try { validateApiRequest({ method: 'GET', path: suffix }); }
+  catch { return sendJson(res, 400, { code: 'TRANSPORT_PATH_INVALID' }); }
+  const localPathname = suffix;
   const search = new URLSearchParams(url.searchParams);
   search.delete("token");
   const localPath = `${localPathname}${search.toString() ? `?${search}` : ""}`;
   const rawBody = ["GET", "HEAD"].includes(String(req.method || "GET").toUpperCase())
     ? Buffer.alloc(0)
     : await readRawBody(req, { maxBytes: speechBodyMaxBytes, label: "Speech" });
-  if (localPathname === "/v1/audio-streams/rabilink/start") {
-    try {
-      const start = JSON.parse(rawBody.toString("utf8"));
-      if ((start.captureId || start.processingPolicy === "transcribe") && !expectedWorker) {
-        return sendJson(res, 409, { ok: false, message: "New capture streams require X-RabiLink-Expected-Worker-Id." });
-      }
-    } catch { return sendJson(res, 400, { ok: false, message: "Invalid audio stream start JSON." }); }
-  }
   const request = createSpeechRequest(req, auth, worker, localPath, rawBody);
   const finalRequest = await speechRequests.waitForCompletion(request, speechRequestWaitMs);
   speechRequests.cleanup();
@@ -2357,15 +2232,6 @@ async function handleSpeechProxy(req, url, res) {
     path: finalRequest.path,
     error: finalRequest.error || ""
   });
-  if (localPathname === "/v1/capabilities" && finalRequest.response?.statusCode === 200) {
-    try {
-      const capabilities = JSON.parse(Buffer.from(finalRequest.response.bodyBase64, "base64").toString("utf8"));
-      if (capabilities.rabilinkAudioStream?.processingPolicyFrozen === true) {
-        capabilities.rabilinkAudioStream.expectedWorkerFencing = true;
-        finalRequest.response.bodyBase64 = Buffer.from(JSON.stringify(capabilities), "utf8").toString("base64");
-      }
-    } catch { /* Never advertise capabilities on an invalid upstream response. */ }
-  }
   return sendSpeechProxyResponse(res, finalRequest);
 }
 
@@ -2373,16 +2239,8 @@ async function handleSpeechProxy(req, url, res) {
 async function handleDirectVideoOffer(req, url, res) {
   const auth = authorizeRabiLinkRequest(req, url, {});
   if (!auth.ok) return sendRabiLinkAuthError(res, auth);
-  if (auth.deviceBinding) return sendJson(res, 403, { error: "Application token required." });
   const worker = requireRokidAppTarget(auth, "video-direct");
   const rawBody = await readRawBody(req, { maxBytes: 64 * 1024, label: "Video signalling" });
-  let offer;
-  try { offer = JSON.parse(rawBody.toString("utf8")); } catch { return sendJson(res, 400, { error: "Invalid SDP offer." }); }
-  if (!offer || typeof offer !== "object" || Object.keys(offer).some(key => !["sdp", "deviceId"].includes(key))
-      || typeof offer.sdp !== "string" || !offer.sdp.startsWith("v=0") || offer.sdp.length > 60 * 1024
-      || !/^[a-zA-Z0-9_-]{1,128}$/.test(offer.deviceId || "") || / typ relay(?: |\r|\n|$)/.test(offer.sdp)) {
-    return sendJson(res, 400, { error: "Only direct video SDP signalling is accepted." });
-  }
   const request = createSpeechRequest(req, auth, worker, "/api/rabilink/video/offer", rawBody);
   const completed = await speechRequests.waitForCompletion(request, speechRequestWaitMs);
   speechRequests.cleanup();
@@ -2442,7 +2300,7 @@ function canWorkerClaimTask(task, appId = "", deviceId = "", deviceGuid = "") {
   return true;
 }
 
-function claimTasks(limit, deviceId, appId = "", deviceGuid = "") {
+function claimTasks(limit, deviceId, appId = "", deviceGuid = "", opaque = false) {
   cleanupTasks();
   const now = Date.now();
   const result = [];
@@ -2450,6 +2308,7 @@ function claimTasks(limit, deviceId, appId = "", deviceGuid = "") {
   for (const task of tasks.values()) {
     if (result.length >= limit) break;
     if (!canWorkerClaimTask(task, appId, deviceId, deviceGuid)) continue;
+    if (!opaque) continue;
     if (task.status === "leased" && task.leaseUntil <= now) {
       task.status = "queued";
       task.leaseUntil = 0;
@@ -2714,7 +2573,7 @@ function markOutboxTimeout(response, waitMs, continuous = false) {
   if (response.messages.length > 0 || !response.shouldContinue || waitMs <= 0 || continuous) {
     return response;
   }
-  const text = `RabiLink 下行消息等待超时：${waitMs}ms 内没有收到电脑端 Rabi/Codex 回复。`;
+  const text = `RabiLink 下行消息等待超时：${waitMs}ms 内没有收到目标 RabiPC 的回复。`;
   return {
     ...response,
     code: -1,
@@ -2900,7 +2759,7 @@ function waitForTask(task, timeoutMs) {
 
 function rokidResponse(task) {
   if (task.status === "done") {
-    const text = task.replyText || "已转交 Codex 处理。";
+    const text = task.replyText || "目标 RabiPC 已完成处理。";
     return {
       code: 0,
       ok: true,
@@ -2925,7 +2784,7 @@ function rokidResponse(task) {
       content: text
     };
   }
-  const text = "已收到，正在转交电脑端 RabiLink 和 Codex 处理。";
+  const text = "已收到，正在等待目标 RabiPC 处理。";
   return {
     code: 0,
     ok: true,
@@ -2963,10 +2822,10 @@ function handleRokidCreateTask(req, url, res, body) {
     taskId: task.id,
     cursor: outboxCursor,
     nextCursor: outboxCursor,
-    text: "已收到，正在转交电脑端 RabiLink 和 Codex 处理。请稍后查询结果。",
-    answer: "已收到，正在转交电脑端 RabiLink 和 Codex 处理。请稍后查询结果。",
-    reply: "已收到，正在转交电脑端 RabiLink 和 Codex 处理。请稍后查询结果。",
-    content: "已收到，正在转交电脑端 RabiLink 和 Codex 处理。请稍后查询结果。"
+    text: "已收到，正在等待目标 RabiPC 处理。请稍后查询结果。",
+    answer: "已收到，正在等待目标 RabiPC 处理。请稍后查询结果。",
+    reply: "已收到，正在等待目标 RabiPC 处理。请稍后查询结果。",
+    content: "已收到，正在等待目标 RabiPC 处理。请稍后查询结果。"
   });
 }
 
@@ -3192,11 +3051,7 @@ function handleRokidInput(req, url, res, body) {
   if (!auth.ok) return sendRabiLinkAuthError(res, auth);
   requireRokidAppTarget(auth);
   const outboxCursor = currentOutboxCursor();
-  const event = createTask({
-    ...body,
-    type: stringValue(body?.type || "voice_transcript"),
-    source: stringValue(body?.source || "rabilink-aiui")
-  }, req, auth);
+  const event = createTask(body, req, auth);
   sendJson(res, 202, {
     code: 0,
     ok: true,
@@ -3270,6 +3125,16 @@ function bindDeviceSerialToApp(account, appId, body) {
   const time = nowIso();
   app.deviceBindings = Array.isArray(app.deviceBindings) ? app.deviceBindings : [];
   let binding = app.deviceBindings.find((item) => item.serialHash === serialHash);
+  const requestedConnectionTarget = stringValue(body.connectionTargetDeviceId);
+  if (binding && !binding.connectionTargetDeviceId) throw Object.assign(new Error('DEVICE_CONNECTION_UPGRADE_REQUIRED'), { statusCode: 409 });
+  if (binding?.connectionTargetDeviceId && requestedConnectionTarget && requestedConnectionTarget !== binding.connectionTargetDeviceId) throw Object.assign(new Error('CONNECTION_TARGET_IMMUTABLE'), { statusCode: 409 });
+  let connectionTarget = binding?.connectionTargetDeviceId || requestedConnectionTarget;
+  if (!binding) {
+    if (!requestedConnectionTarget) throw Object.assign(new Error('EXPLICIT_CONNECTION_TARGET_REQUIRED'), { statusCode: 409 });
+    const connectionWorker = store.workers.find(worker => worker.appId === app.id && (worker.id === connectionTarget || worker.guid === connectionTarget));
+    if (!connectionWorker || !normalizeWorkerCapabilities(connectionWorker.capabilities).includes('webgui')) throw Object.assign(new Error('DEVICE_CONNECTION_MANAGER_REQUIRED'), { statusCode: 409 });
+    connectionTarget = connectionWorker.id;
+  }
   if (binding) {
     binding.enabled = true;
     binding.credentialHash = "";
@@ -3281,6 +3146,7 @@ function bindDeviceSerialToApp(account, appId, body) {
       id: randomId("glasses"),
       serialHash,
       serialPreview: deviceSerialPreview(serialNumber),
+      connectionTargetDeviceId: connectionTarget || "",
       enabled: true,
       credentialHash: "",
       createdAt: time,
@@ -3364,44 +3230,13 @@ function claimDeviceToken(body) {
 }
 
 function handlePortableInput(req, url, res, body) {
-  const sourceDeviceKind = portableDeviceKind(body?.sourceDeviceKind || body?.deviceKind, "other");
-  const transport = portableTransport(body?.transport || body?.sourceTransport, "direct-network");
-  const health = portableHealthPayload(body?.health);
-  if (health) {
-    const auth = authorizeRabiLinkRequest(req, url, body);
-    if (!auth.ok) return sendRabiLinkAuthError(res, auth);
-    const worker = requireRokidAppTarget(auth, "wearable-observation-policy-v1");
-    const expectedWorker = stringValue(req.headers["x-rabilink-expected-worker-id"]);
-    if (!expectedWorker || expectedWorker !== worker.id) return sendJson(res, 409, { ok: false, message: "Frozen wearable worker mismatch; not queued." });
-    if (!["transcribe", "agent"].includes(body?.processingPolicy) || !stringValue(body?.routeProfileId))
-      return sendJson(res, 400, { ok: false, message: "Explicit wearable processing policy and route required." });
-    return handleRokidInput(req, url, res, {
-      text: stringValue(body?.text || "Wearable health observation"),
-      type: "wearable.health",
-      processingPolicy: body.processingPolicy,
-      deliveryMode: "observe",
-      source: "rabilink-wearable",
-      sourceDeviceId: stringValue(body?.sourceDeviceId || body?.deviceId),
-      sourceDeviceName: stringValue(body?.sourceDeviceName || body?.deviceName),
-      sourceDeviceKind,
-      transport,
-      clientMessageId: stringValue(body?.clientMessageId),
-      capturedAt: portableHealthNumber(body?.capturedAt, 0, Number.MAX_SAFE_INTEGER),
-      routeProfileId: stringValue(body?.routeProfileId).slice(0, 160),
-      health
-    });
-  }
-  const input = {
-    ...body,
-    type: stringValue(body?.type || "rabilink.observation"),
-    deliveryMode: stringValue(body?.deliveryMode || "observe"),
-    source: stringValue(body?.source || "rabilink-portable-device"),
-    sourceDeviceId: stringValue(body?.sourceDeviceId || body?.deviceId),
-    sourceDeviceName: stringValue(body?.sourceDeviceName || body?.deviceName),
-    sourceDeviceKind,
-    transport
-  };
-  return handleRokidInput(req, url, res, input);
+  // Worker fencing is transport metadata; input policy and samples are interpreted on PC.
+  const auth = authorizeRabiLinkRequest(req, url, body);
+  if (!auth.ok) return sendRabiLinkAuthError(res, auth);
+  const worker = requireRokidAppTarget(auth);
+  const expected = stringValue(req.headers['x-rabilink-expected-worker-id']);
+  if (expected && expected !== worker.id) return sendJson(res, 409, { ok: false, message: 'Frozen worker mismatch; not queued.' });
+  return handleRokidInput(req, url, res, body);
 }
 
 function handleWorkerMessageAppend(req, url, res, body) {
@@ -3516,6 +3351,7 @@ function handleWorkerMessageAppend(req, url, res, body) {
 async function handleWorkerTasks(req, url, res, body) {
   const auth = authorizeRabiLinkRequest(req, url, body);
   if (!auth.ok) return sendRabiLinkAuthError(res, auth);
+  if (url.searchParams.get('taskFormat') !== 'opaque-v1') return sendJson(res, 426, { code: 'TASK_FORMAT_UPGRADE_REQUIRED', ok: false, requiredTaskFormat: 'opaque-v1' });
   const limit = clamp(Number(url.searchParams.get("limit") || 1), 1, 10);
   const deviceId = stringValue(url.searchParams.get("deviceId") || body?.deviceId);
   const deviceName = stringValue(url.searchParams.get("deviceName") || body?.deviceName || deviceId);
@@ -3534,7 +3370,7 @@ async function handleWorkerTasks(req, url, res, body) {
     "task_available",
     { appId, deviceId, deviceGuid },
     waitMs,
-    () => claimTasks(limit, deviceId, appId, deviceGuid)
+    () => claimTasks(limit, deviceId, appId, deviceGuid, url.searchParams.get("taskFormat") === "opaque-v1")
   );
   if (res.writableEnded || res.destroyed) return;
   sendJson(res, 200, {
@@ -3656,8 +3492,8 @@ function handleWorkerWebguiEvent(req, url, res, body) {
     return sendJson(res, 400, { code: -1, ok: false, message: "A non-ready WebGUI event type is required." });
   }
   const data = body?.data && typeof body.data === "object" && !Array.isArray(body.data) ? body.data : {};
-  if (eventType === "persona_avatar_changed") {
-    // The phone receives only role id + opaque version + Relay-relative URL; no NAS path escapes this boundary.
+  if (body?.deliveryChannel === 'connection') {
+    // The publishing PC chooses an opaque transport channel; Relay does not interpret business event types.
     relayEventHub.publish(eventType, { appId: auth.app.id, data });
     return sendJson(res, 202, { code: 0, ok: true });
   }
@@ -4206,7 +4042,6 @@ function adminPageHtml(integrationMode = false) {
     }
 
     async function load() {
-      if (pendingProfileWrites.size) { flash("alert", "存在待确认的设备配置，请在 Agent 设置中回读后再刷新列表。"); return; }
       flash("alert", "");
       try {
         const body = await request(apiBase + "/state" + (integrationMode ? '?integration=1' : ''));
@@ -4418,7 +4253,7 @@ function adminPageHtml(integrationMode = false) {
       try {
         await request(apiBase + "/apps/" + encodeURIComponent(id) + "/devices", {
           method: "POST",
-          body: JSON.stringify({ serialNumber })
+          body: JSON.stringify({ serialNumber, ...(node.querySelector('.device-owner').value ? { connectionTargetDeviceId: node.querySelector('.device-owner').value } : {}) })
         });
         input.value = "";
         flash("notice", "眼镜 SN 已绑定，眼镜将在下一次连接事件中领取设备凭证。");
@@ -4708,107 +4543,6 @@ function adminPageHtml(integrationMode = false) {
       }
     }
 
-    const createProfileReceiptPolicy = ${createProfileReceiptPolicy.toString()};
-    const createProfileSkillsEditor = ${createProfileSkillsEditor.toString()};
-    const createProfileMcpEditor = ${createProfileMcpEditor.toString()};
-    const pendingProfileWrites = new Set();
-    window.addEventListener("beforeunload", event => { if (pendingProfileWrites.size) { event.preventDefault(); event.returnValue = ""; } });
-    // Device profile editor: user values only enter textContent/value, never HTML.
-    function renderAgentProfileEditor(container, appId, bindingId) {
-      const receiptPolicy = createProfileReceiptPolicy();
-      const panel = document.createElement("div");
-      panel.className = "tile";
-      panel.innerHTML = '<h3>眼镜 Agent 设置</h3><p>配置仅属于此眼镜。Skill 是指引；MCP 是引用，不代表已连接或已获工具权限。</p><label>ID<input class="profile-id" maxlength="128"></label><label>名称<input class="profile-name" maxlength="128"></label><label>系统提示<textarea class="profile-prompt" rows="5" maxlength="8000"></textarea></label><div class="profile-skills"></div><div class="profile-mcp"></div><p class="profile-state" role="status"></p><div class="actions"><button class="profile-save" type="button">保存配置</button><button class="profile-read" type="button">回读 / 刷新</button><button class="profile-close" type="button">关闭</button></div>';
-      panel.querySelectorAll("input,textarea").forEach(input => { input.style.width = "100%"; input.style.boxSizing = "border-box"; });
-      const field = name => panel.querySelector(".profile-" + name);
-      const skillsEditor = createProfileSkillsEditor({document,container:field("skills"),validate:skills=>receiptPolicy.profile({revision:1,id:'draft',name:'draft',systemPrompt:'',skills,mcp:[]}).skills});
-      const mcpEditor = createProfileMcpEditor({document,container:field("mcp"),validate:mcp=>receiptPolicy.profile({revision:1,id:'draft',name:'draft',systemPrompt:'',skills:[],mcp}).mcp});
-      const endpoint = apiBase + "/apps/" + encodeURIComponent(appId) + "/devices/" + encodeURIComponent(bindingId) + "/agent-profile";
-      const ownerId = state.account?.id;
-      if (!ownerId) { panel.textContent = "请先登录管理账号。"; container.appendChild(panel); return; }
-      panel.profileOwnerId = ownerId;
-      const storageKey = "rabilink-profile-pending:" + JSON.stringify([ownerId, appId, bindingId]);
-      let revision = null, busy = false, pending = null, storageBlocked = false;
-      function clearPending() {
-        sessionStorage.removeItem(storageKey);
-        pending = null;
-      }
-      function restorePending() {
-        const raw = sessionStorage.getItem(storageKey);
-        if (!raw) return;
-        const saved = JSON.parse(raw);
-        if (saved.ownerId !== ownerId || saved.appId !== appId || saved.bindingId !== bindingId || typeof saved.body !== "string") throw new Error("待确认请求归属不匹配");
-        const input = JSON.parse(saved.body);
-        if (!Number.isSafeInteger(input.expectedRevision) || typeof input.idempotencyKey !== "string" || !input.profile || input.profile.revision !== input.expectedRevision + 1) throw new Error("待确认请求无效");
-        pending = input;
-      }
-      const status = text => { field("state").textContent = text; };
-      function lock(value) { const ownerChanged=state.account?.id!==ownerId; if (pending && !ownerChanged) pendingProfileWrites.add(panel); else pendingProfileWrites.delete(panel); busy = value; const frozen=ownerChanged||value||storageBlocked||revision===null||pending!==null; for(const name of ['id','name','prompt'])field(name).disabled=frozen;skillsEditor.lock(frozen);mcpEditor.lock(frozen);field("save").disabled=frozen;field("read").disabled=value||ownerChanged;field("close").disabled=value||pending!==null; }
-      async function readback() {
-        if (busy) return;
-        lock(true);
-        try {
-          const response = await fetch(endpoint, { headers: headers(false), credentials: "same-origin" });
-          const body = await response.json();
-          if (!response.ok || body.code !== 0 || !Number.isSafeInteger(body.data?.savedRevision)) throw new Error("读取失败");
-          if (state.account?.id !== ownerId) throw new Error("账号已变化");
-          // Only restore sensitive drafts after the authenticated endpoint confirms ownership.
-          if (!pending) { try { restorePending(); } catch (error) { storageBlocked = true; throw error; } }
-          const data = body.data;
-          if (data.savedRevision < 0 || (data.savedRevision === 0 ? data.profile !== null : receiptPolicy.profile(data.profile).revision !== data.savedRevision)) throw new Error("配置回读无效");
-          receiptPolicy.applied(data.applied, data.savedRevision);
-          if (pending) {
-            const confirmed = await receiptPolicy.resolveHistorical(pending, async key => {
-              const history = await fetch(endpoint + "/operations/" + encodeURIComponent(key), { headers: headers(false), credentials: "same-origin" });
-              return { status: history.status, body: await history.json() };
-            });
-            if (state.account?.id !== ownerId) throw new Error("账号已变化");
-            if (!confirmed) { status("历史回执尚未确认原写入，已保留原请求和幂等键；请稍后回读，不自动重发。"); return; }
-          }
-          clearPending();
-          revision = data.savedRevision;
-          const p = data.profile || { id: "assistant", name: "眼镜助手", systemPrompt: "", skills: [], mcp: [] };
-          field("id").value = p.id; field("name").value = p.name; field("prompt").value = p.systemPrompt;
-          skillsEditor.set(p.skills); mcpEditor.set(p.mcp);
-          status("已保存版本：" + revision + "；模型应用：" + (data.applied ? data.applied.appliedRevision + " / " + data.applied.status : "未确认") + "；MCP：未验证。刷新会覆盖未保存编辑。");
-        } catch (_) { status("读取失败，保留当前编辑与待确认请求。请检查登录和网络后回读。"); }
-        finally { lock(false); }
-      }
-      async function save() {
-        if (busy || pending || storageBlocked || revision === null || state.account?.id !== ownerId) return;
-        let profile;
-        try {
-          profile = receiptPolicy.profile({ revision: revision + 1, id: field("id").value, name: field("name").value, systemPrompt: field("prompt").value, skills: skillsEditor.get(), mcp: mcpEditor.get() });
-        } catch (_) { status("配置字段或 Skill 内容无效；请检查字段提示与 MCP 引用 JSON，未发送请求。"); return; }
-        const input = { expectedRevision: revision, idempotencyKey: "profile-" + crypto.randomUUID(), profile };
-        pending = JSON.parse(JSON.stringify(input));
-        const frozenBody = JSON.stringify(pending);
-        try {
-          sessionStorage.setItem(storageKey, JSON.stringify({ ownerId, appId, bindingId, body: frozenBody }));
-          if (JSON.parse(sessionStorage.getItem(storageKey)).body !== frozenBody) throw new Error();
-        } catch (_) { pending = null; storageBlocked = true; status("无法安全保存待确认请求，未发送。请检查浏览器会话存储后重新打开设置。"); lock(false); return; }
-        lock(true);
-        try {
-          const response = await fetch(endpoint, { method: "PUT", credentials: "same-origin", headers: { ...headers(true), "X-RabiLink-Profile-Write": "1" }, body: frozenBody });
-          const body = await response.json();
-          if (state.account?.id !== ownerId) { status("账号已变化，保留原请求等待同账号回读。"); return; }
-          if (response.status === 412) { clearPending(); revision = null; status("版本冲突：请回读最新配置，重新确认修改后再保存。"); return; }
-          if (!response.ok || body.code !== 0 || !receiptPolicy.matches(body.data, input)) {
-            if (response.status >= 400 && response.status < 500) { clearPending(); status(body.code === "PROFILE_RECEIPT_CAPACITY" || body.error === "PROFILE_RECEIPT_CAPACITY" || body.message === "PROFILE_RECEIPT_CAPACITY" ? "设备操作回执已达 128 条容量上限，保存被拒绝。请联系维护者处理；不能换键重试。" : "配置被拒绝，请检查字段或登录状态；未自动重试。"); }
-            else status("保存结果不确定，原请求与幂等键已保留。只回读，不自动重发或换键。");
-            return;
-          }
-          clearPending(); revision = profile.revision;
-          status("已保存版本：" + revision + "；等待眼镜应用；MCP：未验证。可回读查看模型应用状态。");
-        } catch (_) { status("网络或回执异常，保存结果不确定。原请求与幂等键已保存在当前标签页会话，请回读；刷新后登录同一账号可恢复，关闭标签页可能丢失。"); }
-        finally { lock(false); }
-      }
-      field("save").addEventListener("click", save);
-      field("read").addEventListener("click", readback);
-      field("close").addEventListener("click", () => { if (!busy && !pending) panel.remove(); });
-      container.appendChild(panel); lock(false); void readback();
-    }
-
     function resetDeviceLogFilters() {
       state.deviceLogs = [];
       state.deviceLogFacets = {};
@@ -4843,8 +4577,6 @@ function adminPageHtml(integrationMode = false) {
 
     function render() {
       syncPcPairingUi();
-      if (!state.account || [...pendingProfileWrites].some(panel => panel.profileOwnerId !== state.account.id)) { pendingProfileWrites.clear(); el("apps").innerHTML = ""; }
-      if (pendingProfileWrites.size) return; // Preserve frozen uncertain writes during unrelated UI refreshes.
       const loggedIn = Boolean(state.account);
       const selectedApp = state.apps.find((item) => item.id === state.selectedAppId);
       const showDetails = loggedIn && Boolean(selectedApp) && !state.creatingApp;
@@ -4888,7 +4620,7 @@ function adminPageHtml(integrationMode = false) {
             '<div class="tile"><div class="rabi-field combo target-worker"><span class="field-label">通讯 Rabi PC</span><button class="combo-trigger" type="button"><span class="combo-value"></span></button><div class="combo-panel hidden"><input class="combo-search" placeholder="搜索 Rabi PC / GUID"><div class="combo-options"></div></div></div></div>' +
             '<div class="tile"><span>更新时间</span><b class="updated"></b></div>' +
           '</div>' +
-          (integrationMode ? '<div class="device-binding-row"><div class="rabi-field"><span class="field-label">眼镜 SN</span><input class="device-sn" autocomplete="off" placeholder="输入眼镜上显示的完整 SN"></div><button class="bind-device" type="button">绑定 / 重置</button></div>' : '') +
+          (integrationMode ? '<div class="rabi-field"><span class="field-label">眼镜连接 PC</span><select class="device-owner"></select></div><div class="device-binding-row"><div class="rabi-field"><span class="field-label">眼镜 SN</span><input class="device-sn" autocomplete="off" placeholder="输入眼镜上显示的完整 SN"></div><button class="bind-device" type="button">绑定 / 重置</button></div>' : '') +
           '<div class="actions">' +
             (integrationMode ? '<button class="copy">复制 token</button><button class="regen">重新生成 token</button>' : '') +
             '<button class="danger delete">删除应用</button>' +
@@ -4905,13 +4637,18 @@ function adminPageHtml(integrationMode = false) {
         for (const binding of bindings) {
           const row = document.createElement("div"); row.className = "actions";
           const label = document.createElement("span"); label.textContent = binding.serialPreview + " · " + (binding.claimed ? "已领取" : "等待眼镜领取");
-          const button = document.createElement("button"); button.type = "button"; button.textContent = "Agent 设置";
-          button.addEventListener("click", () => { if (!row.querySelector(".profile-state")) renderAgentProfileEditor(row, app.id, binding.id); });
-          row.appendChild(label); row.appendChild(button); bindingList.appendChild(row);
+          row.appendChild(label); bindingList.appendChild(row);
         }
         renderTargetCombo(node.querySelector(".target-worker"), app);
         node.querySelector(".enabled").addEventListener("change", (event) => patchApp(app.id, { enabled: event.target.checked }).catch((error) => flash("alert", error.message)));
         if (integrationMode) {
+          const deviceOwner = node.querySelector('.device-owner');
+          const emptyOwner = document.createElement('option'); emptyOwner.value = ''; emptyOwner.textContent = '选择保存眼镜设置的 PC；重置时可保留原 PC'; deviceOwner.appendChild(emptyOwner);
+          for (const worker of state.workers || []) {
+            if (worker.appId !== app.id || !Array.isArray(worker.capabilities) || !worker.capabilities.includes('webgui')) continue;
+            const option = document.createElement('option'); option.value = worker.id; option.textContent = worker.name || worker.id; deviceOwner.appendChild(option);
+          }
+          deviceOwner.value = app.connectionOwnerDeviceId || '';
           node.querySelector(".copy").addEventListener("click", () => copyToken(app.id));
           node.querySelector(".regen").addEventListener("click", () => patchApp(app.id, { regenerateToken: true }).catch((error) => flash("alert", error.message)));
           node.querySelector(".bind-device").addEventListener("click", () => bindDeviceSerial(app.id, node));
@@ -5337,206 +5074,9 @@ function selectedMobileWorker(app, workers = mobileWorkersForApp(app)) {
   return null;
 }
 
-function mobileDeviceStatusPath(appId) {
-  const id = sanitizeRabiLinkId(appId, "");
-  return id ? path.join(mobileDeviceStatusDir, `${id}.json`) : "";
-}
-
-function normalizeMobileDeviceStatus(body = {}) {
-  const level = Number(body?.batteryLevel ?? body?.level);
-  if (!Number.isFinite(level) || level < 0 || level > 100) {
-    const error = new Error("batteryLevel must be a number between 0 and 100.");
-    error.statusCode = 400;
-    throw error;
-  }
-  if (typeof body?.charging !== "boolean") {
-    const error = new Error("charging must be a boolean.");
-    error.statusCode = 400;
-    throw error;
-  }
-  const observedAtMs = Date.parse(stringValue(body?.observedAt));
-  return {
-    batteryLevel: Math.round(level),
-    charging: body.charging,
-    observedAt: Number.isFinite(observedAtMs) ? new Date(observedAtMs).toISOString() : nowIso(),
-    receivedAt: nowIso(),
-    source: "rokid-cxr-phone"
-  };
-}
-
-function publicMobileDeviceStatus(status) {
-  if (!status) return null;
-  const receivedAtMs = Date.parse(status.receivedAt || "");
-  if (!Number.isFinite(receivedAtMs)) return null;
-  const ageMs = Math.max(0, Date.now() - receivedAtMs);
-  return {
-    batteryLevel: status.batteryLevel,
-    charging: status.charging === true,
-    observedAt: status.observedAt || status.receivedAt,
-    receivedAt: status.receivedAt,
-    source: "rokid-cxr-phone",
-    stale: ageMs > mobileDeviceStatusStaleMs,
-    ageMs,
-    staleAfterMs: mobileDeviceStatusStaleMs
-  };
-}
-
-function readMobileDeviceStatus(app) {
-  const filePath = mobileDeviceStatusPath(app?.id || "");
-  if (!filePath) return null;
-  recoverInterruptedFileReplacement(filePath);
-  if (!fs.existsSync(filePath)) return null;
-  try {
-    return publicMobileDeviceStatus(JSON.parse(fs.readFileSync(filePath, "utf8")));
-  } catch (error) {
-    writeEvent("mobile_device_status_read_failed", {
-      appId: app?.id || "",
-      message: error instanceof Error ? error.message : String(error)
-    });
-    return null;
-  }
-}
-
-function writeMobileDeviceStatus(app, body = {}) {
-  const status = normalizeMobileDeviceStatus(body);
-  const filePath = mobileDeviceStatusPath(app?.id || "");
-  if (!filePath) {
-    const error = new Error("RabiLink app id is missing.");
-    error.statusCode = 400;
-    throw error;
-  }
-  const stored = { schemaVersion: 1, appId: app.id, ...status };
-  const tmpPath = `${filePath}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  try {
-    fs.writeFileSync(tmpPath, `${JSON.stringify(stored, null, 2)}\n`, "utf8");
-    replaceFileSync(tmpPath, filePath);
-  } finally {
-    if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
-  }
-  const result = publicMobileDeviceStatus(stored);
-  writeEvent("mobile_device_status_updated", {
-    appId: app.id,
-    batteryLevel: result.batteryLevel,
-    charging: result.charging,
-    source: result.source
-  });
-  return result;
-}
-
 function mobileStatePayload(app) {
   const workers = mobileWorkersForApp(app);
-  return {
-    code: 0,
-    ok: true,
-    app: publicApp(app),
-    selectedTargetDeviceId: app.targetDeviceId || "",
-    selectedWorker: selectedMobileWorker(app, workers),
-    deviceStatus: readMobileDeviceStatus(app),
-    workers
-  };
-}
-
-function mobileProofPath(appId) {
-  const id = sanitizeRabiLinkId(appId, "");
-  if (!id) return "";
-  return path.join(mobileProofDir, `${id}.jsonl`);
-}
-
-function normalizeMobileProofType(value) {
-  const type = stringValue(value).toLowerCase().replace(/[^a-z0-9_.:-]+/g, "-").replace(/^-+|-+$/g, "");
-  return type.slice(0, 80) || "runtime";
-}
-
-function normalizeMobileProofDetail(value, maxLength = 220) {
-  return textPreview(stringValue(value), maxLength);
-}
-
-function normalizeMobileProofBody(body = {}) {
-  const device = body?.device && typeof body.device === "object" && !Array.isArray(body.device) ? body.device : {};
-  const runtime = body?.runtime && typeof body.runtime === "object" && !Array.isArray(body.runtime) ? body.runtime : {};
-  return {
-    event: normalizeMobileProofType(body?.event || body?.type),
-    detail: normalizeMobileProofDetail(body?.detail || body?.summary || ""),
-    sessionId: normalizeMobileProofDetail(body?.sessionId || runtime.sessionId || "", 120),
-    routeId: normalizeMobileProofDetail(body?.routeId || runtime.routeId || "", 120),
-    panelId: normalizeMobileProofDetail(body?.panelId || runtime.panelId || "", 120),
-    action: normalizeMobileProofDetail(body?.action || runtime.action || "", 120),
-    status: normalizeMobileProofDetail(body?.status || runtime.status || "", 80),
-    device: {
-      serialNumber: normalizeMobileProofDetail(device.serialNumber || body?.serialNumber || "", 120),
-      userAgent: normalizeMobileProofDetail(device.userAgent || body?.userAgent || "", 220),
-      model: normalizeMobileProofDetail(device.model || "", 120),
-      platform: normalizeMobileProofDetail(device.platform || "", 120)
-    },
-    runtime: {
-      appName: normalizeMobileProofDetail(runtime.appName || body?.appName || "RabiLink AIUI", 120),
-      appVersion: normalizeMobileProofDetail(runtime.appVersion || body?.appVersion || "", 80),
-      aiuiVersion: normalizeMobileProofDetail(runtime.aiuiVersion || body?.aiuiVersion || "", 80)
-    }
-  };
-}
-
-function writeMobileProof(app, req, body = {}) {
-  const workers = mobileWorkersForApp(app);
-  const selected = selectedMobileWorker(app, workers);
-  const normalized = normalizeMobileProofBody(body);
-  const row = {
-    id: randomId("proof"),
-    time: nowIso(),
-    appId: app.id,
-    appName: app.name || "",
-    event: normalized.event,
-    detail: normalized.detail,
-    sessionId: normalized.sessionId,
-    routeId: normalized.routeId,
-    panelId: normalized.panelId,
-    action: normalized.action,
-    status: normalized.status,
-    selectedTargetDeviceId: app.targetDeviceId || "",
-    selectedWorker: selected ? {
-      id: selected.id || "",
-      guid: selected.guid || "",
-      name: selected.name || "",
-      online: !!selected.online
-    } : null,
-    device: {
-      ...normalized.device,
-      userAgent: normalized.device.userAgent || textPreview(req.headers["user-agent"] || "", 220)
-    },
-    runtime: normalized.runtime
-  };
-  const filePath = mobileProofPath(app.id);
-  if (filePath) fs.appendFileSync(filePath, `${JSON.stringify(row)}\n`, "utf8");
-  writeEvent("mobile_runtime_proof", row);
-  writeAccountLogForApp(app, "mobile_runtime_proof", {
-    title: "AIUI 运行证明",
-    detail: row.detail || row.event,
-    workerId: row.selectedWorker?.id || row.selectedTargetDeviceId || "",
-    workerName: row.selectedWorker?.name || "",
-    status: row.status || row.event,
-    textPreview: `${row.runtime.appName || "RabiLink AIUI"} ${row.event}`
-  });
-  return row;
-}
-
-function readMobileProofs(app, limit = 20) {
-  const filePath = mobileProofPath(app?.id || "");
-  if (!filePath || !fs.existsSync(filePath)) return [];
-  const max = clamp(Number(limit || 20), 1, 100);
-  return fs.readFileSync(filePath, "utf8")
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .slice(-max)
-    .map((line) => {
-      try {
-        return JSON.parse(line);
-      } catch {
-        return null;
-      }
-    })
-    .filter(Boolean)
-    .reverse();
+  return { code: 0, ok: true, app: publicApp(app), selectedTargetDeviceId: app.targetDeviceId || '', connectionOwnerDeviceId: app.connectionOwnerDeviceId || '', selectedWorker: selectedMobileWorker(app, workers), workers };
 }
 
 function patchMobileAppTarget(app, targetDeviceId) {
@@ -5590,207 +5130,22 @@ function mobileWorkerTarget(app, url, body = {}) {
   return worker;
 }
 
-async function mobileProxyJson(app, worker, method, localPath, body = null, mutationHeaders = {}) {
-  const request = createMobileWebguiRequest(app, worker, method, localPath, body, mutationHeaders);
-  const finalRequest = await waitForWebguiRequest(request, webguiRequestWaitMs);
-  if (finalRequest.status !== "done" || !finalRequest.response) {
-    const error = new Error(finalRequest.error || "Rabi PC WebGUI request timed out.");
-    error.statusCode = finalRequest.status === "failed" ? 502 : 504;
-    throw error;
-  }
-  const responseBody = Buffer.from(finalRequest.response.bodyBase64 || "", "base64").toString("utf8");
-  let parsed = {};
-  try {
-    parsed = responseBody.trim() ? JSON.parse(responseBody) : {};
-  } catch {
-    parsed = { code: -1, message: responseBody };
-  }
-  return {
-    statusCode: finalRequest.response.statusCode || 200,
-    headers: mobileMutationResponseHeaders(finalRequest.response.headers),
-    body: parsed
-  };
-}
-
-async function mobileProxyRaw(app, worker, method, localPath) {
-  const request = createMobileWebguiRequest(app, worker, method, localPath, null);
-  const finalRequest = await waitForWebguiRequest(request, webguiRequestWaitMs);
-  if (finalRequest.status !== "done" || !finalRequest.response) {
-    const error = new Error(finalRequest.error || "Rabi PC media proxy timed out.");
-    error.statusCode = finalRequest.status === "failed" ? 502 : 504;
-    throw error;
-  }
-  return {
-    statusCode: finalRequest.response.statusCode || 200,
-    headers: finalRequest.response.headers || {},
-    body: Buffer.from(finalRequest.response.bodyBase64 || "", "base64")
-  };
-}
-
-function normalizeMobileWebguiPath(value) {
-  const raw = stringValue(value);
-  if (!raw || !raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\") || /^https?:\/\//i.test(raw)) {
-    const error = new Error("Invalid PC WebGUI path.");
-    error.statusCode = 400;
-    throw error;
-  }
-  return raw;
-}
-
-function mobileWebguiPathAllowed(method, rawPath) {
-  const upperMethod = String(method || "GET").toUpperCase();
-  const pathname = rawPath.split("?")[0] || "/";
-  if (upperMethod === "GET") {
-    return pathname === "/gateways"
-      || pathname === "/manager-config"
-      || pathname === "/meta"
-      || pathname === "/network-options"
-      || pathname === "/api/gateways"
-      || pathname === "/api/scan/agents"
-      || pathname === "/api/scan/message-adapters"
-      || pathname === "/api/agent/copilot-status"
-      || pathname === "/api/remote-agent/devices";
-  }
-  if (upperMethod === "POST") {
-    return pathname === "/gateways"
-      || pathname === "/manager-config"
-      || pathname === "/reload"
-      || pathname === "/open-config-file"
-      || /^\/gateways\/[^/]+\/(?:start|stop|restart|delete|manual-trigger)$/.test(pathname)
-      || pathname === "/api/message/napcat-health"
-      || pathname === "/api/message/napcat-configure-onebot"
-      || pathname === "/api/message/napcat-repair-all"
-      || pathname === "/api/message/napcat-add"
-      || pathname === "/api/message/napcat-launch"
-      || pathname === "/api/message/napcat-restart"
-      || pathname === "/api/message/napcat-remove"
-      || pathname === "/api/agent/copilot-install"
-      || pathname === "/api/agent/copilot-login"
-      || pathname === "/api/agent/marvis-open"
-      || pathname === "/api/agent/astrbot-login-test"
-      || pathname === "/api/remote-agent/scan"
-      || pathname === "/api/remote-agent/connect"
-      || pathname === "/api/remote-agent/disconnect";
-  }
-  if (upperMethod === "PATCH") {
-    return pathname === "/api/rabi/identity";
-  }
-  return false;
-}
-
-async function handleMobileWebguiApi(req, url, res, body, app) {
-  const method = req.method === "GET" ? "GET" : stringValue(body?.method || req.method || "POST").toUpperCase();
-  const localPath = normalizeMobileWebguiPath(req.method === "GET" ? url.searchParams.get("path") : body?.path);
-  if (!mobileWebguiPathAllowed(method, localPath)) {
-    return sendJson(res, 403, {
-      code: -1,
-      ok: false,
-      message: `PC WebGUI path is not allowed for mobile AIUI: ${method} ${localPath}`
-    });
-  }
-  const worker = mobileWorkerTarget(app, url, body);
-  const mutationHeaders = mobileRouteMutationHeaders(req, body?.headers);
-  const result = await mobileProxyJson(
-    app,
-    worker,
-    method,
-    localPath,
-    method === "GET" ? null : body?.body ?? {},
-    mutationHeaders
-  );
-  return sendJson(res, result.statusCode, result.body, result.headers);
-}
-
 async function handleMobileApi(req, url, res, body) {
   const auth = authorizeRabiLinkRequest(req, url, body);
   if (!auth.ok) return sendRabiLinkAuthError(res, auth);
-  if (!auth.app) return sendRabiLinkError(res, 401, "请使用 RabiLink服务器控制台里对应应用的 token。");
-  const app = auth.app;
-  const avatarMatch = url.pathname.match(/^\/api\/rabilink\/mobile\/personas\/([^/]+)\/avatar$/);
-  if (req.method === "GET" && avatarMatch) {
-    const roleId = decodeURIComponent(avatarMatch[1]).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 96);
-    if (!roleId) return sendJson(res, 400, { code: -1, ok: false, message: "Invalid persona id." });
-    const worker = mobileWorkerTarget(app, url, body);
-    const result = await mobileProxyRaw(app, worker, "GET", `/api/roles/${encodeURIComponent(roleId)}/avatar${url.search || ""}`);
-    const contentType = String(result.headers["content-type"] || "image/jpeg");
-    res.writeHead(result.statusCode, {
-      "content-type": contentType,
-      "cache-control": "private, max-age=3600",
-      "x-content-type-options": "nosniff"
-    });
-    return res.end(result.body);
-  }
-  if (req.method === "GET" && url.pathname === "/api/rabilink/mobile/state") {
+  if (req.method === 'GET' && url.pathname === '/api/rabilink/mobile/state') return sendJson(res, 200, mobileStatePayload(auth.app));
+  if (req.method === 'PATCH' && url.pathname === '/api/rabilink/mobile/connection') {
+    if (auth.deviceBinding) return sendJson(res, 403, { code: 'APPLICATION_CONNECTION_CREDENTIAL_REQUIRED' });
+    const store = readAppStore(), app = store.apps.find(item => item.id === auth.app.id);
+    const target = stringValue(body?.connectionOwnerDeviceId);
+    const worker = store.workers.find(item => item.appId === app.id && item.id === target && normalizeWorkerCapabilities(item.capabilities).includes('webgui'));
+    if (!worker) return sendJson(res, 409, { code: 'EXPLICIT_MANAGER_CONNECTION_REQUIRED' });
+    if (app.connectionOwnerDeviceId && app.connectionOwnerDeviceId !== target) return sendJson(res, 409, { code: 'CONNECTION_OWNER_IMMUTABLE' });
+    if (!app.connectionOwnerDeviceId) { app.connectionOwnerDeviceId = target; writeAppStore(store); }
     return sendJson(res, 200, mobileStatePayload(app));
   }
-  if (url.pathname === "/api/rabilink/mobile/asr-settings") {
-    if (req.method !== "GET" && req.method !== "PATCH") return sendJson(res, 405, { error: "Method not allowed." });
-    const workers = mobileWorkersForApp(app);
-    let priority = Array.isArray(app.asrPriority) ? app.asrPriority : [];
-    if (req.method === "PATCH") {
-      try { priority = validateAsrPriority(body?.priority, workers); }
-      catch (error) { return sendJson(res, 400, { error: error.message }); }
-      const store = readAppStore();
-      const current = store.apps.find(item => item.id === app.id);
-      if (!current) return sendJson(res, 404, { error: "Application not found." });
-      current.asrPriority = priority;
-      current.updatedAt = nowIso();
-      writeAppStore(store);
-    }
-    return sendJson(res, 200, { ok: true, priority, workers: orderedAsrWorkers(workers, priority),
-      selectedWorkerId: selectAsrWorker(workers, priority)?.id || "" });
-  }
-  if (req.method === "POST" && url.pathname === "/api/rabilink/mobile/device-status") {
-    const deviceStatus = writeMobileDeviceStatus(app, body || {});
-    return sendJson(res, 200, { code: 0, ok: true, deviceStatus });
-  }
-  if (req.method === "GET" && url.pathname === "/api/rabilink/mobile/proofs") {
-    return sendJson(res, 200, {
-      code: 0,
-      ok: true,
-      proofs: readMobileProofs(app, url.searchParams.get("limit") || 20)
-    });
-  }
-  if (req.method === "POST" && url.pathname === "/api/rabilink/mobile/proof") {
-    const proof = writeMobileProof(app, req, body || {});
-    return sendJson(res, 200, { code: 0, ok: true, proof });
-  }
-  if ((req.method === "PATCH" || req.method === "POST") && url.pathname === "/api/rabilink/mobile/target") {
-    const updated = patchMobileAppTarget(app, body?.targetDeviceId || body?.rabiGuid || "");
-    return sendJson(res, 200, mobileStatePayload(updated));
-  }
-  if (url.pathname === "/api/rabilink/mobile/webgui") {
-    return await handleMobileWebguiApi(req, url, res, body, app);
-  }
-
-  const routeMatch = url.pathname.match(/^\/api\/rabilink\/mobile\/routes(?:\/([^/]+)(?:\/(agent-options|agent-binding))?)?$/);
-  if (!routeMatch) return sendJson(res, 404, { code: -1, ok: false, message: "Not found" });
-
-  const worker = mobileWorkerTarget(app, url, body);
-  const rabiGuid = worker.guid || worker.id;
-  const routeId = routeMatch[1] ? decodeURIComponent(routeMatch[1]) : "";
-  const action = routeMatch[2] || "";
-  if (req.method === "GET" && !routeId && !action) {
-    const result = await mobileProxyJson(app, worker, "GET", `/api/rabi/instances/${encodeURIComponent(rabiGuid)}/routes?includeProfiles=true&presentation=mobile`);
-    return sendJson(res, result.statusCode, result.body);
-  }
-  if (req.method === "GET" && routeId && action === "agent-options") {
-    const result = await mobileProxyJson(app, worker, "GET", `/api/rabi/instances/${encodeURIComponent(rabiGuid)}/routes/${encodeURIComponent(routeId)}/agent-options`);
-    return sendJson(res, result.statusCode, result.body);
-  }
-  if ((req.method === "PATCH" || req.method === "POST") && routeId && action === "agent-binding") {
-    const mutationHeaders = mobileRouteMutationHeaders(req);
-    const result = await mobileProxyJson(
-      app,
-      worker,
-      "PATCH",
-      `/api/rabi/instances/${encodeURIComponent(rabiGuid)}/routes/${encodeURIComponent(routeId)}/agent-binding`,
-      body || {},
-      mutationHeaders
-    );
-    return sendJson(res, result.statusCode, result.body, result.headers);
-  }
-  return sendJson(res, 405, { code: -1, ok: false, message: "Method not allowed" });
+  if (['PATCH', 'POST'].includes(req.method) && url.pathname === '/api/rabilink/mobile/target') return sendJson(res, 200, mobileStatePayload(patchMobileAppTarget(auth.app, body?.targetDeviceId || body?.rabiGuid || '')));
+  return sendJson(res, 410, { code: 'PUBLIC_MANAGER_API_REQUIRED' });
 }
 
 async function handleManageWebgui(req, url, res) {
@@ -5879,30 +5234,6 @@ async function handleAdminApi(req, url, res) {
   if (req.method === "POST" && apiPath === "/apps") {
     const app = createAppForAccount(auth.account, body);
     return sendJson(res, 200, { code: 0, ok: true, app: publicApp(app, { revealToken: body.revealToken !== false }) });
-  }
-  const profileOperationMatch = apiPath.match(/^\/apps\/([^/]+)\/devices\/([^/]+)\/agent-profile\/operations\/([^/]+)$/);
-  if (req.method === 'GET' && profileOperationMatch) {
-    const data = agentProfileService.readOperation({ kind: 'account', accountId: auth.account.id }, decodeURIComponent(profileOperationMatch[1]), decodeURIComponent(profileOperationMatch[2]), decodeURIComponent(profileOperationMatch[3]));
-    return sendJson(res, 200, { code: 0, data });
-  }
-  const retiredGrantMatch = apiPath.match(/^\/apps\/([^/]+)\/devices\/([^/]+)\/knowledge-grant(?:\/operations\/[^/]+)?$/);
-  if (retiredGrantMatch) {
-    const appId = decodeURIComponent(retiredGrantMatch[1]), bindingId = decodeURIComponent(retiredGrantMatch[2]);
-    const app = readAppStore().apps.find(item => item.id === appId && item.enabled !== false && item.ownerAccountId === auth.account.id);
-    if (!app?.deviceBindings?.some(binding => binding.id === bindingId && binding.enabled !== false))
-      return sendJson(res, 404, { code: 'DEVICE_NOT_FOUND' });
-    // Old clients receive an explicit migration result; this endpoint never changes access.
-    return sendJson(res, 410, { code: 'KNOWLEDGE_GRANTS_RETIRED', message: '同一已认证应用的设备默认可用目标 PC 提供的知识服务，无需逐项授权。' });
-  }
-  const profileMatch = apiPath.match(/^\/apps\/([^/]+)\/devices\/([^/]+)\/agent-profile$/);
-  if (profileMatch && ['GET', 'PUT'].includes(req.method)) {
-    const principal = { kind: 'account', accountId: auth.account.id };
-    const appId = decodeURIComponent(profileMatch[1]), bindingId = decodeURIComponent(profileMatch[2]);
-    if (req.method === 'PUT') assertProfileManagementCsrf(req);
-    const data = req.method === 'GET'
-      ? agentProfileService.readForAccount(principal, appId, bindingId)
-      : agentProfileService.save(principal, appId, bindingId, body);
-    return sendJson(res, 200, { code: 0, data });
   }
   const deviceBindingMatch = apiPath.match(/^\/apps\/([^/]+)\/devices$/);
   if (deviceBindingMatch && req.method === "POST") {
@@ -6051,7 +5382,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === speechProxyPrefix || url.pathname.startsWith(`${speechProxyPrefix}/`)) {
       res.setHeader("access-control-allow-origin", "*");
-      res.setHeader("access-control-allow-methods", "GET,POST,OPTIONS");
+      res.setHeader("access-control-allow-methods", API_METHODS.join(','));
       res.setHeader("access-control-allow-headers", "content-type,authorization,x-rabilink-token");
       res.setHeader("access-control-max-age", "86400");
       if (req.method === "OPTIONS") {
@@ -6084,78 +5415,34 @@ const server = http.createServer(async (req, res) => {
             : peerRpcProxy
               ? { maxBytes: 1_500_000, label: "Peer RPC proxy" }
               : {});
-    const knowledgeOperationMatch = /^\/api\/rabilink\/device\/knowledge\/operations\/([^/]+)$/.exec(url.pathname);
-    if (knowledgeOperationMatch) {
-      if (req.method !== 'GET') return sendJson(res,405,{code:'METHOD_NOT_ALLOWED'});
-      const match = findEnabledAppByToken(requestToken(req,url,body));
-      if (!match?.deviceBinding) return sendJson(res,403,{code:'DEVICE_CREDENTIAL_REQUIRED'});
-      let key; try { key=decodeURIComponent(knowledgeOperationMatch[1]); } catch { return sendJson(res,400,{code:'INVALID_OPERATION_KEY'}); }
-      return sendJson(res,200,{code:0,data:readKnowledgeOperation(match.app,match.deviceBinding,key)},{'cache-control':'private, no-store'});
-    }
-    if (url.pathname === '/api/rabilink/device/knowledge') {
-      if (req.method !== 'POST') return sendJson(res, 405, { code: 'METHOD_NOT_ALLOWED' });
-      const match = findEnabledAppByToken(requestToken(req, url, body));
-      if (!match?.deviceBinding) return sendJson(res, 403, { code: 'DEVICE_CREDENTIAL_REQUIRED' });
-      const worker = mobileWorkersForApp(match.app).find(item => item.id === match.app.targetDeviceId);
-      const authorized = authorizeKnowledgeRequest(match.app, match.deviceBinding, worker, body);
-      if (!normalizeWorkerCapabilities(worker.capabilities).includes('knowledgebridge')) return sendJson(res, 503, { code: 'KNOWLEDGE_BRIDGE_NOT_READY', ok: false, uncertain: false });
-      if (authorized.nonReplayable) {
-        const store = readAppStore();
-        const storedBinding = store.apps.find(a => a.id === match.app.id)?.deviceBindings.find(b => b.id === match.deviceBinding.id);
-        const intents = normalizeKnowledgeIntents(storedBinding?.knowledgeIntents || []);
-        const key = body.args.idempotencyKey;
-        const hash = createHash('sha256').update(JSON.stringify({ target: worker.id, request: body })).digest('hex');
-        const previous = intents.find(x => x.key === key);
-        if (previous) return sendJson(res, 409, { code: previous.hash === hash ? 'KNOWLEDGE_OUTCOME_UNCERTAIN' : 'IDEMPOTENCY_CONFLICT', ok: false, uncertain: previous.hash === hash });
-        if (intents.length >= 128) return sendJson(res, 409, { code: 'KNOWLEDGE_INTENT_CAPACITY', ok: false, uncertain: false });
-        storedBinding.knowledgeIntents = [...intents, { key, hash, scope: {ownerAccountId:match.app.ownerAccountId,targetDeviceId:worker.id,roleId:body.args.roleId,tool:body.name,credentialHash:match.deviceBinding.credentialHash} }];
-        writeAppStore(store); // Durable intent before dispatch; restart never blindly re-executes a write.
-      }
-      const now = Date.now();
-      const request = { id: `knowledge-${randomUUID()}`, status: 'queued', createdAt: now, updatedAt: now, expiresAt: now + webguiRequestWaitMs, leaseUntil: 0, attempts: 0, appId: match.app.id, targetDeviceId: worker.id, method: 'POST', path: '/__rabilink/knowledge', headers: { 'content-type': 'application/json' }, bodyBase64: Buffer.from(JSON.stringify(authorized.request)).toString('base64'), knowledge: authorized.metadata, knowledgeCredentialHash: match.deviceBinding.credentialHash, nonReplayable: authorized.nonReplayable, response: null };
-      webguiRequests.set(request.id, request);
-      relayEventHub.publish('webgui_available', { appId: request.appId, targetDeviceId: worker.id, data: { requestId: request.id } });
-      const finished = await waitForWebguiRequest(request, webguiRequestWaitMs);
-      let result;
-      try { result = JSON.parse(Buffer.from(finished.response?.bodyBase64 || '', 'base64').toString('utf8')); } catch { result = null; }
-      if (authorized.nonReplayable) {
-        let outcome;
-        let stage = 'validate';
-        try {
-          outcome = knowledgeOutcome(result,finished.response?.statusCode,body.args.idempotencyKey);
-          stage = 'read';
-          const store=readAppStore();
-          const binding=store.apps.find(a=>a.id===match.app.id)?.deviceBindings.find(b=>b.id===match.deviceBinding.id);
-          stage = 'normalize';
-          const intents=normalizeKnowledgeIntents(binding?.knowledgeIntents||[]);
-          stage = 'lookup';
-          const intent=intents.find(x=>x.key===body.args.idempotencyKey);
-          if (!intent || intent.scope?.credentialHash!==match.deviceBinding.credentialHash) throw new Error('KNOWLEDGE_INTENT_CHANGED');
-          intent.outcome=outcome; binding.knowledgeIntents=intents;
-          stage = 'write';
-          writeAppStore(store); // Persist before any device response, including disconnected sockets.
-        } catch (error) {
-          try {
-            const code = ['EACCES','EPERM','ENOENT','EIO','ENOSPC'].includes(error?.code) ? error.code : 'UNKNOWN';
-            writeEvent('knowledge_receipt_persistence_failed', { requestId: request.id, stage, code });
-          } catch { /* Diagnostic failure must not replace the uncertain response. */ }
-          return sendJson(res,503,{code:'KNOWLEDGE_RECEIPT_NOT_PERSISTED',ok:false,uncertain:true});
+    if (url.pathname === '/api/rabilink/device/api' || url.pathname.startsWith('/api/rabilink/device/api/operations/')) {
+      const auth = authorizeRabiLinkRequest(req, url, body);
+      if (!auth.ok || !auth.app) return sendJson(res, 401, { code: 'API_CONNECTION_REQUIRED' });
+      const identity = { appId: auth.app.id, bindingId: auth.deviceBinding?.id || '$application', targetDeviceId: auth.deviceBinding?.connectionTargetDeviceId || auth.app.connectionOwnerDeviceId, authenticatedAt: Date.now(),
+        credentialHash: auth.deviceBinding?.credentialHash || sha256(auth.app.token) };
+      try {
+        if (req.method === 'GET' && url.pathname.startsWith('/api/rabilink/device/api/operations/')) {
+          const id = decodeURIComponent(url.pathname.slice('/api/rabilink/device/api/operations/'.length));
+          return sendJson(res, 200, { code: 0, data: { receipt: deviceApiService.receipt(identity, id) } });
         }
-        if(outcome.state==='unknown') return sendJson(res,502,{code:'KNOWLEDGE_OUTCOME_UNCERTAIN',ok:false,uncertain:true});
-      }
-      if (!finished.response) return sendJson(res,504,{code:'KNOWLEDGE_TIMEOUT',ok:false,uncertain:false});
-      if (!result) return sendJson(res,502,{code:'INVALID_KNOWLEDGE_RESPONSE',ok:false,uncertain:false});
-      return sendJson(res, finished.response.statusCode || 502, result);
+        if (req.method !== 'POST' || url.pathname !== '/api/rabilink/device/api') return sendJson(res, 405, { code: 'API_METHOD_INVALID' });
+        if (!body || Object.keys(body).some(key => !['request', 'targetDeviceId'].includes(key)) || !body.request) return sendJson(res, 400, { code: 'API_REQUEST_INVALID' });
+        const packet = body.request;
+        if (body.targetDeviceId !== undefined) {
+          if (typeof body.targetDeviceId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(body.targetDeviceId)) return sendJson(res, 400, { code: 'API_TARGET_INVALID' });
+          identity.targetDeviceId = body.targetDeviceId;
+        }
+        if (!identity.targetDeviceId) return sendJson(res, 409, { code: 'API_CONNECTION_TARGET_REQUIRED' });
+        const result = await deviceApiService.request(identity, packet);
+        return sendJson(res, 200, { code: 0, data: result });
+      } catch (error) { return sendJson(res, 400, { code: error.code || 'API_REQUEST_FAILED' }); }
     }
-    if (url.pathname === '/api/rabilink/device/agent-profile' || url.pathname === '/api/rabilink/device/agent-profile/applied') {
-      const match = findEnabledAppByToken(requestToken(req, url, body));
-      if (!match?.deviceBinding) return sendJson(res, 403, { code: -1, message: 'Device credential required.' });
-      const principal = { kind: 'device', appId: match.app.id, bindingId: match.deviceBinding.id, credentialHash: match.deviceBinding.credentialHash };
-      let data;
-      if (req.method === 'GET' && url.pathname === '/api/rabilink/device/agent-profile') data = agentProfileService.readOwn(principal);
-      else if (req.method === 'POST' && url.pathname.endsWith('/applied')) data = agentProfileService.acknowledge(principal, body);
-      else return sendJson(res, 405, { code: -1, message: 'Method not allowed.' });
-      return sendJson(res, 200, { code: 0, data });
+    if (req.method === 'GET' && url.pathname === '/api/rabilink/devices/connections') {
+      const auth = authorizeRabiLinkRequest(req, url);
+      if (!auth.ok || !auth.app) return sendJson(res, 401, { code: 'API_CONNECTION_REQUIRED' });
+      const devices = (auth.app.deviceBindings || []).filter(item => item.enabled !== false && item.credentialHash && (!auth.deviceBinding || item.id === auth.deviceBinding.id))
+        .map(item => ({ id: item.id, serialPreview: item.serialPreview || '', connectionTargetDeviceId: item.connectionTargetDeviceId || '' }));
+      return sendJson(res, 200, { code: 0, data: { devices, sourceDeviceId: auth.app.targetDeviceId || '', targetDeviceId: auth.app.targetDeviceId || '', connectionOwnerDeviceId: auth.app.connectionOwnerDeviceId || '' } }, { 'cache-control': 'private, no-store' });
     }
     if (req.method === "POST" && url.pathname === "/api/rabilink/devices/token") {
       const claimed = claimDeviceToken(body);
@@ -6167,35 +5454,9 @@ const server = http.createServer(async (req, res) => {
         device: claimed.device
       });
     }
-    if (url.pathname === "/api/rabilink/mobile/state"
-      || url.pathname === "/api/rabilink/mobile/asr-settings"
-      || url.pathname === "/api/rabilink/mobile/device-status"
-      || url.pathname === "/api/rabilink/mobile/proof"
-      || url.pathname === "/api/rabilink/mobile/proofs"
-      || url.pathname === "/api/rabilink/mobile/target"
-      || url.pathname === "/api/rabilink/mobile/webgui"
-      || url.pathname.startsWith("/api/rabilink/mobile/personas/")
-      || url.pathname.startsWith("/api/rabilink/mobile/routes")) {
-      return await handleMobileApi(req, url, res, body);
-    }
-    if (req.method === "POST" && (url.pathname === "/rokid/rabilink" || url.pathname === "/api/rokid/rabilink")) {
-      return await handleRokid(req, url, res, body);
-    }
-    if (req.method === "POST" && (url.pathname === "/rokid/rabilink/tasks" || url.pathname === "/api/rokid/rabilink/tasks")) {
-      return handleRokidCreateTask(req, url, res, body);
-    }
+    if (url.pathname.startsWith('/api/rabilink/mobile/')) return await handleMobileApi(req, url, res, body);
     if (req.method === "POST" && (url.pathname === "/rokid/rabilink/input" || url.pathname === "/api/rokid/rabilink/input")) {
       return handleRokidInput(req, url, res, body);
-    }
-    if (req.method === "GET" && url.pathname === "/api/rabilink/devices/health-capabilities") {
-      const auth = authorizeRabiLinkRequest(req, url, body);
-      if (!auth.ok) return sendRabiLinkAuthError(res, auth);
-      const worker = requireRokidAppTarget(auth, "wearable-observation-policy-v1");
-      if (stringValue(req.headers["x-rabilink-expected-worker-id"]) !== worker.id)
-        return sendJson(res, 409, { ok: false, message: "Frozen wearable target changed." });
-      return sendJson(res, 200, { rabilinkWearableObservation: {
-        processingPolicies: ["transcribe", "agent"], expectedWorkerFencing: true, processingPolicyFrozen: true
-      } });
     }
     if (req.method === "POST" && url.pathname === "/api/rabilink/devices/input") {
       return handlePortableInput(req, url, res, body);

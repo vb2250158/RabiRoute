@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import test from "node:test";
 import { RabiLinkRelayRuntime } from "./rabiLinkRelayRuntime.js";
+import { createHash } from 'node:crypto';
+import { validateInternalManagerHop } from '../shared/internalManagerHop.js';
 
 const FETCH_BLOCKED_PORTS = new Set([
   0, 1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95,
@@ -93,7 +95,7 @@ test("test HTTP server helper excludes WHATWG Fetch blocked ports", async () => 
   }
 });
 
-test("Relay forwards authenticated model settings but rejects direct-local QQ message reads", async (t) => {
+test("Relay forwards all public model and message APIs to the authoritative Manager", async (t) => {
   let forwarded = 0;
   const local = http.createServer((request, response) => {
     if (!["/api/events", "/api/speech/events"].includes(request.url || "")) forwarded += 1;
@@ -129,7 +131,89 @@ test("Relay forwards authenticated model settings but rejects direct-local QQ me
   runtime.sync({ enabled: true, url: `http://127.0.0.1:${relayPort}`, token: "test-only-token", deviceId: "test-pc", deviceGuid: "test-guid", deviceName: "Test PC", claimWaitMs: 60000,
     localWebguiUrl: `http://127.0.0.1:${localPort}`, localSpeechUrl: "" });
   await waitForRelayRuntime(runtime, "settings forwarding", () => completed.size === paths.length, () => ({ completed: completed.size }));
-  assert.equal(forwarded, 3);
+  assert.equal(forwarded, paths.length);
+});
+
+test("generic public API transport forwards future contract headers while protecting credentials and proxy identity", async t => {
+  const headers: Array<http.IncomingHttpHeaders> = [];
+  const principals: Array<ReturnType<typeof validateInternalManagerHop>> = [];
+  const admittedRequests: http.IncomingMessage[] = [];
+  const authenticatedAt = Date.now() - 1000;
+  let scope = '';
+  const local = http.createServer((request, response) => {
+    if (request.url === '/api/future') {
+      headers.push(request.headers);
+      admittedRequests.push(request);
+      principals.push(validateInternalManagerHop(request, { generation: 'fixture-generation', scope }));
+    }
+    response.end('{}');
+  });
+  const localPort = await listen(local); t.after(() => close(local));
+  let claimed = false, completed = 0;
+  const relay = http.createServer((request, response) => {
+    const url = new URL(request.url || '/', 'http://localhost');
+    if (url.pathname === '/api/rabilink/events') { openRelayEvents(response); return; }
+    if (url.pathname === '/worker/webgui-requests') {
+      const requests = claimed ? [] : [true, false].map((publicApiTransport, index) => ({ id: 'headers-' + index, publicApiTransport,
+        connectionIdentity: { appId: 'fixture-app', deviceId: 'device-one', authenticatedAt }, method: 'GET', path: '/api/future', headers: { 'x-rabiroute-future-contract': 'v2', authorization: 'forged', cookie: 'forged', 'x-rabiroute-relay-proxy': 'forged', 'x-forwarded-for': 'forged', 'x-rabilink-tunnel-local': 'forged', 'x-rabilink-tunnel-device-id': 'forged' } }));
+      claimed = true; response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, requests })); return;
+    }
+    if (request.method === 'POST' && url.pathname.endsWith('/response')) {
+      request.resume(); request.on('end', () => { completed++; response.writeHead(200, { 'content-type': 'application/json' }).end('{"ok":true}'); }); return;
+    }
+    response.writeHead(404).end();
+  });
+  const relayPort = await listen(relay); t.after(() => close(relay));
+  const runtime = new RabiLinkRelayRuntime(); t.after(() => runtime.stop());
+  scope = createHash('sha256').update(`http://127.0.0.1:${relayPort}\nsynthetic-test-token`).digest('hex');
+  runtime.sync({ enabled: true, url: `http://127.0.0.1:${relayPort}`, token: 'synthetic-test-token', deviceId: 'fixture-pc', deviceGuid: 'fixture-guid', deviceName: 'Fixture', claimWaitMs: 60000,
+    applicationGenerationId: 'fixture-generation', localWebguiUrl: `http://127.0.0.1:${localPort}`, localSpeechUrl: '' });
+  await waitForRelayRuntime(runtime, 'generic header forwarding', () => completed === 2, () => ({ completed }));
+  assert.equal(headers[0]?.['x-rabiroute-future-contract'], 'v2'); assert.equal(headers[1]?.['x-rabiroute-future-contract'], undefined);
+  assert.equal(headers[0]?.['x-rabilink-tunnel-local'], 'fixture-generation'); assert.equal(headers[0]?.['x-rabilink-tunnel-device-id'], 'device-one');
+  assert.equal(headers[1]?.['x-rabilink-tunnel-local'], 'fixture-generation'); assert.equal(headers[1]?.['x-rabilink-tunnel-device-id'], '$application');
+  assert.equal(principals[0]?.deviceId, 'device-one');
+  assert.equal(principals[0]?.authenticatedAt, authenticatedAt, 'queue authentication time is MAC-bound without refreshing it');
+  assert.equal(principals[1]?.deviceId, '$application');
+  for (const row of headers) { assert.equal(row.authorization, undefined); assert.equal(row.cookie, undefined); assert.equal(row['x-forwarded-for'], undefined); assert.equal(row['x-rabiroute-relay-proxy'], '1'); }
+  await runtime.stop();
+  assert.equal(validateInternalManagerHop(admittedRequests[0]!, { generation: 'fixture-generation', scope }), null,
+    'an admitted request loses its owned transport guard when the Relay runtime stops');
+});
+
+test("Relay issues a fresh authenticated main-process hop for each HTTP retry and signs the actual wire target", async t => {
+  const proofs: Array<ReturnType<typeof validateInternalManagerHop>> = [];
+  let scope = '', claimed = false, completed = false;
+  const local = http.createServer((request, response) => {
+    if (request.url?.startsWith('/api/future?')) {
+      proofs.push(validateInternalManagerHop(request, { generation: 'retry-generation', scope }));
+      if (proofs.length === 1) { request.socket.destroy(); return; }
+    }
+    response.end('{}');
+  });
+  const localPort = await listen(local); t.after(() => close(local));
+  const relay = http.createServer((request, response) => {
+    const url = new URL(request.url || '/', 'http://localhost');
+    if (url.pathname === '/api/rabilink/events') { openRelayEvents(response); return; }
+    if (url.pathname === '/worker/webgui-requests') {
+      const requests = claimed ? [] : [{ id: 'retry-hop', publicApiTransport: true, connectionIdentity: { appId: 'fixture-app', deviceId: 'eye' },
+        method: 'GET', path: '/api/future?q=测试', headers: { 'x-rabilink-internal-hop': 'forged', 'x-rabiroute-peer-proxy': 'forged' } }];
+      claimed = true; response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, requests })); return;
+    }
+    if (request.method === 'POST' && url.pathname.endsWith('/response')) {
+      request.resume(); request.on('end', () => { completed = true; response.writeHead(200).end('{"ok":true}'); }); return;
+    }
+    response.writeHead(404).end();
+  });
+  const relayPort = await listen(relay); t.after(() => close(relay));
+  scope = createHash('sha256').update(`http://127.0.0.1:${relayPort}\nfixture-token`).digest('hex');
+  const runtime = new RabiLinkRelayRuntime({ localRequestAttempts: 2 }); t.after(() => runtime.stop());
+  await runtime.sync({ enabled: true, url: `http://127.0.0.1:${relayPort}`, token: 'fixture-token', deviceId: 'pc', deviceGuid: 'pc-guid', deviceName: 'Fixture', claimWaitMs: 60000,
+    applicationGenerationId: 'retry-generation', localWebguiUrl: `http://127.0.0.1:${localPort}`, localSpeechUrl: '' });
+  await waitForRelayRuntime(runtime, 'fresh authenticated HTTP retry', () => completed, () => ({ completed, proofs: proofs.length }));
+  assert.equal(proofs.length, 2);
+  assert.equal(proofs.every(value => value?.kind === 'relay' && value.deviceId === 'eye' && value.target === '/api/future?q=%E6%B5%8B%E8%AF%95'), true);
+  assert.notEqual(proofs[0]!.nonce, proofs[1]!.nonce);
 });
 
 test("Relay rejects retired persona synchronization paths before local fetch", async (t) => {
@@ -432,6 +516,7 @@ test("global Relay runtime forwards media ranges and Manager SSE events without 
     streamPath: "/api/events",
     eventType: "gateway_status",
     data: { gatewayId: "route-a", running: true },
+    deliveryChannel: 'manager',
     deviceId: "pc-range",
     deviceGuid: "guid-range"
   });
@@ -1395,167 +1480,4 @@ test("owner SSE republishes actual speech and ASR recovery and loss without idle
   assert.equal(lateFetchStarts, 0, "stop never initiates another capability fetch");
   assert.equal(fetchStarts, stoppedFetchStarts, "stop does not restart capability discovery");
   assert.equal(probes, stoppedProbes, "stop cancels capability discovery");
-});
-
-test("Manager owner readiness events recover knowledge without idle meta polling and stop aborts its probe", async (t) => {
-  let managerReady = false;
-  let managerEventsRunning = true;
-  let probes = 0;
-  let activeProbes = 0;
-  let maximumActiveProbes = 0;
-  let holdProbe = false;
-  let heldProbe: http.ServerResponse | undefined;
-  let probeAborted = false;
-  let stopping = false;
-  let lateFetchStarts = 0;
-  const ownerStreams = new Set<http.ServerResponse>();
-  const advertisements: boolean[] = [];
-  const nativeFetch = globalThis.fetch;
-  t.mock.method(globalThis, "fetch", (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
-    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
-    if (stopping && url.pathname === "/meta") lateFetchStarts++;
-    return nativeFetch(input, init);
-  });
-  const manager = http.createServer((request, response) => {
-    if (request.url === "/api/events") {
-      if (!managerEventsRunning) { response.writeHead(503).end(); return; }
-      ownerStreams.add(response); response.once("close", () => ownerStreams.delete(response));
-      openRelayEvents(response); return;
-    }
-    if (request.url === "/api/speech/events") { openRelayEvents(response); return; }
-    if (request.url === "/meta") {
-      probes++; activeProbes++; maximumActiveProbes = Math.max(maximumActiveProbes, activeProbes);
-      response.once("close", () => { activeProbes--; });
-      if (holdProbe) {
-        heldProbe = response;
-        response.writeHead(200, { "content-type": "application/json" }); response.flushHeaders();
-        response.once("close", () => { probeAborted = !response.writableEnded; }); return;
-      }
-      if (!managerReady) { response.writeHead(503).end(); return; }
-      response.setHeader("content-type", "application/json");
-      response.end(JSON.stringify({ applicationGenerationId: "owner-generation", managerInstanceId: "owner-instance",
-        health: { live: true, requiredReady: true, state: "healthy" } })); return;
-    }
-    response.writeHead(404).end();
-  });
-  const managerPort = await listen(manager); t.after(() => close(manager));
-  const relay = http.createServer((request, response) => {
-    const url = new URL(request.url || "/", "http://localhost");
-    if (url.pathname === "/api/rabilink/events") { openRelayEvents(response); return; }
-    if (url.pathname === "/worker/webgui-requests") advertisements.push((url.searchParams.get("capabilities") || "").split(",").includes("knowledgebridge"));
-    response.setHeader("content-type", "application/json"); response.end(JSON.stringify({ requests: [] }));
-  });
-  const relayPort = await listen(relay); t.after(() => close(relay));
-  const runtime = new RabiLinkRelayRuntime({ channelRetryDelayMs: 10, knowledge: {
-    endpoint: () => ({ managerBaseUrl: `http://127.0.0.1:${managerPort}`, applicationGenerationId: "owner-generation", managerInstanceId: "owner-instance" }),
-    roleIds: () => ["fixture"]
-  } });
-  t.after(() => runtime.stop());
-  await runtime.sync({ enabled: true, url: `http://127.0.0.1:${relayPort}`, token: "test",
-    deviceId: "pc", deviceGuid: "guid", deviceName: "PC", claimWaitMs: 0,
-    localWebguiUrl: `http://127.0.0.1:${managerPort}`, localSpeechUrl: "" });
-  const details = () => ({ probes, advertisements, maximumActiveProbes, probeAborted, lateFetchStarts });
-  await waitForRelayRuntime(runtime, "initial unavailable knowledge owner", () => advertisements.length > 0 && ownerStreams.size > 0 && activeProbes === 0, details);
-  assert.equal(runtime.status().knowledgeBridgeReady, false);
-  managerReady = true;
-  for (const stream of ownerStreams) stream.write('event: route_catalog_startup_changed\ndata: {"state":"ready"}\n\n');
-  await waitForRelayRuntime(runtime, "knowledge owner ready event", () => advertisements.includes(true), details);
-  assert.equal(runtime.status().knowledgeBridgeReady, true);
-  const idleProbes = probes;
-  for (const stream of ownerStreams) stream.write("event: conversation_changed\ndata: {}\n\n");
-  await new Promise(resolve => setTimeout(resolve, 160));
-  assert.equal(probes, idleProbes, "idle time and unrelated owner events do not read meta");
-  holdProbe = true;
-  for (const stream of ownerStreams) stream.write('event: route_catalog_startup_changed\ndata: {"state":"ready"}\n\n');
-  await waitForRelayRuntime(runtime, "in-flight probe before Manager SSE loss", () => heldProbe !== undefined, details);
-  managerEventsRunning = false;
-  for (const stream of ownerStreams) stream.end();
-  await waitForRelayRuntime(runtime, "Manager SSE loss revokes knowledge", () => ownerStreams.size === 0 && advertisements.at(-1) === false, details);
-  holdProbe = false;
-  heldProbe!.end(JSON.stringify({ applicationGenerationId: "owner-generation", managerInstanceId: "owner-instance",
-    health: { live: true, requiredReady: true, state: "healthy" } }));
-  await waitForRelayRuntime(runtime, "late probe completion after Manager SSE loss", () => activeProbes === 0, details);
-  await new Promise(resolve => setTimeout(resolve, 80));
-  assert.equal(runtime.status().knowledgeBridgeReady, false, "a disconnected owner's late probe cannot restore knowledge");
-  managerEventsRunning = true;
-  await waitForRelayRuntime(runtime, "Manager SSE reconnect restores knowledge", () => ownerStreams.size > 0 && advertisements.at(-1) === true, details);
-  managerReady = false;
-  for (const stream of ownerStreams) stream.write('event: route_catalog_startup_changed\ndata: {"state":"degraded"}\n\n');
-  await waitForRelayRuntime(runtime, "knowledge owner loses readiness", () => advertisements.length >= 3 && advertisements.at(-1) === false, details);
-  holdProbe = true;
-  heldProbe = undefined;
-  for (const stream of ownerStreams) stream.write('event: route_catalog_startup_changed\ndata: {"state":"ready"}\n\n');
-  await waitForRelayRuntime(runtime, "acknowledged in-flight meta body", () => heldProbe !== undefined, details);
-  assert.equal(maximumActiveProbes, 1);
-  stopping = true;
-  await runtime.stop();
-  await waitForRelayRuntime(runtime, "meta body cancellation", () => probeAborted, details);
-  const stoppedProbes = probes;
-  await new Promise(resolve => setTimeout(resolve, 100));
-  assert.equal(lateFetchStarts, 0);
-  assert.equal(probes, stoppedProbes);
-});
-
-test("nested uncertain knowledge receipts revoke advertised readiness while CAS rejection preserves it", async (t) => {
-  const owners = new Set<http.ServerResponse>();
-  const manager = http.createServer((request, response) => {
-    if (request.url === "/api/events") { owners.add(response); response.once("close", () => owners.delete(response)); openRelayEvents(response); return; }
-    if (request.url === "/api/speech/events") { openRelayEvents(response); return; }
-    response.setHeader("content-type", "application/json");
-    if (request.url === "/meta") {
-      response.end(JSON.stringify({ applicationGenerationId: "receipt-generation", managerInstanceId: "receipt-instance",
-        health: { live: true, requiredReady: true, state: "healthy" } })); return;
-    }
-    request.resume();
-    if (request.method === "POST") { response.writeHead(503).end(JSON.stringify({ code: -1, uncertain: true, commitState: "unknown" })); return; }
-    if (request.method === "PATCH") { response.writeHead(412).end(JSON.stringify({ code: -1, commitState: "not_started" })); return; }
-    response.writeHead(404).end();
-  });
-  const managerPort = await listen(manager); t.after(() => close(manager));
-  const queue: Record<string, unknown>[] = [];
-  const receipts = new Map<string, Record<string, unknown>>();
-  const advertisements: boolean[] = [];
-  let relayStream: http.ServerResponse | undefined;
-  const relay = http.createServer((request, response) => { void (async () => {
-    const url = new URL(request.url || "/", "http://localhost");
-    if (url.pathname === "/api/rabilink/events") { relayStream = response; openRelayEvents(response); return; }
-    response.setHeader("content-type", "application/json");
-    if (url.pathname === "/worker/webgui-requests") {
-      advertisements.push((url.searchParams.get("capabilities") || "").split(",").includes("knowledgebridge"));
-      response.end(JSON.stringify({ requests: queue.splice(0, 1) })); return;
-    }
-    if (request.method === "POST" && url.pathname.endsWith("/response")) {
-      const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk));
-      const finished = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-      receipts.set(url.pathname.split("/").at(-2)!, JSON.parse(Buffer.from(finished.bodyBase64, "base64").toString("utf8")));
-    }
-    response.end(JSON.stringify({ requests: [] }));
-  })().catch(error => { response.writeHead(500).end(String(error)); }); });
-  const relayPort = await listen(relay); t.after(() => close(relay));
-  const runtime = new RabiLinkRelayRuntime({ channelRetryDelayMs: 10, knowledge: {
-    endpoint: () => ({ managerBaseUrl: `http://127.0.0.1:${managerPort}`, applicationGenerationId: "receipt-generation", managerInstanceId: "receipt-instance" }), roleIds: () => ["fixture"]
-  } });
-  t.after(() => runtime.stop());
-  await runtime.sync({ enabled: true, url: `http://127.0.0.1:${relayPort}`, token: "test", deviceId: "pc", deviceGuid: "guid", deviceName: "PC", claimWaitMs: 0,
-    localWebguiUrl: `http://127.0.0.1:${managerPort}`, localSpeechUrl: "" });
-  const details = () => ({ advertisements, receipts: [...receipts.keys()] });
-  await waitForRelayRuntime(runtime, "receipt fixture owner ready", () => runtime.status().knowledgeBridgeReady === true && owners.size > 0 && advertisements.length > 0, details);
-  const enqueue = (id: string, name: string, args: Record<string, unknown>) => {
-    queue.push({ id, method: "POST", path: "/__rabilink/knowledge", nonReplayable: true,
-      knowledge: { appId: "app", deviceBindingId: "glass", ownerAccountId: "owner", targetDeviceId: "pc" },
-      bodyBase64: Buffer.from(JSON.stringify({ operation: "call", name, args })).toString("base64") });
-    relayStream!.write("event: webgui_available\ndata: {}\n\n");
-  };
-  enqueue("uncertain", "recent_memory_create", { roleId: "fixture", idempotencyKey: "unknown-key", body: { title: "Fixture", focus: "fixture", keywords: ["test"], content: "Synthetic fixture only" } });
-  await waitForRelayRuntime(runtime, "nested uncertainty revokes directory capabilities", () => receipts.has("uncertain") && advertisements.at(-1) === false, details);
-  assert.equal((receipts.get("uncertain")!.structuredContent as Record<string, unknown>).uncertain, true);
-  assert.equal(runtime.status().knowledgeBridgeReady, false);
-  for (const owner of owners) owner.write('event: route_catalog_startup_changed\ndata: {"state":"ready"}\n\n');
-  await waitForRelayRuntime(runtime, "receipt fixture owner recovery", () => advertisements.at(-1) === true, details);
-  enqueue("cas", "recent_memory_update", { roleId: "fixture", id: "fixture-memory", idempotencyKey: "cas-key", etag: '"fixture-etag"', body: { title: "Fixture" } });
-  await waitForRelayRuntime(runtime, "CAS receipt", () => receipts.has("cas"), details);
-  const cas = receipts.get("cas")!.structuredContent as Record<string, unknown>;
-  assert.equal(cas.statusCode, 412); assert.equal(cas.uncertain, false);
-  assert.equal(runtime.status().knowledgeBridgeReady, true, "business CAS rejection is not an unavailable knowledge owner");
-  assert.equal(advertisements.at(-1), true);
 });

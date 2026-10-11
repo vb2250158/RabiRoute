@@ -1,48 +1,54 @@
-# Cross-PC API calls
+# Cross-PC connection signalling and discovery
 
 English | [简体中文](rabilink-peer-rpc.md)
 
-For generic endpoint tunnelling and speech server selection, see [Cross-PC tunnels](rabilink-peer-tunnel_en.md). This page documents the legacy read-only protocol.
+Status: experimental, current source contract. This page covers discovery and retained control signalling. All business reads, writes, streams and third-PC capabilities use [generic connections](rabilink-peer-tunnel_en.md). Local automation does not establish physical dual-PC acceptance or remote deployment.
 
-Status: experimental. Read operations support LAN, a public WebRTC connection attempt, and bounded Relay fallback. Automated coverage includes real local WebRTC channels, LAN preference, Relay fallback and application isolation. Cross-carrier public connectivity and sustained operation on two physical PCs require separate acceptance.
+## Discover a target PC
 
-## Call another PC
+Enable the same RabiLink application on both endpoints. Discover the current `managerBaseUrl` from Host `status --json`, then check `/meta` for application generation, Manager instance and readiness required by the target API before querying:
 
-Both online PCs must use the same RabiLink application token and advertise `peer-rpc-v1`. The Relay must also include `/api/rabilink/peer/proxy`. Obtain the local `managerBaseUrl` from Host `status --json`, then verify `/meta` health, application generation and Manager instance before using:
+- `GET /api/rabilink/peer/list`: registrations and categorized `summary` counts, with device ID, GUID, `deviceKind`, presence, capabilities and LAN addresses.
+- `GET /api/rabilink/peer/list?deviceKind=pc&online=true`: explicitly classified online PCs, with counts matching the filtered result.
+- `GET /api/rabilink/peer/servers`: current connectivity, actual transport and RTT, as documented on the generic connection page.
 
-- `GET /api/rabilink/peer/list`: registrations with a categorized `summary`. Each item has `deviceKind` (for example `pc`, `phone`, `glasses` or `watch`), target ID, online state, capabilities and LAN addresses. Missing or invalid kinds become `unknown`; names and capabilities never imply hardware. `summary.total` counts registrations, not computers.
-- `GET /api/rabilink/peer/list?deviceKind=pc&online=true`: only explicitly classified online PCs. Summary counts reflect the filtered result; without filters, unknown and offline registrations remain visible.
-- `POST /api/rabilink/peer/call`: address a target by ID. These control endpoints are loopback-only; the remote data endpoint only accepts encrypted packets.
+PCs report `deviceKind=pc`; phones, glasses and extensions keep their own types. Missing or invalid types become `unknown`; names and capabilities never imply hardware. `summary.total` counts registrations. Relay preserves a registered type when a later client omits it; historical entries require a fresh device report. Types and versions identify installations but grant no authority.
 
-```json
-{
-  "targetDeviceId": "pc-b",
-  "capability": "plans",
-  "operation": "list",
-  "input": { "roleId": "Example" }
-}
-```
+Discovery controls accept safe local access or Manager-ingress-authenticated connections. Real remote Agent principals take precedence; revocation cannot fall back to loopback access, and forged headers cannot establish a principal. The separate peer LAN listener exposes only encrypted protocol and tunnel handshakes, never full Manager or WebGUI controls directly.
 
-The response includes `transport` (`lan`, `p2p` or `relay`) and `reply`. Business success requires `reply.ok`; the reply also identifies the request, device and runtime instance. `plans.list` returns only plan ID, title, status and update time. `persona.manifest` returns the selected persona's file manifest. `system.describe` returns the instance and exposed operations after same-application authentication.
+## Signalling control plane
 
-## Target PC and available operations
+The business `POST /api/rabilink/peer/call` endpoint is removed and returns 404. The old `plans.list` / `persona.manifest` registrations, manifest helper and per-business-call P2P caller are also removed. There is no second business dispatcher.
 
-PC event connections and worker requests explicitly report `deviceKind=pc`. Phone and glasses clients retain their existing `deviceKind` reporting. The updated Relay preserves a registered kind when an older client later omits it. Historical entries are not rewritten from their names; devices must explicitly report their kind again. Types are self-reported categories, not authorization credentials, and support custom extensions.
+The retained encrypted wire accepts only:
 
-Since 0.3.22, current same-application authentication allows all read-only operations actually registered by this protocol and personas actually owned by Manager's global `rolesRoot`. Same-name personas in custom Route directories do not enter this knowledge catalog. `peer-access.json` operation/role allowlists are retired and never authorize requests. Other applications, wrong generations and unknown personas still fail. Administration and writes use [generic connections](rabilink-peer-tunnel_en.md); this protocol registers no writes.
+| Operation | Purpose |
+| --- | --- |
+| `system.describe` | Confirm device, generation, Manager instance and enabled control signals |
+| `transport.tunnel` | Application bootstrap and generic WebRTC or Relay tunnel negotiation |
+| `transport.offer` | Control DataChannel receiver compatibility for supported older phones |
 
-## Transport and lifecycle
+The dispatcher will not execute or advertise obsolete business operations even if they are accidentally registered. Disabled applications cannot allocate connections. Describe metadata identifies connection allocation as control traffic rather than a read-only operation. Retired `peer-access.json` files never grant authority.
 
-Discovery is provided by the shared RabiLink module and does not depend on persona data synchronization. Every call refreshes registered addresses, verifies the target and generation through encrypted `system.describe`, and binds its request to that generation. Requests and replies use AES-256-GCM with an application-derived key. LAN never carries the application token. Relay forwards encrypted packets only to `/api/rabilink/peer/receive`; callers cannot supply arbitrary URLs.
+PC signalling uses the existing `/api/rabilink/peer/proxy` to deliver ciphertext to the target's `/api/rabilink/peer/receive`. A describe exchange precedes one allocation bound to the current generation/instance. Changed credentials, cancellation, identity mismatch or instance replacement fail closed. Each signalling HTTP exchange has a five-second budget. Unknown allocation results are never replayed across LAN/P2P/Relay. Expiry and packet sizes are bounded; plaintext is limited to 1 MiB. Business transport selection and connection reuse belong to the generic tunnel.
 
-At most four registered private IPv4 addresses are tried, with a two-second discovery deadline each. If LAN is unavailable, encrypted SDP travels through Relay to establish a werift WebRTC DataChannel. STUN discovers addresses; TURN is not enabled. Each direct attempt has a twelve-second deadline, each connection serves one call, and at most eight connections coexist. Read requests can fall back to Relay, while business rejection remains a failure. Requests expire within two minutes; plaintext requests/results are limited to 1 MiB, with a separate wire limit.
+Requests and replies use application-derived AES-256-GCM. Local or remote Agent administration does not replace application isolation, target identity or generation checks. Relay forwards to the fixed target rather than an arbitrary local URL. Plugin disposal closes channels and drains accepted HTTP work.
 
-The RabiLink Manager plugin owns routes and WebRTC connections. Disposal removes routes, closes connections and drains accepted HTTP operations. Requests bound to an old generation fail closed; callers must rediscover before issuing a new request.
+## Access all business APIs
 
-This protocol version registers read operations only. Adding mutations requires durable target-side deduplication, receipt queries and uncertain-result recovery first. Do not register writes in the existing read retry flow.
+Public target-PC APIs execute through the `manager` service, for example:
 
-## Existing contracts
+~~~text
+GET /api/rabilink/peer/http/pc-b/manager/meta
+GET /api/rabilink/peer/http/pc-b/manager/api/agent/help
+~~~
 
-Persona data synchronization has been removed from the source: LAN synchronization file transfer, merge and `/persona-sync/proxy` are no longer provided. Cross-PC access reads data on the target computer through RabiLink without creating synchronized replicas; this RPC registers only reads, while mutations use the generic Manager connection. Existing personas, plans, memories and conflict evidence are retained. Video retains its separate channel and prohibition on server-carried video bytes.
+New Manager APIs and public headers require no Relay dispatcher additions. All three transports share encryption, multiplexing and authorization. LAN is preferred, then P2P, then Relay; healthy connections are reused. Third-PC access uses existing nested forwarding, limited to four hops with repeated or self-targets denied. [Generic connections](rabilink-peer-tunnel_en.md) define HTTP/SSE/WebSocket/binary, no replay of uncertain writes and mid-stream revocation.
 
-Checks: `src/rabiPeer.test.ts`, `scripts/rabilink-relay-peers.test.mjs`, and Relay runtime and shared peer LAN regressions. Source changes and automated success do not establish managed local deployment, remote Relay upgrades or physical dual-PC acceptance.
+Personas do not determine permissions. Existing persona, plan and chat-history APIs on the source PC remain the data owners; remote access creates no synchronized replicas. The old manifest API is unnecessary to retain data. Existing user data and conflict evidence remain intact. Video retains its separate no-video-relay contract.
+
+## Compatibility exit and acceptance
+
+The old `transport.offer` receiver retains control wire only for supported clients. Business requests have one generic `manager` path. Remove the old DataChannel receiver after supported clients migrate to `transport.tunnel`, old usage reaches zero and device acceptance is complete. The generic connection page defines exit conditions for legacy bootstrap signatures and the persona-page bootstrap alias.
+
+All 66 focused transport tests passed, covering real local WebRTC, isolated Relay, LAN forwarding across three runtimes, unknown endpoints and business headers, stream revocation, cancellation and no replay of unknown results. Entry points are `src/rabiPeer.test.ts`, `src/rabiPeerClient.test.ts`, `src/manager/rabiPeerRoutes.test.ts` and `src/peerTunnel/` tests. Physical dual-PC operation, cross-carrier P2P, sustained operation and phone/glasses upgrades still need separate runtime evidence; this page makes no deployment or physical-acceptance claim.

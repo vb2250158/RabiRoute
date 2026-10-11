@@ -23,9 +23,10 @@ type ReadyDescriptor = Readonly<{
 }>;
 
 async function runHungPlanStorageWorker(): Promise<void> {
-  const [{ PlanStorageStartupLifecycle }, { startManager }] = await Promise.all([
+  const [{ PlanStorageStartupLifecycle }, { startManager }, { RouteCatalogStartupLifecycle }] = await Promise.all([
     import("./planStorageStartupLifecycle.js"),
-    import("./controlPlaneRoutes.js")
+    import("./controlPlaneRoutes.js"),
+    import("./routeCatalogStartupLifecycle.js")
   ]);
   const neverCompletes = new Promise<never>(() => {});
   const lifecycle = new PlanStorageStartupLifecycle({
@@ -45,7 +46,12 @@ async function runHungPlanStorageWorker(): Promise<void> {
     }
   });
 
-  await startManager({ planStorageStartupLifecycle: lifecycle });
+  // This fixture exercises plan startup, not host process discovery or route activation.
+  const routeLifecycle = new RouteCatalogStartupLifecycle({
+    apply: () => {},
+    attemptFactory: () => ({ result: neverCompletes, cancel: async () => {} })
+  });
+  await startManager({ planStorageStartupLifecycle: lifecycle, routeCatalogStartupLifecycle: routeLifecycle });
   process.stdout.write(`${START_MANAGER_RETURNED_MARKER}\n`);
 }
 
@@ -85,6 +91,16 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
   test("Manager emits structured READY before a hung plan-storage attempt and remains controllable", { timeout: 45_000 }, async t => {
     const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-manager-ready-plan-storage-"));
     const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+    const fixturePackageRoot = path.join(fixtureRoot, "package");
+    for (const directory of ["dist/plugins/packages", "dist/automatic-code", "ribiwebgui/dist", "assets", "docs"]) {
+      fs.mkdirSync(path.join(fixturePackageRoot, directory), { recursive: true });
+    }
+    fs.writeFileSync(path.join(fixturePackageRoot, "ribiwebgui/dist/index.html"), "<!doctype html><title>Manager fixture</title>");
+    fs.writeFileSync(path.join(fixturePackageRoot, "docs/guide.md"), "# Manager fixture\n");
+    fs.writeFileSync(path.join(fixturePackageRoot, "dist/automatic-code/catalog.json"), JSON.stringify({ modules: [], webInputDigest: "0".repeat(64) }));
+    const speechFixtureRoot = path.join(fixturePackageRoot, "plugin-adapters/rabi-speech");
+    fs.mkdirSync(speechFixtureRoot, { recursive: true });
+    fs.copyFileSync(path.join(packageRoot, "plugin-adapters/rabi-speech/model-catalog.json"), path.join(speechFixtureRoot, "model-catalog.json"));
     const stateRoot = path.join(fixtureRoot, "state");
     const rolesRoot = path.join(fixtureRoot, "roles");
     const routeRoot = path.join(fixtureRoot, "route");
@@ -123,7 +139,10 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
         RABIROUTE_HOSTED: "1",
         RABIROUTE_MANAGER_AUTOSTART: "0",
         RABIROUTE_MANAGER_READ_ONLY: "0",
-        RABIROUTE_PACKAGE_ROOT: packageRoot,
+        RABIROUTE_PACKAGE_ROOT: fixturePackageRoot,
+        RABIROUTE_HOT_PATCH_WATCH: "0",
+        RABIROUTE_HOT_PATCH_SOURCE_ROOT: "",
+        RABIROUTE_HOT_PATCH_FULL_REPO: "0",
         RABIROUTE_PLUGIN_PACKAGE_ROOTS: path.join(fixtureRoot, "empty-plugin-packages"),
         RABIROUTE_PLUGIN_PROFILE: profilePath,
         RABIROUTE_STATE_ROOT: stateRoot,

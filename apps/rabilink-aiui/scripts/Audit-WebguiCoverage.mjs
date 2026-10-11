@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import vm from 'node:vm';
+import { validateApiRequest } from '../../../packages/rabi-api-contract/request.mjs';
 import { fileURLToPath } from 'node:url';
 import { contracts, METHODS } from './webgui-coverage-contract.mjs';
 const projectRoot = path.resolve(import.meta.dirname, '..');
@@ -58,15 +58,12 @@ export function discover(source) {
   }
   return result;
 }
-export function relayPolicy(source) {
-  const start = source.indexOf('function mobileWebguiPathAllowed(');
-  const end = source.indexOf('\n}',start);
-  if (start < 0 || end < 0) throw new Error('Missing actual Relay permission function');
-  return vm.runInNewContext('(' + source.slice(start,end+2) + ')', Object.create(null), {timeout:1000});
+export function publicApiTransportPolicy(method, path) {
+  try { validateApiRequest({ method, path, ...(!['GET','HEAD','OPTIONS'].includes(method) ? { operationId: 'audit-original' } : {}) }); return true; }
+  catch { return false; }
 }
 export function audit(root = repoRoot, policyOverride, extraDiscovered = []) {
-  const relay = read(path.join(root,'scripts/rabilink-relay-server.mjs'));
-  const allowed = policyOverride || relayPolicy(relay);
+  const allowed = policyOverride || publicApiTransportPolicy;
   const page = read(path.join(root,'apps/rabilink-aiui/pages/home/index.ink'));
   const found = files(path.join(root,'ribiwebgui/src')).flatMap(file => discover(read(file)).map(e => ({...e,file:path.relative(root,file)})));
   const errors = [];
@@ -78,8 +75,7 @@ export function audit(root = repoRoot, policyOverride, extraDiscovered = []) {
   }
   for (const c of contracts) {
     const sample = c.endpoint.replaceAll(':param','fixture').replaceAll(':dynamic','/fixture');
-    const expected = contracts.filter(row => row.endpoint === c.endpoint && row.classification === 'required').flatMap(row => row.methods);
-    for (const method of METHODS) if (allowed(method,sample) !== expected.includes(method)) errors.push(`Relay permission mismatch ${method} ${c.endpoint}`);
+    if (c.classification === 'required') for (const method of c.methods) if (!allowed(method,sample)) errors.push(`Public transport rejected UI Manager path ${method} ${c.endpoint}`);
     if (c.classification === 'required') {
       const markers = c.endpoint.startsWith('/gateways/') ? ['gatewayActionPath'] : ({'/gateways':['loadWebguiConfigData'],'/manager-config':['loadManagerConfig'],'/open-config-file':['openPcConfigFile'],'/api/scan/agents':['runAgentScan'],'/api/scan/message-adapters':['runMessageScan']})[c.endpoint] || [c.endpoint];
       if (!page.includes(c.endpoint) && !(c.endpoint === '/api/gateways' && page.includes('loadWebguiConfigData')) && !markers.some(m => page.includes(m))) errors.push(`Missing legacy implementation: ${c.endpoint}`);
@@ -89,6 +85,7 @@ export function audit(root = repoRoot, policyOverride, extraDiscovered = []) {
       if (!fs.existsSync(file)) errors.push(`Missing dedicated fixture: ${c.evidence}`);
     }
   }
+  for (const path of ['/api/internal/fixture','/__rabilink/fixture','//external.invalid/fixture']) if (allowed('GET',path)) errors.push('Private transport boundary widened: ' + path);
   // Request-helper paths are explicit: fetch(path) cannot expose their URL to literal extraction.
   const skill = read(path.join(root,'ribiwebgui/src/roleSkillClient.ts'));
   if (!skill.includes('export function roleSkillPath') || !skill.includes('/skills${') || !skill.includes('await request(path, { signal })')) errors.push('Skill helper manifest drift');

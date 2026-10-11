@@ -117,36 +117,41 @@ type DshRpcError = { ok: false; error: { code?: string; message?: string } };
 
 export type DshAgentPreset = { id: string; name?: string; description?: string; broken?: string; isDefault?: boolean };
 
-export async function listDshAgentPresets(baseUrl?: string): Promise<DshAgentPreset[]> {
-  const result = await dshRpc<{ presets: DshAgentPreset[] }>(resolveDshBaseUrl(baseUrl), "agentPresets/list", {});
+export async function listDshAgentPresets(baseUrl?: string, assertAuthorized?: () => void | Promise<void>): Promise<DshAgentPreset[]> {
+  const result = await dshRpc<{ presets: DshAgentPreset[] }>(resolveDshBaseUrl(baseUrl), "agentPresets/list", {}, assertAuthorized);
   if (!result.ok) throw new Error(`DSH mode catalog unavailable: ${result.error.message}`);
   if (!Array.isArray(result.value.presets)) throw new Error("Invalid DSH mode catalog.");
   return result.value.presets.filter(row => typeof row.id === "string" && row.id.trim());
 }
 
 /** DSH owns preset selection. Never replace a locked session or silently fall back. */
-export async function ensureDshSessionPreset(baseUrl: string, session: DshSessionSummary, preset?: string): Promise<void> {
+export async function ensureDshSessionPreset(baseUrl: string, session: DshSessionSummary, preset?: string, assertAuthorized?: () => void | Promise<void>): Promise<void> {
+  await assertAuthorized?.();
   const wanted = preset?.trim();
   if (!wanted || session.agentPreset === wanted) return;
-  const selected = await dshRpc<string>(baseUrl, "agentPresets/select", { agentId: session.id, agentPreset: wanted });
+  const selected = await dshRpc<string>(baseUrl, "agentPresets/select", { agentId: session.id, agentPreset: wanted }, assertAuthorized);
   if (!selected.ok) throw new Error(`无法应用 DSH 会话模式 ${wanted}：${selected.error.message}。已开始对话的会话请明确选择新会话。`);
   if (selected.value !== wanted) throw new Error("DSH returned an unexpected session mode.");
-  const current = await readDshSessionCatalog(baseUrl);
+  const current = await readDshSessionCatalog(baseUrl, assertAuthorized);
   if (current.find(row => row.id === session.id)?.agentPreset !== wanted) throw new Error("DSH mode selection could not be verified.");
+  await assertAuthorized?.();
   session.agentPreset = wanted;
 }
 
-async function dshRpc<T>(baseUrl: string, method: string, payload: unknown): Promise<DshRpcOk<T> | DshRpcError> {
+async function dshRpc<T>(baseUrl: string, method: string, payload: unknown, assertAuthorized?: () => void | Promise<void>): Promise<DshRpcOk<T> | DshRpcError> {
   const rpcId = randomUUID();
   const response = await dshAuthenticatedFetch(baseUrl, method,
-    JSON.stringify({ type: "client-request", rpcId, method, payload: { args: payload } }));
+    JSON.stringify({ type: "client-request", rpcId, method, payload: { args: payload } }), assertAuthorized);
   if (!response.ok) {
     throw new Error(`DSH ${method} transport failed with HTTP ${response.status}.`);
   }
-  const full = await response.json() as {
+  let full: {
     rpcId?: unknown;
     result?: { ok?: boolean; value?: unknown; error?: unknown };
   };
+  try { full = await response.json(); }
+  catch (error) { await assertAuthorized?.(); throw error; }
+  await assertAuthorized?.();
   if (full.rpcId !== rpcId) {
     throw new Error(`DSH ${method} rpcId mismatch (possible cross-talk).`);
   }
@@ -253,10 +258,12 @@ export async function listDshModels(baseUrl?: string): Promise<{
 async function applyDshSessionModel(
   baseUrl: string,
   sessionId: string,
-  selection: DshModelSelection | undefined
+  selection: DshModelSelection | undefined,
+  assertAuthorized?: () => void | Promise<void>
 ): Promise<void> {
   if (!selection) return;
-  const current = (await readDshSessionRows(baseUrl)).find((item) => item.sessionId === sessionId);
+  const current = (await readDshSessionRows(baseUrl, assertAuthorized)).find((item) => item.sessionId === sessionId);
+  await assertAuthorized?.();
   if (!current) throw new Error(`DSH session was not found: ${sessionId}`);
   // The owner projects next (including its lastUsed fallback); session/models no longer exists.
   const active = current.projections?.values?.modelSelection?.next;
@@ -269,7 +276,8 @@ async function applyDshSessionModel(
     provider: selection.provider,
     model: selection.model,
     ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {})
-  } });
+  } }, assertAuthorized);
+  await assertAuthorized?.();
   if (!selected.ok) {
     throw new Error(`DSH session.selectModel failed: ${selected.error.message || selected.error.code || "unknown error"}`);
   }
@@ -351,10 +359,10 @@ function dshSessionSummary(item: DshSessionListItem): DshSessionSummary | null {
   };
 }
 
-async function readDshSessionRows(baseUrl: string): Promise<DshSessionListItem[]> {
+async function readDshSessionRows(baseUrl: string, assertAuthorized?: () => void | Promise<void>): Promise<DshSessionListItem[]> {
   // Current owner list ignores cursor and returns ALL visible rows (no continuation).
   // Never cap this read: ID resolution and workspace/query filtering need the full catalog.
-  const result = await dshRpc<{ items: DshSessionListItem[] }>(normalizedDshBaseUrl(baseUrl), "session/list", { _request: {} });
+  const result = await dshRpc<{ items: DshSessionListItem[] }>(normalizedDshBaseUrl(baseUrl), "session/list", { _request: {} }, assertAuthorized);
   if (!result.ok) {
     throw new Error(`DSH session list failed: ${result.error.message || result.error.code || "unknown error"}`);
   }
@@ -362,8 +370,8 @@ async function readDshSessionRows(baseUrl: string): Promise<DshSessionListItem[]
   return result.value.items;
 }
 
-async function readDshSessionCatalog(baseUrl: string): Promise<DshSessionSummary[]> {
-  return (await readDshSessionRows(baseUrl))
+async function readDshSessionCatalog(baseUrl: string, assertAuthorized?: () => void | Promise<void>): Promise<DshSessionSummary[]> {
+  return (await readDshSessionRows(baseUrl, assertAuthorized))
     .map(dshSessionSummary)
     .filter((item): item is DshSessionSummary => item !== null);
 }
@@ -374,14 +382,17 @@ export async function listDshSessions(options: {
   limit?: number;
   offset?: number;
   allowedWorkspaces?: string[];
+  assertAuthorized?: () => void | Promise<void>;
 } = {}): Promise<DshSessionSummary[]> {
+  await options.assertAuthorized?.();
   const query = String(options.query || "").trim().toLocaleLowerCase();
   const workspaceKeys = new Set(
     (options.allowedWorkspaces || []).map(canonicalDshWorkspace).filter(Boolean)
   );
   const offset = Math.max(0, Math.trunc(options.offset ?? 0));
   const limit = Math.max(0, Math.trunc(options.limit ?? 100));
-  const rows = await readDshSessionCatalog(normalizedDshBaseUrl(options.baseUrl));
+  const rows = await readDshSessionCatalog(normalizedDshBaseUrl(options.baseUrl), options.assertAuthorized);
+  await options.assertAuthorized?.();
   return rows
     .filter((item) => workspaceKeys.size === 0 || (item.cwd && workspaceKeys.has(canonicalDshWorkspace(item.cwd))))
     .filter((item) => !query || `${item.title}\n${item.id}\n${item.cwd || ""}`.toLocaleLowerCase().includes(query))
@@ -552,7 +563,8 @@ export async function resolveDshSession(params: {
  */
 export async function readDshSession(
   sessionId: string,
-  baseUrl?: string
+  baseUrl?: string,
+  assertAuthorized?: () => void | Promise<void>
 ): Promise<{
   id: string;
   title: string;
@@ -563,7 +575,7 @@ export async function readDshSession(
   active: boolean;
   status: { type: "active" | "idle" };
 }> {
-  const item = (await readDshSessionRows(normalizedDshBaseUrl(baseUrl))).find((candidate) => candidate.sessionId === sessionId);
+  const item = (await readDshSessionRows(normalizedDshBaseUrl(baseUrl), assertAuthorized)).find((candidate) => candidate.sessionId === sessionId);
   if (!item) {
     throw new Error(`DSH session was not found: ${sessionId}`);
   }
@@ -647,6 +659,7 @@ export type DshSessionDelivery = {
  * DSH session runs on the same machine and can read those files.
  */
 export async function sendDshSessionMessage(params: {
+  assertAuthorized?: () => void | Promise<void>;
   sessionId: string;
   prompt: string;
   cwd: string;
@@ -660,12 +673,13 @@ export async function sendDshSessionMessage(params: {
   requestId?: string;
 }): Promise<DshSessionDelivery> {
   const baseUrl = resolveDshBaseUrl(params.baseUrl);
+  await params.assertAuthorized?.();
   if (params.agentPreset?.trim()) {
-    const session = (await readDshSessionCatalog(baseUrl)).find(row => row.id === params.sessionId);
+    const session = (await readDshSessionCatalog(baseUrl, params.assertAuthorized)).find(row => row.id === params.sessionId);
     if (!session) throw new Error("The configured DSH session no longer exists.");
-    await ensureDshSessionPreset(baseUrl, session, params.agentPreset);
+    await ensureDshSessionPreset(baseUrl, session, params.agentPreset, params.assertAuthorized);
   }
-  await applyDshSessionModel(baseUrl, params.sessionId, params.modelSelection);
+  await applyDshSessionModel(baseUrl, params.sessionId, params.modelSelection, params.assertAuthorized);
   const imagePaths = params.imagePaths || [];
   const content: Array<{ type: "text"; text: string } | { type: "image"; mediaType: string; data: string; name: string }> = [
     { type: "text", text: params.prompt }
@@ -684,7 +698,7 @@ export async function sendDshSessionMessage(params: {
     // target has no active turn.
     mode: params.mode ?? "steer",
     content
-  } });
+  } }, params.assertAuthorized);
   if (result.ok && result.value?.accepted !== true) throw new Error("DSH session delivery returned no acceptance receipt.");
   if (result.ok) {
     return {
@@ -702,7 +716,7 @@ export async function sendDshSessionMessage(params: {
       sessionId: params.sessionId,
       mode: params.mode ?? "steer",
       content: [{ type: "text", text: degraded }]
-    } });
+    } }, params.assertAuthorized);
     if (retried.ok && retried.value?.accepted !== true) throw new Error("DSH session delivery returned no acceptance receipt.");
     if (retried.ok) {
       return {

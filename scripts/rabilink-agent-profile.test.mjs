@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createAgentProfileService, validateAgentProfile } from './rabilink-agent-profile.mjs';
+import { createAgentProfileService, validateAgentProfile } from '../packages/rabilink-agent-contract/profile.mjs';
 const account = { kind: 'account', accountId: 'a' };
 const device = { kind: 'device', appId: 'app', bindingId: 'device', credentialHash: 'verified' };
 const profile = (revision = 1) => ({ revision, id: 'agent', name: 'Assistant', systemPrompt: 'Help', skills: [{ id: 'guide', title: 'Guide', content: 'Read carefully', enabled: true }], mcp: [{ id: 'pc-knowledge', label: 'Knowledge', enabled: true }] });

@@ -109,6 +109,37 @@ test("persistence failure is 503 uncertain", async t => {
   assert.equal(result.body.code, "RECEIPT_PERSIST_FAILED"); assert.equal(result.body.settlement, "failed");
   assert.equal(JSON.parse(fs.readFileSync(f.file, "utf8")).state, "sending");
 });
+for (const settle of [false, true]) {
+  test(`authorization revoked during ${settle ? "settlement" : "verification"} rejects without disclosure or mutation`, async t => {
+    const f = fixture(t);
+    const before = fs.readFileSync(f.file, "utf8");
+    let revoked = false;
+    const denial = new Error("example authorization revoked");
+    const options = { ...f.options,
+      requestAuthority: () => { if (revoked) throw denial; },
+      verify: async () => { await Promise.resolve(); revoked = true; return f.proof; }
+    };
+    await assert.rejects(() => (settle ? settleAgentSendDelivery : verifyAgentSendDelivery)(f.deliveryId, f.request, options),
+      error => error === denial);
+    assert.equal(fs.readFileSync(f.file, "utf8"), before);
+  });
+}
+test("completed receipt replay is fenced before result disclosure", async t => {
+  const f = fixture(t);
+  f.save({ ...f.receipt, state: "completed", result: f.result });
+  const originalRead = fs.readFileSync;
+  let revoked = false;
+  const denial = new Error("example authorization revoked");
+  t.mock.method(fs, "readFileSync", (...args: Parameters<typeof fs.readFileSync>) => {
+    const value = Reflect.apply(originalRead, fs, args);
+    if (String(args[0]) === f.file) revoked = true;
+    return value;
+  });
+  await assert.rejects(() => settleAgentSendDelivery(f.deliveryId, f.request, { ...f.options,
+    requestAuthority: () => { if (revoked) throw denial; },
+    verify: async () => { assert.fail("must not verify completed"); }
+  }), error => error === denial);
+});
 test("storage unavailable is distinguished from missing", async t => {
   const f = fixture(t);
   t.mock.method(fs, "statSync", () => { throw Object.assign(new Error("isolated access denied"), { code: "EACCES" }); });

@@ -22,6 +22,8 @@ export type AgentSendVerification = {
 
 export type AgentSendReconciliationOptions = {
   rootDir: string;
+  /** Internal original-request admission fence; never accepted from HTTP JSON. */
+  requestAuthority?: () => void;
   /** Internal trusted capability, never populated from HTTP JSON or public callers.
    * Must use authoritative original history and read-only platform evidence. */
   verify: (request: Readonly<AgentSendRequest>, receipt: Readonly<DurableDeliveryReceipt<AgentSendResult>>)
@@ -100,8 +102,10 @@ function completeOriginalResult(result: AgentSendResult | undefined,
 async function reconcileAgentSend(deliveryId: unknown, originalRequest: AgentSendRequest,
   options: AgentSendReconciliationOptions, settle: boolean): Promise<AgentSendReconciliationResponse> {
   // Invalid input throws before any receipt read or trusted callback.
+  options.requestAuthority?.();
   const input = prepareInput(deliveryId, originalRequest);
   const read = readSnapshot(options.rootDir, input.deliveryId);
+  options.requestAuthority?.();
   if (!read.snapshot) return read.failure!;
   const receipt = read.snapshot.receipt;
   if (receipt.requestDigest !== input.digest) {
@@ -116,7 +120,9 @@ async function reconcileAgentSend(deliveryId: unknown, originalRequest: AgentSen
   }
   let verification: AgentSendVerification | undefined;
   const verify = async (current: Readonly<DurableDeliveryReceipt<AgentSendResult>>) => {
+    options.requestAuthority?.();
     verification = await options.verify(structuredClone(input.request), structuredClone(current));
+    options.requestAuthority?.();
     if (verification?.platformVerification !== "present" || verification.originalTerminalProven !== true
       || !completeOriginalResult(verification.originalResult, input)) {
       return { state: "uncertain" as const, reason: "The entire original terminal delivery was not proven." };
@@ -135,17 +141,24 @@ async function reconcileAgentSend(deliveryId: unknown, originalRequest: AgentSen
           ? { originalResult: verification.originalResult } : {})
       });
     } catch {
+      options.requestAuthority?.();
       return response(input.deliveryId, 503, { code: "VERIFICATION_UNAVAILABLE" });
     }
   }
   let verificationUnavailable = false;
   const outcome = await reconcileDurableDelivery<AgentSendResult>({
     rootDir: options.rootDir, namespace: RECEIPT_NAMESPACE, deliveryId: input.deliveryId, payload: input.payload,
+    requestAuthority: options.requestAuthority,
     verify: async current => {
       try { return await verify(current); }
-      catch { verificationUnavailable = true; return { state: "uncertain", reason: "Verification unavailable." }; }
+      catch {
+        options.requestAuthority?.();
+        verificationUnavailable = true;
+        return { state: "uncertain", reason: "Verification unavailable." };
+      }
     }
   });
+  options.requestAuthority?.();
   const proof = {
     platformVerification: verification?.platformVerification === "present" ? "present" as const : "unknown" as const,
     ...(verification ? { evidence: verification.evidence } : {})

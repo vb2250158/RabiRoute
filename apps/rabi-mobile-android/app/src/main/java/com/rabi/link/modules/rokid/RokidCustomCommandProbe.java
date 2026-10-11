@@ -13,6 +13,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.util.UUID;
+import com.rabi.link.protocol.RabiAiuiWakeProbeProtocol;
 
 /** CXR-L-only, foreground diagnostic. No capture or arbitrary channel commands. */
 final class RokidCustomCommandProbe implements RokidCxrController.Listener {
@@ -25,6 +26,7 @@ final class RokidCustomCommandProbe implements RokidCxrController.Listener {
     private boolean appReady;
     private boolean closed;
     private String pending = "";
+    private boolean wakeProbePending;
 
     RokidCustomCommandProbe(Activity activity) {
         this.activity = activity;
@@ -39,7 +41,7 @@ final class RokidCustomCommandProbe implements RokidCxrController.Listener {
         TextView title = new TextView(activity);
         title.setText("CXR 自定义消息测试"); title.setTextSize(22); root.addView(title);
         TextView note = new TextView(activity);
-        note.setText("目标：Rabi 眼镜组件。此测试不录音、不拍摄；回包不代表深深收到消息。按顺序连接、查询安装、启动，再发送测试。");
+        note.setText("目标：Rabi 眼镜组件。按顺序连接、查询安装、启动，再发送测试。双指单击测试用于验证已配置的自定义指令能否打开 AIUI，请先在乐奇 App 将该手势配置为打开 AIUI。");
         root.addView(note);
         Switch output = new Switch(activity);
         output.setText("收到的文字显示到眼镜（不录音）");
@@ -60,6 +62,7 @@ final class RokidCustomCommandProbe implements RokidCxrController.Listener {
             appReady = false; controller.startGlassVideoApp();
         });
         button(root, "发送一次 Ping", this::ping);
+        button(root, "测试双指单击唤醒 AIUI（实验）", this::wakeProbe);
         button(root, "测试眼镜文字显示", () -> {
             controller.disconnect();
             installed = false; appReady = false; pending = "";
@@ -105,7 +108,7 @@ final class RokidCustomCommandProbe implements RokidCxrController.Listener {
         if (!linkReady()) return;
         if (!installed || !appReady) { append("未确认当前安装与眼镜组件启动，未发送。"); return; }
         if (!pending.isEmpty()) { append("上一条测试仍在等待回包。"); return; }
-        String id = UUID.randomUUID().toString(); pending = id;
+        String id = UUID.randomUUID().toString(); pending = id; wakeProbePending = false;
         boolean sent = controller.sendVideoCommand("RABI_VIDEO:{\"action\":\"ping\",\"session\":\"" + id + "\"}");
         append("sendCustomCmd accepted=" + sent + " requestId=" + id);
         if (!sent) { pending = ""; return; }
@@ -115,6 +118,18 @@ final class RokidCustomCommandProbe implements RokidCxrController.Listener {
     }
 
     private void append(String line) { main.post(() -> { if (!closed) report.append(log, line); }); }
+    private void wakeProbe() {
+        if (!linkReady()) return;
+        if (!installed || !appReady) { append("请先确认眼镜组件已安装并启动。"); return; }
+        if (!pending.isEmpty()) { append("上一条测试仍在等待回包。"); return; }
+        String id = UUID.randomUUID().toString(); pending = id; wakeProbePending = true;
+        boolean sent = controller.sendVideoCommand(RabiAiuiWakeProbeProtocol.command(id));
+        append("双指单击测试 SDK accepted=" + sent + " requestId=" + id);
+        if (!sent) { pending = ""; return; }
+        main.postDelayed(() -> {
+            if (id.equals(pending)) { pending = ""; append("双指单击回执超时；请观察 AIUI 是否出现，未自动重发。"); }
+        }, 15000);
+    }
     @Override public void onLog(String line) { append(line); }
     @Override public void onCxrConnectionChanged(boolean value) { main.post(() -> { if (!value) { installed = false; appReady = false; pending = ""; } }); }
     @Override public void onGlassBtConnectionChanged(boolean value) { onCxrConnectionChanged(value); }
@@ -130,7 +145,19 @@ final class RokidCustomCommandProbe implements RokidCxrController.Listener {
     }
     @Override public void onNativeVoiceProtocol(String payload, String channel, String clientId) {
         main.post(() -> {
-            if (!pending.isEmpty() && payload.equals("RABI_VIDEO_STATUS:pong:" + pending)) {
+            if (closed) return;
+            String wakeState = RabiAiuiWakeProbeProtocol.receiptState(payload, pending);
+            if (wakeProbePending && !wakeState.isEmpty() && com.rabi.link.protocol.RabiGlassVideoProtocol.REPLY.equals(clientId)) {
+                append("双指单击广播回执=" + wakeState + " requestId=" + pending);
+                if (!"broadcast_submitted".equals(wakeState)) {
+                    pending = "";
+                    if ("dispatch_security_rejected".equals(wakeState)) append("眼镜系统拒绝广播权限；未宣称 AIUI 唤醒，也未自动重试。");
+                    else if ("dispatch_invalid_argument".equals(wakeState)) append("眼镜广播参数被拒绝；未宣称 AIUI 唤醒。");
+                    else append("请在眼镜确认 AIUI 是否打开；此回执只确认广播阶段。");
+                }
+                return;
+            }
+            if (!wakeProbePending && !pending.isEmpty() && payload.equals("RABI_VIDEO_STATUS:pong:" + pending)) {
                 append("匹配回包：requestId=" + pending + "；仅证明 Rabi 组件收发成功。"); pending = "";
             }
         });

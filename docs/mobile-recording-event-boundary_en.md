@@ -12,6 +12,10 @@ Configure watches, bands, and smart glasses in RabiLink mobile. The PC Route end
 
 Device type is record-source metadata. Users do not add each device as a PC endpoint. Capture pause and upload controls follow the [all-day recording contract](rabilink-all-day-recording_en.md).
 
+## Authorization boundary
+
+Public Manager all-day recording queries, settings, start/stop, and controlled media grant safe local and authenticated remote Agents equal access, with no local fallback after revocation. This does not expand phone upload consent: `PUT /api/resource-cache/data/recording-events` still requires an authenticated resources tunnel and blocks belonging to that same source. Phone audio reads retain the saved event’s owner. A public Agent identity is not a private phone-resource identity and does not change the Host capture owner.
+
 ## Implementation and legacy retirement
 
 This change removes the PC device configuration entries and establishes this architecture. Unified recording-event delivery still requires implementation and end-to-end acceptance; earlier device-path results do not validate it.

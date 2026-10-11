@@ -188,14 +188,16 @@ export class ManagerPluginRouteRegistry {
 
   private activeBatches(): readonly ManagerPluginRouteBatch[] {
     const published = this.publishedActivations?.();
-    const latestByInstance = new Map<string, ManagerPluginRouteBatch>();
-    const instanceOrder: string[] = [];
+    const latestByInstance = new Map<string, string | undefined>();
     for (const batch of this.batches) {
       if (published && (!batch.activationId || !published.has(batch.activationId))) continue;
-      if (!latestByInstance.has(batch.instanceId)) instanceOrder.push(batch.instanceId);
-      latestByInstance.set(batch.instanceId, batch);
+      latestByInstance.set(batch.instanceId, batch.activationId);
     }
-    return instanceOrder.map(instanceId => latestByInstance.get(instanceId)!);
+    return this.batches.filter(batch =>
+      latestByInstance.has(batch.instanceId)
+      && latestByInstance.get(batch.instanceId) === batch.activationId
+      && (!published || !!batch.activationId && published.has(batch.activationId))
+    );
   }
 
   handle(request: IncomingMessage, url: URL, response: ServerResponse): boolean {

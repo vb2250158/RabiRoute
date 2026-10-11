@@ -56,6 +56,40 @@ const authorization = ref<{ nodes: Array<{ nodeId: string; enabledAgentIds: stri
 const managerUrl = ref(window.location.origin);
 const connectionToken = ref("");
 const connectionAvailable = ref(false);
+const namingInstance = ref<AgentInstance>();
+const nodeName = ref("");
+const savingName = ref(false);
+const nameError = ref("");
+
+function editName(instance: AgentInstance): void {
+  namingInstance.value = instance;
+  nodeName.value = instance.name || "";
+  nameError.value = "";
+}
+
+async function saveName(): Promise<void> {
+  const instance = namingInstance.value;
+  if (!instance || savingName.value) return;
+  savingName.value = true;
+  nameError.value = "";
+  try {
+    await readJson(await fetch(`/api/lan-agent/instances/${encodeURIComponent(instance.instanceId)}/name`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", "x-rabiroute-webgui-token": connectionToken.value },
+      body: JSON.stringify({ name: nodeName.value, expectedName: instance.name || "" })
+    }));
+    await refresh();
+    if (error.value) throw new Error(error.value);
+    if ((instances.value.find(item => item.instanceId === instance.instanceId)?.name || "") !== nodeName.value.trim()) {
+      throw new Error("名称保存结果未确认，请刷新后核对。");
+    }
+    namingInstance.value = undefined;
+  } catch (reason) {
+    nameError.value = userFacingError(reason);
+  } finally {
+    savingName.value = false;
+  }
+}
 
 async function copyInstallPrompt(): Promise<void> {
   if (issuingTicket.value) return;
@@ -155,6 +189,16 @@ onMounted(() => { void refresh(); });
     </div>
 
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
+    <v-dialog :model-value="!!namingInstance" :persistent="savingName" max-width="480" @update:model-value="value => { if (!value && !savingName) namingInstance = undefined; }">
+      <v-card title="修改名称">
+        <v-card-text>
+          <p class="text-caption mb-3">{{ namingInstance?.address || namingInstance?.instanceId }}</p>
+          <v-text-field v-model="nodeName" label="远端智能体名称" hint="留空恢复默认名称；离线也可修改。" persistent-hint maxlength="80" counter="80" autofocus :disabled="savingName" @keydown.enter.prevent="saveName" />
+          <v-alert v-if="nameError" type="error" variant="tonal" class="mt-3">{{ nameError }}</v-alert>
+        </v-card-text>
+        <v-card-actions><v-spacer /><v-btn :disabled="savingName" @click="namingInstance = undefined">取消</v-btn><v-btn color="primary" :loading="savingName" @click="saveName">保存名称</v-btn></v-card-actions>
+      </v-card>
+    </v-dialog>
     <v-dialog v-model="enrollmentOpen" max-width="760">
     <v-card>
       <v-card-title>接入一台电脑</v-card-title>
@@ -188,8 +232,9 @@ onMounted(() => { void refresh(); });
     <v-expansion-panels multiple>
       <v-expansion-panel v-for="instance in instances" :key="instance.instanceId">
         <v-expansion-panel-title>
-          {{ instance.local ? "实例：本机" : `远端智能体（${instance.address || "离线"}）` }}
+          <span class="instance-title">{{ instance.local ? "实例：本机" : `${instance.name || '远端智能体'}（${instance.address || "离线"}）` }}</span>
           <v-chip class="ml-3" size="small" :color="instance.connected ? 'success' : 'default'">{{ instance.connected ? "在线" : "离线" }}</v-chip>
+          <v-btn v-if="!instance.local" class="ml-2" icon="mdi-pencil" size="small" variant="text" title="修改名称" aria-label="修改名称" @click.stop="editName(instance)" />
         </v-expansion-panel-title>
         <v-expansion-panel-text>
           <v-expansion-panels multiple>
@@ -217,7 +262,7 @@ onMounted(() => { void refresh(); });
         <thead><tr><th>节点</th><th>状态</th><th>更新时间</th><th>结果</th></tr></thead>
         <tbody>
           <tr v-for="task in tasks" :key="task.taskId">
-            <td>{{ task.nodeId }}</td><td>{{ task.status }}</td><td>{{ formatTime(task.updatedAt) }}</td><td>{{ task.error || task.result || "—" }}</td>
+            <td :title="task.nodeId">{{ instances.find(instance => instance.instanceId === task.nodeId)?.name || task.nodeId }}</td><td>{{ task.status }}</td><td>{{ formatTime(task.updatedAt) }}</td><td>{{ task.error || task.result || "—" }}</td>
           </tr>
           <tr v-if="!tasks.length"><td colspan="4" class="lan-muted">暂无任务记录。</td></tr>
         </tbody>
@@ -233,4 +278,5 @@ onMounted(() => { void refresh(); });
 .detail-row span { color: var(--rr-muted-soft); opacity: 1; }
 .detail-row b { overflow-wrap: anywhere; }
 .fingerprint { overflow-wrap: anywhere; }
+.instance-title { overflow-wrap: anywhere; }
 </style>

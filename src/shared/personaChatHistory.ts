@@ -4,7 +4,7 @@ export type PersonaChatReply = {
   receivedAt: string;
   sessionId: string;
   turnId?: string;
-  kind?: "final_reply" | "agent_delivery" | "user_delivery";
+  kind?: "final_reply" | "agent_delivery" | "user_delivery" | "aiui_user" | "aiui_assistant";
   deliveryId?: string;
   sourceLabel?: string;
   planId?: string;

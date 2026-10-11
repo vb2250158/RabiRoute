@@ -18,6 +18,7 @@ import com.rokid.cxr.Caps;
 import com.pedro.common.ConnectChecker;
 import com.pedro.library.rtmp.RtmpCamera2;
 import com.rabi.link.protocol.RabiGlassVideoProtocol;
+import com.rabi.link.protocol.RabiAiuiWakeProbeProtocol;
 import org.json.JSONObject;
 
 /** Visible camera owner. Losing the phone lease releases both camera and microphone. */
@@ -73,6 +74,11 @@ public final class GlassVideoActivity extends Activity {
         String id = data.optString("session");
         String action = data.optString("action");
         if (id.isEmpty() || id.length() > 80) return;
+        if (RabiAiuiWakeProbeProtocol.COMMAND.equals(action)) {
+            GlassAiuiWakeProbe.dispatch(this, id, stream != null || !pendingUrl.isEmpty(),
+                    state -> { if (!destroyed) report("aiui_wake_probe:" + id + ":" + state); });
+            return;
+        }
         if ("ping".equals(action) && id.matches("[a-f0-9-]{36}")) {
             report("pong:" + id);
             return;

@@ -23,6 +23,7 @@ async function fixture(t: test.TestContext, options: { limit?: number; concurren
       if (hash(content) !== input.sha256) throw Object.assign(new Error(), { code: "integrity" });
       await input.beforeCommit?.();
       if (commitGate) await commitGate;
+      input.assertCommitAuthorized?.();
       const key = JSON.stringify([input.owner, input.uploadId]);
       const prior = rows.get(key);
       if (prior && (prior.sha256 !== input.sha256 || prior.fileName !== input.fileName)) throw Object.assign(new Error(), { code: "conflict" });

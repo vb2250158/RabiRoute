@@ -71,7 +71,7 @@ const configSurfaceSource = read(files.configSurface);
 const aiuiSource = `${aiuiPageSource}\n${configSurfaceSource}`;
 assertCurrentRemoteSurface({ webgui: routeConfigSource, aiui: aiuiSource, shared: sharedConfigSource,
   runtime: read(path.join(repoRoot, 'src/manager/controlPlaneRoutes.ts')),
-  owner: read(path.join(projectRoot, 'utils/agent-runtime-mode.js')) });
+  owner: read(path.join(projectRoot, 'utils/device-agent-page.js')) });
 const sharedGatewayFields = extractTypeFields(sharedConfigSource, "GatewayDefinition");
 const aiuiGatewayFieldSet = new Set([
   ...GATEWAY_SCALAR_FIELDS.map((field) => field.key),

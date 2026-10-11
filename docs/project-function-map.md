@@ -12,7 +12,7 @@ Linux 启动、状态、重启和退出由 `scripts/linux-host.mjs` 统一拥有
 
 完成连接鉴权后即可使用已提供的接口，不再增加逐功能或逐人格授权。发送仍须遵守来源身份、目标、消息格式和幂等回执合同。详见[连接与接口使用](connection-access.md)。
 
-0.3.22 连接合同：同一 RabiLink 应用已鉴权设备默认使用 PC 实际提供的全部服务。设备固定公钥与应用作用域继续复核；知识读写复用 Manager 接口，无额外 MCP 密钥或知识 grant。旧逐服务权限字段和知识表单已退役。实现与迁移见[通用连接](rabilink-peer-tunnel.md)及[知识运行合同](rabilink-knowledge-runtime.md)。
+同一 RabiLink 应用已鉴权设备可使用 PC 实际提供的全部服务。设备固定公钥与应用作用域继续复核；知识读写直接复用 Manager 接口。Relay 只负责连接、鉴权和通用中转，应用设置及人格资料由显式指定的 PC 保存；旧业务协议不迁移。见[通用连接](rabilink-peer-tunnel.md)。
 
 远端 Agent 归 Agent 执行端，不再作为消息端添加；通过[远端接入](lan-rabi-agent-bootstrap.md)选择实例与 Agent。
 
@@ -22,7 +22,9 @@ Linux 启动、状态、重启和退出由 `scripts/linux-host.mjs` 统一拥有
 
 移动端正在整合为[全天记录](rabilink-all-day-recording.md)：唯一 `RabiConversationService` owner 协调手机、眼镜和健康，音频/音视频/仅健康与暂停分离，旧独立采集 service 已从源码移除。音频可靠分片冻结来源/目标/策略，视频停止后派生音轨；仅转写 PC 能力/worker 围栏与 captureId 关联已接入源码，不支持时 deferred。关联仅人工刷新 processedAt 最近24小时最多200条，无ID不猜；健康仅采集/状态统一，完整历史仍PC。autoResume内部false、开机暂停，自动恢复未实现。新记录不因传输 ACK 自动按缓存期限删除，自动滚动容量管理未完成。日常入口和旧版本证据见[移动端记录界面](rabilink-mobile-recording-ui.md)，整体验收仍待。
 
-跨电脑只读接口见[调用与应用鉴权](rabilink-peer-rpc.md)：支持设备发现、计划摘要、人格文件清单；LAN 优先、P2P 尝试及 Relay 回退共用加密合同。公网和双 PC 长期运行待验收。
+跨电脑接口共用[通用传输](rabilink-peer-tunnel.md)：LAN→P2P→Relay。RPC 只交换发现与连接元数据，业务请求直接调用目标 PC 的 Manager 接口；新增接口无需修改 Relay。启用并鉴权的 Agent 可调用全部业务接口，工作区、人格和 Route 绑定只提供上下文或自动投递目标。公网和双 PC 长期运行仍待验收。
+
+本机、远程实例与原生设备 Agent 的消息互投共用[精确投递与正式回复](agent-endpoint-delivery.md)合同：PC 保存唯一请求记录，目标 owner 的原回执确认接收，正式回复反转原来源与目标。设备来源不要求工作目录，电脑目标仍校验其实际执行目录；跨电脑及真机验收分别记录。
 
 手机与电脑的实验视频直连见 [接入与验收状态](rabilink-direct-video.md)：Android 负责 SDK 取流和发送，RabiLink 插件负责电脑接收，Relay 只交换 SDP。当前已验证数据通道，眼镜画面和公网打洞尚未验收。
 
@@ -150,7 +152,7 @@ Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，
 | 个人微信消息端 | 实验原型 | OpenClaw/iLink 二维码、长轮询、context token、`weixin-messages.jsonl` | forwarding、Outbox 来源会话文本回复 | 登录轮询或收到消息时 | token 写运行期 `data/`；文本可能投递 Agent，媒体只记录 | route 消息端 | `src/adapters/weixinAdapter.ts`、`src/weixinOpenClaw.ts` | `docs/current-capabilities.md` |
 | 定时任务运行入口 | 已验证 | `automationRules[].trigger.schedule`、`heartbeatSkipWhenAgentBusy`、`messageProcessingAgents.codex`、人格脚本路径合同 | heartbeat adapter、AgentPacket、受限脚本执行器、Codex active 状态、消息处理 Agent 池 | 定时器触发时 | 通知 Agent 时写 heartbeat 与投递日志且不注入聊天历史；运行脚本时写独立自动化执行记录；同一规则不重叠运行 | Route 启用 heartbeat；脚本动作按所属人格路径合同执行 | `src/adapters/heartbeatAdapter.ts`、`src/automation/personaAutomationRuntime.ts`、`src/scheduling/heartbeatSchedules.ts`、`src/forwarding.ts` | `docs/configuration.md` |
 | Manual trigger | 已验证，真实投递 | manager request、`manual-trigger-events.jsonl` | `triggerManualRule`、forwarding | 用户点击 / API 调用时 | 写手动触发日志、router 日志、replay ledger，可能投递 Agent | `POST /gateways/:id/manual-trigger` | `src/manualTrigger.ts`、`src/manager/controlPlaneRoutes.ts` | `docs/rabi-agent-interfaces.md` |
-| 米家 / Xiaomi Home | 实验支持；自动化合同已验证，真实 Home Assistant 待验收 | 插件 Profile 默认值、本机 `settings.json`、地址绑定的受保护单账号凭据 | REST/WebSocket 查询、显著事件投递、typed capability 动作 | 保存设置、Route 卡片连接/退出、事件到达或显式动作时 | 受保护凭据与设置写入；事件可能投递 Agent；设备动作使用持久 receipt。地址和候选令牌同次验证，非回环默认 HTTPS | Route 消息端卡片；`/api/agent/xiaomi-home/*` | `src/integrations/xiaomiHome/*`、`src/shared/xiaomiHome*`、`ribiwebgui/src/components/renderers/XiaomiHome*` | 插件双语 README、`docs/current-capabilities.md` |
+| 米家 / Xiaomi Home | 实验支持；自动化合同已验证，真实 Home Assistant 待验收 | 插件 Profile 默认值、本机 `settings.json`、地址绑定的受保护单账号凭据 | REST/WebSocket 查询、显著事件投递、类型化设备／媒体动作、显式语音绑定与持久回执查询 | 保存设置、Route 卡片连接/退出、事件到达或显式动作时 | 受保护凭据与设置写入；事件可能投递 Agent；设备动作使用持久 receipt。地址和候选令牌同次验证，非回环默认 HTTPS；开启全局接入并认证的远端 Agent 与本机公共 API 同权，异步请求持续复核原租约 | Route 消息端卡片；`/api/agent/xiaomi-home/*` | `src/integrations/xiaomiHome/*`、`src/shared/xiaomiHome*`、`ribiwebgui/src/components/renderers/XiaomiHome*` | 插件双语 README、`docs/current-capabilities.md` |
 | Role panel message | 已验证，真实投递 | `data/roles/<RoleId>/role-panel/messages.jsonl` | role panel 子进程、forwarding | 用户在角色面板发送时 | 写 timeline，可能投递 Agent | `POST /api/role-panel/messages` | `src/rolePanelTimeline.ts`、`src/manager/controlPlaneRoutes.ts` | `docs/routing-and-personas.md` |
 | RouteDecision | 已有 | route profile、event record、extra values | forwarding、未来 preview | 每次投递时 | 本身无写入；调用方可能写日志 | 代码内部 | `src/routing/routeDecision.ts` | `docs/persona-route-workbench-plan.md` |
 | Forwarding | 已有 | active routeProfiles、record、extra values、Route 的 `primaryAgentAdapter` 与消息处理 Agent 策略 | 主控 Agent adapter、消息处理 Agent 池、history、delivery replay | 每次真实消息进入时 | 普通逐条路由只投递主控 Agent；已形成的消息组和启用模式后的 heartbeat 投给消息处理 Agent；失败时不自动改投不同类型 Agent | `forwardMessage` / `forwardMessageAndWait` | `src/forwarding.ts`、`src/messageAgentPool.ts` | `docs/code-architecture.md` |

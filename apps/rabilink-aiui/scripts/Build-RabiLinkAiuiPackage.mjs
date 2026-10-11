@@ -100,6 +100,7 @@ async function bundlePageSetup(setupSource, relayBaseUrl, releaseVersion) {
   }
 
   const result = await build({
+    absWorkingDir: projectRoot,
     stdin: {
       contents: versionedSetupSource,
       resolveDir: path.join(projectRoot, "pages", "home"),

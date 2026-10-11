@@ -1,9 +1,11 @@
-import fs from "node:fs/promises";
+import { checkedFs } from "./requestAccess.mjs";
 import { createReadStream } from "node:fs";
 import { pipeline } from "node:stream/promises";
 
-export async function streamMedia(request, response, file, mime, filename) {
+export async function streamMedia(request, response, file, mime, filename, access, dependencies = {}) {
+  const fs = dependencies.fs ?? checkedFs(access); access?.assert();
   const { size } = await fs.stat(file);
+  access?.assert();
   const range = request.headers.range;
   let start = 0, end = size - 1;
   if (range) {
@@ -17,11 +19,13 @@ export async function streamMedia(request, response, file, mime, filename) {
       response.writeHead(416, { "content-range": `bytes */${size}` }); response.end(); return;
     }
   }
+  access?.assert();
   response.writeHead(range ? 206 : 200, {
     "content-type": mime, "content-length": end - start + 1,
     "accept-ranges": "bytes", "cache-control": "private, no-store", "x-content-type-options": "nosniff",
     ...(filename ? { "content-disposition": `inline; filename="${filename}"` } : {}),
     ...(range ? { "content-range": `bytes ${start}-${end}/${size}` } : {})
   });
-  await pipeline(createReadStream(file, { start, end }), response);
+  access?.assert();
+  await pipeline((dependencies.createReadStream ?? createReadStream)(file, { start, end }), response);
 }

@@ -1,5 +1,4 @@
 import type { PlanItem, PlanTaskBinding } from "../roleKnowledge.js";
-import { sameCodexWorkspace } from "../codexTaskIdentity.js";
 import type { PlanAssistantAgentType } from "../shared/agentAdapterCapabilities.js";
 
 export type PlanTaskDeliveryTarget = {
@@ -42,9 +41,8 @@ export function replacementPlanTaskBinding(
   if (!binding || !sessionId || sessionId === binding.sessionId) return null;
   const workspace = resolved.cwd?.trim() || binding.workspace?.trim() || "";
   if (!workspace) throw new Error("Replacement Agent session workspace is unavailable.");
-  if (binding.workspace && !sameCodexWorkspace(binding.workspace, workspace)) {
-    throw new Error(`Replacement Agent session belongs to another workspace: ${workspace}`);
-  }
+  // A replacement session may live in another directory: the binding records the
+  // session's own workspace below instead of refusing a cross-directory handover.
   return {
     ...binding,
     sessionId,

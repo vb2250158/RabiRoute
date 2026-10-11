@@ -192,9 +192,9 @@ export type ManagerReadWorkerRequest = {
   task: ManagerReadWorkerTask;
 };
 
-export type ManagerReadWorkerMessage = ManagerReadWorkerResponse & {
+export type ManagerReadWorkerMessage = { type: "ready" } | (ManagerReadWorkerResponse & {
   requestId: string;
-};
+});
 
 function performanceShardStart(filename: string): number {
   const match = filename.match(/^performance-(\d{4})-(\d{2})-(\d{2})-(\d{2})\.jsonl$/);
@@ -492,11 +492,13 @@ if (workerData) {
   parentPort.on("message", (request: ManagerReadWorkerRequest) => {
     void respond(request.requestId, request.task);
   });
+  send({ type: "ready" });
 } else if (process.send) {
   process.on("message", (request: ManagerReadWorkerRequest) => {
     void respond(request.requestId, request.task);
   });
   process.once("disconnect", () => process.exit(0));
+  send({ type: "ready" });
 } else {
   throw new Error("Manager read process requires a parent channel.");
 }

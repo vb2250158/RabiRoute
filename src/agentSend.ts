@@ -461,6 +461,13 @@ export function prepareAgentSendRequest(request: AgentSendRequest): NormalizedAg
   return normalizeAgentSend(request);
 }
 
+/** Shared owner mapping. Extra outer receipt metadata cannot be inferred from history. */
+export function mapAgentSendReplyResult(result: AgentReplyResult, request: Readonly<AgentSendRequest>): AgentSendResult {
+  const normalized = normalizeAgentSend(request);
+  return { ...result, deliveryId: normalized.deliveryId, sender: normalized.sender,
+    channel: normalized.channel, routeId: normalized.routeId, target: normalized.target };
+}
+
 export async function inspectAgentSendDelivery(
   request: AgentSendRequest,
   options: AgentReplyOptions
@@ -468,17 +475,7 @@ export async function inspectAgentSendDelivery(
   const normalized = normalizeAgentSend(request);
   const inspection = await inspectAgentReplyDelivery(normalized.internal, options);
   if (inspection.state !== "completed") return inspection;
-  return {
-    state: "completed",
-    result: {
-      ...inspection.result,
-      deliveryId: normalized.deliveryId,
-      sender: normalized.sender,
-      channel: normalized.channel,
-      routeId: normalized.routeId,
-      target: normalized.target
-    }
-  };
+  return { state: "completed", result: mapAgentSendReplyResult(inspection.result, request) };
 }
 
 function replyImageDescriptionPlan(
@@ -519,12 +516,7 @@ export async function handleAgentSend(
       })
     : undefined;
   return {
-    ...result,
-    deliveryId: normalized.deliveryId,
-    sender: normalized.sender,
-    channel: normalized.channel,
-    routeId: normalized.routeId,
-    target: normalized.target,
+    ...mapAgentSendReplyResult(result, request),
     replyImageDescriptionArchive
   };
 }

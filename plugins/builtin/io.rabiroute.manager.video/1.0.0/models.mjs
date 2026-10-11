@@ -1,11 +1,13 @@
 import fs from "node:fs/promises";
+import { checkedFs } from "./requestAccess.mjs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { VideoError } from "./service.mjs";
 import { resolveWorkflow } from "./workflow.mjs";
 
 const folders = { diffusion: "diffusion_models", textEncoder: "text_encoders", vae: "vae", audioVae: "vae", lora: "loras", lora4: "loras" };
-async function availableSpace(root) {
+async function availableSpace(root, access) {
+  const fs = checkedFs(access);
   let existing = root;
   while (!await fs.stat(existing).catch(error => { if (error.code === "ENOENT") return null; throw error; })) {
     const parent = path.dirname(existing);
@@ -15,7 +17,8 @@ async function availableSpace(root) {
   const disk = await fs.statfs(existing);
   return disk.bavail * disk.bsize;
 }
-export async function safeTarget(root, relative) {
+export async function safeTarget(root, relative, access) {
+  const fs = checkedFs(access);
   const base = path.resolve(root), target = path.resolve(base, relative);
   const inside = path.relative(base, target);
   if (!inside || inside.startsWith("..") || path.isAbsolute(inside)) throw new VideoError("模型文件路径无效。");
@@ -27,13 +30,14 @@ export async function safeTarget(root, relative) {
   }
   return target;
 }
-async function validSize(file, bytes) {
+async function validSize(file, bytes, access) {
+  const fs = checkedFs(access);
   try {
     const stat = await fs.stat(file);
     if (!stat.isFile() || stat.size !== bytes) return false;
     const handle = await fs.open(file, "r");
     try {
-      const header = Buffer.alloc(9); await handle.read(header, 0, 9, 0);
+      const header = Buffer.alloc(9); access?.assert(); await handle.read(header, 0, 9, 0); access?.assert();
       const length = Number(header.readBigUInt64LE());
       return length > 2 && length < Math.min(bytes - 8, 100 * 1024 * 1024) && header[8] === 123;
     } finally { await handle.close(); }
@@ -101,12 +105,13 @@ export class VideoModels {
     if (this.runtime.readOnly) throw new VideoError("只读模式下不能安装或配置模型。", 423);
     if (this.closed || this.flight || this.runtime.alive()) throw new VideoError("请先停止视频服务并等待安装结束。", 409);
   }
-  async configure(body) {
+  async configure(body, access) {
+    const fs = checkedFs(access); access?.assert();
     this.guard();
     if (!body || Object.keys(body).some(key => !["modelRoot", "expectedRevision", "layout"].includes(key)) || body.expectedRevision !== this.settings.revision || !("modelRoot" in body)) throw new VideoError("目录设置已改变，请刷新后重试。", 409);
     if (body.layout !== undefined && !["flat", "categorized"].includes(body.layout)) throw new VideoError("模型目录布局无效。");
-    const modelRoot = await this.runtime.validateModelRoot(body.modelRoot);
-    if (modelRoot) await safeTarget(modelRoot, "model-directory-check");
+    const modelRoot = await this.runtime.validateModelRoot(body.modelRoot, access);
+    if (modelRoot) await safeTarget(modelRoot, "model-directory-check", access);
     this.guard();
     const target = { revision: this.settings.revision + 1, modelRoot, layout: modelRoot ? (body.layout ?? this.settings.layout) : "flat" };
     const temp = `${this.file}.${randomUUID()}.tmp`;
@@ -114,11 +119,12 @@ export class VideoModels {
     await fs.rename(temp, this.file); this.settings = target;
     return this.directories();
   }
-  async snapshot() {
+  async snapshot(access) {
+    const fs = checkedFs(access); access?.assert();
     const models = await Promise.all(this.catalog.models.map(async model => {
       const files = await Promise.all(Object.entries(model.files).map(async ([key, name]) => {
-        const target = await safeTarget(this.root(), path.relative(this.root(), path.join(this.modelRoot(model), folders[key], name)));
-        const installed = await validSize(target, model.expectedBytes[key]);
+        const target = await safeTarget(this.root(), path.relative(this.root(), path.join(this.modelRoot(model), folders[key], name)), access);
+        const installed = await validSize(target, model.expectedBytes[key], access);
         const exists = installed || !!await fs.lstat(target).catch(error => { if (error.code === "ENOENT") return null; throw error; });
         return { key, name, bytes: model.expectedBytes[key], installed, state: installed ? "installed" : exists ? "invalid" : "missing" };
       }));
@@ -129,18 +135,20 @@ export class VideoModels {
       }) : undefined;
       return { id: model.id, label: model.label, files, workflows, installed: files.every(file => file.installed), bytes: files.reduce((sum, file) => sum + file.bytes, 0) };
     }));
-    return { runtimeInstalled: await this.runtime.installed(), models, job: this.job };
+    const runtimeInstalled = await this.runtime.installed(access); access?.assert();
+    return { runtimeInstalled, models, job: this.job };
   }
-  async assertStartable() {
-    const ready = await this.snapshot();
+  async assertStartable(access) {
+    const ready = await this.snapshot(access); access?.assert();
     if (!ready.runtimeInstalled) throw new VideoError("视频运行环境尚未安装，请在模型管理中安装运行环境。", 409);
     if (ready.models.some(model => model.installed || model.workflows?.some(workflow => workflow.installed))) return;
     const missing = [...new Set(ready.models.flatMap(model => model.files.filter(file => !file.installed).map(file => file.name)))];
     throw new VideoError(`当前模型目录没有可用工作流。缺失或损坏：${missing.join("、")}。请检查模型主目录或初始化所需模型。`, 409);
   }
-  async downloadPlan(ids = this.catalog.models.map(model => model.id)) {
-    await this.runtime.validateModelRoot(this.root());
-    const snapshot = await this.snapshot(), files = new Map();
+  async downloadPlan(ids = this.catalog.models.map(model => model.id), access) {
+    access?.assert();
+    await this.runtime.validateModelRoot(this.root(), access); access?.assert();
+    const snapshot = await this.snapshot(access), files = new Map();
     for (const model of snapshot.models.filter(model => ids.includes(model.id))) {
       const definition = this.catalog.models.find(row => row.id === model.id);
       for (const file of model.files) {
@@ -148,7 +156,8 @@ export class VideoModels {
         if (!files.has(relative)) files.set(relative, { ...file, relative });
       }
     }
-    const availableBytes = await this.availableSpace(this.root());
+    access?.assert();
+    const availableBytes = await this.availableSpace(this.root(), access); access?.assert();
     const entries = [...files.values()], missing = entries.filter(file => !file.installed);
     const downloadBytes = missing.reduce((sum, file) => sum + file.bytes, 0);
     const errors = [];
@@ -157,23 +166,25 @@ export class VideoModels {
     if (downloadBytes > availableBytes) errors.push("模型目录所在磁盘空间不足，请释放空间或更换主目录。");
     return { revision: this.settings.revision, modelRoot: this.root(), files: entries, downloadBytes, additionalBytes: downloadBytes, availableBytes, errors, canDownload: !errors.length };
   }
-  async initializeModels(body) {
+  async initializeModels(body, access) {
+    access?.assert();
     this.guard();
     if (!body || Object.keys(body).some(key => key !== "expectedRevision") || body.expectedRevision !== this.settings.revision) throw new VideoError("模型目录已改变，请重新查看下载空间。", 409);
-    const plan = await this.downloadPlan();
+    const plan = await this.downloadPlan(undefined, access); access?.assert();
     if (!plan.canDownload) throw new VideoError(plan.errors.join("\n"), 409);
-    return this.begin("models", () => this.downloadModels(this.catalog.models));
+    return this.begin("models", () => this.downloadModels(this.catalog.models), access);
   }
-  begin(kind, operation) {
-    this.guard(); this.job = { kind, state: "running", bytes: 0, total: 0 };
+  begin(kind, operation, access) {
+    access?.assert(); this.guard(); access?.beforeMutation(); this.job = { kind, state: "running", bytes: 0, total: 0 };
     this.flight = Promise.resolve().then(operation).then(() => { this.job.state = "completed"; }, error => { this.job.state = "failed"; this.job.message = `${this.job.currentFile ? `${this.job.currentFile}：` : ""}${error instanceof VideoError ? error.message : "安装或下载失败，请检查网络、磁盘权限和运行日志。"} 已有模型和未完成下载均已保留。`; }).finally(() => { this.flight = null; this.publish(); });
     this.publish(); return this.job;
   }
-  installRuntime() { return this.begin("runtime", () => this.runtime.install()); }
-  download(id) {
+  installRuntime(access) { return this.begin("runtime", () => this.runtime.install(), access); }
+  download(id, access) {
+    access?.assert();
     const model = this.catalog.models.find(row => row.id === id);
     if (!model) throw new VideoError("未知视频模型。");
-    return this.begin("model", () => this.downloadModels([model]));
+    return this.begin("model", () => this.downloadModels([model]), access);
   }
   async downloadModels(models) {
       if (!await this.runtime.installed()) throw new VideoError("请先安装视频运行环境。", 409);

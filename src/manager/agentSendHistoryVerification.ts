@@ -11,6 +11,8 @@ export type AgentSendHistoryVerificationOptions = Readonly<{
   logPath: string;
   /** Inject the authoritative agentReplyDeliveryTrace capability, not a guessed digest. */
   traceReplyRequest: (request: AgentReplyRequest) => { deliveryId?: string; deliveryRequestDigest?: string };
+  /** Owner projects business fields only; audit metadata must never escape. */
+  projectResult: (data: Readonly<Record<string, unknown>>) => AgentReplyResult;
   /** Use the owner's existing AgentReplyResult -> AgentSendResult mapping. */
   mapResult: (result: AgentReplyResult, request: Readonly<AgentSendRequest>) => AgentSendResult;
 }>;
@@ -90,7 +92,8 @@ export async function inspectOriginalAgentSendHistory(
         continue;
       }
       if (!nonempty(data.sentFileId) && !nonempty(data.sentMessageId)) continue;
-      completed = data as unknown as AgentReplyResult;
+      try { completed = options.projectResult(data); }
+      catch { damaged = true; continue; }
       terminalComplete = false;
       const originalPayload = record(internal.payload);
       const hasCaption = nonempty(internal.text) || nonempty(originalPayload?.text);

@@ -69,3 +69,16 @@ test("proxy queue turns a caller timeout into a failed request and releases priv
   assert.match(completed.error, /timed out/i);
   assert.equal(completed.bodyBase64, "");
 });
+
+test('expired mutation lease remains uncertain and is never executed by a second worker', async () => {
+  const queue = new RelayProxyRequestQueue({ name: 'Opaque', idPrefix: 'http', requestWaitMs: 1000, leaseMs: 10, retentionMs: 1000 });
+  const write = queue.create({ appId: 'app-a', targetDeviceId: 'pc-a', method: 'POST', path: '/future/write', bodyBase64: Buffer.from('private').toString('base64') });
+  assert.equal(queue.claim(1, () => true)[0].id, write.id);
+  write.leaseUntil = Date.now() - 1;
+  assert.deepEqual(queue.claim(1, () => true), []);
+  assert.equal(write.error, 'TRANSPORT_OUTCOME_UNCERTAIN'); assert.equal(write.status, 'failed'); assert.equal(write.attempts, 1); assert.equal(write.bodyBase64, '');
+  assert.equal(queue.complete(write.id, { statusCode: 200, ok: true }).deduplicated, true);
+  const read = queue.create({ appId: 'app-a', targetDeviceId: 'pc-a', method: 'GET', path: '/future/read' });
+  queue.claim(1, () => true); read.leaseUntil = Date.now() - 1;
+  assert.equal(queue.claim(1, () => true)[0].id, read.id); assert.equal(read.attempts, 2);
+});

@@ -82,24 +82,35 @@ export class DshConnectionStore {
     };
   }
 
-  resolve(origin: string, now = Date.now()): DshConnectionResolution | undefined {
+  resolve(origin: string, now = Date.now(), assertAuthorized?: () => void): DshConnectionResolution | undefined {
+    assertAuthorized?.();
     const row = this.readDocument().connections.find(item => item.origin === origin);
+    assertAuthorized?.();
     if (!row) return undefined;
     if (row.state === "disconnected") return { state: "disconnected" };
     if (Number(row.expiresAt) <= now) return { state: "expired" };
     try {
       if (row.protection !== this.protector.scheme) throw new Error("protection mismatch");
       const cached = this.credentialCache.get(origin);
-      if (cached && cached.protectedValue === row.protectedCredential && cached.credential.expiresAt === row.expiresAt && cached.until > now) return { state: "connected", ...cached.credential };
+      if (cached && cached.protectedValue === row.protectedCredential && cached.credential.expiresAt === row.expiresAt && cached.until > now) {
+        assertAuthorized?.();
+        return { state: "connected", ...cached.credential };
+      }
       const value = JSON.parse(this.protector.unprotect(row.protectedCredential!)) as DshSessionCredential & { origin: string };
       if (value.origin !== origin || value.expiresAt !== row.expiresAt || !/^dsh-auth-[A-Za-z0-9_-]+=[A-Za-z0-9_.-]+$/.test(value.cookie)) throw new Error("invalid");
       const credential = { cookie: value.cookie, expiresAt: value.expiresAt };
+      assertAuthorized?.();
       this.credentialCache.set(origin, { protectedValue: row.protectedCredential!, credential, until: Math.min(value.expiresAt, now + 60_000) });
       return { state: "connected", ...credential };
-    } catch { throw new DshConnectionError("DSH saved authentication is unavailable to this system account; reconnect in WebGUI.", 401); }
+    } catch {
+      // Preserve request-authority denial instead of disguising it as a login failure.
+      assertAuthorized?.();
+      throw new DshConnectionError("DSH saved authentication is unavailable to this system account; reconnect in WebGUI.", 401);
+    }
   }
 
-  connect(origin: string, credential: DshSessionCredential, expectedRevision: number): void {
+  connect(origin: string, credential: DshSessionCredential, expectedRevision: number, assertAuthorized?: () => void): void {
+    assertAuthorized?.();
     origin = dshLocalOrigin(origin);
     if (!/^dsh-auth-[A-Za-z0-9_-]+=[A-Za-z0-9_.-]+$/.test(credential.cookie)
       || !Number.isSafeInteger(credential.expiresAt) || credential.expiresAt <= Date.now()) {
@@ -107,18 +118,21 @@ export class DshConnectionStore {
     }
     const protectedCredential = this.protector.protect(JSON.stringify({ ...credential, origin }));
     this.replace({ origin, state: "connected", updatedAt: new Date().toISOString(), expiresAt: credential.expiresAt,
-      protection: this.protector.scheme, protectedCredential }, expectedRevision);
+      protection: this.protector.scheme, protectedCredential }, expectedRevision, assertAuthorized);
   }
 
-  invalidate(origin: string, rejectedCookie: string): void {
+  invalidate(origin: string, rejectedCookie: string, assertAuthorized?: () => void): void {
+    assertAuthorized?.();
     withFileLockSync(`${this.filePath}.lock`, () => {
-      const current = this.resolve(origin);
+      assertAuthorized?.();
+      const current = this.resolve(origin, Date.now(), assertAuthorized);
       if (current?.state !== "connected" || current.cookie !== rejectedCookie) return;
       const document = this.readDocument();
       const row = document.connections.find(item => item.origin === origin)!;
       row.expiresAt = 0;
       row.updatedAt = new Date().toISOString();
       document.revision++;
+      assertAuthorized?.();
       atomicWriteFileSync(this.filePath, `${JSON.stringify(document, null, 2)}\n`, { mode: 0o600 });
       this.credentialCache.delete(origin);
       recordDataMutationAudit({ group: "security", event: "dsh_connection_rejected", owner: "DshConnectionStore", action: "invalidate",
@@ -126,13 +140,15 @@ export class DshConnectionStore {
     });
   }
 
-  disconnect(origin: string, expectedRevision: number): void {
-    this.replace({ origin: dshLocalOrigin(origin), state: "disconnected", updatedAt: new Date().toISOString() }, expectedRevision);
+  disconnect(origin: string, expectedRevision: number, assertAuthorized?: () => void): void {
+    assertAuthorized?.();
+    this.replace({ origin: dshLocalOrigin(origin), state: "disconnected", updatedAt: new Date().toISOString() }, expectedRevision, assertAuthorized);
   }
 
-  private replace(row: ConnectionRecord, expectedRevision: number): void {
+  private replace(row: ConnectionRecord, expectedRevision: number, assertAuthorized?: () => void): void {
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new DshConnectionError("DSH connection revision is required.");
     withFileLockSync(`${this.filePath}.lock`, () => {
+      assertAuthorized?.();
       const document = this.readDocument();
       if (row.state === "connected" && Number(row.expiresAt) <= Date.now()) throw new DshConnectionError("DSH session credential expired before saving.", 401);
       if (document.revision !== expectedRevision) throw new DshConnectionError("DSH connections changed; refresh before retrying.", 409);
@@ -142,6 +158,7 @@ export class DshConnectionStore {
         document.connections.push(row);
       } else document.connections[index] = row;
       document.revision++;
+      assertAuthorized?.();
       atomicWriteFileSync(this.filePath, `${JSON.stringify(document, null, 2)}\n`, { mode: 0o600 });
       this.credentialCache.delete(row.origin);
       recordDataMutationAudit({ group: "security", event: "dsh_connection_updated", owner: "DshConnectionStore", action: row.state,

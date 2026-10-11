@@ -2,6 +2,8 @@ import type http from "node:http";
 import { createHash } from "node:crypto";
 import { normalizeNapCatInstances, definitionUsesNapcat, type GatewayDefinition } from "../shared/gatewayConfigModel.js";
 import { getTrustedLanAgentSource, hasLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
+import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
+import { hasAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import { QqReadError, qqRead, qqMessageMatches, qqMessageMedia, qqMessageText, readQqMedia, type QqMessage } from "./qqMessageMedia.js";
 
 export type QqMessageRoutesContext = {
@@ -12,7 +14,7 @@ export type QqMessageRoutesContext = {
 };
 const activeReads = new WeakMap<QqMessageRoutesContext, number>();
 
-/** Local management reads only. Remote Agent grants require a separate object-read contract. */
+/** Public bounded reads share authenticated Agent authority and retain upstream/object safety. */
 export function handleQqMessageRoutes(request: http.IncomingMessage, url: URL, response: http.ServerResponse,
   context: QqMessageRoutesContext, track: <T>(operation: Promise<T>) => Promise<T>): boolean {
   const history = url.pathname === "/api/agent/qq/history";
@@ -21,9 +23,16 @@ export function handleQqMessageRoutes(request: http.IncomingMessage, url: URL, r
   const fail = (status: number, errorCode: string) => context.json(response, status, { code: -1, errorCode });
   response.setHeader("cache-control", "private, no-store");
   if (request.method !== "GET") { fail(405, "QQ_READ_GET_REQUIRED"); return true; }
-  if (!context.local(request) || getTrustedLanAgentSource(request) || hasLanAgentBodyGuard(request)
-    || request.headers["x-rabilink-tunnel-local"] || request.headers["x-rabilink-resource-owner"] || request.headers["x-rabiroute-peer-proxy"]) {
-    fail(403, "QQ_READ_LOCAL_REQUIRED"); return true;
+  const authorized = () => {
+    try {
+      const principal = assertTrustedLanAgentPrincipal(request);
+      if (hasAuthenticatedConnectionRequest(request) || principal) return true;
+      if (request.headers["x-rabilink-tunnel-local"] || request.headers["x-rabilink-resource-owner"] || request.headers["x-rabiroute-peer-proxy"]) return false;
+      return context.local(request) && !getTrustedLanAgentSource(request) && !hasLanAgentBodyGuard(request);
+    } catch { return false; }
+  };
+  if (!authorized()) {
+    fail(403, "QQ_READ_AUTH_REQUIRED"); return true;
   }
   const allowed = history ? ["routeId", "kind", "target", "cursor", "limit"] : ["routeId", "kind", "target"];
   const keys = [...url.searchParams.keys()];
@@ -54,11 +63,13 @@ export function handleQqMessageRoutes(request: http.IncomingMessage, url: URL, r
   response.once("close", closed);
   const current = () => {
     const now = normalizeNapCatInstances(definition);
-    if (context.route(routeId) !== definition || !context.local(request) || definition.enabled !== true || !definitionUsesNapcat(definition)
+    if (!authorized()) throw new QqReadError(403, "QQ_READ_AUTHORIZATION_REVOKED");
+    if (context.route(routeId) !== definition || definition.enabled !== true || !definitionUsesNapcat(definition)
       || definition.napcatInstances?.length !== 1 || now.length !== 1 || now[0]?.enabled === false
       || now[0]?.id !== instance.id || now[0]?.httpUrl !== endpoint.httpUrl || (now[0]?.accessToken ?? "") !== endpoint.accessToken) throw new QqReadError(409, "QQ_READ_ROUTE_CHANGED");
   };
   const page = async (anchor: string | null, count: number) => {
+    current();
     const data = await qqRead(endpoint, kind === "group" ? "get_group_msg_history" : "get_friend_msg_history", {
       [kind === "group" ? "group_id" : "user_id"]: target, count,
       ...(anchor ? { message_seq: anchor } : {}), reverseOrder: true, disable_get_url: true, parse_mult_msg: false

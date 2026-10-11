@@ -1,3 +1,4 @@
+import { stickySpeechAuthority, awaitSpeechAuthority, type SpeechAuthorityGuard } from "./speechRequestAuthority.js";
 import { randomUUID } from "node:crypto";
 import {
   DEFAULT_SPEECH_ROUTE_PROFILE,
@@ -675,7 +676,13 @@ export class ManagerSpeechControl {
     this.statusCacheTtlMs = Math.min(5_000, Math.max(0, Math.floor(dependencies.statusCacheTtlMs ?? 500)));
   }
 
-  status(): Promise<SpeechRuntimeStatus> {
+  status(guard?: SpeechAuthorityGuard): Promise<SpeechRuntimeStatus> {
+    const authority = stickySpeechAuthority(guard);
+    return awaitSpeechAuthority(authority, () => this.statusOwned());
+  }
+
+  // A shared read flight belongs to the Manager; each caller fences its own result.
+  private statusOwned(): Promise<SpeechRuntimeStatus> {
     const endpoint = this.dependencies.serviceUrl();
     const serviceUrl = endpoint + "#" + (this.dependencies.contextKey?.() || "");
     if (this.statusCache?.serviceUrl === serviceUrl && this.statusCache.expiresAt > Date.now()) {
@@ -702,20 +709,26 @@ export class ManagerSpeechControl {
     return promise;
   }
 
-  eventStream(signal: AbortSignal): Promise<Response> {
-    return fetch(localSpeechEndpoint(this.dependencies.serviceUrl(), "/v1/events"), {
+  eventStream(signal: AbortSignal, guard?: SpeechAuthorityGuard): Promise<Response> {
+    guard = stickySpeechAuthority(guard);
+    guard();
+    return awaitSpeechAuthority(guard, () => fetch(localSpeechEndpoint(this.dependencies.serviceUrl(), "/v1/events"), {
       method: "GET",
       headers: { accept: "text/event-stream" },
       signal
-    });
+    }));
   }
 
-  async models(): Promise<SpeechModel[]> {
-    const raw = assertSuccess(await this.localSpeech.requestJson(this.dependencies.serviceUrl(), "/v1/models", {}, 10_000));
+  async models(guard?: SpeechAuthorityGuard): Promise<SpeechModel[]> {
+    guard = stickySpeechAuthority(guard);
+    guard();
+    const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(this.dependencies.serviceUrl(), "/v1/models", {}, 10_000)));
     return rows(raw.data).map(normalizeModel).filter(model => Boolean(model.id));
   }
 
-  personas(): SpeechPersona[] {
+  personas(guard?: SpeechAuthorityGuard): SpeechPersona[] {
+    guard = stickySpeechAuthority(guard);
+    guard();
     return this.dependencies.personas()
       .filter(persona => persona.isPersona)
       .map(persona => ({
@@ -733,17 +746,23 @@ export class ManagerSpeechControl {
       .sort((left, right) => left.id.localeCompare(right.id));
   }
 
-  async playbackStatus(): Promise<SpeechPlaybackStatus> {
-    const raw = assertSuccess(await this.localSpeech.requestJson(this.dependencies.serviceUrl(), "/v1/playback/status", {}, 10_000));
+  async playbackStatus(guard?: SpeechAuthorityGuard): Promise<SpeechPlaybackStatus> {
+    guard = stickySpeechAuthority(guard);
+    guard();
+    const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(this.dependencies.serviceUrl(), "/v1/playback/status", {}, 10_000)));
     return normalizePlaybackStatus(raw);
   }
 
-  async audioStreams(): Promise<SpeechAudioStreamStatus> {
-    const raw = assertSuccess(await this.localSpeech.requestJson(this.dependencies.serviceUrl(), "/v1/audio-streams", {}, 10_000));
+  async audioStreams(guard?: SpeechAuthorityGuard): Promise<SpeechAudioStreamStatus> {
+    guard = stickySpeechAuthority(guard);
+    guard();
+    const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(this.dependencies.serviceUrl(), "/v1/audio-streams", {}, 10_000)));
     return normalizeAudioStreamStatus(raw);
   }
 
-  private async recordBoundMobileEvidence(command: SpeechMessageCommand): Promise<SpeechRecord | undefined> {
+  private async recordBoundMobileEvidence(command: SpeechMessageCommand, guard?: SpeechAuthorityGuard): Promise<SpeechRecord | undefined> {
+    guard = stickySpeechAuthority(guard);
+    guard();
     const recordId = stringValue(command.recordId).trim();
     const text = stringValue(command.text).trim();
     const sourceDeviceId = stringValue(command.sourceDeviceId).trim();
@@ -760,11 +779,11 @@ export class ManagerSpeechControl {
     try {
       let records: SpeechRecord[];
       if (command.processingPolicy != null) {
-        const raw = assertSuccess(await this.localSpeech.requestJson(this.dependencies.serviceUrl(),
-          `/v1/records/${encodeURIComponent(recordId)}`, {}, 10_000));
+        const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(this.dependencies.serviceUrl(),
+          `/v1/records/${encodeURIComponent(recordId)}`, {}, 10_000)));
         records = [normalizeSpeechRecord(raw)];
       } else {
-        records = await this.records({ sourceDeviceId, limit: 50 });
+        records = await awaitSpeechAuthority(guard, () => this.records({ sourceDeviceId, limit: 50 }, guard));
       }
       return records.find(record => (
         record.kind === "asr"
@@ -776,6 +795,7 @@ export class ManagerSpeechControl {
         && record.sourceDeviceKind === sourceDeviceKind
       ));
     } catch {
+      guard();
       return undefined;
     }
   }
@@ -785,40 +805,46 @@ export class ManagerSpeechControl {
     clientId?: string;
     sourceDeviceId?: string;
     beforeSequence?: number;
-  } = {}): Promise<SpeechAudioStreamEvent[]> {
+  } = {}, guard?: SpeechAuthorityGuard): Promise<SpeechAudioStreamEvent[]> {
+    guard = stickySpeechAuthority(guard);
+    guard();
     const search = new URLSearchParams();
     search.set("limit", String(Math.min(1_000, Math.max(1, query.limit ?? 200))));
     if (query.clientId) search.set("client_id", query.clientId);
     if (query.sourceDeviceId) search.set("source_device_id", query.sourceDeviceId);
     if (query.beforeSequence != null) search.set("before_sequence", String(query.beforeSequence));
-    const raw = assertSuccess(await this.localSpeech.requestJson(
+    const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(
       this.dependencies.serviceUrl(),
       `/v1/audio-streams/events?${search.toString()}`,
       {},
       10_000
-    ));
+    )));
     return normalizeAudioStreamStatus({ events: raw.events }).events;
   }
 
-  async audioStreamToken(): Promise<string> {
-    const raw = assertSuccess(await this.localSpeech.requestJson(
+  async audioStreamToken(guard?: SpeechAuthorityGuard): Promise<string> {
+    guard = stickySpeechAuthority(guard);
+    guard();
+    const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(
       this.dependencies.serviceUrl(),
       "/v1/audio-streams/token",
       { method: "POST" },
       10_000
-    ));
+    )));
     const token = stringValue(raw.token).trim();
     if (!token) throw new SpeechControlError("RabiSpeech returned no audio stream token.", 502);
     return token;
   }
 
-  async selectAudioStream(command: SpeechAudioStreamSelectionCommand): Promise<SpeechAudioStreamStatus> {
+  async selectAudioStream(command: SpeechAudioStreamSelectionCommand, guard?: SpeechAuthorityGuard): Promise<SpeechAudioStreamStatus> {
+    guard = stickySpeechAuthority(guard);
+    guard();
     const source = command?.source === "remote" ? "remote" : "local";
     const clientId = source === "remote" ? stringValue(command?.clientId).trim() : "";
     if (source === "remote" && !clientId) {
       throw new SpeechControlError("A remote audio client id is required.", 400);
     }
-    const raw = assertSuccess(await this.localSpeech.requestJson(
+    const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(
       this.dependencies.serviceUrl(),
       "/v1/audio-streams/selection",
       {
@@ -827,16 +853,18 @@ export class ManagerSpeechControl {
         body: JSON.stringify({ source, client_id: clientId || null })
       },
       30_000
-    ));
+    )));
     return normalizeAudioStreamStatus(raw);
   }
 
-  async setPlaybackVolume(command: SpeechPlaybackVolumeCommand): Promise<SpeechPlaybackStatus> {
+  async setPlaybackVolume(command: SpeechPlaybackVolumeCommand, guard?: SpeechAuthorityGuard): Promise<SpeechPlaybackStatus> {
+    guard = stickySpeechAuthority(guard);
+    guard();
     const volume = command?.volume;
     if (typeof volume !== "number" || !Number.isInteger(volume) || volume < 0 || volume > 100) {
       throw new SpeechControlError("Playback volume must be an integer between 0 and 100.", 400);
     }
-    const raw = assertSuccess(await this.localSpeech.requestJson(
+    const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(
       this.dependencies.serviceUrl(),
       "/v1/playback/settings",
       {
@@ -845,7 +873,7 @@ export class ManagerSpeechControl {
         body: JSON.stringify({ volume })
       },
       10_000
-    ));
+    )));
     return normalizePlaybackStatus(raw);
   }
 
@@ -858,7 +886,9 @@ export class ManagerSpeechControl {
     until?: number;
     sourceDeviceId?: string;
     before?: number;
-  } = {}): Promise<SpeechRecord[]> {
+  } = {}, guard?: SpeechAuthorityGuard): Promise<SpeechRecord[]> {
+    guard = stickySpeechAuthority(guard);
+    guard();
     const search = new URLSearchParams();
     search.set("limit", String(Math.min(1000, Math.max(1, query.limit ?? 200))));
     if (query.kind) search.set("kind", query.kind);
@@ -868,46 +898,52 @@ export class ManagerSpeechControl {
     if (query.until != null) search.set("until", String(query.until));
     if (query.sourceDeviceId) search.set("source_device_id", query.sourceDeviceId);
     if (query.before != null) search.set("before", String(query.before));
-    const raw = assertSuccess(await this.localSpeech.requestJson(
+    const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(
       this.dependencies.serviceUrl(),
       `/v1/records?${search.toString()}`,
       {},
       10_000
-    ));
+    )));
     return rows(raw.data).map(normalizeSpeechRecord).filter(item => Boolean(item.id));
   }
 
-  recordAudio(recordId: string): Promise<LocalSpeechResponse> {
+  recordAudio(recordId: string, guard?: SpeechAuthorityGuard): Promise<LocalSpeechResponse> {
+    guard = stickySpeechAuthority(guard);
+    guard();
     const normalized = stringValue(recordId).trim();
     if (!normalized || normalized.length > 200) {
       throw new SpeechControlError("A valid speech record id is required.", 400);
     }
-    return this.localSpeech.requestBinary(
+    return awaitSpeechAuthority(guard, () => this.localSpeech.requestBinary(
       this.dependencies.serviceUrl(),
       `/v1/records/${encodeURIComponent(normalized)}/audio`,
       {},
       30_000
-    );
+    ));
   }
 
-  async speakerRegistry(sessionId?: string): Promise<SpeechSpeakerRegistry> {
+  async speakerRegistry(sessionId?: string, guard?: SpeechAuthorityGuard): Promise<SpeechSpeakerRegistry> {
+    guard = stickySpeechAuthority(guard);
+    guard();
     const search = new URLSearchParams();
     const normalizedSessionId = stringValue(sessionId).trim().slice(0, 200);
     if (normalizedSessionId) search.set("session_id", normalizedSessionId);
     const suffix = search.size > 0 ? `?${search.toString()}` : "";
-    const raw = assertSuccess(await this.localSpeech.requestJson(
+    const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(
       this.dependencies.serviceUrl(),
       `/v1/speaker-profiles${suffix}`,
       {},
       10_000
-    ));
+    )));
     return normalizeSpeakerRegistry(raw);
   }
 
-  async createSpeakerProfile(command: SpeechSpeakerProfileCreateCommand): Promise<SpeechSpeakerProfile> {
+  async createSpeakerProfile(command: SpeechSpeakerProfileCreateCommand, guard?: SpeechAuthorityGuard): Promise<SpeechSpeakerProfile> {
+    guard = stickySpeechAuthority(guard);
+    guard();
     const displayName = stringValue(command?.displayName).trim();
     if (!displayName) throw new SpeechControlError("Missing speaker display name.", 400);
-    const raw = assertSuccess(await this.localSpeech.requestJson(
+    const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(
       this.dependencies.serviceUrl(),
       "/v1/speaker-profiles",
       {
@@ -916,20 +952,22 @@ export class ManagerSpeechControl {
         body: JSON.stringify({ display_name: displayName, aliases: stringArray(command?.aliases) })
       },
       10_000
-    ));
+    )));
     return normalizeSpeakerProfile(raw);
   }
 
   async updateSpeakerProfile(
     speakerId: string,
-    command: SpeechSpeakerProfileUpdateCommand
+    command: SpeechSpeakerProfileUpdateCommand, guard?: SpeechAuthorityGuard
   ): Promise<SpeechSpeakerProfile> {
+    guard = stickySpeechAuthority(guard);
+    guard();
     const normalizedId = this.speakerProfileId(speakerId);
     const payload: Record<string, unknown> = {};
     if (command?.displayName != null) payload.display_name = stringValue(command.displayName).trim();
     if (command?.aliases != null) payload.aliases = stringArray(command.aliases);
     if (Object.keys(payload).length === 0) throw new SpeechControlError("No speaker profile changes were provided.", 400);
-    const raw = assertSuccess(await this.localSpeech.requestJson(
+    const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(
       this.dependencies.serviceUrl(),
       `/v1/speaker-profiles/${encodeURIComponent(normalizedId)}`,
       {
@@ -938,25 +976,29 @@ export class ManagerSpeechControl {
         body: JSON.stringify(payload)
       },
       10_000
-    ));
+    )));
     return normalizeSpeakerProfile(raw);
   }
 
-  async deleteSpeakerProfile(speakerId: string): Promise<SpeechSpeakerProfileDeleteResult> {
+  async deleteSpeakerProfile(speakerId: string, guard?: SpeechAuthorityGuard): Promise<SpeechSpeakerProfileDeleteResult> {
+    guard = stickySpeechAuthority(guard);
+    guard();
     const normalizedId = this.speakerProfileId(speakerId);
-    const raw = assertSuccess(await this.localSpeech.requestJson(
+    const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(
       this.dependencies.serviceUrl(),
       `/v1/speaker-profiles/${encodeURIComponent(normalizedId)}`,
       { method: "DELETE" },
       10_000
-    ));
+    )));
     return {
       deleted: normalizeSpeakerProfile(asRecord(raw.deleted)),
       removedBindings: numberValue(raw.removed_bindings ?? raw.removedBindings)
     };
   }
 
-  async bindSpeaker(command: SpeechSpeakerBindingCommand): Promise<SpeechSpeakerBinding> {
+  async bindSpeaker(command: SpeechSpeakerBindingCommand, guard?: SpeechAuthorityGuard): Promise<SpeechSpeakerBinding> {
+    guard = stickySpeechAuthority(guard);
+    guard();
     const sessionId = stringValue(command?.sessionId).trim();
     const recordId = stringValue(command?.recordId).trim();
     const speakerLabel = stringValue(command?.speakerLabel).trim();
@@ -964,7 +1006,7 @@ export class ManagerSpeechControl {
     if (!sessionId) throw new SpeechControlError("Missing speaker session id.", 400);
     if (!recordId) throw new SpeechControlError("Missing speech record id.", 400);
     if (!speakerLabel) throw new SpeechControlError("Missing diarization speaker label.", 400);
-    const raw = assertSuccess(await this.localSpeech.requestJson(
+    const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(
       this.dependencies.serviceUrl(),
       "/v1/speaker-bindings",
       {
@@ -978,11 +1020,13 @@ export class ManagerSpeechControl {
         })
       },
       10_000
-    ));
+    )));
     return normalizeSpeakerBinding(raw);
   }
 
-  async identifySpeaker(command: SpeechSpeakerIdentityCommand): Promise<SpeechSpeakerIdentityResult> {
+  async identifySpeaker(command: SpeechSpeakerIdentityCommand, guard?: SpeechAuthorityGuard): Promise<SpeechSpeakerIdentityResult> {
+    guard = stickySpeechAuthority(guard);
+    guard();
     const sessionId = stringValue(command?.sessionId).trim();
     const recordId = stringValue(command?.recordId).trim();
     const speakerLabel = stringValue(command?.speakerLabel).trim();
@@ -994,7 +1038,7 @@ export class ManagerSpeechControl {
     if (!speakerId && !displayName) {
       throw new SpeechControlError("A display name is required when no speaker profile id is provided.", 400);
     }
-    const raw = assertSuccess(await this.localSpeech.requestJson(
+    const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(
       this.dependencies.serviceUrl(),
       "/v1/speaker-identities",
       {
@@ -1010,11 +1054,13 @@ export class ManagerSpeechControl {
         })
       },
       10_000
-    ));
+    )));
     return normalizeSpeakerIdentityResult(raw);
   }
 
-  async unbindSpeaker(sessionId: string, recordId: string, speakerLabel: string): Promise<SpeechSpeakerBinding> {
+  async unbindSpeaker(sessionId: string, recordId: string, speakerLabel: string, guard?: SpeechAuthorityGuard): Promise<SpeechSpeakerBinding> {
+    guard = stickySpeechAuthority(guard);
+    guard();
     const normalizedSessionId = stringValue(sessionId).trim();
     const normalizedRecordId = stringValue(recordId).trim();
     const normalizedLabel = stringValue(speakerLabel).trim();
@@ -1026,37 +1072,45 @@ export class ManagerSpeechControl {
       record_id: normalizedRecordId,
       speaker_label: normalizedLabel
     });
-    const raw = assertSuccess(await this.localSpeech.requestJson(
+    const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(
       this.dependencies.serviceUrl(),
       `/v1/speaker-bindings?${search.toString()}`,
       { method: "DELETE" },
       10_000
-    ));
+    )));
     return normalizeSpeakerBinding(raw);
   }
 
-  async stopPlayback(): Promise<SpeechPlaybackStatus> {
-    const raw = assertSuccess(await this.localSpeech.requestJson(
+  async stopPlayback(guard?: SpeechAuthorityGuard): Promise<SpeechPlaybackStatus> {
+    guard = stickySpeechAuthority(guard);
+    guard();
+    const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(
       this.dependencies.serviceUrl(),
       "/v1/playback/stop",
       { method: "POST" },
       10_000
-    ));
+    )));
     return normalizePlaybackStatus(raw);
   }
 
-  async microphoneStatus(): Promise<SpeechMicrophoneStatus> {
-    const raw = assertSuccess(await this.localSpeech.requestJson(this.dependencies.serviceUrl(), "/v1/microphone/status", {}, 10_000));
+  async microphoneStatus(guard?: SpeechAuthorityGuard): Promise<SpeechMicrophoneStatus> {
+    guard = stickySpeechAuthority(guard);
+    guard();
+    const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(this.dependencies.serviceUrl(), "/v1/microphone/status", {}, 10_000)));
     return normalizeMicrophoneStatus(raw);
   }
 
-  async microphoneDevices(): Promise<SpeechAudioInput[]> {
-    const raw = assertSuccess(await this.localSpeech.requestJson(this.dependencies.serviceUrl(), "/v1/microphone/devices", {}, 15_000));
+  async microphoneDevices(guard?: SpeechAuthorityGuard): Promise<SpeechAudioInput[]> {
+    guard = stickySpeechAuthority(guard);
+    guard();
+    const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(this.dependencies.serviceUrl(), "/v1/microphone/devices", {}, 15_000)));
     return rows(raw.data).map(normalizeAudioInput);
   }
 
-  async startMicrophone(command: SpeechMicrophoneStartCommand): Promise<SpeechMicrophoneStatus> {
-    const raw = assertSuccess(await this.localSpeech.requestJson(
+  async startMicrophone(command: SpeechMicrophoneStartCommand, guard?: SpeechAuthorityGuard): Promise<SpeechMicrophoneStatus> {
+    guard = stickySpeechAuthority(guard);
+    guard();
+    const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(
       this.dependencies.serviceUrl(),
       "/v1/microphone/start",
       {
@@ -1065,12 +1119,14 @@ export class ManagerSpeechControl {
         body: JSON.stringify(microphonePayload(command, true))
       },
       30_000
-    ));
+    )));
     return normalizeMicrophoneStatus(raw);
   }
 
-  async updateMicrophoneSettings(command: SpeechMicrophoneSettingsCommand): Promise<SpeechMicrophoneStatus> {
-    const raw = assertSuccess(await this.localSpeech.requestJson(
+  async updateMicrophoneSettings(command: SpeechMicrophoneSettingsCommand, guard?: SpeechAuthorityGuard): Promise<SpeechMicrophoneStatus> {
+    guard = stickySpeechAuthority(guard);
+    guard();
+    const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(
       this.dependencies.serviceUrl(),
       "/v1/microphone/settings",
       {
@@ -1079,42 +1135,48 @@ export class ManagerSpeechControl {
         body: JSON.stringify(microphonePayload(command))
       },
       30_000
-    ));
+    )));
     const updated = normalizeMicrophoneStatus(raw);
     if (updated.config.streamingEnabled && !updated.running) {
-      return this.startMicrophone(microphoneSettingsFromConfig(updated.config));
+      return this.startMicrophone(microphoneSettingsFromConfig(updated.config), guard);
     }
     return updated;
   }
 
-  async reconcileMicrophone(): Promise<SpeechMicrophoneStatus> {
-    const current = await this.microphoneStatus();
+  async reconcileMicrophone(guard?: SpeechAuthorityGuard): Promise<SpeechMicrophoneStatus> {
+    guard = stickySpeechAuthority(guard);
+    guard();
+    const current = await awaitSpeechAuthority(guard, () => this.microphoneStatus(guard));
     if (!current.config.streamingEnabled) {
-      return current.running ? this.stopMicrophone() : current;
+      return current.running ? this.stopMicrophone(guard) : current;
     }
     const settings = microphoneSettingsFromConfig(current.config);
-    if (!current.running) return this.startMicrophone(settings);
+    if (!current.running) return this.startMicrophone(settings, guard);
     if (current.config.autoSubmit !== true || current.config.routeId) {
-      return this.updateMicrophoneSettings(settings);
+      return this.updateMicrophoneSettings(settings, guard);
     }
     return current;
   }
 
-  async stopMicrophone(): Promise<SpeechMicrophoneStatus> {
-    const raw = assertSuccess(await this.localSpeech.requestJson(
+  async stopMicrophone(guard?: SpeechAuthorityGuard): Promise<SpeechMicrophoneStatus> {
+    guard = stickySpeechAuthority(guard);
+    guard();
+    const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(
       this.dependencies.serviceUrl(),
       "/v1/microphone/stop",
       { method: "POST" },
       15_000
-    ));
+    )));
     return normalizeMicrophoneStatus(raw);
   }
 
-  synthesize(command: SpeechSynthesisCommand): Promise<LocalSpeechResponse> {
+  synthesize(command: SpeechSynthesisCommand, guard?: SpeechAuthorityGuard): Promise<LocalSpeechResponse> {
+    guard = stickySpeechAuthority(guard);
+    guard();
     const input = stringValue(command?.input).trim();
     if (!input) throw new SpeechControlError("Missing TTS input.", 400);
     if (input.length > 10_000) throw new SpeechControlError("TTS input exceeds 10000 characters.", 400);
-    return this.localSpeech.requestBinary(
+    return awaitSpeechAuthority(guard, () => this.localSpeech.requestBinary(
       this.dependencies.serviceUrl(),
       "/v1/audio/speech",
       {
@@ -1128,25 +1190,29 @@ export class ManagerSpeechControl {
           routeId: command.routeId?.slice(0, 200) ?? null
         }))
       }
-    );
+    ));
   }
 
-  transcribe(contentType: string, body: Buffer): Promise<LocalSpeechResponse> {
+  transcribe(contentType: string, body: Buffer, guard?: SpeechAuthorityGuard): Promise<LocalSpeechResponse> {
+    guard = stickySpeechAuthority(guard);
+    guard();
     if (!contentType.toLowerCase().startsWith("multipart/form-data;")) {
       throw new SpeechControlError("ASR requires multipart/form-data.", 415);
     }
-    return this.localSpeech.requestBinary(this.dependencies.serviceUrl(), "/v1/audio/transcriptions", {
+    return awaitSpeechAuthority(guard, () => this.localSpeech.requestBinary(this.dependencies.serviceUrl(), "/v1/audio/transcriptions", {
       method: "POST",
       headers: { "content-type": contentType },
       body: new Uint8Array(body)
-    });
+    }));
   }
 
-  async acceptMessage(command: SpeechMessageCommand): Promise<SpeechMessageResult> {
+  async acceptMessage(command: SpeechMessageCommand, guard?: SpeechAuthorityGuard): Promise<SpeechMessageResult> {
+    guard = stickySpeechAuthority(guard);
+    guard();
     const text = stringValue(command?.text).trim();
     if (!text) throw new SpeechControlError("Missing speech transcript text.", 400);
     const sessionId = (stringValue(command?.sessionId) || `speech-${Date.now()}`).trim().slice(0, 200);
-    const mobileEvidence = await this.recordBoundMobileEvidence(command);
+    const mobileEvidence = await awaitSpeechAuthority(guard, () => this.recordBoundMobileEvidence(command, guard));
     if (command.processingPolicy != null && !["agent", "transcribe"].includes(command.processingPolicy)) {
       throw new SpeechControlError("Unsupported processing policy.", 400);
     }
@@ -1156,9 +1222,10 @@ export class ManagerSpeechControl {
     }
     let transcribeOnly = mobileEvidence?.processingPolicy === "transcribe";
     if (command.recordId && !mobileEvidence) {
+      const recordId = command.recordId;
       try {
-        const raw = assertSuccess(await this.localSpeech.requestJson(this.dependencies.serviceUrl(),
-          `/v1/records/${encodeURIComponent(command.recordId)}`, {}, 10_000));
+        const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(this.dependencies.serviceUrl(),
+          `/v1/records/${encodeURIComponent(recordId)}`, {}, 10_000)));
         if (raw.processing_policy === "transcribe") {
           if (raw.text !== text || raw.source_device_id !== command.sourceDeviceId
             || raw.source_stream_id !== command.sourceStreamId || raw.source_device_kind !== command.sourceDeviceKind
@@ -1168,6 +1235,7 @@ export class ManagerSpeechControl {
           transcribeOnly = true;
         }
       } catch (error) {
+        guard();
         if (error instanceof SpeechControlError && error.message.includes("attribution mismatch")) throw error;
         if (command.processingPolicy === "transcribe" && !mobileEvidence) throw error;
       }
@@ -1193,6 +1261,7 @@ export class ManagerSpeechControl {
         }
       : { ...command, sourceDeviceTrust: undefined };
     const fallbackId = this.createMessageId();
+    guard();
     const ingress = this.dependencies.speechIngressStore
       ? this.dependencies.speechIngressStore.append({ ...trustedCommand, processingPolicy: transcribeOnly ? "transcribe" : trustedCommand.processingPolicy, text, sessionId }, fallbackId)
       : {
@@ -1214,7 +1283,7 @@ export class ManagerSpeechControl {
       if (!this.routeAcceptsRecord(route, record)) {
         throw new SpeechControlError(`The selected Route has no enabled ${record.messageAdapterType} message endpoint.`, 400);
       }
-      const delivery = await this.deliverToRoute(route.id, record);
+      const delivery = await awaitSpeechAuthority(guard, () => this.deliverToRoute(route.id, record, guard));
       return { ...delivery, sessionId: record.sessionId, deliveries: [delivery] };
     }
 
@@ -1231,10 +1300,11 @@ export class ManagerSpeechControl {
       };
     }
 
-    const deliveries = await Promise.all(routes.map(async route => {
+    const deliveries = await awaitSpeechAuthority(guard, () => Promise.all(routes.map(async route => {
       try {
-        return await this.deliverToRoute(route.id, record);
+        return await awaitSpeechAuthority(guard, () => this.deliverToRoute(route.id, record, guard));
       } catch (error) {
+        guard();
         return {
           routeId: route.id,
           messageId: "",
@@ -1242,7 +1312,7 @@ export class ManagerSpeechControl {
           detail: error instanceof Error ? error.message : String(error)
         };
       }
-    }));
+    })));
     const delivered = deliveries.filter(item => item.status === "delivered").length;
     const recorded = deliveries.filter(item => item.status === "recorded").length;
     const failed = deliveries.length - delivered - recorded;
@@ -1275,7 +1345,9 @@ export class ManagerSpeechControl {
     return [...unique.values()];
   }
 
-  private async deliverToRoute(routeId: string, record: SpeechIngressRecord): Promise<SpeechRouteDeliveryResult> {
+  private async deliverToRoute(routeId: string, record: SpeechIngressRecord, guard?: SpeechAuthorityGuard): Promise<SpeechRouteDeliveryResult> {
+    guard = stickySpeechAuthority(guard);
+    guard();
     const receipt = this.dependencies.speechIngressStore?.readDeliveryReceipt?.(record.id, routeId);
     if (receipt) return {
       routeId,
@@ -1286,25 +1358,29 @@ export class ManagerSpeechControl {
     };
     const flightKey = `${record.messageAdapterType}:${record.id}:${routeId}`;
     const existingFlight = this.deliveryFlights.get(flightKey);
-    if (existingFlight) return existingFlight;
-    const flight = this.deliverToRouteOnce(routeId, record).finally(() => {
+    if (existingFlight) return awaitSpeechAuthority(guard, () => existingFlight);
+    const flight = this.deliverToRouteOnce(routeId, record, guard).finally(() => {
       if (this.deliveryFlights.get(flightKey) === flight) this.deliveryFlights.delete(flightKey);
     });
     this.deliveryFlights.set(flightKey, flight);
     return flight;
   }
 
-  private async deliverToRouteOnce(routeId: string, record: SpeechIngressRecord): Promise<SpeechRouteDeliveryResult> {
+  private async deliverToRouteOnce(routeId: string, record: SpeechIngressRecord, guard?: SpeechAuthorityGuard): Promise<SpeechRouteDeliveryResult> {
+    guard = stickySpeechAuthority(guard);
+    guard();
     const messageId = record.id;
     try {
-      const outcome = await this.dependencies.deliverTranscript({ routeId, record });
+      const outcome = await awaitSpeechAuthority(guard, () => this.dependencies.deliverTranscript({ routeId, record }));
       if (outcome.status === "failed") {
         throw new SpeechControlError(outcome.detail || outcome.reason || "Speech delivery failed.", 502);
       }
       const endpointLabel = record.messageAdapterType === "rabilink" ? "rabilink ASR message" : "speech message";
+      guard();
       this.dependencies.appendRouteLog(routeId, `${endpointLabel} ${outcome.status}: ${messageId}${outcome.reason ? `; ${outcome.reason}` : ""}`);
       const result = { routeId, messageId, ...outcome };
       if (outcome.status === "delivered" || outcome.status === "recorded") {
+        guard();
         this.dependencies.speechIngressStore?.appendDeliveryReceipt?.({
           schemaVersion: 1,
           recordId: record.id,
@@ -1318,6 +1394,7 @@ export class ManagerSpeechControl {
       }
       return result;
     } catch (error) {
+      guard();
       const message = error instanceof Error ? error.message : String(error);
       this.dependencies.appendRouteLog(routeId, `speech message failed: ${messageId}; ${message}`);
       throw error;

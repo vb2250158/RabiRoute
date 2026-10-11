@@ -11,6 +11,7 @@ import type { AgentRequestStore } from "../agentRequests/store.js";
 import type { AgentSendTraceQuery } from "./agentSendIdempotency.js";
 import { getTrustedLanAgentSource, hasLanAgentBodyGuard, type TrustedLanAgentSource } from "./lanAgentBodyAuthority.js";
 import { ManagerPluginRequestTracker } from "./managerPluginRequestTracker.js";
+import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
 import { handleAgentQqDiagnostics, type AgentQqDiagnosticsContext } from "./agentQqDiagnostics.js";
 import { handleAgentGroupFiles, type AgentGroupFilesContext } from "./agentGroupFiles.js";
 import { handleQqMessageRoutes, type QqMessageRoutesContext } from "./qqMessageRoutes.js";
@@ -26,11 +27,11 @@ export type AgentCommunicationRoutesContext = {
   jsonResponse: (response: http.ServerResponse, statusCode: number, body: unknown) => void;
   receiptResponse: (deliveryId: string) => AgentCommunicationHttpResponse;
   findSendTraces: (query: AgentSendTraceQuery) => unknown[];
-  send: (request: AgentSendRequest, options?: { remoteSource?: TrustedLanAgentSource }) => Promise<AgentCommunicationHttpResponse>;
+  send: (request: AgentSendRequest, options?: { remoteSource?: TrustedLanAgentSource; requestAuthority?: () => void }) => Promise<AgentCommunicationHttpResponse>;
   // Host owns authorization, original-request binding and trusted evidence callbacks.
   maintenance?: {
-    verify: (deliveryId: string, originalRequest: AgentSendRequest, options: { remoteSource?: TrustedLanAgentSource }) => Promise<AgentCommunicationHttpResponse>;
-    settle: (deliveryId: string, originalRequest: AgentSendRequest, options: { remoteSource?: TrustedLanAgentSource }) => Promise<AgentCommunicationHttpResponse>;
+    verify: (deliveryId: string, originalRequest: AgentSendRequest, options: { remoteSource?: TrustedLanAgentSource; requestAuthority?: () => void }) => Promise<AgentCommunicationHttpResponse>;
+    settle: (deliveryId: string, originalRequest: AgentSendRequest, options: { remoteSource?: TrustedLanAgentSource; requestAuthority?: () => void }) => Promise<AgentCommunicationHttpResponse>;
   };
   agentRequests: AgentRequestStore;
   refreshAgentRequestReminderTimers: () => void;
@@ -164,7 +165,10 @@ function handleReceiptMaintenance(
       fail(403, "AGENT_SEND_MAINTENANCE_SOURCE_UNAVAILABLE", "Trusted source session is unavailable.");
       return;
     }
-    const result = await maintenance[match[2] as "verify" | "settle"](deliveryId, originalRequest, { remoteSource });
+    const requestAuthority = () => { assertTrustedLanAgentPrincipal(request); };
+    requestAuthority();
+    const result = await maintenance[match[2] as "verify" | "settle"](deliveryId, originalRequest, { remoteSource, requestAuthority });
+    requestAuthority();
     context.jsonResponse(response, result.statusCode, { code: result.statusCode < 400 ? 0 : -1, ...result.body });
   }).catch(() => {
     // Parser and injected-handler exceptions may contain the original request or secrets.
@@ -288,9 +292,12 @@ function handleSend(
       if (hasLanAgentBodyGuard(request) && !remoteSource) {
         throw new Error("Remote Agent trusted source session is unavailable.");
       }
-      return context.send(body, { remoteSource });
+      const requestAuthority = () => { assertTrustedLanAgentPrincipal(request); };
+      requestAuthority();
+      return context.send(body, { remoteSource, requestAuthority });
     })
     .then(result => {
+      assertTrustedLanAgentPrincipal(request);
       context.jsonResponse(response, result.statusCode, {
         code: result.body.ok ? 0 : -1,
         ...result.body

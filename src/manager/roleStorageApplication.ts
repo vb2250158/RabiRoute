@@ -26,6 +26,7 @@ import type {
 } from "../personaPlanWorkflow.js";
 import {
   ManagerStorageMutationError,
+  assertManagerStorageMutationAuthorized,
   ManagerStorageMutationPool,
   type ManagerStorageMutationPoolStatus
 } from "./managerStorageMutationPool.js";
@@ -51,6 +52,7 @@ export type RoleStorageGenerationIdentity = Readonly<{
 }>;
 
 export type RoleStorageCommandContext = Readonly<{
+  authorize?: () => void;
   actor?: import("../shared/planHistoryActor.js").PlanHistoryActor;
   idempotencyKey?: string;
   expectedRevision?: string | null;
@@ -121,7 +123,8 @@ export class RoleStorageApplicationError extends Error {
       | "busy"
       | "generation_mismatch"
       | "projection_unavailable"
-      | "mutation_failed",
+      | "mutation_failed"
+      | "authorization_revoked",
     readonly statusCode: number,
     readonly operationId?: string,
     readonly commitState: "not_started" | "unknown" | "committed" = "not_started",
@@ -270,6 +273,8 @@ function publicMutationError(error: unknown, operationId?: string): RoleStorageA
     return new RoleStorageApplicationError("Storage mutation failed.", "mutation_failed", 500, operationId, "unknown");
   }
   switch (error.code) {
+    case "authorization_revoked":
+      return new RoleStorageApplicationError("Original request authorization was revoked.", "authorization_revoked", 403, operationId, error.commitState ?? "not_started");
     case "validation_rejected":
       return new RoleStorageApplicationError(error.message, "invalid_request", 400, operationId, "not_started");
     case "revision_conflict":
@@ -298,7 +303,7 @@ function publicMutationError(error: unknown, operationId?: string): RoleStorageA
       );
     case "busy":
     case "stopped":
-      return new RoleStorageApplicationError(`Role storage is temporarily unavailable (${error.code}).`, "busy", 503, operationId, "not_started", error.code);
+      return new RoleStorageApplicationError(`Role storage is temporarily unavailable (${error.code}).`, "busy", 503, operationId, error.commitState ?? "not_started", error.code);
     case "fence_mismatch":
       return new RoleStorageApplicationError(
         "The Manager storage generation changed while the commit result was unresolved. Retry only with the same Idempotency-Key.",
@@ -485,7 +490,7 @@ export class RoleStorageCommands {
     allowResourceDerivedKey?: boolean;
     context: RoleStorageCommandContext;
     expectedRevision: () => Promise<string | null>;
-    mutate(options: { idempotencyKey: string; expectedRevision: string | null; actor?: import("../shared/planHistoryActor.js").PlanHistoryActor; signal?: AbortSignal; timeoutMs?: number }): Promise<TCommit>;
+    mutate(options: { authorize?: () => void; idempotencyKey: string; expectedRevision: string | null; actor?: import("../shared/planHistoryActor.js").PlanHistoryActor; signal?: AbortSignal; timeoutMs?: number }): Promise<TCommit>;
     project(catalog: RoleKnowledgeCatalogSnapshot): Promise<TProjection>;
   }): Promise<RoleStorageCommit<TCommit, TProjection>> {
     const roleId = canonicalStorageMutationRoleId(input.roleId);
@@ -498,6 +503,8 @@ export class RoleStorageCommands {
       allowResourceDerivedKey: input.allowResourceDerivedKey
     });
     this.assertPoolGeneration();
+    try { assertManagerStorageMutationAuthorized(input.context); }
+    catch (error) { throw publicMutationError(error, operationId); }
     const expectedRevision = await input.expectedRevision();
     const auditBase = {
       group: roleStorageAuditGroup(input.operation),
@@ -512,7 +519,10 @@ export class RoleStorageCommands {
     recordDataMutationAudit({ ...auditBase, event: "role_storage_mutation_started", outcome: "started" });
     let commit: TCommit;
     try {
+      this.assertPoolGeneration();
+      assertManagerStorageMutationAuthorized(input.context);
       commit = await input.mutate({
+        authorize: input.context.authorize,
         idempotencyKey: operationId,
         expectedRevision,
         actor: input.context.actor,
@@ -575,7 +585,7 @@ export class RoleStorageCommands {
     allowResourceDerivedKey?: boolean;
     context: RoleStorageCommandContext;
     expectedRevision: () => Promise<string | null>;
-    mutate(options: { idempotencyKey: string; expectedRevision: string | null; actor?: import("../shared/planHistoryActor.js").PlanHistoryActor; signal?: AbortSignal; timeoutMs?: number }): Promise<TCommit>;
+    mutate(options: { authorize?: () => void; idempotencyKey: string; expectedRevision: string | null; actor?: import("../shared/planHistoryActor.js").PlanHistoryActor; signal?: AbortSignal; timeoutMs?: number }): Promise<TCommit>;
     project(commit: TCommit): Promise<TProjection>;
   }): Promise<RoleStorageProjectedCommit<TCommit, TProjection>> {
     const roleId = canonicalStorageMutationRoleId(input.roleId);
@@ -588,6 +598,8 @@ export class RoleStorageCommands {
       allowResourceDerivedKey: input.allowResourceDerivedKey
     });
     this.assertPoolGeneration();
+    try { assertManagerStorageMutationAuthorized(input.context); }
+    catch (error) { throw publicMutationError(error, operationId); }
     const expectedRevision = await input.expectedRevision();
     const auditBase = {
       group: roleStorageAuditGroup(input.operation),
@@ -602,7 +614,10 @@ export class RoleStorageCommands {
     recordDataMutationAudit({ ...auditBase, event: "role_storage_mutation_started", outcome: "started" });
     let commit: TCommit;
     try {
+      this.assertPoolGeneration();
+      assertManagerStorageMutationAuthorized(input.context);
       commit = await input.mutate({
+        authorize: input.context.authorize,
         idempotencyKey: operationId,
         expectedRevision,
         actor: input.context.actor,
@@ -1055,7 +1070,9 @@ export class RoleStorageCommands {
     recordDataMutationAudit({ ...auditBase, event: "role_storage_mutation_started", outcome: "started" });
     let commit: RolePanelTimelineAppendResult;
     try {
+      assertManagerStorageMutationAuthorized(context);
       commit = await this.mutationPool.appendRolePanelTimeline(canonicalRoleId, message, {
+        authorize: context.authorize,
         idempotencyKey: operationId,
         expectedRevision: null,
         signal: context.signal,
@@ -1109,7 +1126,7 @@ export class RoleStorageCommands {
     record: PlanFeedbackRecord,
     payload: unknown,
     context: RoleStorageCommandContext,
-    mutate: (options: { idempotencyKey: string; expectedRevision: string | null; signal?: AbortSignal; timeoutMs?: number }) => Promise<PlanFeedbackRecord>
+    mutate: (options: { authorize?: () => void; idempotencyKey: string; expectedRevision: string | null; signal?: AbortSignal; timeoutMs?: number }) => Promise<PlanFeedbackRecord>
   ): Promise<RoleStorageProjectedCommit<PlanFeedbackRecord, RoleStoragePlanFeedbackProjection>> {
     const canonicalPlanId = canonicalStorageMutationPlanId(planId);
     return this.commitProjection({

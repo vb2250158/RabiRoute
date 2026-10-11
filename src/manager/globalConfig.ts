@@ -42,11 +42,82 @@ export class RabiGlobalConfigStore {
   readonly configPath: string;
   private current: RabiGlobalConfig;
   private deviceIdentityBinding: unknown;
+  // Request-scoped fence: requests never survive a Manager process restart.
+  private lanAgentAdmissionIncarnation = randomUUID();
+  private lanAgentAdmissionAvailable = true;
+  private lanAgentDeliveryPolicy!: { enabled: boolean; incarnation: string };
+
+  /** Durable business-delivery fence, separate from the process-scoped HTTP admission. */
+  getLanAgentDeliveryPolicy(): Readonly<{ enabled: boolean; incarnation: string }> {
+    return { ...this.lanAgentDeliveryPolicy,
+      enabled: this.lanAgentAdmissionAvailable && this.current.webguiLan.enabled && this.lanAgentDeliveryPolicy.enabled };
+  }
+
+  private publishDeliveryPolicy(enabled: boolean, forceRotation = false): void {
+    if (!forceRotation && this.lanAgentDeliveryPolicy?.enabled === enabled) return;
+    const policy = { enabled, incarnation: randomUUID() };
+    fs.mkdirSync(path.join(this.rootDir, "data", ".runtime"), { recursive: true });
+    // A failed atomic rename must remain visible after process restart. Leave
+    // this intent marker until both the fence and Config publication succeed.
+    this.markDeliveryPublicationPending();
+    atomicWriteFileSync(path.join(this.rootDir, "data", ".runtime", "lan-agent-delivery-policy.json"), `${JSON.stringify(policy)}\n`);
+    this.lanAgentDeliveryPolicy = policy;
+  }
+
+  getLanAgentAdmissionPolicy(): Readonly<{ enabled: boolean; incarnation: string }> {
+    return { enabled: this.lanAgentAdmissionAvailable && this.current.webguiLan.enabled,
+      incarnation: this.lanAgentAdmissionIncarnation };
+  }
+
+  private publish(config: RabiGlobalConfig | null, persistConfig?: () => void): void {
+    const available = config !== null;
+    try {
+      // Publish the durable revocation fence before committing Config. Recovery
+      // from any failed publication must not reuse the pre-failure incarnation.
+      this.publishDeliveryPolicy(available && Boolean(config?.webguiLan.enabled), !this.lanAgentAdmissionAvailable);
+      if (persistConfig) {
+        this.markDeliveryPublicationPending();
+        persistConfig();
+      }
+      if (fs.existsSync(this.deliveryIntentPath())) fs.unlinkSync(this.deliveryIntentPath());
+    } catch (error) {
+      this.lanAgentAdmissionAvailable = false;
+      this.lanAgentAdmissionIncarnation = randomUUID();
+      throw error;
+    }
+    if (available !== this.lanAgentAdmissionAvailable
+      || (config && config.webguiLan.enabled !== this.current.webguiLan.enabled)) {
+      this.lanAgentAdmissionIncarnation = randomUUID();
+    }
+    this.lanAgentAdmissionAvailable = available;
+    if (config) this.current = freezeGlobalConfig(config);
+  }
+
+  private markDeliveryPublicationPending(): void {
+    fs.mkdirSync(path.dirname(this.deliveryIntentPath()), { recursive: true });
+    const descriptor = fs.openSync(this.deliveryIntentPath(), "w");
+    try { fs.writeFileSync(descriptor, "pending\n"); fs.fsyncSync(descriptor); }
+    finally { fs.closeSync(descriptor); }
+  }
+
+  private deliveryIntentPath(): string {
+    return path.join(this.rootDir, "data", ".runtime", "lan-agent-delivery-policy.pending");
+  }
 
   constructor(rootDir: string) {
     this.rootDir = rootDir;
     this.configPath = path.join(rootDir, "data", "Config.json");
+    const policyPath = path.join(rootDir, "data", ".runtime", "lan-agent-delivery-policy.json");
+    try {
+      const policy = JSON.parse(fs.readFileSync(policyPath, "utf8"));
+      if (typeof policy.enabled !== "boolean" || typeof policy.incarnation !== "string" || !policy.incarnation) throw new Error("Invalid delivery policy fence.");
+      this.lanAgentDeliveryPolicy = policy;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
     this.current = this.loadOrCreate();
+    this.publishDeliveryPolicy(this.current.webguiLan.enabled, fs.existsSync(this.deliveryIntentPath()));
+    if (fs.existsSync(this.deliveryIntentPath())) fs.unlinkSync(this.deliveryIntentPath());
   }
 
   read(): RabiGlobalConfig {
@@ -55,9 +126,7 @@ export class RabiGlobalConfigStore {
 
   reload(): RabiGlobalConfig {
     const reloaded = this.readExisting();
-    if (reloaded) {
-      this.current = freezeGlobalConfig(reloaded);
-    }
+    this.publish(reloaded);
     return this.read();
   }
 
@@ -114,8 +183,7 @@ export class RabiGlobalConfigStore {
       current.agentUploads.maxFileMiB !== next.agentUploads.maxFileMiB ? "agentUploads" : "",
       JSON.stringify(current.performance) !== JSON.stringify(next.performance) ? "performance" : ""
     ].filter(Boolean);
-    this.persist(next, changedFields.length ? "patch" : "normalize", current.updatedAt, next.updatedAt, changedFields);
-    this.current = freezeGlobalConfig(next);
+    this.publish(next, () => this.persist(next, changedFields.length ? "patch" : "normalize", current.updatedAt, next.updatedAt, changedFields));
     return this.read();
   }
 

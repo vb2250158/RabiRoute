@@ -8,7 +8,10 @@ English | <a href="./README.md">简体中文</a>
 
 RabiLink AIUI brings speech recognition, a host model, speech synthesis and a transparent HUD into one glasses application page for conversations, result presentation and controlled configuration. It is not tied to a specific preset persona. By default, the **AIUI host `LanguageModel`** handles conversation; PC supplies controlled HTTP tools rather than replacing the glasses application's model.
 
-> **Maturity**: Phone-managed device configuration and knowledge-tool integration are under implementation and acceptance testing. Source, mocks and local builds do not establish installation or device acceptance. Arbitrary Lingzhu platform Agent binding, physically offline inference and a complete autonomous multi-step tool loop are not promised.
+> **Maturity**: Phone persona binding, generic HTTP APIs, history and voice steering are wired in source; installation and hardware acceptance remain pending. Source, mocks and local builds do not establish installation or device acceptance. An application multi-step loop has source and fixture evidence; complete Route and real-host acceptance remain pending. Arbitrary Lingzhu binding and physically offline inference are not promised.
+
+The model-turn runtime is separate from page interaction: one task serializes requests on the same model session; actual tool observations return for the next decision. Explicit cancellation destroys the current model and fences late results; timed-out tools are never automatically replayed. Advanced settings retain the persona source computer ID when saving remote-persona configuration. See [generic transport and host capabilities](docs/generic-api-transport_en.md), [model-turn runtime](docs/agent-turn-runtime_en.md) and [personas, generic APIs and steering](docs/persona-agent_en.md).
+
 
 ---
 
@@ -18,7 +21,7 @@ RabiLink AIUI brings speech recognition, a host model, speech synthesis and a tr
 - “Local” means that the AIUI page calls its host model, not that inference necessarily runs physically on the glasses or works offline. Current code calls `LanguageModel.create(options)`, checks availability and rejects known offline state.
 - Spoken “set/bind agent” commands only change the **local display name**, not a Lingzhu platform binding. `agentId` is not a verified platform invocation route. Renaming saves the complete `{id,name,prompt}` first; storage failure preserves the existing name/model, and late obsolete models cannot replace a newer session.
 - A phone-managed device profile can configure name, system prompt, Skill guidance and MCP service references. Saved configuration, applied model configuration and connected tools are different states; execution integration and end-to-end acceptance are still in progress. Once a device profile is active, names are managed on the phone rather than through a competing spoken setting.
-- Official tool documentation supports function declarations and `toolcall` events, but no tool-result continuation interface has been verified. Ordinary prompt text must not impersonate a tool response or justify a complete Agent-loop claim.
+- Default conversation uses application action framing and explicit observations for continued reasoning, with native tool declarations empty. It claims no native tool role or result-submission API. Real-host and Route acceptance remain pending.
 
 ## Core design
 
@@ -33,15 +36,15 @@ RabiLink AIUI brings speech recognition, a host model, speech synthesis and a tr
    - Basic host conversation does not require a Rabi Token or an online PC, but depends on available host ASR, model and TTS services and their network/permission requirements.
    - `SpeechRecognition` → `LanguageModel.create(options)` → `speechSynthesis`. Model unavailability produces an error or bounded fallback message, not a fabricated successful model result.
 4. **Barge-in and echo suppression**:
-   - ASR releases the microphone before TTS and resumes in a controlled manner afterward.
+   - Normal conversation retains ASR during TTS and inference; non-echo text stops only playback, and final input steers the next step after the active request settles.
    - The runtime filters TTS echoes and rapid duplicate ASR, and handles new user speech interrupting playback. Recognition and interruption quality in real noise still require device testing.
 5. **Minimal transparent AR HUD**:
    - Green high-contrast captions, name/status/clock/battery, and a mostly clear central view.
-   - A tap interrupts playback; explicit legacy remote mode can request review. Double-tap returns or exits. Readability across sizes is subject to layout and device acceptance.
+   - A tap can interrupt the active conversation and playback. Double-tap returns or exits. Readability across sizes is subject to layout and device acceptance.
 
 ---
 
-## Runtime architecture and compatibility
+## Runtime architecture
 
 ```text
 RabiLink AIUI: one page, local-aiui by default
@@ -51,11 +54,8 @@ RabiLink AIUI: one page, local-aiui by default
   (name / system prompt / Skill guidance / MCP references)
 
   AIUI → controlled HTTP → RabiPC tools → actual tool results
-  (integration/acceptance in progress; model tool-result continuation unverified)
+  (actual results return to the same host model; hardware acceptance pending)
 
-Only with explicit agentRuntimeMode=legacy-remote-observer:
-  ASR → legacy remote observation/review → remote reply queue → TTS / HUD
-  Mutually exclusive with local model submission; a Token alone does not enable it
 ```
 
 ### 1. Default host-model conversation
@@ -68,24 +68,12 @@ User speaks
 → Echo/duplicate filtering and interruption when appropriate
 → LanguageModel.create(options), then promptStreaming() or prompt()
 → Sentences go to speechSynthesis and HUD
-→ ASR resumes in a controlled manner after playback
+→ ASR remains active during reasoning/playback; final input steers between steps
 ```
 
-Default mode does not send the old remote inference queue, start the old reply long-wait loop, request remote review or play old remote replies, preventing duplicate submission/replies. Old records are retained rather than automatically deleted. Device status, configuration reads and logs retain their own contracts.
+### 2. Registered device Agent
 
-### 2. Explicit legacy remote-observer mode
-
-Retained only for migration of existing message-endpoint callers. Startup must explicitly set `agentRuntimeMode=legacy-remote-observer` and valid remote credentials must be available. Missing credentials produce a disconnected state, not a silent switch to another executor. This mode does not also call the local model.
-
-```text
-Upstream: ASR observation + clientMessageId → POST /rokid/rabilink/input
-          → remote conversation record → remote Agent review
-Downstream: remote replies/notifications → durable outbound queue
-          → /rokid/rabilink/messages?stream=1 controlled foreground long wait
-          → local persistent queue → TTS
-```
-
-This does not establish automatic binding to arbitrary cloud Agents. The compatibility entry can be removed only after callers migrate and old queues have been handled with confirmation. See [model ownership](docs/agent-runtime-mode_en.md).
+A PC message Route can select `deviceAgent`. After loading its native model, the glasses register their name, stable ID and session, then claim and execute the original message. The phone forwards only wake nonces. A rejected system broadcast leaves the original message queued and never records completion. Automatic wake and real-device execution are unverified. See [device Agent](docs/device-agent_en.md).
 
 ---
 
@@ -93,7 +81,7 @@ This does not establish automatic binding to arbitrary cloud Agents. The compati
 
 ### Method 1: Phone device settings
 
-In Relay management, select the owned application and bound glasses, then open Agent settings to edit the name, system prompt, Skill guidance and MCP references. The device reads its profile with its own credential. A new profile waits during the current conversation; after successful storage, the next turn rebuilds the model.
+On the phone, open **All-day recording → Devices → Glasses → Glasses settings** and select a persona, its source PC and optional preloaded Skills. The glasses connection PC owns the profile and may reference a persona from another PC in the same authenticated application. The device reads this PC profile through generic HTTP transport and applies changes after the active turn and its steering settle. The server owns connections, authentication and forwarding, not persona configuration.
 
 Check Saved and Applied separately. An unconnected MCP reference must not appear as an available tool; integration and device acceptance remain in progress. With a phone profile active, spoken renaming directs the user back to phone management. See [device profile HTTP and phone settings](../../docs/aiui-agent-profile-http_en.md) and [profile lifecycle](docs/agent-profile-runtime_en.md).
 
@@ -120,11 +108,11 @@ Pass these through AIUI Studio or a supported page invocation entry:
 ## Official API contracts and references
 
 - **Speech recognition (ASR)**: [SpeechRecognition API (0.18.0)](https://js.rokid.com/AIUI/api/ai/speech-recognition?lang=zh-CN&version=0.18.0)
-  - Foreground single-turn state machine and controlled renewal; check interactive readiness before starting and stop ASR before TTS.
+  - Every `SpeechRecognition.start()` requires user interaction. The input handler synchronously starts one continuous recognizer, retaining it during inference and TTS and delivering new final segments by `resultIndex`. End or failure waits for another tap or wake; timers never create another recognition round. Interim-result support and actual simultaneous audio require separate host acceptance.
 - **Speech synthesis (TTS)**: [speechSynthesis API (0.18.0)](https://js.rokid.com/AIUI/api/ai/speech-synthesis?lang=zh-CN&version=0.18.0)
-  - Uses `speak(utterance, "enqueue")`, `onend/onerror` and bounded text-length-based lifecycle timeouts.
+  - Conversation uses only `synthesize()` and an owned `SpeechAudioPlayer`. Non-echo recognized text stops the actual player, aborts the old task and discards late results. Unsupported synthesis or failures show an explicit TTS status; they never fall back to the uncontrollable shared `speak()` player. The official shared player exposes neither `cancel()` nor utterance completion events.
 - **Host model**: [LanguageModel API (0.18.0)](https://js.rokid.com/AIUI/api/ai/language-model?lang=zh-CN&version=0.18.0)
-  - `LanguageModel.create(options)` supplies initial prompts and tool declarations; this is not a zero-parameter contract.
+  - The application supplies initial prompts with `LanguageModel.create(options)`; the official API also permits omitted options with a host default model.
   - Uses `promptStreaming()` or `prompt()`; only one active request per session.
   - `toolcall` provides structured events; result continuation remains unverified. See [tool contract review](docs/agent-tool-contract_en.md).
 
@@ -132,7 +120,7 @@ Pass these through AIUI Studio or a supported page invocation entry:
 
 - The top area shows configured name, state, clock and battery; the bottom shows captions and configuration status while preserving the central view where possible.
 - Captions use a green high-contrast design. Actual size, safe edges and compact layouts follow current implementation and acceptance; readability under every lighting condition is not promised.
-- **Tap / Enter**: Interrupt playback; request review while idle in explicit legacy remote mode.
+- **Tap / Enter**: Interrupt the active conversation during inference or playback. While idle, start device Agent reception; a tap resumes listening when transcription is paused.
 - **Double-tap**: Return or exit.
 
 ---
@@ -143,7 +131,7 @@ Run commands from a **complete source snapshot on local disk**, not NAS. Tests, 
 
 ### 1. Local checks and smoke tests
 
-`npm run check:agent` runs the nine focused Agent smoke scripts and the endpoint/configuration boundary negative tests. `npm run check` runs this entry first, then retains the complete existing cross-application audit chain; missing or incompatible Android bridge contracts remain failures rather than silently skipped checks.
+`npm run check:agent` runs eleven focused Agent smoke scripts, plus phone bridge, device Agent, endpoint, configuration and device-status contract tests. `npm run check` runs this entry first, then retains the complete existing cross-application audit chain; missing or incompatible Android bridge contracts remain failures rather than silently skipped checks.
 ```powershell
 # Full static/dynamic contract checks
 node .\scripts\check-rabilink-aiui.mjs

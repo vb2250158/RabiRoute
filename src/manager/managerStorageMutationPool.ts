@@ -1,5 +1,5 @@
 import { fork } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
@@ -25,6 +25,7 @@ import {
   canonicalStorageMutationRoleId,
   sameManagerStorageMutationFence,
   storageMutationRoleDirectory,
+  type ManagerStorageMutationAdmission,
   type ManagerStorageMutationChildIdentity,
   type ManagerStorageMutationFence,
   type ManagerStorageMutationRequest,
@@ -83,6 +84,8 @@ export type ManagerStorageMutationPoolStatus = Readonly<{
 }>;
 
 export type ManagerStorageMutationOptions = Readonly<{
+  /** Parent-only original-request authority; never serialized to the worker or receipt. */
+  authorize?: () => void;
   actor?: import("../shared/planHistoryActor.js").PlanHistoryActor;
   idempotencyKey: string;
   expectedRevision: string | null;
@@ -91,6 +94,7 @@ export type ManagerStorageMutationOptions = Readonly<{
 }>;
 
 type PendingMutation<T = unknown> = {
+  authorize?: () => void;
   actor?: import("../shared/planHistoryActor.js").PlanHistoryActor;
   roleId: string;
   planId?: string;
@@ -120,6 +124,7 @@ type ActiveMutation = {
   request: ManagerStorageMutationRequest;
   timer: NodeJS.Timeout;
   abortListener?: () => void;
+  admission?: "allowed" | "denied";
   terminating: boolean;
 };
 
@@ -127,11 +132,17 @@ export class ManagerStorageMutationError extends Error {
   constructor(
     message: string,
     readonly code: "busy" | "timeout" | "aborted" | "worker_failed" | "mutation_failed" | "revision_conflict"
-      | "idempotency_conflict" | "indeterminate" | "fence_mismatch" | "termination_unconfirmed" | "stopped" | "validation_rejected"
+      | "idempotency_conflict" | "indeterminate" | "fence_mismatch" | "termination_unconfirmed" | "stopped" | "validation_rejected" | "authorization_revoked",
+    readonly commitState?: "not_started" | "unknown"
   ) {
     super(message);
     this.name = "ManagerStorageMutationError";
   }
+}
+
+export function assertManagerStorageMutationAuthorized(context: { authorize?: () => void }): void {
+  try { context.authorize?.(); }
+  catch { throw new ManagerStorageMutationError("Original request authorization was revoked.", "authorization_revoked"); }
 }
 
 function positiveInteger(value: number | undefined, fallback: number): number {
@@ -280,6 +291,8 @@ export class ManagerStorageMutationPool {
     if (options.signal?.aborted) {
       return Promise.reject(new ManagerStorageMutationError("Storage mutation request was aborted.", "aborted"));
     }
+    try { assertManagerStorageMutationAuthorized(options); }
+    catch (error) { return Promise.reject(error); }
     let roleId: string;
     let planId: string | undefined;
     try {
@@ -311,6 +324,7 @@ export class ManagerStorageMutationPool {
         task: cloneSerializable(task),
         actor: options.actor ? cloneSerializable(options.actor) : undefined,
         timeoutMs: positiveInteger(options.timeoutMs, this.timeoutMs),
+        authorize: options.authorize,
         signal: options.signal,
         resolve,
         reject
@@ -540,7 +554,7 @@ export class ManagerStorageMutationPool {
           "termination_unconfirmed"
         );
       }
-      this.settleActive(active, new ManagerStorageMutationError("Storage mutation pool stopped.", "stopped"));
+      this.settleActive(active, new ManagerStorageMutationError("Storage mutation pool stopped.", "stopped", "unknown"));
     }
     const slot = this.blockedSlot ?? this.childSlot;
     if (slot && !slot.closed) {
@@ -573,6 +587,12 @@ export class ManagerStorageMutationPool {
       queueMicrotask(() => this.drain());
       return;
     }
+    try { assertManagerStorageMutationAuthorized(pending); }
+    catch (error) {
+      pending.reject(error as ManagerStorageMutationError);
+      queueMicrotask(() => this.drain());
+      return;
+    }
     let slot = this.childSlot;
     if (!slot || slot.closed) {
       try {
@@ -599,7 +619,8 @@ export class ManagerStorageMutationPool {
       fence,
       expectedRevision: pending.expectedRevision,
       task: pending.task,
-      actor: pending.actor
+      actor: pending.actor,
+      ...(pending.authorize ? { admissionNonce: randomBytes(32).toString("hex") } : {})
     });
     const active: ActiveMutation = {
       slot,
@@ -666,21 +687,66 @@ export class ManagerStorageMutationPool {
     return slot;
   }
 
-  private handleMessage(slot: ChildSlot, response: ManagerStorageMutationResponse): void {
+  private handleMessage(slot: ChildSlot, response: ManagerStorageMutationResponse | ManagerStorageMutationAdmission): void {
     const active = this.activeMutation;
     if (!active || active.slot !== slot || active.terminating) return;
+    const rejectProtocol = () => {
+      void this.terminateActive(active, new ManagerStorageMutationError(
+        "Storage mutation response failed request/generation/role/plan/admission fencing.",
+        "fence_mismatch", "unknown"
+      ));
+    };
     if (response?.protocolVersion !== MANAGER_STORAGE_MUTATION_PROTOCOL_VERSION
       || response.requestId !== active.request.requestId
       || !response.fence
-      || !sameManagerStorageMutationFence(response.fence, active.request.fence)) {
-      void this.terminateActive(active, new ManagerStorageMutationError(
-        "Storage mutation response failed request/generation/role/plan fencing.",
-        "fence_mismatch"
-      ));
+      || !sameManagerStorageMutationFence(response.fence, active.request.fence)
+      || response.admissionNonce !== active.request.admissionNonce) {
+      rejectProtocol();
       return;
     }
-    if (response.ok) this.settleActive(active, undefined, cloneSerializable(response.value));
-    else this.settleActive(active, mutationResponseError(response.message));
+    if ("kind" in response) {
+      if (response.kind !== "authorization_request" || !active.pending.authorize
+        || response.stage !== "commit_admission" || response.sequence !== 1 || active.admission) {
+        rejectProtocol();
+        return;
+      }
+      try {
+        assertManagerStorageMutationAuthorized(active.pending);
+        // Irreversible commit admission: a later revoke does not undo an allow.
+        active.admission = "allowed";
+      } catch {
+        active.admission = "denied";
+      }
+      const decision: ManagerStorageMutationAdmission = {
+        ...response, kind: "authorization_decision", allowed: active.admission === "allowed"
+      };
+      try {
+        slot.child.send(decision, error => {
+          if (error && this.activeMutation === active && !active.terminating) {
+            void this.terminateActive(active, new ManagerStorageMutationError(
+              "Storage mutation admission decision could not be sent.", "worker_failed", "unknown"
+            ));
+          }
+        });
+      } catch {
+        void this.terminateActive(active, new ManagerStorageMutationError(
+          "Storage mutation admission decision could not be sent.", "worker_failed", "unknown"
+        ));
+      }
+      return;
+    }
+    if (active.pending.authorize && active.admission !== "allowed") {
+      if (active.admission === "denied" && response.ok === false && response.code === "authorization_revoked") {
+        this.settleActive(active, new ManagerStorageMutationError(
+          "Original request authorization was revoked before commit admission.", "authorization_revoked", "unknown"
+        ));
+      } else rejectProtocol();
+      return;
+    }
+    if (response.ok === true) this.settleActive(active, undefined, cloneSerializable(response.value));
+    else if (response.ok === false && typeof response.message === "string" && !response.code) {
+      this.settleActive(active, mutationResponseError(response.message));
+    } else rejectProtocol();
   }
 
   private handleChildError(slot: ChildSlot, _error: Error): void {

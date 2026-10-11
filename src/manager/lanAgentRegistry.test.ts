@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import WebSocket from "ws";
-import { LanAgentRegistry } from "./lanAgentRegistry.js";
+import { LanAgentRegistry, LanAgentNodeNameConflictError } from "./lanAgentRegistry.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 
 type ConnectedClient = {
@@ -13,6 +13,43 @@ type ConnectedClient = {
   messages: Array<Record<string, unknown>>;
   waitFor: (type: string) => Promise<Record<string, unknown>>;
 };
+
+test("node aliases persist offline and survive connector reconnects without changing Agent identities", async () => {
+  const statePath = temporaryStatePath();
+  const registry = new LanAgentRegistry({ statePath });
+  const server = http.createServer();
+  registry.attach(server, { enabled: () => true, getToken: () => "fixture" });
+  const port = await listen(server);
+  let client: ConnectedClient | undefined;
+  try {
+    const agents = [{ agentId: "first", name: "Worker", provider: "codex-desktop", enabled: true }];
+    client = await connectNode(port, "fixture", "alpha", agents);
+    const closed = new Promise<void>(resolve => client!.socket.once("close", () => resolve()));
+    client.socket.close();
+    await closed;
+    registry.setNodeName("alpha", "  Build computer  ", "");
+    assert.equal(registry.listInstances()[1]?.name, "Build computer");
+    assert.equal(registry.listNodes()[0]?.connected, false);
+    assert.throws(() => registry.setNodeName("alpha", "Other", ""), LanAgentNodeNameConflictError);
+    for (const value of [42, "x".repeat(81), "multi\nline"]) {
+      assert.throws(() => registry.setNodeName("alpha", value, "Build computer"));
+    }
+    assert.throws(() => registry.setNodeName("missing", "Other", ""));
+    const restored = new LanAgentRegistry({ statePath });
+    assert.equal(restored.listInstances()[1]?.name, "Build computer");
+    restored.close();
+    client = await connectNode(port, "fixture", "alpha", agents);
+    assert.equal(registry.listInstances()[1]?.name, "Build computer");
+    assert.deepEqual(registry.listInstances()[1]?.agents.map(({ agentId, name, provider, enabled }) => ({ agentId, name, provider, enabled })), agents);
+    assert.equal(registry.listInstances()[1]?.instanceId, "alpha");
+    registry.setNodeName("alpha", " ", "Build computer");
+    assert.equal(registry.listInstances()[1]?.name, undefined);
+    assert.equal(JSON.parse(fs.readFileSync(statePath, "utf8")).nodes[0].name, undefined);
+  } finally {
+    client?.socket.close(); registry.close(); await closeServer(server);
+    fs.rmSync(path.dirname(statePath), { recursive: true, force: true });
+  }
+});
 
 test("instance identity survives restart and management replies stay on their authenticated connection", async () => {
   const statePath = temporaryStatePath();

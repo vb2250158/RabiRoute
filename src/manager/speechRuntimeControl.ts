@@ -1,3 +1,4 @@
+import { stickySpeechAuthority, awaitSpeechAuthority, type SpeechAuthorityGuard } from "./speechRequestAuthority.js";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -153,12 +154,16 @@ export class SpeechRuntimeControl {
     this.stopTimeoutMs = options.stopTimeoutMs ?? 15_000;
   }
 
-  start(): Promise<SpeechRuntimeControlResult> {
-    return this.runExclusive(() => this.startUnlocked());
+  start(guard?: SpeechAuthorityGuard): Promise<SpeechRuntimeControlResult> {
+    const authority = stickySpeechAuthority(guard);
+    authority();
+    return this.runExclusive(() => awaitSpeechAuthority(authority, () => this.startUnlocked(authority)));
   }
 
-  stop(): Promise<SpeechRuntimeControlResult> {
-    return this.runExclusive(() => this.stopUnlocked());
+  stop(guard?: SpeechAuthorityGuard): Promise<SpeechRuntimeControlResult> {
+    const authority = stickySpeechAuthority(guard);
+    authority();
+    return this.runExclusive(() => awaitSpeechAuthority(authority, () => this.stopUnlocked(authority)));
   }
 
   private runExclusive<T>(operation: () => Promise<T>): Promise<T> {
@@ -227,10 +232,12 @@ export class SpeechRuntimeControl {
     }
   }
 
-  private async startUnlocked(): Promise<SpeechRuntimeControlResult> {
+  private async startUnlocked(guard?: SpeechAuthorityGuard): Promise<SpeechRuntimeControlResult> {
+    guard = stickySpeechAuthority(guard);
+    guard();
     const serviceUrl = normalizeLocalSpeechServiceUrl(this.options.serviceUrl());
     servicePort(serviceUrl);
-    const current = await this.inspect(serviceUrl);
+    const current = await awaitSpeechAuthority(guard, () => this.inspect(serviceUrl));
     if (current.state === "online") {
       return { action: "already_online", status: current };
     }
@@ -240,10 +247,11 @@ export class SpeechRuntimeControl {
 
     const paths = this.runtimePaths();
     this.assertWindowsRuntimeInstalled(paths);
-    if (paths.runtimeExecutable !== paths.bundledExecutable) await prepareStableSpeechExecutable(paths.bundledExecutable, this.options.rootDir);
+    if (paths.runtimeExecutable !== paths.bundledExecutable) await awaitSpeechAuthority(guard, () => prepareStableSpeechExecutable(paths.bundledExecutable, this.options.rootDir, guard));
     let recoveredOwnedBindConflict = false;
     while (true) {
       if (!this.launchChild || this.launchChild.exitCode !== null) {
+        guard();
         this.launchOutput = "";
         this.launchChild = this.spawnRuntime(
           "powershell.exe",
@@ -268,7 +276,7 @@ export class SpeechRuntimeControl {
       }
 
       try {
-        const status = await this.waitForState(serviceUrl, "online", this.startTimeoutMs, () => {
+        const status = await awaitSpeechAuthority(guard, () => this.waitForState(serviceUrl, "online", this.startTimeoutMs, () => {
           if (this.launchChild?.exitCode != null) {
             throw new SpeechRuntimeControlError(
               `RabiSpeech 启动进程提前退出（code ${this.launchChild.exitCode}）。`,
@@ -277,17 +285,18 @@ export class SpeechRuntimeControl {
               this.launchResolution()
             );
           }
-        });
+        }, guard));
         return { action: "started", status };
       } catch (error) {
-        const latest = await this.inspect(serviceUrl);
+        guard();
+        const latest = await awaitSpeechAuthority(guard, () => this.inspect(serviceUrl));
         if (latest.state === "online") {
           return { action: "already_online", status: latest };
         }
         if (
           !recoveredOwnedBindConflict
           && error instanceof SpeechRuntimeControlError
-          && await this.recoverOwnedBindConflict(paths)
+          && await awaitSpeechAuthority(guard, () => this.recoverOwnedBindConflict(paths, guard))
         ) {
           recoveredOwnedBindConflict = true;
           continue;
@@ -297,7 +306,9 @@ export class SpeechRuntimeControl {
     }
   }
 
-  private async stopUnlocked(): Promise<SpeechRuntimeControlResult> {
+  private async stopUnlocked(guard?: SpeechAuthorityGuard): Promise<SpeechRuntimeControlResult> {
+    guard = stickySpeechAuthority(guard);
+    guard();
     const serviceUrl = normalizeLocalSpeechServiceUrl(this.options.serviceUrl());
     const port = servicePort(serviceUrl);
     const paths = this.runtimePaths();
@@ -307,9 +318,9 @@ export class SpeechRuntimeControl {
     if (this.launchChild?.pid && this.launchChild.exitCode === null) {
       targetPid = this.launchChild.pid;
     } else {
-      const owner = await this.inspectOwner(port, paths.runtimeExecutable, paths.hostScript);
+      const owner = await awaitSpeechAuthority(guard, () => this.inspectOwner(port, paths.runtimeExecutable, paths.hostScript));
       if (!owner) {
-        const status = await this.inspect(serviceUrl);
+        const status = await awaitSpeechAuthority(guard, () => this.inspect(serviceUrl));
         return { action: "already_offline", status };
       }
       if (!owner.owned) {
@@ -318,9 +329,9 @@ export class SpeechRuntimeControl {
       targetPid = owner.pid;
     }
 
-    await this.killProcessTree(targetPid);
+    await awaitSpeechAuthority(guard, () => this.killProcessTree(targetPid));
     this.launchChild = null;
-    const status = await this.waitForState(serviceUrl, "offline", this.stopTimeoutMs);
+    const status = await awaitSpeechAuthority(guard, () => this.waitForState(serviceUrl, "offline", this.stopTimeoutMs, undefined, guard));
     return { action: "stopped", status };
   }
 
@@ -328,14 +339,16 @@ export class SpeechRuntimeControl {
     serviceUrl: string,
     expected: SpeechRuntimeStatus["state"],
     timeoutMs: number,
-    beforeInspect?: () => void
+    beforeInspect?: () => void, guard?: SpeechAuthorityGuard
   ): Promise<SpeechRuntimeStatus> {
+    guard = stickySpeechAuthority(guard);
+    guard();
     const deadline = this.now() + timeoutMs;
-    let latest = await this.inspect(serviceUrl);
+    let latest = await awaitSpeechAuthority(guard, () => this.inspect(serviceUrl));
     while (latest.state !== expected && this.now() < deadline) {
       beforeInspect?.();
-      await this.wait(500);
-      latest = await this.inspect(serviceUrl);
+      await awaitSpeechAuthority(guard, () => this.wait(500));
+      latest = await awaitSpeechAuthority(guard, () => this.inspect(serviceUrl));
     }
     if (latest.state === expected) return latest;
     if (expected === "online") {
@@ -356,6 +369,7 @@ export class SpeechRuntimeControl {
 
   private captureLaunchOutput(child: RuntimeChild): void {
     const capture = (chunk: unknown) => {
+      if (this.launchChild !== child) return;
       const text = String(chunk || "");
       if (!text) return;
       this.launchOutput = `${this.launchOutput}${text}`.slice(-8_000);
@@ -399,18 +413,20 @@ export class SpeechRuntimeControl {
     return null;
   }
 
-  private async recoverOwnedBindConflict(paths: ReturnType<SpeechRuntimeControl["runtimePaths"]>): Promise<boolean> {
+  private async recoverOwnedBindConflict(paths: ReturnType<SpeechRuntimeControl["runtimePaths"]>, guard?: SpeechAuthorityGuard): Promise<boolean> {
+    guard = stickySpeechAuthority(guard);
+    guard();
     if (!/address already in use|WinError 10048|only one usage of each socket/i.test(this.launchOutput)) {
       return false;
     }
     const port = this.launchBindPort();
     if (!port) return false;
-    const owner = await this.inspectOwner(port, paths.runtimeExecutable, paths.hostScript);
+    const owner = await awaitSpeechAuthority(guard, () => this.inspectOwner(port, paths.runtimeExecutable, paths.hostScript));
     if (!owner?.owned || owner.pid === this.launchChild?.pid) return false;
-    await this.killProcessTree(owner.pid);
+    await awaitSpeechAuthority(guard, () => this.killProcessTree(owner.pid));
     this.launchChild = null;
     this.launchOutput = "";
-    await this.wait(500);
+    await awaitSpeechAuthority(guard, () => this.wait(500));
     return true;
   }
 

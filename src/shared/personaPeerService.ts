@@ -1,7 +1,6 @@
 /** A restricted persona service reuses peer transport without granting Manager administration. */
 export const PERSONA_PEER_SERVICE = "persona";
 export const PERSONA_REFERENCE_CAPABILITY = "persona-reference-v1";
-export const PERSONA_BOOTSTRAP_DOMAIN = "rabi-persona-bootstrap-v1";
 
 export type PersonaPeerRequest = { method: string; path: string; upgrade?: boolean; redirect?: boolean };
 

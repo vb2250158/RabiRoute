@@ -344,8 +344,8 @@ test("communication drain waits for in-flight authorized group-file read", async
     }
   }));
   const req = request("GET");
-  req.headers = {};
-  setTrustedLanAgentSource(req, { nodeId: "node-one", agentId: "agent-one", provider: "dsh", sessionId, sessionName: "Main" });
+  req.headers = { host: "localhost" };
+  req.socket = { remoteAddress: "127.0.0.1" } as http.IncomingMessage["socket"];
   const res = response();
   res.setHeader = () => res;
   assert.equal(routes.handler(req, new URL("http://localhost/api/agent/qq/group-files?routeId=route-one&groupId=123"), res), true);

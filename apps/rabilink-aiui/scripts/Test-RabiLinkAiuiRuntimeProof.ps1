@@ -84,7 +84,9 @@ $report = [ordered]@{
   generated_at = (Get-Date).ToUniversalTime().ToString("o")
   relay_base_url = $normalizedRelayBaseUrl
   token_present = [bool]$Token
-  endpoint = if ($normalizedRelayBaseUrl) { "$normalizedRelayBaseUrl/api/rabilink/mobile/proofs" } else { "" }
+  endpoint = if ($normalizedRelayBaseUrl) { "$normalizedRelayBaseUrl/api/rabilink/device/api" } else { "" }
+  manager_path = "/api/rabilink/mobile/proofs"
+  connection_owner_device_id = ""
   http_status = 0
   accepted_events = @("app-start", "relay-connected", "pc-bound", "webgui-config-loaded", "webgui-config-saved")
   required_events = $requiredEvents
@@ -117,20 +119,38 @@ if (-not $Token) {
   exit 1
 }
 
-$uri = "{0}/api/rabilink/mobile/proofs?limit={1}" -f $normalizedRelayBaseUrl, ([Math]::Max(1, [Math]::Min(100, $Limit)))
+$uri = "$normalizedRelayBaseUrl/api/rabilink/device/api"
 $acceptedEvents = @("app-start", "relay-connected", "pc-bound", "webgui-config-loaded", "webgui-config-saved")
 if ($IncludeSmoke) {
   $acceptedEvents += "smoke-runtime"
 }
 $report.accepted_events = $acceptedEvents
-$request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get, $uri)
+$request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Post, $uri)
 $request.Headers.TryAddWithoutValidation("X-RabiLink-Token", $Token) | Out-Null
 $client = [System.Net.Http.HttpClient]::new()
 try {
+  $directoryRequest = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get, "$normalizedRelayBaseUrl/api/rabilink/mobile/state")
+  $directoryRequest.Headers.TryAddWithoutValidation("X-RabiLink-Token", $Token) | Out-Null
+  try {
+    $directoryResponse = $client.SendAsync($directoryRequest).GetAwaiter().GetResult()
+    if (-not $directoryResponse.IsSuccessStatusCode) { throw "Connection directory request failed." }
+    $directory = $directoryResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult() | ConvertFrom-Json
+    $owner = [string]$directory.connectionOwnerDeviceId
+    if ([string]::IsNullOrWhiteSpace($owner)) { throw "APPLICATION_CONNECTION_OWNER_REQUIRED" }
+    $report.connection_owner_device_id = $owner
+    $managerPath = "/api/rabilink/mobile/proofs?limit=" + ([Math]::Max(1, [Math]::Min(100, $Limit)))
+    $wire = @{targetDeviceId=$owner;request=@{method="GET";path=$managerPath}} | ConvertTo-Json -Depth 5 -Compress
+    $request.Content = [System.Net.Http.StringContent]::new($wire, [System.Text.Encoding]::UTF8, "application/json")
+  } finally { $directoryRequest.Dispose() }
   $response = $client.SendAsync($request).GetAwaiter().GetResult()
   $report.http_status = [int]$response.StatusCode
   $text = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
   $json = if ($text) { try { $text | ConvertFrom-Json } catch { $null } } else { $null }
+  if ($response.IsSuccessStatusCode) {
+    $receipt = $json.data.structuredContent
+    if (-not $receipt -or $receipt.ok -ne $true -or $receipt.uncertain -eq $true) { throw "MANAGER_PROOFS_UNCONFIRMED" }
+    $json = $receipt.data
+  }
   if (-not $response.IsSuccessStatusCode) {
     $report.error = if ($text) { $text } else { "Runtime proof request failed." }
   } elseif (-not $json -or -not ($json.PSObject.Properties.Name -contains "proofs")) {
@@ -181,6 +201,7 @@ try {
     }
   }
 }
+catch { $report.error = $_.Exception.Message }
 finally {
   $client.Dispose()
   $request.Dispose()

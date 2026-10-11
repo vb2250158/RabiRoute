@@ -56,9 +56,9 @@ test("administrative settings enforce preconditions, persist replay, and never e
   assert.equal(await bindings.recoverAdministrative("other-op", archiveAdminDigest(input, etag)), null);
   let provisionCalls = 0;
   class PartialBindings extends RecordingArchiveBindings {
-    override async provisionNamespace(roleId: string, ns: string): ReturnType<RecordingArchiveBindings["provisionNamespace"]> {
+    override async provisionNamespace(...args: Parameters<RecordingArchiveBindings["provisionNamespace"]>): ReturnType<RecordingArchiveBindings["provisionNamespace"]> {
       provisionCalls++;
-      await super.provisionNamespace(roleId, ns);
+      await super.provisionNamespace(...args);
       throw new Error("simulated failure after namespace commit");
     }
   }

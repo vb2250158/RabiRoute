@@ -15,8 +15,11 @@ internal abstract class TunnelChannel : AutoCloseable {
     @Volatile var closed = false; private set
     fun receive(bytes: ByteArray) { if(bytes.size > 40_000 || !incoming.offer(bytes)) close() }
     fun read(timeoutMs: Long): ByteArray {
+        return poll(timeoutMs) ?: error("Tunnel timeout")
+    }
+    fun poll(timeoutMs: Long): ByteArray? {
         check(!closed) { "Tunnel closed" }
-        val bytes = incoming.poll(timeoutMs.coerceAtLeast(1),TimeUnit.MILLISECONDS) ?: error("Tunnel timeout")
+        val bytes = incoming.poll(timeoutMs.coerceAtLeast(1),TimeUnit.MILLISECONDS) ?: return null
         check(bytes.isNotEmpty() && !closed) { "Tunnel closed" }; return bytes
     }
     abstract fun send(bytes: ByteArray)

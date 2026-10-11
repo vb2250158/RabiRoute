@@ -197,7 +197,9 @@ test("Android SDK preserves route catalog revisions and requires caller-owned mu
   assert.match(source, /Route mutation response is missing an explicit committed receipt/);
   assert.match(source, /Legacy route mutation is disabled:[\s\S]*caller-owned operationId[\s\S]*content hash/);
   assert.match(source, /throw UnsupportedOperationException\(LEGACY_ROUTE_MUTATION_MESSAGE\)/);
-  assert.doesNotMatch(source, /UUID\.randomUUID\(|randomUUID\(/);
+  const bindingMethods = source.match(/fun (?:setAgentBinding|setMobileAgentBinding)\([\s\S]*?(?=\n    (?:fun|private fun|\/\*\*))/g);
+  assert.ok(bindingMethods?.length, "Route binding methods must be inspected");
+  for (const method of bindingMethods) assert.doesNotMatch(method, /UUID\.randomUUID\(|randomUUID\(/);
 
   assert.match(probe, /sdk\.getRouteCatalog\(instance\)/);
   assert.match(probe, /routeCatalog\.routeConfigHash\.ifBlank \{ routes\.contentHash \}/);

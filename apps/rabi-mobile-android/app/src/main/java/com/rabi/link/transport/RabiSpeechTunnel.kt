@@ -14,10 +14,10 @@ import java.security.SecureRandom
 import java.util.UUID
 
 /** A single authenticated, reusable speech connection. Connect retries never replay a business request. */
-class RabiSpeechTunnel @JvmOverloads constructor(private val context: Context, private val relay: RabiLinkRelayConfig, private val worker: RabiLinkPc, private val service: String = "speech") : AutoCloseable {
-    private val device = RabiMobileDeviceIdentity.load(context)
+class RabiSpeechTunnel @JvmOverloads constructor(private val context: Context, private val relay: RabiLinkRelayConfig, private val worker: RabiLinkPc, private val service: String = "speech",private val delegation: RabiTunnelDeviceDelegation? = null) : AutoCloseable {
+    private val device = delegation?.sourceDeviceId ?: RabiMobileDeviceIdentity.load(context)
     private val prefs = context.getSharedPreferences("rabi_speech_tunnel",Context.MODE_PRIVATE)
-    private val seed = synchronized(RabiSpeechTunnel::class.java) {
+    private val seed = delegation?.seed ?: synchronized(RabiSpeechTunnel::class.java) {
         prefs.getString("identitySeed",null)?.let { TunnelCrypto.unb64(it) } ?: ByteArray(32).also {
             SecureRandom().nextBytes(it); check(prefs.edit().putString("identitySeed",TunnelCrypto.b64(it)).commit())
         }
@@ -25,9 +25,11 @@ class RabiSpeechTunnel @JvmOverloads constructor(private val context: Context, p
     private val crypto = TunnelCrypto(seed,device,UUID.randomUUID().toString())
     @Volatile private var disposed = false
     private var generation = ""
+    private var delegatedEpoch = ""
     @Volatile private var channel: TunnelChannel? = null
     private var cipher: TunnelCrypto.SessionCipher? = null
     var transport: String = ""; private set
+    internal val delegatedManagerGeneration: String? get()=delegation?.grant()?.managerGeneration
 
     private fun signal(capability: String,operation: String,input: JSONObject): JSONObject {
         val id = UUID.randomUUID().toString()
@@ -53,17 +55,25 @@ class RabiSpeechTunnel @JvmOverloads constructor(private val context: Context, p
 
     @Synchronized fun connect() {
         check(!disposed) { "Tunnel disposed" }
-        if(channel?.closed==false) return
+        if(channel?.closed==false) {delegation?.grant();delegation?.assertLease(delegatedEpoch);return}
         disconnect(); generation=""
         val scope=TunnelCrypto.hex(MessageDigest.getInstance("SHA-256").digest((relay.baseUrl+"\n"+relay.token+"\n"+worker.id).toByteArray()))
         val trusted=prefs.getString(scope,null)?.trimEnd()?.plus("\n")
         var key=trusted ?: ""
+        val delegatedGrant=delegation?.grant()
+        if(delegatedGrant!=null) {
+            require(delegation!!.targetDeviceId==worker.id)
+            check(trusted==null || trusted==delegatedGrant.publicKey) {"Peer identity changed"}
+            key=delegatedGrant.publicKey;delegatedEpoch=delegatedGrant.epoch
+            if(trusted==null) check(prefs.edit().putString(scope,key.trimEnd()).commit())
+        }
         fun establish(candidate: TunnelChannel,kind: String,timeout: Long) {
             try {
-                val handshake=crypto.handshake(worker.id,key)
+                delegation?.assertLease(delegatedEpoch)
+                val handshake=crypto.handshake(worker.id,key,delegatedGrant?.generation)
                 candidate.send(handshake.hello.toByteArray())
                 val established=handshake.accept(candidate.read(timeout))
-                check(!disposed) { "Tunnel disposed" }
+                check(!disposed) { "Tunnel disposed" };delegation?.assertLease(delegatedEpoch)
                 channel=candidate; cipher=established; transport=kind
                 if(disposed) { disconnect(); error("Tunnel disposed") }
             } catch(error: Throwable) { candidate.close(); throw error }
@@ -83,9 +93,9 @@ class RabiSpeechTunnel @JvmOverloads constructor(private val context: Context, p
         return false
         }
         // A pinned peer can reconnect locally even while the rendezvous server is unavailable.
-        if(trusted != null && (service == "speech" || prefs.getBoolean("grant:$scope:$service",false)) && tryLan()) return
+        if((delegatedGrant!=null || trusted != null && (service == "speech" || prefs.getBoolean("grant:$scope:$service",false))) && tryLan()) return
         signal("system","describe",JSONObject())
-        val identity=signal("transport","tunnel",crypto.bootstrap(worker.id,service))
+        val identity=if(delegatedGrant==null)signal("transport","tunnel",crypto.bootstrap(worker.id,service)) else JSONObject().put("publicKey",delegatedGrant.publicKey)
         key=identity.getString("publicKey")
         check(trusted==null || trusted==key) { "Peer identity changed (${trusted?.length}/${key.length}; ${TunnelCrypto.hex(MessageDigest.getInstance("SHA-256").digest(key.toByteArray())).take(16)})" }
         if(trusted==null) check(prefs.edit().putString(scope,key.trimEnd()).commit())
@@ -100,21 +110,27 @@ class RabiSpeechTunnel @JvmOverloads constructor(private val context: Context, p
         establish(TunnelChannel.websocket("${if(base.scheme=="https") "wss" else "ws"}://${base.rawAuthority}/api/rabilink/tunnel/socket?room=$room",mapOf("X-RabiLink-Token" to relay.token),5000),"relay",5000)
     }
 
-    data class Response(val status: Int,val body: ByteArray)
-    @Synchronized fun request(method: String,path: String,contentType: String,body: ByteArray,timeoutMs: Long=190_000): Response {
+    data class Response(val status: Int,val body: ByteArray,val headers: JSONObject = JSONObject())
+    @Synchronized fun request(method: String,path: String,contentType: String,body: ByteArray,timeoutMs: Long=190_000): Response =
+        requestHttp(method,path,JSONObject().put("content-type",contentType),body,timeoutMs)
+
+    /** Generic service HTTP; connect fallback never retries a dispatched request. */
+    @Synchronized fun requestHttp(method: String,path: String,headers: JSONObject,body: ByteArray,timeoutMs: Long=190_000): Response {
+        require(method.matches(Regex("[A-Z]{1,20}")) && method != "CONNECT" && method != "TRACE")
+        require(path.startsWith("/") && !path.startsWith("//") && !path.contains('\\') && !path.contains('\r') && !path.contains('\n'))
         connect()
         val link=channel ?: error("No tunnel"); val encryption=cipher ?: error("No cipher")
-        val id=UUID.randomUUID().toString(); var credit=65536; var status=0; var ended=false
+        val id=UUID.randomUUID().toString(); var credit=65536; var status=0; var ended=false; var responseHeaders=JSONObject()
         val output=ByteArrayOutputStream(); val deadline=System.nanoTime()+timeoutMs*1_000_000
-        fun send(frame: JSONObject) { link.send(encryption.encode(frame)) }
+        fun send(frame: JSONObject) { delegation?.assertLease(delegatedEpoch);link.send(encryption.encode(frame)) }
         fun pump() {
             val remaining=(deadline-System.nanoTime())/1_000_000; check(remaining>0) { "Speech request timed out" }
-            val frame=encryption.decode(link.read(remaining)); val kind=frame.getString("type")
+            val frame=encryption.decode(link.read(remaining));delegation?.assertLease(delegatedEpoch); val kind=frame.getString("type")
             if(kind=="ping") { send(JSONObject().put("type","pong").put("id",frame.getString("id"))); return }
             if(frame.optString("id")!=id) return
             when(kind) {
                 "window" -> { val bytes=frame.getInt("bytes"); require(bytes>0 && credit+bytes<=65536); credit+=bytes }
-                "head" -> status=frame.getJSONObject("head").getInt("status")
+                "head" -> { val head=frame.getJSONObject("head"); status=head.getInt("status"); responseHeaders=head.optJSONObject("headers") ?: JSONObject() }
                 "data" -> {
                     val bytes=TunnelCrypto.unb64(frame.getString("data")); require(bytes.size<=12000 && output.size()+bytes.size<=8*1024*1024)
                     output.write(bytes); send(JSONObject().put("type","window").put("id",id).put("bytes",bytes.size))
@@ -125,7 +141,7 @@ class RabiSpeechTunnel @JvmOverloads constructor(private val context: Context, p
             }
         }
         try {
-            send(JSONObject().put("type","open").put("id",id).put("request",JSONObject().put("service",service).put("method",method).put("path",path).put("headers",JSONObject().put("content-type",contentType))))
+            send(JSONObject().put("type","open").put("id",id).put("request",JSONObject().put("service",service).put("method",method).put("path",path).put("headers",headers)))
             var offset=0
             while(offset<body.size) {
                 while(credit==0) pump()
@@ -134,9 +150,19 @@ class RabiSpeechTunnel @JvmOverloads constructor(private val context: Context, p
             }
             send(JSONObject().put("type","end").put("id",id))
             while(!ended) pump()
-            check(status in 100..599); return Response(status,output.toByteArray())
+            delegation?.assertLease(delegatedEpoch);check(status in 100..599); return Response(status,output.toByteArray(),responseHeaders)
         } catch(error: Throwable) { close(); throw error }
     }
     private fun disconnect() { channel?.close(); channel=null; cipher=null; transport="" }
-    override fun close() { disposed=true; disconnect() }
+    /** Dedicated streaming requests preserve raw bytes, including upgraded WebSocket frames. */
+    @Synchronized internal fun streamHttp(method:String,path:String,headers:JSONObject,input:java.io.InputStream,upgrade:Boolean,
+                                          onHead:(Int,JSONObject)->Unit,onData:(ByteArray)->Unit,timeoutMs:Long=86400000) {
+        require(method.matches(Regex("[A-Z]{1,20}")) && method !in listOf("CONNECT","TRACE"))
+        require(path.startsWith("/") && !path.startsWith("//") && !path.contains('\\') && !path.contains('\r') && !path.contains('\n'))
+        connect();val link=channel ?: error("No tunnel");val encryption=cipher ?: error("No cipher")
+        val guard={check(!disposed);delegation?.grant();delegation?.assertLease(delegatedEpoch);Unit}
+        try{TunnelHttpExchange({guard();link.send(encryption.encode(it))},{timeout->link.poll(timeout)?.let(encryption::decode)},guard)
+            .run(service,method,path,headers,input,upgrade,onHead,onData,timeoutMs)}catch(error:Throwable){close();throw error}
+    }
+    override fun close() { disposed=true; disconnect();delegation?.close() }
 }

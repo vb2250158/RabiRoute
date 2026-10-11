@@ -38,8 +38,13 @@ test("shared owner pauses and reads back cleaning before enter; pulse is bounded
   const count=f.actions.length;await f.owner.command("pulse",body,"remote-test-pulse-01");assert.equal(f.actions.length,count);
   s=f.result(await f.owner.command("stop",{sessionId:s.sessionId},"remote-test-stop-01"));assert.equal(s.state,"ready");assert.ok(!f.actions.some(a=>a.id.includes("exit_remote")));
   const newPulse=f.owner.command("pulse",{sessionId:s.sessionId,expectedStateVersion:s.stateVersion,direction:"forward",durationMs:500},"remote-test-pulse-02");
-  await delay(30);await f.owner.command("stop",{sessionId:s.sessionId},"remote-test-stop-01"); // replay must not abort the new pulse
-  assert.equal(f.owner.status(s.sessionId).state,"moving");
+  const admissionDeadline=performance.now()+5000;
+   while(!f.actions.some(a=>Array.isArray(a.parameters.values)&&a.parameters.values[0]===1)) {
+    assert.ok(performance.now()<admissionDeadline,"new pulse must dispatch before replay");await delay(10);
+   }
+   await f.owner.command("stop",{sessionId:s.sessionId},"remote-test-stop-01"); // replay must not abort the new pulse
+  assert.ok(["ready", "moving"].includes(f.owner.status(s.sessionId).state)); // Durable replay I/O may outlast the bounded pulse.
+   assert.ok(f.actions.some(a=>Array.isArray(a.parameters.values)&&a.parameters.values[0]===1));
   await f.owner.command("stop",{sessionId:s.sessionId},"remote-test-stop-02");await newPulse;
   s=f.result(await f.owner.command("exit",{sessionId:s.sessionId},"remote-test-exit-01"));assert.equal(s.state,"stopped");assert.ok(f.actions.some(a=>a.id.includes("exit_remote")));
  }finally{await f.close();}

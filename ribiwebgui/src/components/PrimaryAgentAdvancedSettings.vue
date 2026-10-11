@@ -20,7 +20,8 @@ function updatePolicy(patch: Record<string, unknown>) {
     <p class="section-note">以下设置用于当前路线的主控：{{ targetTitle }}。更换主控后沿用路线设置；远端不可用时不会改投本机。</p>
     <template v-if="agentAdapterSupportsManagedTaskFeature(provider, 'messageProcessingAgent')">
       <v-switch :model-value="policy()?.enabled === true" label="使用独立消息处理 Agent" @update:model-value="value => updatePolicy({ enabled: value === true })" />
-      <div v-if="policy()?.enabled" class="catalog-param-grid">
+      <v-alert v-if="provider === 'deviceAgent'" type="info" variant="tonal">设备 Agent 使用宿主配置的模型、推理和语音；此处仅设置路线的消息处理策略。</v-alert>
+      <div v-if="policy()?.enabled && provider !== 'deviceAgent'" class="catalog-param-grid">
         <v-text-field :model-value="policy()?.model || (provider === 'codex' ? DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL : '')" label="消息处理模型" @update:model-value="value => updatePolicy({ model: String(value || '') })" />
         <v-select :model-value="policy()?.reasoningEffort || DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT" :items="['low', 'medium', 'high', 'xhigh']" label="消息处理推理强度" @update:model-value="value => updatePolicy({ reasoningEffort: value })" />
         <v-text-field :model-value="policy()?.maxAgents" type="number" :min="1" :max="MAX_MESSAGE_PROCESSING_AGENTS" label="消息处理 Agent 数量上限" @update:model-value="value => updatePolicy({ maxAgents: Number(value) || undefined })" />

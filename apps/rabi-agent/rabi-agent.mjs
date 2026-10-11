@@ -418,8 +418,9 @@ class RabiAgentRuntime {
     } finally { this.connecting = false; }
     this.socket = socket;
     socket.addEventListener("open", () => this.send({ type: "authenticate", token: this.config.nodeCredential }));
-    socket.addEventListener("message", event => this.handleManagerMessage(event.data));
+    socket.addEventListener("message", event => { if (this.socket === socket) this.handleManagerMessage(event.data); });
     socket.addEventListener("close", () => {
+      if (this.socket !== socket) return;
       this.connected = false;
       clearInterval(this.heartbeatTimer);
       this.scheduleReconnect();
@@ -479,8 +480,12 @@ class RabiAgentRuntime {
       return;
     }
     if (message.type === "manageAgent") {
+      const originalSocket = this.socket;
+      const originalCredential = this.config.nodeCredential;
+      const preparedOperation = ["prepared_delivery", "reconcile_prepared_delivery"].includes(message.operation);
       this.taskQueue = this.taskQueue.catch(() => undefined).then(async () => {
         try {
+          if (preparedOperation && (!this.connected || this.socket !== originalSocket || this.config.nodeCredential !== originalCredential)) throw new Error("Original Manager connection changed before queued delivery execution.");
           let result;
           if (message.operation === "list") result = agentCatalog(this.config);
           else if (message.operation === "configure") {
@@ -492,7 +497,7 @@ class RabiAgentRuntime {
             result = agentCatalog(next);
             this.send({ type: "agentCatalog", agents: result });
           } else {
-            const { manageInstanceAgent } = await import("./runtime/management.mjs");
+            const { manageInstanceAgent, EndpointTransportReceipts, sameAgentEndpoint } = await import("./runtime/management.mjs");
             const agent = instanceAgents(this.config).find(agent => agent.agentId === message.params?.agentId);
             const initializeNew = !agent && message.params?.agentId === "new-agent" && ["resolve", "create"].includes(message.params?.action) && !message.params?.prompt;
             if (message.operation === "threads" && (!agent || agent.enabled === false) && !initializeNew) throw new Error("The instance Agent is missing or disabled.");
@@ -506,7 +511,35 @@ class RabiAgentRuntime {
             const dsh = (message.operation === "scan" || initializeNew) && message.params?.dshBaseUrl ? normalizeDshBinding({ baseUrl: message.params.dshBaseUrl, sessionId: "scan" }) : agent?.dsh || this.config.dsh;
             const params = { ...message.params, ...(provider ? { provider, agentAdapter: provider } : {}) };
             if (message.operation === "threads" && params.cwd) params.cwd = resolveTaskWorkspace(params.cwd, this.config);
-            result = await manageInstanceAgent(message.operation, params, { ...this.config, dsh, rootDir: path.dirname(fileURLToPath(import.meta.url)) });
+            let endpointExecution;
+            if (preparedOperation) {
+              const delivery = params.delivery;
+              const assertAuthorized = async () => {
+                if (!this.connected || this.socket !== originalSocket || this.config.nodeCredential !== originalCredential || !this.config.nodeCredential) throw new Error("Authenticated Manager connection is required for prepared delivery.");
+                const current = instanceAgents(this.config).find(item => item.agentId === params.agentId);
+                const endpoint = delivery?.target;
+                const currentProvider = current?.provider === "codex-desktop" ? "codex" : current?.provider;
+                if (!current || current.enabled === false || endpoint?.kind !== "instance" || endpoint.nodeId !== this.config.nodeId
+                  || endpoint.agentId !== current.agentId || endpoint.provider !== currentProvider
+                  || !(endpoint.sessionId === current.sessionId || current.managedSessionIds?.includes(endpoint.sessionId))) throw new Error("Prepared endpoint no longer matches the exact enabled instance owner.");
+                const authority = await createManagerClient({ config: this.config, configPath: this.configPath, agentId: current.agentId })
+                  .invoke("GET", `/api/agent/delivery-authority?deliveryId=${encodeURIComponent(delivery.deliveryId)}&generation=${encodeURIComponent(delivery.generation)}`);
+                if (!authority.ok || authority.uncertain || authority.identityChanged) throw new Error("Original delivery authority is unavailable; operation was refused.");
+                let body; try { body = JSON.parse(authority.body); } catch { throw new Error("Invalid delivery authority response."); }
+                const proof = body.data || body;
+                if (proof.authorized !== true || proof.deliveryId !== delivery.deliveryId || proof.generation !== delivery.generation
+                  || proof.promptHash !== delivery.promptHash || proof.executionOptionsHash !== delivery.executionOptionsHash || !sameAgentEndpoint(proof.endpoint, endpoint)
+                  || !["dispatching", "committed"].includes(proof.state)) throw new Error("Original delivery incarnation or reservation is no longer authorized.");
+                if (!this.connected || this.socket !== originalSocket || this.config.nodeCredential !== originalCredential) throw new Error("Original Manager connection changed during delivery authority verification.");
+              };
+              await assertAuthorized();
+              const receipts = new EndpointTransportReceipts(path.join(path.dirname(this.configPath), "endpoint-transport-receipts"));
+              endpointExecution = { endpoint: delivery.target, assertAuthorized,
+                readReceipt: prepared => receipts.readReceipt(prepared),
+                beginAttempt: prepared => receipts.beginAttempt(prepared),
+                writeReceipt: (prepared, receipt) => receipts.writeReceipt(prepared, receipt) };
+            }
+            result = await manageInstanceAgent(message.operation, params, { ...this.config, dsh, endpointExecution, rootDir: path.dirname(fileURLToPath(import.meta.url)) });
             if (agent && message.operation === "threads" && result.statusCode < 400 && ["resolve", "create"].includes(message.params?.action)) {
               const next = registerManagedSession(this.config, agent.agentId, result.data?.thread?.id);
               if (next !== this.config) {
@@ -516,8 +549,8 @@ class RabiAgentRuntime {
               }
             }
           }
-          this.send({ type: "managementResult", requestId: message.requestId, result });
-        } catch (error) { this.send({ type: "managementResult", requestId: message.requestId, error: boundedText(error instanceof Error ? error.message : String(error), 1024) }); }
+          if (!preparedOperation || (this.connected && this.socket === originalSocket && this.config.nodeCredential === originalCredential)) this.send({ type: "managementResult", requestId: message.requestId, result });
+        } catch (error) { if (!preparedOperation || (this.connected && this.socket === originalSocket && this.config.nodeCredential === originalCredential)) this.send({ type: "managementResult", requestId: message.requestId, error: boundedText(error instanceof Error ? error.message : String(error), 1024) }); }
       });
       return;
     }

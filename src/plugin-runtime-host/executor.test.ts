@@ -262,7 +262,7 @@ test("isolated executor heartbeat terminates an unresponsive child and reports r
   await withTestDeadline(failureObserved, 90_000);
   await waitFor(() => executor.leases.list().length === 0);
   const rows = (await fs.readFile(marker, "utf8")).trim().split(/\r?\n/).map(line => JSON.parse(line));
-  assert.equal(rows.length, 2);
+  assert.equal(rows.length, 2, JSON.stringify(runtime.current().records[0]?.error));
   assert.notEqual(rows[0].pid, rows[1].pid);
   assert.equal(runtime.current().records[0]?.error?.code, "runtime_failed");
   assert.match(runtime.current().records[0]?.error?.message ?? "", /heartbeat failed/);

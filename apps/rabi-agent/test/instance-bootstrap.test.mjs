@@ -142,6 +142,23 @@ test("queued task revoked before execution never enters the host", async () => f
   } finally { runtime.stop(); globalThis.fetch = savedFetch; }
 }));
 
+test("prepared management captures original connection before queue execution and sends no replacement receipt", async () => fixture(async ({ configPath, directory }) => {
+  const runtime = new __test.RabiAgentRuntime({ managerUrl: "http://manager.test:54321", nodeId: "fixture-node", nodeCredential: "fixture-node", defaultWorkspace: directory,
+    allowedWorkspaces: [directory], codexDesktop: { threadId: "fixture-session" } }, configPath);
+  let releaseQueue;
+  const replies = [];
+  runtime.send = value => { replies.push(value); return true; };
+  runtime.connected = true;
+  runtime.socket = { close() {} };
+  runtime.taskQueue = new Promise(resolve => { releaseQueue = resolve; });
+  runtime.handleManagerMessage(JSON.stringify({ type: "manageAgent", requestId: "fixture-delivery", operation: "prepared_delivery", params: {} }));
+  runtime.socket = { close() {} };
+  releaseQueue();
+  await runtime.taskQueue;
+  assert.equal(replies.length, 0);
+  runtime.stop();
+}));
+
 test("WebSocket authenticates only with node credential after self verification", async () => fixture(async ({ configPath, directory }) => {
   const savedFetch = globalThis.fetch;
   const savedSocket = globalThis.WebSocket;

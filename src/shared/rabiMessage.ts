@@ -254,7 +254,7 @@ function normalizeAgentIdentity(value: unknown, field: string): Omit<RabiAgentMe
     agentAdapter,
     agentType: optionalSourceText(raw.agentType, `${field}.agentType`, 80),
     sessionName: requiredSourceText(raw.sessionName, `${field}.sessionName`),
-    sessionId: requiredSourceText(raw.sessionId, `${field}.sessionId`, 200),
+    sessionId: requiredSourceText(raw.sessionId, `${field}.sessionId`, 4096),
     workspace: optionalSourceText(raw.workspace, `${field}.workspace`, 2000)
   };
 }

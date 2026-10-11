@@ -43,6 +43,7 @@ export type IdempotentAgentSendResponse = {
 
 type ExecuteOptions = {
   rootDir: string;
+  requestAuthority?: () => void;
   deliver: () => Promise<AgentSendResult>;
   recover?: DurableDeliveryOptions<AgentSendResult>["recover"];
   waitForCompletionMs?: number;
@@ -149,14 +150,16 @@ function recentReplyTargetKeyFromResult(rootDir: string, result: AgentSendResult
   return `${path.resolve(rootDir)}:${createHash("sha256").update(fingerprint, "utf8").digest("hex")}`;
 }
 
-function hydrateRecentSuccessfulReplies(rootDir: string): void {
+function hydrateRecentSuccessfulReplies(rootDir: string, requestAuthority?: () => void): void {
+  requestAuthority?.();
   const resolvedRoot = path.resolve(rootDir);
   if (hydratedRecentReplyRoots.has(resolvedRoot)) return;
-  hydratedRecentReplyRoots.add(resolvedRoot);
   const receiptDir = path.join(resolvedRoot, "data", RECEIPT_NAMESPACE);
-  if (!fs.existsSync(receiptDir)) return;
   const now = Date.now();
-  for (const fileName of fs.readdirSync(receiptDir)) {
+  const entries = new Map<string, RecentSuccessfulReply>();
+  const fileNames = fs.existsSync(receiptDir) ? fs.readdirSync(receiptDir) : [];
+  for (const fileName of fileNames) {
+    requestAuthority?.();
     if (!fileName.endsWith(".json")) continue;
     try {
       const receipt = JSON.parse(fs.readFileSync(path.join(receiptDir, fileName), "utf8")) as AgentSendReceipt;
@@ -166,9 +169,9 @@ function hydrateRecentSuccessfulReplies(rootDir: string): void {
       if (!result || result.status !== "sent" || !Number.isFinite(updatedAt) || expiresAt <= now) continue;
       const key = recentReplyTargetKeyFromResult(resolvedRoot, result);
       if (!key) continue;
-      const existing = recentSuccessfulReplies.get(key);
+      const existing = entries.get(key);
       if (existing && existing.expiresAt >= expiresAt) continue;
-      recentSuccessfulReplies.set(key, {
+      entries.set(key, {
         deliveryId: receipt.deliveryId,
         fingerprint: "",
         result,
@@ -178,11 +181,24 @@ function hydrateRecentSuccessfulReplies(rootDir: string): void {
       // Ignore malformed runtime receipts. Exact delivery lookup remains authoritative.
     }
   }
+  // A denied hydration must not publish a partial cache or suppress the next rebuild.
+  requestAuthority?.();
+  for (const [key, entry] of entries) {
+    const existing = recentSuccessfulReplies.get(key);
+    if (!existing || existing.expiresAt < entry.expiresAt) recentSuccessfulReplies.set(key, entry);
+  }
+  hydratedRecentReplyRoots.add(resolvedRoot);
 }
 
-function readRecentSuccessfulReply(rootDir: string, key: string | undefined): RecentSuccessfulReply | undefined {
+function readRecentSuccessfulReply(
+  rootDir: string,
+  key: string | undefined,
+  requestAuthority?: () => void
+): RecentSuccessfulReply | undefined {
+  requestAuthority?.();
   if (!key) return undefined;
-  hydrateRecentSuccessfulReplies(rootDir);
+  hydrateRecentSuccessfulReplies(rootDir, requestAuthority);
+  requestAuthority?.();
   const existing = recentSuccessfulReplies.get(key);
   if (!existing) return undefined;
   if (existing.expiresAt > Date.now()) return existing;
@@ -194,8 +210,10 @@ function rememberSuccessfulReply(
   key: string | undefined,
   deliveryId: string,
   fingerprint: string,
-  result: AgentSendResult
+  result: AgentSendResult,
+  requestAuthority?: () => void
 ): void {
+  requestAuthority?.();
   if (!key || result.status !== "sent") return;
   const entry: RecentSuccessfulReply = {
     deliveryId,
@@ -212,17 +230,29 @@ function rememberSuccessfulReply(
 
 async function coalesceMessageProcessingContent(
   key: string | undefined,
-  deliver: () => Promise<AgentSendResult>
+  deliver: () => Promise<AgentSendResult>,
+  requestAuthority?: () => void
 ): Promise<{ duplicate: boolean; result: AgentSendResult }> {
-  if (!key) return { duplicate: false, result: await deliver() };
+  requestAuthority?.();
+  if (!key) {
+    const result = await deliver();
+    requestAuthority?.();
+    return { duplicate: false, result };
+  }
   const now = Date.now();
   const existing = recentMessageProcessingSends.get(key);
   if (existing && existing.expiresAt > now) {
-    return { duplicate: true, result: await existing.promise };
+    const result = await existing.promise;
+    requestAuthority?.();
+    return { duplicate: true, result };
   }
   if (existing) recentMessageProcessingSends.delete(key);
 
-  const promise = deliver();
+  // Observe synchronous failures and revocation in the same promise as delivery.
+  const promise = Promise.resolve().then(() => {
+    requestAuthority?.();
+    return deliver();
+  });
   const entry: RecentContentSend = {
     promise,
     expiresAt: now + MESSAGE_PROCESSING_CONTENT_DEDUPE_MS
@@ -234,10 +264,15 @@ async function coalesceMessageProcessingContent(
   cleanupTimer.unref?.();
   try {
     const result = await promise;
-    if (result.status !== "sent") recentMessageProcessingSends.delete(key);
+    requestAuthority?.();
+    if (result.status !== "sent" && recentMessageProcessingSends.get(key) === entry) {
+      recentMessageProcessingSends.delete(key);
+    }
     return { duplicate: false, result };
   } catch (error) {
-    recentMessageProcessingSends.delete(key);
+    // Revocation cannot delete another request's cache or authorize an automatic replay.
+    requestAuthority?.();
+    if (recentMessageProcessingSends.get(key) === entry) recentMessageProcessingSends.delete(key);
     throw error;
   }
 }
@@ -326,7 +361,9 @@ export async function executeIdempotentAgentSend(
   const deliveryId = normalizeDurableDeliveryId(request.deliveryId);
   const replyTargetKey = recentReplyTargetKey(options.rootDir, prepared);
   const contentFingerprint = sendContentFingerprint(request);
-  const recentReply = prepared.allowAdditionalReply ? undefined : readRecentSuccessfulReply(options.rootDir, replyTargetKey);
+  const recentReply = prepared.allowAdditionalReply
+    ? undefined
+    : readRecentSuccessfulReply(options.rootDir, replyTargetKey, options.requestAuthority);
   if (recentReply) {
     if (recentReply.fingerprint === contentFingerprint) {
       return completedResponse(deliveryId, {
@@ -356,7 +393,7 @@ export async function executeIdempotentAgentSend(
     deliveryId,
     payload,
     deliver: async () => {
-      const coalesced = await coalesceMessageProcessingContent(contentKey, options.deliver);
+      const coalesced = await coalesceMessageProcessingContent(contentKey, options.deliver, options.requestAuthority);
       contentDuplicate = coalesced.duplicate;
       return {
         ...coalesced.result,
@@ -368,10 +405,12 @@ export async function executeIdempotentAgentSend(
       };
     },
     recover: options.recover,
-    waitForCompletionMs: options.waitForCompletionMs
+    waitForCompletionMs: options.waitForCompletionMs,
+    requestAuthority: options.requestAuthority
   });
   if (outcome.state === "completed") {
-    rememberSuccessfulReply(replyTargetKey, deliveryId, contentFingerprint, outcome.result);
+    rememberSuccessfulReply(replyTargetKey, deliveryId, contentFingerprint, outcome.result, options.requestAuthority);
+    options.requestAuthority?.();
     return completedResponse(deliveryId, outcome.result, outcome.duplicate || contentDuplicate);
   }
   return nonTerminalResponse(

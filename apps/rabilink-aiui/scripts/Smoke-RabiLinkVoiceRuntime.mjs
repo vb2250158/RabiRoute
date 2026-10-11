@@ -51,7 +51,8 @@ try {
   assert.equal(asrCapability.available, true);
   assert.equal(asrCapability.requiresApiKey, false);
   assert.equal(asrCapability.networkFallback, false);
-  assert.equal(asrCapability.supportsContinuous, false);
+  assert.equal(asrCapability.supportsContinuous, true);
+  assert.equal(asrCapability.supportsPartial, true);
 
   let finalResult = null;
   let nativeError = null;
@@ -134,60 +135,13 @@ try {
     return true;
   });
 
-  const spoken = [];
-  let cancelled = 0;
-  class MockUtterance {
-    constructor(text) {
-      this.text = text;
-      this.lang = "";
-    }
-  }
-  const synthesis = {
-    speak(utterance, mode) {
-      spoken.push({ utterance, mode });
-    },
-    cancel() {
-      cancelled += 1;
-    }
-  };
-  const tts = createAiuiTtsOutputAdapter({
-    speechSynthesisApi: synthesis,
-    SpeechSynthesisUtteranceCtor: MockUtterance,
-    language: "zh-CN",
-    now: () => clock
+  class MockUtterance { constructor(text) { this.text = text; } }
+  const sharedOnly = createAiuiTtsOutputAdapter({
+    speechSynthesisApi: { speak() { throw new Error("Shared player must never execute"); } },
+    SpeechSynthesisUtteranceCtor: MockUtterance
   });
-  const ttsCapability = tts.getCapability();
-  assert.equal(ttsCapability.mode, "aiui_native");
-  assert.equal(ttsCapability.available, true);
-  assert.equal(ttsCapability.requiresApiKey, false);
-  assert.equal(ttsCapability.networkFallback, false);
-  assert.equal(ttsCapability.supportsPlaybackReceipt, false);
-  assert.equal(ttsCapability.supportsCancel, true);
-
-  let ttsEnded = 0;
-  let ttsError = null;
-  clock += 20;
-  const playback = tts.speak("这是 AIUI 原生播报。", {
-    messageId: "relay-message-1",
-    mode: "enqueue",
-    onEnd: () => { ttsEnded += 1; },
-    onError: (error) => { ttsError = error; }
-  });
-  assert.equal(spoken.length, 1);
-  assert.equal(spoken[0].mode, "enqueue");
-  assert.equal(spoken[0].utterance.text, "这是 AIUI 原生播报。");
-  assert.equal(spoken[0].utterance.lang, "zh-CN");
-  assert.equal(playback.attempt.accepted, true);
-  assert.equal(playback.attempt.messageId, "relay-message-1");
-  assert.equal(playback.attempt.mode, "aiui_native");
-  assert.equal(playback.attempt.playbackReceipt, "not_supported");
-  playback.utterance.onend?.({ type: "end" });
-  assert.equal(ttsEnded, 1);
-  playback.utterance.onerror?.({ error: "synthesis-failed" });
-  assert(ttsError instanceof VoiceRuntimeError);
-  assert.equal(ttsError.nativeCode, "synthesis-failed");
-  assert.equal(tts.cancel(), true);
-  assert.equal(cancelled, 1);
+  assert.equal(sharedOnly.getCapability().available, false);
+  await assert.rejects(sharedOnly.synthesize("不可停止的播放器"), error => error.code === "tts_unavailable");
 
   // Test synthesize with subtitles: 'word' and SpeechAudioPlayer speech-text sync
   let syncedCueText = "";
@@ -214,8 +168,6 @@ try {
     destroy() {}
   }
   const syncSynthesis = {
-    speak() {},
-    cancel() {},
     async synthesize(utterance, synthOptions) {
       assert.equal(synthOptions.subtitles, "word");
       return {
@@ -243,7 +195,7 @@ try {
   assert.equal(unavailableTts.getCapability().available, false);
   assert.equal(unavailableTts.getCapability().requiresApiKey, false);
   assert.match(unavailableTts.getCapability().reason, /speechSynthesis/);
-  assert.throws(() => unavailableTts.speak("不会走 API"), (error) => {
+  await assert.rejects(unavailableTts.synthesize("不会走 API"), (error) => {
     assert(error instanceof VoiceRuntimeError);
     assert.equal(error.code, "tts_unavailable");
     return true;

@@ -6,6 +6,8 @@ The video plugin's `VideoProjects` owns project state at `stateRoot/projects/<id
 
 The creation page supports My Projects, creation, opening, renaming and returning to the list. Cards, positions, prompts, first/last frames, reference asset IDs, generation parameters and locally generated audio are saved with the project. Audio Blobs are serialized into the project document and restored as playback URLs. Uploaded media retain server asset references; temporary playback URLs are not durable resources.
 
+The authenticated LAN HTTP entry supports creating projects, adding and copying cards, and submitting generation jobs. The browser uses `crypto.getRandomValues()` through a shared UUID v4 generator for IDs and idempotency keys, without depending on the secure-context-only `crypto.randomUUID()` API. Server-side project formats and access control are unchanged.
+
 Edits trigger serial autosaves. Changes made during a save become the next latest snapshot. Normal save status is hidden; network failures and concurrent conflicts display errors. Leaving with unsaved changes triggers the browser's protection prompt. A failed read does not overwrite an existing project. Failed saves do not automatically retry an overwrite: retain the edits and resolve the error. Offline edits are not guaranteed saved.
 
 The server writes a temporary file and atomically renames it, checks revisions and serializes writes within one process. When two clients submit the same revision, the later write receives 409 instead of silently overwriting. There is no expiry, automatic cleanup or archival policy, and this change does not delete projects. Project save requests are limited to 64 MiB.

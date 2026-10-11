@@ -5,9 +5,12 @@ import {
   YeYuGamerManagerApiError,
   type YeYuGamerDispatchOptions,
   type YeYuGamerManagerConfigInput,
+  type YeYuGamerRequestAccess,
   type YeYuGamerWorkItemCreate
 } from "./managerApi.js";
 import type { ManagerPluginRouteHandler } from "../../manager/managerPluginRouteRegistry.js";
+import { assertTrustedLanAgentPrincipal } from "../../manager/lanAgentRequestAccess.js";
+import { localModelSettingsRequestAllowed } from "../../manager/speechModelSettingsAccess.js";
 
 export type YeYuGamerManagerRouteClient = Pick<
   YeYuGamerManagerApiClient,
@@ -36,16 +39,6 @@ const readRoutes = Object.freeze({
   "/api/agent/yeyu-gamer/capabilities": "getCapabilities"
 } as const);
 
-function isLoopbackAddress(address: string | undefined): boolean {
-  if (!address) return false;
-  const normalized = address.toLowerCase().replace(/^\[|\]$/g, "").split("%")[0];
-  return normalized === "::1"
-    || normalized === "127.0.0.1"
-    || normalized === "localhost"
-    || normalized.startsWith("127.")
-    || normalized.startsWith("::ffff:127.");
-}
-
 function presentedError(error: unknown): { status: number; code: string; message: string } {
   if (error instanceof YeYuGamerManagerApiError) {
     return { status: error.status, code: error.code, message: error.message };
@@ -55,30 +48,6 @@ function presentedError(error: unknown): { status: number; code: string; message
     code: "yeyu_gamer_integration_error",
     message: "YeYu Gamer Manager integration failed."
   };
-}
-
-function tracked<T>(context: YeYuGamerManagerRoutesContext, operation: Promise<T>): void {
-  void (context.trackOperation?.(operation) ?? operation);
-}
-
-function respondWithOperation<T>(
-  response: http.ServerResponse,
-  context: YeYuGamerManagerRoutesContext,
-  operation: Promise<T>,
-  successStatus = 200
-): void {
-  tracked(context, operation.then(data => {
-    context.jsonResponse(response, successStatus, { code: 0, data });
-  }).catch(error => {
-    const presented = presentedError(error);
-    context.jsonResponse(response, presented.status, {
-      code: -1,
-      error: {
-        code: presented.code,
-        message: presented.message
-      }
-    });
-  }));
 }
 
 export function handleYeYuGamerManagerApi(
@@ -92,56 +61,67 @@ export function handleYeYuGamerManagerApi(
   if (!(request.method === "GET" && readMethod)
     && !(request.method === "POST" && isWorkItemDispatch)) return false;
 
-  if (!isLoopbackAddress(request.socket.remoteAddress) && !hasAuthenticatedConnectionRequest(request)) {
-    context.jsonResponse(response, 403, {
-      code: -1,
-      error: {
-        code: "yeyu_gamer_connection_auth_required",
-        message: "A verified RabiRoute connection is required."
-      }
-    });
-    return true;
-  }
-
-  let client: YeYuGamerManagerRouteClient;
-  try {
-    const config = context.getConfig();
-    client = context.createClient?.(config) ?? new YeYuGamerManagerApiClient(config);
-  } catch (error) {
+  let denied: YeYuGamerManagerApiError | undefined;
+  let dispatched = false;
+  const access: YeYuGamerRequestAccess = {
+    authorize() {
+      if (denied) throw denied;
+      try {
+        if (assertTrustedLanAgentPrincipal(request)) return;
+        if (localModelSettingsRequestAllowed(request)) return;
+      } catch { /* An invalid original lease never falls back to local access. */ }
+      denied = new YeYuGamerManagerApiError(403, "yeyu_gamer_access_denied", "An enabled authenticated Agent or a trusted local caller is required.");
+      throw denied;
+    },
+    beforeDispatch() {
+      access.authorize();
+      if (isWorkItemDispatch) dispatched = true;
+    }
+  };
+  const fail = (error: unknown) => {
+    try { access.authorize(); } catch (authorizationError) { error = authorizationError; }
     const presented = presentedError(error);
     context.jsonResponse(response, presented.status, {
       code: -1,
-      error: { code: presented.code, message: presented.message }
+      error: { code: presented.code, message: presented.message },
+      ...(isWorkItemDispatch && presented.status === 403 ? {
+        mutationOutcome: dispatched ? "unknown" : "not_started",
+        uncertain: dispatched
+      } : {})
     });
+  };
+
+  let client: YeYuGamerManagerRouteClient;
+  try {
+    access.authorize();
+    const config = context.getConfig();
+    client = context.createClient?.(config) ?? new YeYuGamerManagerApiClient(config);
+    access.authorize();
+  } catch (error) {
+    fail(error);
     return true;
   }
 
-  if (request.method === "GET" && readMethod) {
-    respondWithOperation(response, context, client[readMethod]() as Promise<unknown>);
-    return true;
-  }
-
-  if (request.method === "POST" && isWorkItemDispatch) {
-    respondWithOperation(
-      response,
-      context,
-      context.readJsonBody<YeYuGamerWorkItemDispatchRequest>(request).then(body => {
-        if (!body || typeof body !== "object" || !body.workItem) {
-          throw new YeYuGamerManagerApiError(400, "yeyu_gamer_work_item_rejected", "workItem is required.");
-        }
-        const options: YeYuGamerDispatchOptions = {
-          idempotencyKey: body.idempotencyKey,
-          expectedStateVersion: body.expectedStateVersion,
-          ...(body.requestId ? { requestId: body.requestId } : {})
-        };
-        return client.createWorkItem(body.workItem, options);
-      }),
-      202
-    );
-    return true;
-  }
-
-  return false;
+  const operation = Promise.resolve().then(async () => {
+    access.authorize();
+    if (request.method === "GET" && readMethod) return client[readMethod](access);
+    const body = await context.readJsonBody<YeYuGamerWorkItemDispatchRequest>(request);
+    access.authorize();
+    if (!body || typeof body !== "object" || !body.workItem) {
+      throw new YeYuGamerManagerApiError(400, "yeyu_gamer_work_item_rejected", "workItem is required.");
+    }
+    const options: YeYuGamerDispatchOptions = {
+      idempotencyKey: body.idempotencyKey,
+      expectedStateVersion: body.expectedStateVersion,
+      ...(body.requestId ? { requestId: body.requestId } : {})
+    };
+    return client.createWorkItem(body.workItem, options, access);
+  }).then(data => {
+    access.authorize();
+    context.jsonResponse(response, isWorkItemDispatch ? 202 : 200, { code: 0, data });
+  }).catch(fail);
+  void (context.trackOperation?.(operation) ?? operation);
+  return true;
 }
 
 export function createYeYuGamerManagerRouteHandler(

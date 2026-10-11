@@ -21,8 +21,8 @@ function frozenCapability(input) {
     networkFallback: false,
     locale: input.locale,
     locales: Object.freeze([input.locale]),
-    supportsPartial: input.kind === "asr" ? false : undefined,
-    supportsContinuous: input.kind === "asr" ? false : undefined,
+    supportsPartial: input.kind === "asr" ? input.available : undefined,
+    supportsContinuous: input.kind === "asr" ? input.available : undefined,
     supportsCancel: input.supportsCancel,
     supportsPlaybackReceipt: input.kind === "tts" ? false : undefined,
     reason: input.reason || ""
@@ -110,9 +110,35 @@ export function createAiuiAsrInputAdapter(options = {}) {
         : Boolean(options.interimResults);
       const segments = [];
       let finalEmitted = false;
+      let lastFinalIndex = -1;
+      const emitFinal = (text, event) => {
+        sequence += 1;
+        const capturedAt = Number(now());
+        handlers.onFinal?.(Object.freeze({
+          resultId: normalizedText(idFactory("asr", sequence, capturedAt)) || defaultId("asr", sequence, capturedAt),
+          text, final: true, capturedAt, adapterId, mode: AIUI_NATIVE_VOICE_MODE, locale
+        }), event);
+      };
 
       recognition.onresult = (event) => {
         const results = event?.results;
+        if (recognition.continuous && results?.length) {
+          const interim = [];
+          const startIndex = Number.isInteger(event.resultIndex) ? event.resultIndex : 0;
+          for (let i = startIndex; i < results.length; i++) {
+            const item = results[i];
+            const text = normalizedText((item?.[0] || item?.item?.(0))?.transcript);
+            if (!text || i <= lastFinalIndex) continue;
+            if (item?.isFinal === true) {
+              lastFinalIndex = i;
+              emitFinal(text, event);
+            } else if (recognition.interimResults) interim.push(text);
+          }
+          if (interim.length) handlers.onInterim?.(Object.freeze({
+            text: interim.join(""), final: false, adapterId, mode: AIUI_NATIVE_VOICE_MODE, locale
+          }), event);
+          return;
+        }
         if (!results || !results.length) {
           const fallbackText = speechTextFromEvent(event);
           if (!fallbackText) return;
@@ -224,7 +250,7 @@ export function createAiuiAsrInputAdapter(options = {}) {
 export function createAiuiTtsOutputAdapter(options = {}) {
   const adapterId = normalizedText(options.adapterId) || "aiui-native-tts";
   const locale = normalizedLocale(options.language || options.locale);
-  const synthesis = options.speechSynthesisApi && typeof options.speechSynthesisApi.speak === "function"
+  const synthesis = options.speechSynthesisApi && typeof options.speechSynthesisApi.synthesize === "function"
     ? options.speechSynthesisApi
     : null;
   const UtteranceCtor = typeof options.SpeechSynthesisUtteranceCtor === "function"
@@ -235,16 +261,16 @@ export function createAiuiTtsOutputAdapter(options = {}) {
     : null;
   const now = typeof options.now === "function" ? options.now : Date.now;
   const idFactory = typeof options.idFactory === "function" ? options.idFactory : defaultId;
-  const available = Boolean(synthesis && UtteranceCtor);
-  const supportsSynthesize = Boolean(available && typeof synthesis.synthesize === "function" && PlayerCtor);
+  const available = Boolean(synthesis && UtteranceCtor && PlayerCtor);
+  const supportsSynthesize = available;
   const capability = frozenCapability({
     adapterId,
     kind: "tts",
     available,
     locale,
-    supportsCancel: Boolean(synthesis && typeof synthesis.cancel === "function"),
+    supportsCancel: available,
     supportsSynthesize,
-    reason: available ? "" : "AIUI native speechSynthesis is unavailable in this runtime."
+    reason: available ? "" : "AIUI native speechSynthesis.synthesize and SpeechAudioPlayer are required in this runtime."
   });
   let sequence = 0;
 
@@ -257,54 +283,6 @@ export function createAiuiTtsOutputAdapter(options = {}) {
     },
     getCapability() {
       return capability;
-    },
-    speak(text, speakOptions = {}) {
-      if (!available) throw unavailableError(capability);
-      const value = normalizedText(text);
-      if (!value) {
-        throw new VoiceRuntimeError("tts_empty_text", "AIUI native TTS text is empty.", { adapterId });
-      }
-      sequence += 1;
-      const acceptedAt = Number(now());
-      const attemptId = normalizedText(idFactory("tts", sequence, acceptedAt))
-        || defaultId("tts", sequence, acceptedAt);
-      const messageId = normalizedText(speakOptions.messageId) || attemptId;
-      const utterance = new UtteranceCtor(value);
-      utterance.voice = speakOptions.voice || options.voice || "female-tianmei";
-      utterance.volume = typeof speakOptions.volume === "number" ? speakOptions.volume : 1;
-      utterance.lang = locale;
-      utterance.onstart = (event) => speakOptions.onStart?.(event);
-      utterance.onend = (event) => speakOptions.onEnd?.(event);
-      utterance.onerror = (event) => {
-        const nativeCode = normalizedText(event?.error) || "unknown";
-        speakOptions.onError?.(new VoiceRuntimeError(
-          "tts_runtime_error",
-          `AIUI native TTS failed: ${nativeCode}`,
-          { adapterId, nativeCode }
-        ), event);
-      };
-      const mode = normalizedText(speakOptions.mode) || "enqueue";
-      try {
-        synthesis.speak(utterance, mode);
-      } catch (error) {
-        throw new VoiceRuntimeError(
-          "tts_start_failed",
-          errorMessage(error, "AIUI native TTS failed to start."),
-          { adapterId, cause: error }
-        );
-      }
-      const attempt = Object.freeze({
-        attemptId,
-        messageId,
-        accepted: true,
-        status: "accepted",
-        acceptedAt,
-        adapterId,
-        mode: AIUI_NATIVE_VOICE_MODE,
-        locale,
-        playbackReceipt: "not_supported"
-      });
-      return Object.freeze({ utterance, attempt });
     },
     async synthesize(text, synthesizeOptions = {}) {
       if (!available) throw unavailableError(capability);
@@ -351,19 +329,6 @@ export function createAiuiTtsOutputAdapter(options = {}) {
         throw new VoiceRuntimeError(
           "tts_synthesize_failed",
           errorMessage(error, "AIUI native TTS synthesize failed."),
-          { adapterId, cause: error }
-        );
-      }
-    },
-    cancel() {
-      if (!synthesis || typeof synthesis.cancel !== "function") return false;
-      try {
-        synthesis.cancel();
-        return true;
-      } catch (error) {
-        throw new VoiceRuntimeError(
-          "tts_cancel_failed",
-          errorMessage(error, "AIUI native TTS failed to cancel."),
           { adapterId, cause: error }
         );
       }

@@ -224,6 +224,12 @@ try {
   });
   toolsView.startRendering();
   await new Promise((resolve) => setTimeout(resolve, 1500));
+  const startsBeforeFirstGesture = asrStarts.length;
+  view.setInteractive(true);
+  const firstGestureHandled = view.dispatchVoiceWakeup("leqi", Date.now());
+  const startDeadline = Date.now() + 2000;
+  while (asrStarts.length === 0 && Date.now() < startDeadline)
+    await new Promise(resolve => setTimeout(resolve, 20));
   const context = canvas.getContext("2d");
   const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
   let firstLitY = canvas.height;
@@ -265,6 +271,8 @@ try {
     invocationHasToken: Object.prototype.hasOwnProperty.call(transcriptionQuery, "token"),
     pngLength: canvas.toDataURL("image/png").length,
     asrStarts: asrStarts.length,
+    startsBeforeFirstGesture,
+    firstGestureHandled,
     firstAsrRequest: asrStarts[0] || null,
     firstLitY,
     lastLitY,
@@ -681,8 +689,10 @@ try {
     "InkWebView::open_bundle completed"
   ];
   const forbidden = /Module not found|Builtin module not found|Error running (?:page|component)|Exported default must be an object|Failed to execute page|JsRuntime::eval_module declare failed/;
-  const asrContractOk = result?.asrStarts >= 1
-    && result?.firstAsrRequest?.continuous === false
+  const asrContractOk = result?.startsBeforeFirstGesture === 0
+    && result?.firstGestureHandled === true
+    && result?.asrStarts === 1
+    && result?.firstAsrRequest?.continuous === true
     && result?.firstAsrRequest?.interimResults === true;
   const tokenInvocationOk = result?.invocationHasToken === Boolean(runtimeToken);
   const hudLayoutOk = regions.normal.ok && result?.firstLitY >= 8
@@ -710,7 +720,7 @@ try {
     && toolsTranscriptionResult?.running === true
     && toolsTranscriptionResult?.closeRequested === false
     && toolsTranscriptionResult?.litPixels > 500
-    && toolsTranscriptionResult?.asrStarts === 0;
+    && toolsTranscriptionResult?.asrStarts === 1;
   const switchedToConfigurationUi = swipeResult?.running === true
     && swipeResult?.closeRequested === false
     && swipeResult?.asrStarts > result?.asrStarts

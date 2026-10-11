@@ -3,6 +3,8 @@ import fs, { constants } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
+import { Transform } from "node:stream";
+import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
 import { ManagerReadWorkerError } from "./managerReadWorkerPool.js";
 import { roleSkillArchiveLimits } from "./roleSkillArchive.js";
 import { parseRoleSkillDownloadRoute } from "./roleKnowledgeRoute.js";
@@ -102,6 +104,7 @@ async function transfer(
     const outputPath = path.join(lease, "download.zip");
     const result = await context.archive(roleDir, route.skillId, outputPath, { signal: controller.signal, onWorkerReleased });
     controller.signal.throwIfAborted();
+    assertTrustedLanAgentPrincipal(request);
     if (!result.ok) {
       context.json(response, archiveErrorStatus[result.code], { code: -1, error: `SKILL_ARCHIVE_${result.code.toUpperCase()}` });
       return;
@@ -119,6 +122,7 @@ async function transfer(
       const stat = await file.stat();
       if (!stat.isFile() || stat.nlink !== 1 || stat.size !== result.sizeBytes) throw new Error("Invalid archive artifact.");
       controller.signal.throwIfAborted();
+      assertTrustedLanAgentPrincipal(request);
       const asciiName = `${route.skillId}.zip`.replace(/[^A-Za-z0-9._-]/g, "_");
       response.writeHead(200, {
         "content-type": "application/zip",
@@ -129,7 +133,13 @@ async function transfer(
         "cache-control": "private, no-store",
         "x-content-type-options": "nosniff"
       });
-      await pipeline(file.createReadStream(), response, { signal: controller.signal });
+      const authorityGuard = new Transform({
+        transform(chunk, encoding, callback) {
+          try { assertTrustedLanAgentPrincipal(request); callback(null, chunk); }
+          catch (error) { callback(error instanceof Error ? error : new Error(String(error))); }
+        }
+      });
+      await pipeline(file.createReadStream(), authorityGuard, response, { signal: controller.signal });
     } finally { await file.close(); }
   } catch (error) {
     if (error instanceof ManagerReadWorkerError && error.code === "termination_unconfirmed") {
@@ -138,6 +148,8 @@ async function transfer(
     }
     if (controller.signal.aborted || response.destroyed) return;
     if (response.headersSent) { response.destroy(); return; }
+    try { assertTrustedLanAgentPrincipal(request); }
+    catch { context.json(response, 403, { code: -1, error: "LAN_AGENT_AUTHORIZATION_REVOKED" }); return; }
     const unavailable = error instanceof ManagerReadWorkerError
       && ["busy", "timeout", "termination_unconfirmed"].includes(error.code);
     context.json(response, unavailable ? 503 : 500, {

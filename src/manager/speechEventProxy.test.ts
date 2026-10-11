@@ -14,6 +14,45 @@ function listen(server: http.Server): Promise<number> {
   });
 }
 
+test("speech SSE fences every chunk and aborts revoked upstream", { timeout: 5000 }, async () => {
+  let revoked = false; let upstreamAborted = false;
+  let stream!: ReadableStreamDefaultController<Uint8Array>;
+  const server = http.createServer((_request, response) => {
+    proxySpeechEventStream(response, {
+      guard: () => { if (revoked) throw new Error("revoked"); },
+      openUpstream: async signal => new Response(new ReadableStream({ start(controller) {
+        stream = controller;
+        controller.enqueue(new TextEncoder().encode("data: allowed\n\n"));
+        signal.addEventListener("abort", () => { upstreamAborted = true; controller.error(new Error("aborted")); }, { once: true });
+      } }), { headers: { "content-type": "text/event-stream" } })
+    });
+  });
+  const port = await listen(server);
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/events`);
+    const reader = response.body!.getReader();
+    assert.match(new TextDecoder().decode((await reader.read()).value), /allowed/);
+    revoked = true; stream.enqueue(new TextEncoder().encode("data: secret-after-revocation\n\n"));
+    await assert.rejects(reader.read());
+    assert.equal(upstreamAborted, true);
+  } finally { server.closeAllConnections(); await close(server); }
+});
+
+test("speech SSE rejects revoked open success and error without upstream disclosure", async () => {
+  for (const upstreamFails of [false, true]) {
+    let revoked = false;
+    const server = http.createServer((_request, response) => proxySpeechEventStream(response, {
+      guard: () => { if (revoked) throw new Error("revoked"); },
+      openUpstream: async () => { revoked = true; if (upstreamFails) throw new Error("secret failure");
+        return new Response("secret stream", { headers: { "content-type": "text/event-stream" } }); }
+    }));
+    const port = await listen(server);
+    try { const response = await fetch(`http://127.0.0.1:${port}/events`);
+      assert.equal(response.status, 403); assert.doesNotMatch(await response.text(), /secret/);
+    } finally { server.closeAllConnections(); await close(server); }
+  }
+});
+
 function close(server: http.Server): Promise<void> {
   return new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
 }

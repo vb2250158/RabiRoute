@@ -1,50 +1,54 @@
-# 跨电脑接口调用
+# 跨电脑连接信令与设备发现
 
 [English](rabilink-peer-rpc_en.md) | 简体中文
 
-状态：实验支持。当前提供只读能力调用，使用局域网直连、公网 WebRTC 打洞尝试和受限 Relay 中转。自动化验证包含真实本机 WebRTC 数据通道、LAN 优先、直连失败后的 Relay 回退及应用隔离；跨运营商公网和真实双 PC 持续运行仍需各自验收。
+状态：实验实现，现行源码合同。本页说明设备发现和保留的控制信令；全部业务读取、写入、流与第三台 PC 能力统一通过[通用连接](rabilink-peer-tunnel.md)。本机自动化不等于真实双 PC 或远程部署验收。
 
-新的通用接口与语音服务器选择见[跨电脑通用连接](rabilink-peer-tunnel.md)。本页保留旧只读协议的兼容说明。
+## 发现目标电脑
 
-## 调用另一台 PC
+两端启用同一 RabiLink 应用。调用方通过当前 Host `status --json` 的 `managerBaseUrl` 读取 `/meta`，核对当前 application generation、Manager 实例和目标接口所需健康状态，再查询：
 
-两台 PC 使用同一个 RabiLink 应用 token，并在线运行包含 `peer-rpc-v1` 的版本。Relay 也需要包含 `/api/rabilink/peer/proxy`。调用方通过当前 Host `status --json` 的 `managerBaseUrl` 读取 `/meta`，核对健康状态、application generation 和 Manager 实例后，再调用本机接口：
+- `GET /api/rabilink/peer/list`：设备登记和 `summary` 分类计数，每项提供设备 ID、GUID、`deviceKind`、在线状态、能力及 LAN 地址。
+- `GET /api/rabilink/peer/list?deviceKind=pc&online=true`：只返回明确上报为 PC 且在线的登记；计数对应筛选结果。
+- `GET /api/rabilink/peer/servers`：当前连接状态、实际线路和 RTT，详见通用连接页。
 
-- `GET /api/rabilink/peer/list`：返回设备登记及 `summary` 分类计数。每项包含 `deviceKind`（如 `pc`、`phone`、`glasses`、`watch`）、目标 ID、在线状态、能力及 LAN 地址。缺失或非法类型统一为 `unknown`，不根据名称或能力猜测硬件。`summary.total` 是登记数，不是电脑数。
-- `GET /api/rabilink/peer/list?deviceKind=pc&online=true`：仅查看明确上报为 PC 且在线的登记；摘要对应筛选后的结果。不带筛选时保留未知及离线记录。
-- `POST /api/rabilink/peer/call`：按目标 ID 调用。控制入口仅允许回环访问；远端数据入口只接受加密协议。
+PC 上报 `deviceKind=pc`；手机、眼镜及扩展设备保留自身类型。缺失或非法值为 `unknown`，不根据名称或能力猜测硬件；`summary.total` 是设备登记数。Relay 保留已登记类型，后续客户端省略字段不会清空它；历史登记须由设备重新上报。类型与版本只用于识别，不授予权限。
 
-请求示例：
+发现入口接受安全本机访问或 Manager ingress 已验证的连接。真实远端 Agent principal 优先，原始授权撤销后不能回退为回环访问；伪造身份请求头不建立 principal。独立 peer LAN 端口只提供加密协议及隧道握手，不直接提供完整 Manager 或 WebGUI 控制。
 
-```json
-{
-  "targetDeviceId": "pc-b",
-  "capability": "plans",
-  "operation": "list",
-  "input": { "roleId": "Example" }
-}
-```
+## 信令控制面
 
-返回的 `transport` 为 `lan`、`p2p` 或 `relay`。`reply.ok` 才表示业务成功；`reply` 同时包含请求 ID、目标设备和运行实例身份。`plans.list` 只返回计划 ID、标题、状态和更新时间；`persona.manifest` 查询指定人格的文件清单。`system.describe` 在同一应用鉴权后返回当前实例与已开放操作。
+`peer-rpc-v1` 的业务入口 `POST /api/rabilink/peer/call` 已删除，返回 404。旧 `plans.list` / `persona.manifest` 注册、清单辅助模块和每业务调用新建 P2P 的调用端同时移除；业务不再有第二份分发表。
 
-## 目标电脑与可用操作
+保留的加密 wire 只接受：
 
-PC 在事件连接和 worker 请求中明确上报 `deviceKind=pc`；手机和眼镜沿用已有的 `deviceKind` 上报。新版 Relay 保留已登记类型，旧客户端后续省略该字段不会清空它。历史登记不会按名称批量改写，需设备重新明确上报。客户端上报属于自述分类，不作为权限凭据；支持自定义类型扩展。
+| 操作 | 用途 |
+| --- | --- |
+| `system.describe` | 确认目标设备、generation、Manager instance 和已启用的控制信令 |
+| `transport.tunnel` | 应用握手、通用 WebRTC 或 Relay 隧道连接协商 |
+| `transport.offer` | 受支持旧手机的控制 DataChannel 接收兼容 |
 
-0.3.22 起，目标在同一 RabiLink 应用鉴权通过后默认开放本协议实际注册的只读操作和 Manager 全局 `rolesRoot` 实际拥有的人格。Route 自定义目录中的同名人格不进入这份知识目录。不再读取 `peer-access.json` 的操作与角色白名单；旧文件不参与授权。其它应用、错误 generation 或未知人格继续拒绝。通用管理和写入使用[通用连接](rabilink-peer-tunnel.md)，本协议不注册写操作。
+即使旧业务操作误加入注册表，分派器也不执行或列出它。应用停用后不接受连接分配；`system.describe` 中的连接分配操作标为控制面且不是只读操作。旧 `peer-access.json` 不再参与鉴权。
 
-## 传输与生命周期
+PC 信令通过既有 `/api/rabilink/peer/proxy` 发送密文到目标 `/api/rabilink/peer/receive`。先执行 describe，再发送绑定当前 generation/instance 的一次分配；凭据变化、取消、身份不匹配或实例切换后失败关闭。信令 HTTP 每次有五秒预算，不跨 LAN/P2P/Relay 重放结果未知的分配。请求有效期和包大小有界，明文最多 1 MiB；LAN/P2P/Relay 业务线路与连接复用由通用隧道负责。
 
-设备发现由 RabiLink 共用模块提供，不依赖人格数据同步。调用方每次从 Relay 获取当前设备地址，先用加密 `system.describe` 校验目标和 generation，再发送绑定该 generation 的请求。请求与回复统一使用应用密钥派生的 AES-256-GCM 加密，LAN 不传应用 token；Relay 只转发密文，固定到 `/api/rabilink/peer/receive`，不能由调用者指定 URL。
+请求与回复使用应用密钥派生的 AES-256-GCM；应用隔离、目标身份和 generation 校验不被本机或远端 Agent 的管理访问替代。Relay 固定转发目标，不接受任意本机 URL。插件停止关闭通道并等待已接受的 HTTP 操作。
 
-先尝试最多四个登记的私有 IPv4 地址，每个发现请求最多两秒。LAN 不可用时，经 Relay 交换加密 SDP，用现有 werift 实现建立一次 WebRTC DataChannel；STUN 只帮助发现地址，没有 TURN。一次直连尝试最多十二秒，单连接只完成一次调用，最多同时八条连接。连接失败后只读请求可使用 Relay，业务拒绝不会被改成成功。请求有效期最多两分钟，明文请求或结果最多 1 MiB，传输包有独立大小限制。
+## 调用全部业务接口
 
-Manager RabiLink 插件拥有调用入口和 WebRTC 连接；停用时撤销路由、关闭连接并等待已接受的 HTTP 操作。旧 generation 的请求失败关闭，调用者重新发现后再发起新请求。
+目标 PC 的公开接口通过 `manager` 服务执行，例如：
 
-本协议版本只注册只读业务操作。新增写操作前必须扩展目标端的持久化请求去重、结果查询和不确定状态恢复，不能直接把写函数注册进现有只读重试流程。
+~~~text
+GET /api/rabilink/peer/http/pc-b/manager/meta
+GET /api/rabilink/peer/http/pc-b/manager/api/agent/help
+~~~
 
-## 现有功能的兼容边界
+新增 Manager API 或公开请求头不需要增加 Relay 分发代码。三线路共用加密、流复用与授权合同，优先 LAN，再尝试 P2P，最后 Relay；健康连接复用。第三台 PC 使用现有嵌套转发，最多四跳并拒绝重复或本机目标。HTTP/SSE/WebSocket/二进制、未知写入不重放及鉴权中途失效的具体规则见[通用连接](rabilink-peer-tunnel.md)。
 
-人格数据同步功能已从源码移除：不再提供 LAN 同步文件传输、合并或 `/persona-sync/proxy`。跨电脑访问继续通过 RabiLink 在目标电脑读取数据，不创建同步副本；此 RPC 只注册读取操作，写入使用 Manager 通用连接。已有的人格、计划、记忆和历史冲突证据不删除。视频仍保留独立通道和“禁止服务器承载视频字节”的带宽合同。
+人格与权限独立。资料仍由来源 PC 的既有人格、计划和聊天记录接口持有，跨电脑访问不创建同步副本；旧清单接口不是保留数据的必要条件。已有用户数据和历史冲突证据保留，视频继续遵守独立的禁止视频中转合同。
 
-验证入口：`src/rabiPeer.test.ts`、`scripts/rabilink-relay-peers.test.mjs`，以及 Relay runtime 与共用 peer LAN 通道回归。源码变更和自动化传输成功不代替本机部署、远程 Relay 升级或真实双 PC 验收。
+## 兼容退出与验收
+
+旧 `transport.offer` 接收端只为仍受支持客户端保留控制 wire；正式业务只有通用 `manager` 路径。受支持客户端迁移到 `transport.tunnel`、旧信令使用清零且完成设备验收后，删除旧 DataChannel 接收端。`bootstrap-speech/resources/persona` 的签名兼容和人格页面 bootstrap 别名退出条件见通用连接页。
+
+本轮 66 项传输测试通过，覆盖本机真实 WebRTC、隔离 Relay、三 Runtime LAN 转发、未知接口和业务头、流式撤权、取消及未知结果不重放。入口为 `src/rabiPeer.test.ts`、`src/rabiPeerClient.test.ts`、`src/manager/rabiPeerRoutes.test.ts` 和 `src/peerTunnel/` 测试。真实双 PC、跨运营商 P2P、持续运行及手机/眼镜升级仍需单独运行证据；本页不宣称这些验收或部署已完成。

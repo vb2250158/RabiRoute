@@ -1,6 +1,6 @@
 # Plan and memory summary search
 
-中文：[计划与记忆摘要搜索](knowledge-search.md)
+English | [简体中文](knowledge-search.md)
 
 Manager owns one derived in-memory index per persona. Files remain authoritative. Search neither writes records nor updates viewedAt. The bundled `rabi-knowledge-search` skill searches summaries before requesting existing detail endpoints.
 
@@ -22,6 +22,14 @@ Reload is automatic during normal operation. `kind=plan|recent|consolidated` fil
 `data.items` contains identity, type, title, focus, keywords, status, archival state, update/view times, revision, a maximum 160-character excerpt, matchedBy and detailUrl. Continue with `data.nextCursor` and unchanged query parameters. A changed index version returns 409; restart pagination. A warming index returns 503. Memory detail reads retain their existing viewedAt behavior.
 
 ## Refresh and cost
+
+Read children send `ready` after installing their IPC listener. The parent dispatches the first request only after that signal, preventing message loss during initialization. Startup waiting stays within the original request timeout; cancellation or shutdown prevents later dispatch. Publish parent and child together; the protocol does not support an older child.
+
+Interactive readers use normal process priority to avoid starvation on busy Windows hosts. Background catalog scans retain low priority. Concurrency, queue and timeout limits remain unchanged.
+
+For skill catalog or body timeouts, verify `GET /api/roles/:roleId/skills` and `GET /api/roles/:roleId/skills/:skillId` separately, then verify listing and loading in the actual Agent. Check reader startup, process priority and queues; increasing the client timeout alone does not fix process starvation. Verify plan-storage recovery separately: successful skill reads do not prove that plan APIs have recovered.
+
+Plan pagination watches canonical `plan.json` files and plan directory replacements under `active` and `archive`. Quarantine leases, transaction manifests and attachments do not rebuild the catalog, preventing background recovery from repeatedly interrupting the first page. Unknown events and watcher failures still trigger full validation.
 
 The index maps keywords to references, references to summaries and search text, and references to old keywords. Hot searches perform no filesystem access. Fulltext scans prepared memory text. Metadata updates replace summaries; only changed IDs, titles or keywords rebuild postings. viewedAt does not rebuild postings.
 

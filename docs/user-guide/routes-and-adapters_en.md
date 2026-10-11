@@ -48,7 +48,7 @@ Open **Message Adapters** and add an entry under **Message sources**. The catalo
 
 Each adapter shows maturity, connection state, dependency checks, and its own settings. Stabilize one source before adding another.
 
-Configure the Home Assistant address, event monitor, device-control gate, and camera options inside the **Xiaomi Home** message endpoint. They do not appear again on the host-wide **Settings** page. An authorized LAN WebGUI can maintain this configuration; device inventory, control actions, and recording content remain available only on the Manager PC.
+Configure the Home Assistant address, event monitor, device-control gate, and camera options inside the **Xiaomi Home** message endpoint. They do not appear again on the host-wide **Settings** page. An authorized LAN WebGUI can maintain this configuration. Once global Agent admission is enabled and node plus Agent authentication succeeds, remote Agents can also use the same public deployment, device, and recording APIs as local callers. The device-control switch, version preconditions, and separate recording read token still apply; unauthenticated access is not admitted.
 
 To inspect the complete delivery path for the current Route, select **Channel check** at the top of the page. The dialog uses three columns: **Message inputs → Manager → Agent handlers**. The left side lists added message inputs, the center shows the Manager state for the current Route, and the right side lists configured Agents with their primary or secondary role. Select a message node or **View settings** to return to its settings; **Check again** refreshes both message-input and Agent status.
 

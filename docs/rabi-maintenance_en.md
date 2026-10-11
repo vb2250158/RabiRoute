@@ -32,6 +32,8 @@ If a bug already has a plan and task binding, forward evidence to that owner and
 
 ## Outage recovery
 
+An independent Worker renews durable receipts for ordinary message delivery. Manager awaits heartbeat Worker startup and shutdown asynchronously, retaining the 10-second deadline for each handshake; waiting does not block HTTP health checks. Delivery still rechecks the original connection authority and receipt owner. An uncertain result requires reconciling the original delivery without automatic replay.
+
 Use Rabi for managed delivery while it is healthy. Only current discovery and bounded retries establishing an outage allow the previously verified maintenance binding to receive reports through its existing Desktop owner. Follow the [delivery fallback contract](rabi-agent-interfaces_en.md); failure on an old port is not outage evidence. Do not switch channels while the original outcome is uncertain.
 
 When plan writes are unavailable, retain a minimal pending report and actual fallback receipt, continue independent local diagnosis, and never directly edit persona plan/callback storage. After recovery, read actual state before reconciling; do not resend delivered content merely to obtain a formal receipt. Host owns installed lifecycle. Do not kill Manager, scan old ports, or start a second Runtime.

@@ -175,6 +175,49 @@ test("snapshot never associates ABA intermediate receipt with original raw revis
   } finally { fs.readFileSync = originalRead; }
 });
 
+test("revocation during asynchronous proof leaves original receipt unchanged", async t => {
+  const f = fixture(t);
+  const before = fs.readFileSync(f.file, "utf8");
+  let revoked = false;
+  const outcome = await reconcileDurableDelivery({ ...f,
+    requestAuthority: () => { if (revoked) throw new Error("example authority revoked"); },
+    verify: async () => { await Promise.resolve(); revoked = true;
+      return { state: "completed", result: { accepted: "proof" } }; }
+  });
+  assert.equal(outcome.state, "uncertain");
+  assert.equal(Object.hasOwn(outcome, "result"), false);
+  assert.equal(fs.readFileSync(f.file, "utf8"), before);
+});
+for (const boundary of ["locked_read", "post_commit", "readback"] as const) {
+  test(`revocation at ${boundary} fences mutation or disclosure`, async t => {
+    const f = fixture(t);
+    const originalRead = fs.readFileSync;
+    const originalRename = fs.renameSync;
+    let proofReturned = false;
+    let committed = false;
+    let revoked = false;
+    t.mock.method(fs, "readFileSync", (...args: Parameters<typeof fs.readFileSync>) => {
+      const value = Reflect.apply(originalRead, fs, args);
+      if (String(args[0]) === f.file && proofReturned
+        && (boundary === "locked_read" || (boundary === "readback" && committed))) revoked = true;
+      return value;
+    });
+    t.mock.method(fs, "renameSync", (...args: Parameters<typeof fs.renameSync>) => {
+      const value = originalRename(...args);
+      if (String(args[1]) === f.file) { committed = true; if (boundary === "post_commit") revoked = true; }
+      return value;
+    });
+    const outcome = await reconcileDurableDelivery({ ...f,
+      requestAuthority: () => { if (revoked) throw new Error("example authority revoked"); },
+      verify: async () => { proofReturned = true; return { state: "completed", result: { accepted: "proof" } }; }
+    });
+    assert.equal(revoked, true);
+    assert.equal(outcome.state, "uncertain");
+    assert.equal(Object.hasOwn(outcome, "result"), false);
+    assert.equal(committed, boundary !== "locked_read");
+    assert.equal(JSON.parse(originalRead(f.file, "utf8")).state, committed ? "completed" : "sending");
+  });
+}
 test("persistence failure returns uncertain and retains original receipt", async t => {
   const f = fixture(t);
   const original = fs.renameSync;

@@ -85,6 +85,46 @@ export async function appendPersonaChatReply(
   finally { if (writes.get(file) === write) writes.delete(file); }
 }
 
+/** Appends device exchanges with stable identity; replay must preserve the original text. */
+export async function appendPersonaAiuiExchange(roleDir: string, input: { sessionId: string; turnId: string; userText: string; assistantText?: string | null }) {
+  const file = path.resolve(roleDir, HISTORY_PATH);
+  const rows: PersonaChatReply[] = [
+    { kind: 'aiui_user', text: input.userText, sessionId: 'aiui:' + input.sessionId, turnId: input.turnId + ':user', id: '', receivedAt: new Date().toISOString(), sourceLabel: '眼镜 AIUI' },
+    ...(input.assistantText ? [{ kind: 'aiui_assistant' as const, text: input.assistantText, sessionId: 'aiui:' + input.sessionId, turnId: input.turnId + ':assistant', id: '', receivedAt: new Date().toISOString(), sourceLabel: '眼镜 AIUI' }] : [])
+  ];
+  for (const row of rows) row.id = createHash('sha256').update(JSON.stringify(['aiui', row.sessionId, row.turnId])).digest('hex');
+  const previous = writes.get(file) ?? Promise.resolve();
+  const write = previous.catch(() => undefined).then(async () => {
+    const ids = await historyIds(file);
+    const duplicates = new Map(rows.filter(row => ids.has(row.id)).map(row => [row.id, row.text]));
+    if (duplicates.size) {
+      const stream = fs.createReadStream(file, { encoding: 'utf8' });
+      const lines = createInterface({ input: stream, crlfDelay: Infinity });
+      try {
+        for await (const line of lines) {
+          if (!line.trim()) continue;
+          const row = parseReply(line);
+          if (duplicates.has(row.id) && duplicates.get(row.id) !== row.text) throw new Error('AIUI_TURN_CONFLICT');
+        }
+      } finally { lines.close(); stream.destroy(); }
+    }
+    const pending = rows.filter(row => !ids.has(row.id));
+    if (pending.length) {
+      await mkdir(path.dirname(file), { recursive: true });
+      const handle = await open(file, 'a');
+      try {
+        await handle.writeFile(pending.map(row => JSON.stringify(row) + '\n').join(''), 'utf8'); await handle.sync();
+        const info = await handle.stat(); pending.forEach(row => ids.add(row.id));
+        idCaches.set(file, { size: info.size, mtimeMs: info.mtimeMs, ids });
+      } finally { await handle.close(); }
+      recordDataMutationAudit({ group: 'persona.chat-history', event: 'persona_aiui_exchange_recorded', owner: 'personaChatHistory', action: 'append', target: { type: 'persona-chat-reply', id: rows[0]!.id }, dataSource: { kind: 'ledger', id: file }, outcome: 'committed' });
+    }
+    return { state: 'committed', turnId: input.turnId, recordIds: rows.map(row => row.id), deduplicated: pending.length === 0 };
+  });
+  writes.set(file, write);
+  try { return await write; } finally { if (writes.get(file) === write) writes.delete(file); }
+}
+
 /** Reads backwards by byte offset, so paging never reloads the complete history. */
 export async function readPersonaChatHistory(roleDir: string, cursor?: number, limit = 50): Promise<PersonaChatHistoryPage> {
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error("limit must be an integer from 1 to 100.");

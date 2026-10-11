@@ -1,8 +1,8 @@
 # Agent: RabiLink AIUI（眼镜应用宿主模型与受控工具）
 
-> **受控轮询例外**：AIUI QuickJS 没有原生 SSE/WS/分块回调。仅在显式 `agentRuntimeMode=legacy-remote-observer` 时，为前台主动下行和 backlog 保留受控长等待；页面隐藏、退出或断线时立即停止，不做高频空请求。默认 `local-aiui` 不启动旧远端消息轮询；设备配置和工具使用各自受控 HTTP 请求。
+> **设备 Agent 等待**：QuickJS 只有有限 HTTP Relay。消息 notice 与 receipt 使用由 PC 状态变化唤醒的有界阻塞 GET；页面退出停止等待。不得假称 AIUI 已接入手机 LAN/P2P。
 
-- **Version**: 1.0.23
+- **Version**: 1.0.34
 - **Description**: Rokid AR 眼镜应用，默认由 AIUI 宿主模型处理对话，通过手机管理设备配置，通过受控 HTTP 使用 PC 工具。
 - **Author**: RabiLink Project
 
@@ -13,9 +13,8 @@ RabiLink AIUI 在同一页面承载对话、状态和配置，不硬编码特定
 - **宿主模型边界**：使用 `LanguageModel.create(options)`。宿主模型不等于物理端侧 SLM，不保证离线；基本对话不要求 Rabi Token 或 PC 在线，但仍依赖宿主 ASR、模型、TTS 的可用性、网络和权限。错误与保底提示不能冒充模型成功结果。
 - **配置归属**：支持启动参数 `agentId`、`agentName`、`systemPrompt` 及设备 profile；`agentId` 只是本地配置标识，不承诺任意灵珠平台 Agent 绑定。设备 profile 生效后优先于旧设置，名称与提示由手机管理。
 - **口语名称设置**：无设备 profile 时，口语“设置／绑定智能体”仅改本地显示名称，不切换平台 Agent 或自动改写提示。完整保存成功才更新界面和确认；保存失败保留旧设置。
-- **Skill 与 MCP**：Skill 是受限指引，不是新权限；MCP 引用不代表授权、连接或调用成功。PC 工具走受认证和授权的 HTTP，QuickJS 不启动 stdio。当前按单步调用与真实结果展示处理；没有已证实的官方结果续轮接口时，不用普通 prompt 冒充工具响应，不宣称完整自动多步闭环。
-- **页面依赖**：不需要额外导入 RabiLinkMessage 插件；页面自身承载受控消息与配置接口。PC 知识 HTTP/MCP 服务仍需独立配置和授权，不因省去页面插件而自动可用。
-- **兼容远端观察**：仅显式 `agentRuntimeMode=legacy-remote-observer` 才启用旧观察队列、远端审阅与回复接收；与本地模型投递互斥，不静默换执行者。接线、构建与真机验收状态按实际证据报告。
+- **Skill 与 MCP**：Skill 是受限指引，不是新权限；MCP 引用不代表授权、连接或调用成功。PC 工具走受认证和授权的 HTTP，QuickJS 不启动 stdio。默认对话使用应用管理的 Agent 循环：严格解析动作、执行已连接工具，再把真实结果作为明确标记的应用观察交给同一宿主模型续推理。观察使用官方支持的 user 消息，不冒充原生 tool role 或原生工具结果提交 API；不注册第二条原生 toolcall 执行链。真机与正式路由验收完成前保持实验状态。
+- **页面依赖**：不需要额外导入 RabiLinkMessage 插件；页面自身承载受控消息与配置接口。PC 服务须实际存在并可连接；RabiLink 连接鉴权成功后默认可用全部公开 PC 接口，不要求知识 HTTP/MCP 再次申请功能许可。只有用户在 WebGUI 或配置文件明确禁用的能力才限制，接口不存在、平台不支持与配置禁用分别报告，不因省去页面插件而宣称不存在的能力已可用。
 
 ## System Prompts
 
@@ -30,12 +29,11 @@ RabiLink AIUI 在同一页面承载对话、状态和配置，不硬编码特定
 ## Capabilities
 
 - **AIUI `SpeechRecognition`**：前台连续自然语言采集，状态机受控续轮，具备快速重复文本与标点抑制。
-- **AIUI `LanguageModel`**：宿主模型会话，通过 `create(options)` 传入初始提示与工具声明，支持 `promptStreaming()` / `prompt()` 及 `toolcall` 事件；同一会话只允许一个活跃请求。工具结果回传续轮接口尚未证实。
+- **AIUI `LanguageModel`**：宿主模型会话，通过 `create(options)` 传入人格与应用动作协议，工具声明放在应用协议中；原生 `tools` 为空。使用 `promptStreaming()` / `prompt()` 串行推理，实际结果经普通应用观察消息续轮，同一会话只允许一个活跃请求。原生 `tool` role 与结果提交 API 仍未证实。
 - **AIUI `speechSynthesis`**：宿主原生语音合成，流式分句播报，生命周期与文本时长双重超时监控；实际声音取决于宿主能力。
-- **智能打断与回声抑制（Barge-in）**：过滤自身 TTS 回声与快速重复输入；检测到新的用户语音时中断播报并处理新一轮，实际效果须真机验证。
+- **智能打断与回声抑制（Barge-in）**：过滤自身 TTS 回声与快速重复输入；检测到新的用户语音时只中断播报，完整输入在当前请求结束后引导后续推理，实际效果须真机验证。
 - **极简 AR HUD 渲染**：绿色高对比度字幕及名称、状态、时钟、电量显示；保持边缘安全和中央视野，小尺寸布局须单独验收。
 - **设备 Agent 配置**：手机 profile 管理名称、系统提示、Skill 指引与 MCP 引用。保存、模型应用、工具连接和实际调用分别确认；新配置在当前轮结束后再应用。
-- **可选旧远端协同（HTTP Relay / API）**：仅显式兼容模式下使用观察队列、持久游标与主动消息接收；默认模式保留旧数据但不发送或播报旧远端队列。
 
 ## 页面操作状态与兼容调用规则
 
@@ -46,10 +44,8 @@ RabiLink AIUI 在同一页面承载对话、状态和配置，不硬编码特定
 2. **配置应用**：
    - 启动参数支持 `agentId`、`agentName` 和 `systemPrompt`，但不是平台绑定合同。
    - 设备 profile 优先；无 profile 时口语可设置本地名称，保存失败不得播报成功。
-3. **显式远端兼容**：
-   - 只有 `agentRuntimeMode=legacy-remote-observer` 才选择旧远端执行链。无真实凭据时报告未连接，不静默回退或双投。
-   - 旧调用者迁移且旧队列经用户确认处理后，才移除兼容入口；不自动删除旧记录。
-4. **兼容页面路由**：
+3. **正式设备 Agent**：原生模型加载后注册名称 + 稳定 ID + 会话；PC 单 mailbox 保存原 deliveryId，手机只转发 wake nonce，签名眼镜 owner 领取并回传，不换模型。
+4. **页面路由**：
    - `mode=transcription`（连接对话）或 `mode=configuration`（配置助手）只改变同一页面内部操作状态，不选择模型 owner；状态切换禁止调用页面结束方法或 `finish()`，严禁因此退出页面。
 
 ## 页面与交互合同
@@ -57,8 +53,8 @@ RabiLink AIUI 在同一页面承载对话、状态和配置，不硬编码特定
 - `pages/home/index` 为唯一产品页面，单页面内承载完整交互，不进行页面重定向或多页面跳转。
 - **视觉层级**：HUD 采用单绿色调（#00FF88 / #55FF99）与高对比度透明背景，顶部显示当前配置名称，底部清晰显示字幕；不得以强光可读性或完全通透的宣传替代多尺寸与真机验收。
 - **手势交互**：
-  - 单击触摸板（Tap）：在播报时打断当前 TTS；仅在显式旧远端模式空闲时请求远端 Agent 即时审阅。
+  - 单击触摸板（Tap）：在播报时打断当前 TTS；空闲时检查设备 Agent 连接。
   - 双击触摸板（Double Tap）：返回上一级或退出当前应用。
-- **麦克风交接**：TTS 播报开始前立即释放 ASR 麦克风占用；播报结束后自动恢复下一轮 ASR，避免眼镜自己听自己说话。
+- **并行语音输入**：日常 AIUI 对话在 TTS 和推理时继续原生 ASR。非回声文字只停播，原推理继续；完整输入排入引导队列，当前宿主请求结束后、下一次决策前采用；已分发工具须先等实际结果，不并发启动第二个模型请求。人格切换等引导队列结束后应用；真机并行与回声效果按实测报告。
 
-实现边界见 [README](README.md)、[模型执行归属](docs/agent-runtime-mode.md)、[设备配置应用](docs/agent-profile-runtime.md)与[工具合同核对](docs/agent-tool-contract.md)。本文件是运行与维护指令，不机械翻译为另一个加载副本。
+实现边界见 [README](README.md)、[模型执行归属](docs/agent-runtime-mode.md)、[设备配置应用](docs/agent-profile-runtime.md)、[人格与语音引导](docs/persona-agent.md)及[工具合同核对](docs/agent-tool-contract.md)。本文件是运行与维护指令，不机械翻译为另一个加载副本。

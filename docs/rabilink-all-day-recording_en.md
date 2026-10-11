@@ -136,6 +136,8 @@ Pause is a capture privacy boundary, not merely hidden UI or suspended upload.
 
 Store raw media, health and transcripts privately and share through controlled grants; separate credentials from diagnostics. Configure raw media, text and summary retention independently. Make upload targets, permitted personas, deletion scope and third-party copy limits explicit. Enabling all-day recording does not authorize every persona or external platform to receive everything.
 
+Public Manager all-day recording endpoints grant safe local and authenticated remote Agents equal access. They revalidate the original lease after body, queue and async boundaries, and before operations or disclosure; revocation or authorization ABA never falls back to local access. This permission does not replace phone upload consent, the private resources-tunnel owner, or the Host’s single capture owner. Public event-audio reads first verify that the event is visible in the target persona’s timeline; direct media endpoints read only controlled media for that persona and the current Host.
+
 ## 7. Android and hardware constraints
 
 - Declare actual foreground service types and notification, microphone, camera, Bluetooth and health permissions for the device/API/target SDK. Do not keep every type enabled unconditionally.

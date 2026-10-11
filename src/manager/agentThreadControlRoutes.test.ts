@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import type http from "node:http";
+import http from "node:http";
 import test from "node:test";
 import type { AgentRequestStore } from "../agentRequests/store.js";
 import { registerLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
+import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import type {
   AgentThreadRequest,
   AgentThreadRequestOptions,
@@ -53,7 +54,7 @@ function context(overrides: Partial<AgentThreadControlRoutesContext> = {}): Agen
   };
 }
 
-test("remote thread requests without trusted session never fall back to local authority", async () => {
+test("sessionless remote management is allowed while sends require a trusted source", async () => {
   for (const method of ["GET", "POST"]) {
     const req = request(method);
     registerLanAgentBodyGuard(req, () => undefined);
@@ -72,8 +73,98 @@ test("remote thread requests without trusted session never fall back to local au
     routes.handler(req, new URL("http://localhost/api/agent/threads"), res);
     res.emit("close");
     await routes.stopAcceptingAndDrain();
-    assert.equal(invoked, false);
-    assert.deepEqual(statuses, [400]);
+    assert.equal(invoked, method === "GET");
+    assert.deepEqual(statuses, [method === "GET" ? 200 : 400]);
+  }
+});
+
+test("application connection does not replace the trusted desktop Agent source", async () => {
+  const req = request("POST");
+  registerLanAgentBodyGuard(req, () => undefined);
+  const remoteSource = { nodeId: "pc", agentId: "agent", sessionId: "session", provider: "codex" as const, sessionName: "Source" };
+  let invoked = false;
+  const routes = createAgentThreadControlRoutes(context({
+    getTrustedRemoteSource: () => remoteSource,
+    getTrustedDeviceSource: () => ({ scope: "scope", sourceDeviceId: "application", deviceOwner: false }),
+    readJsonBody: async <T>() => ({ action: "send", sourceThreadId: "session" } as T),
+    agentThreadRequestOptions: (_body, extra) => ({ ...extra } as AgentThreadRequestOptions),
+    handleAgentThreadRequest: async (_body, options, deviceSource) => {
+      invoked = true;
+      assert.equal(options.remoteSource, remoteSource);
+      assert.equal(deviceSource, undefined);
+      return { statusCode: 200, data: { ok: true } };
+    }
+  }));
+  const res = response();
+  routes.handler(req, new URL("http://localhost/api/agent/threads"), res);
+  res.emit("close");
+  await routes.stopAcceptingAndDrain();
+  assert.equal(invoked, true);
+});
+
+test("HTTP native source comes only from ingress and retains its revocation fence", async () => {
+  const verified = { scope: "scope", sourceDeviceId: "glasses-a", deviceOwner: true };
+  const workStarted = deferred<void>();
+  const continueWork = deferred<void>();
+  let current = true;
+  const observed: unknown[] = [];
+  const routes = createAgentThreadControlRoutes(context({
+    readJsonBody: async <T>(req: http.IncomingMessage) => {
+      let body = "";
+      for await (const chunk of req) body += String(chunk);
+      return JSON.parse(body) as T;
+    },
+    getTrustedRemoteSource: () => undefined,
+    getTrustedDeviceSource: req => req.headers["x-test-source"] === "verified" ? verified : undefined,
+    agentThreadRequestOptions: (_body, extra) => ({ ...extra } as AgentThreadRequestOptions),
+    handleAgentThreadRequest: async (_body, options, source) => {
+      observed.push(source);
+      if (observed.length === 2) {
+        workStarted.resolve();
+        await continueWork.promise;
+      }
+      options.requestAuthority?.();
+      return { statusCode: 200, data: { ok: true } };
+    },
+    jsonResponse: (res, status, body) => {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify(body));
+    }
+  }));
+  const server = http.createServer((req, res) => {
+    registerLanAgentBodyGuard(req, () => undefined);
+    markAuthenticatedConnectionRequest(req, () => {
+      if (!current) throw new Error("connection revoked");
+    });
+    routes.handler(req, new URL(req.url!, "http://localhost"), res);
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address() as import("node:net").AddressInfo;
+  const url = `http://127.0.0.1:${address.port}/api/agent/threads`;
+  const send = (verifiedSource: boolean) => fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(verifiedSource ? { "x-test-source": "verified" } : {}) },
+    body: JSON.stringify({ action: "send", message: "hello", trustedDeviceSource: verified, remoteSource: { sessionId: "forged" } })
+  });
+  try {
+    const forged = await send(false);
+    assert.equal(forged.status, 400);
+    assert.equal(observed.length, 0);
+    const accepted = await send(true);
+    assert.equal(accepted.status, 200);
+    assert.deepEqual(observed, [verified]);
+    const pending = send(true);
+    await workStarted.promise;
+    current = false;
+    continueWork.resolve();
+    const revoked = await pending;
+    assert.equal(revoked.status, 400);
+    assert.match(await revoked.text(), /connection revoked/);
+  } finally {
+    continueWork.resolve();
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    await routes.stopAcceptingAndDrain();
   }
 });
 

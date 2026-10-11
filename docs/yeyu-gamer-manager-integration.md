@@ -48,7 +48,9 @@ YeYu Gamer Manager 首次启动后生成 `secrets\actors\rabiroute.token`。Rabi
 
 ## RabiRoute 本机门面
 
-RabiRoute Manager 向本机及已鉴权远端连接提供这些路径；复用连接凭据，不再限制调用方必须来自本机。目标 YeYu Gamer 仍由本机客户端连接：
+RabiRoute Manager 向已认证且启用的远端 Agent 和可信本机调用方提供相同的公开路径。无 Agent 凭据的调用仍须通过 loopback、Host、Origin 和转发头检查；失效的原请求授权不能降级为本机访问。下游 YeYu Gamer Manager 仍固定访问本机地址，其独立 Token 不向远端披露。
+
+请求在正文、凭据文件、HTTP 和响应正文等待后复验原授权。撤销或禁用后重新启用不会恢复旧请求；派发前拒绝报告 `not_started`，HTTP 已派发后拒绝保守报告 `unknown` / `uncertain`，不返回业务回执，也不声称撤回了下游已接受的命令：
 
 ```http
 GET /api/agent/yeyu-gamer/health

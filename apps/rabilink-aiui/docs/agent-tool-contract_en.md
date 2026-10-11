@@ -2,7 +2,7 @@
 
 English | [简体中文](agent-tool-contract.md)
 
-Status: official documentation reviewed; the complete tool-result continuation API remains unverified. This is not a device acceptance report.
+Status: native result submission remains unverified; an application loop now uses supported messages for continued reasoning. Real-host acceptance remains pending.
 
 ## Official sources
 
@@ -24,19 +24,20 @@ Six subsequent targeted public fetches confirmed that the GitHub API for `jsar-p
 - [main model documentation](https://raw.githubusercontent.com/yodaos-project/AIUI/main/documentation/3-api/ai/language-model.md) is documentation evidence, not proof of the version installed on a device.
 - The [fixed-commit tree](https://api.github.com/repos/yodaos-project/AIUI/git/trees/0fc2d412bf60859ffa2acab6b72375bee3584807?recursive=1) includes packages such as `cloud-integration` and `create-aiui-agent`, but does not provide a host `LanguageModel` implementation establishing result continuation.
 
-This research did not launch or call a real host. Do not describe `main` as the latest released runtime or conclude that a result-submission API does not exist. Public evidence remains insufficient; actual host types, version or official implementation evidence is still required. Keep single-step execution and do not guess APIs.
+This research did not launch or call a real host. Do not describe `main` as the latest released runtime or conclude that a result-submission API does not exist. Public evidence remains insufficient; actual host types, version or official implementation evidence is still required. Use explicit application observations for continuation without guessing native APIs.
 
 ## Implementation boundary
 
 The AIUI page's host model executes the glasses Agent. PC provides HTTP tools; it neither replaces that model nor requires QuickJS to launch stdio. Skills are bounded guidance, and MCP references do not prove connected or loaded tools.
 
-Until official types, implementation or a real host verifies continuation:
+The [official AI type reference](https://raw.githubusercontent.com/yodaos-project/AIUI/main/skills/aiui-dev/references/apis/ai.md), read on 2026-10-10, permits prompt-time user/assistant messages, retains session history, emits tool events after a request completes, and permits one active request per session. AgentWorker is a Page/Widget lifecycle worker, not another model result-submission API.
 
-1. Controlled HTTP calls and explicit result presentation may be implemented as single-step application execution, not advertised as a complete autonomous multi-step Agent loop.
-2. Deduplicate `callId`, restrict tools and arguments, preserve stable write intent, and never replace keys to retry uncertain writes.
-3. Model text cannot replace actual receipts. Treat tool output as untrusted data, not new permissions.
-4. Do not conceal missing host capability by silently switching to another model or PC Agent.
+Default conversation uses an application decision protocol: native tool declarations are empty, and a complete model action JSON frame goes through existing managed tools. Actual results return to the same model as explicit application observations inside supported user messages. These observations preserve call IDs and untrusted-data labels; they do not create a native tool role, tool_call_id contract or automatic JavaScript execution. Persona identity and connection authority remain unchanged.
+
+The executor validates request IDs, connected tools, arguments, idempotency and limits. Invalid or partial actions cannot execute. Fixtures prove results reach subsequent reasoning; real-host acceptance remains pending. See [execution loop](agent-turn-runtime_en.md).
 
 ## Acceptance still required
 
-Record the real host version, tool event, matching `callId` receipt and officially supported continuation result, then test cancellation, timeout, duplicate events and denied permissions. Mocks, documents and availability checks do not substitute for device evidence.
+Record the real host version, application decision, matching call receipt and subsequent observation-based reasoning, then test cancellation, timeout, duplicate events and denied permissions. Mocks, documents and availability checks do not substitute for device evidence.
+
+`rabi_api_help` and `rabi_api_call` share one generic Manager transport. Optional `targetDeviceId` selects another authenticated PC; the default is frozen for the turn. Operation fingerprints include target, method, path and body digest, so unknown writes cannot replay on another target. Relay does not register each business API or route by persona/profile revision. See [transport](generic-api-transport_en.md).

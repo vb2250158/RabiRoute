@@ -1,4 +1,4 @@
-export const agentAdapterTypes = ["codex", "copilotCli", "marvis", "astrbot", "dsh", "workbuddy", "antigravity"] as const;
+export const agentAdapterTypes = ["codex", "copilotCli", "marvis", "astrbot", "dsh", "workbuddy", "antigravity", "deviceAgent"] as const;
 
 export type AgentAdapterType = typeof agentAdapterTypes[number];
 
@@ -117,7 +117,21 @@ const antigravityTaskCapabilities: AgentAdapterCapabilities = Object.freeze({
   })
 });
 
+const deviceAgentCapabilities: AgentAdapterCapabilities = Object.freeze({
+  managedTasks: Object.freeze<Partial<Record<ManagedTaskAgentFeature, true>>>({
+    agentThreads: true
+  })
+});
+
 const manifestsByAgentType = Object.freeze({
+  deviceAgent: Object.freeze({
+    type: "deviceAgent",
+    label: "设备 Agent（实验）",
+    maturity: "experimental",
+    transport: Object.freeze({ protocol: "http", mode: "device-owner-mailbox" }),
+    host: Object.freeze({ name: "Device Agent runtime", required: true }),
+    capabilities: deviceAgentCapabilities
+  }),
   codex: Object.freeze({
     type: "codex",
     label: "Codex（ChatGPT 中的编码 Agent）",

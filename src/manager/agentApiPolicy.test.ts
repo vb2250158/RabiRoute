@@ -140,15 +140,10 @@ test("core business operations are allowed with their exact methods", () => {
   for (const [method, target] of allowed) assert.equal(authorize(method, target).allowed, true, `${method} ${target}`);
 });
 
-test("generic Codex hooks cannot forge another session or replace the principal-bound LAN hook", () => {
-  assert.equal(listAgentApiOperations().some(operation => operation.pathTemplate.startsWith("/api/codex-hook")), false);
-  for (const suffix of ["context", "roles", "doctor", "sessions", "sessions/example-session"]) {
-    for (const method of ["GET", "POST", "PUT", "PATCH", "DELETE"]) {
-      const decision = authorize(method, `/api/codex-hook/${suffix}`);
-      assert.deepEqual(decision, { allowed: false, reason: "operation_not_allowed" });
-    }
+test("Hook catalog describes management and source-event contracts without binding grants", () => {
+  for (const [method, suffix] of [["POST", "context"], ["GET", "roles"], ["GET", "doctor"], ["GET", "sessions"], ["GET", "sessions/example-session"], ["PUT", "sessions/example-session"], ["PATCH", "sessions/example-session"], ["DELETE", "sessions/example-session"]]) {
+    assert.equal(authorize(method!, "/api/codex-hook/" + suffix).allowed, true);
   }
-  // This catalog must not grant the special endpoint without the caller's exact node/Agent check.
   assert.equal(authorize("POST", "/api/lan-agent/instances/example-node/agents/example-agent/context").allowed, false);
 });
 
@@ -173,7 +168,8 @@ test("administration, credentials, arbitrary files and unsupported methods fail 
     const methods = target === "/api/agent/xiaomi-home/artifacts" ? ["POST", "PUT", "DELETE"] : ["GET", "POST", "PATCH", "PUT", "DELETE"];
     for (const method of methods) assert.equal(authorize(method, target).allowed, false, `${method} ${target}`);
   }
-  for (const method of ["HEAD", "OPTIONS", "TRACE", "CONNECT", "get", " GET", "POST ", "GET\r\n"]) {
+  for (const method of ["HEAD", "OPTIONS"]) assert.deepEqual(authorize(method, "/meta"), { allowed: false, reason: "operation_not_allowed" });
+  for (const method of ["TRACE", "CONNECT", "get", " GET", "POST ", "GET\r\n"]) {
     assert.deepEqual(authorize(method, "/meta"), { allowed: false, reason: "invalid_method" });
   }
   assert.equal(authorize("DELETE", "/api/roles/example/plans/plan-1").allowed, false);
@@ -191,12 +187,11 @@ test("raw path and encoding attacks cannot normalize into an allowed operation",
     "/api/roles/a%2fb/plans", "/api/roles/a%5cb/plans", "/api/roles/a%252fb/plans",
     "/api/roles/a%00/plans", "/api/roles/a%0d/plans", "/api/roles/a%7f/plans",
     "/api/roles/%ff/plans", "/api/roles/%C0%AF/plans", "/api/roles/%E0%A4/plans",
-    "/api/roles/%u002e/plans", "/api/roles/%/plans", "/api/roles/a%3Ab/plans",
-    "/api/roles/a%3fb/plans", "/api/roles/a%23b/plans", "/api/roles/a;b/plans",
-    "/api/roles/a./plans", "/api/roles/a%20/plans", "/api/roles/CON/plans",
-    "/api/roles/.hidden/plans", "/api/roles/a\u0000/plans", "/api/roles/a b/plans",
-    "/api/roles/\ud800/plans", "/api/roles/" + "a".repeat(513) + "/plans"
+    "/api/roles/%u002e/plans", "/api/roles/%/plans",
+    "/api/roles/a\u0000/plans", "/api/roles/a b/plans", "/api/roles/\ud800/plans"
   ]) assert.equal(authorize("GET", target).allowed, false, JSON.stringify(target));
+  // Discovery is not a filesystem validator or an extra remote authorization gate.
+  for(const role of ['a%3Ab','a%3fb','a%23b','a;b','a.','a%20','CON','.hidden','a'.repeat(513)]) assert.equal(authorize('GET',`/api/roles/${role}/plans`).allowed,true);
   assert.equal(authorize("GET", "/meta?query=" + "a".repeat(16_384)).allowed, false);
 });
 
@@ -208,8 +203,10 @@ test("query credentials and query-based file or method bypasses are denied", () 
     "path=example", "file=other.md", "url=http%3A%2F%2Flocalhost", "_method=DELETE", "method=POST",
     "query=one&query=two", "limit=10&limit=20", "to%256ben=fake", "token[]=fake",
     "query=%ff", "query=%", "query=%00", "query=%0d%0a", "query=x&&limit=1", "query=x;token=fake&unknown=x",
-    "limit", "=x", "", "query=x&", "q=x&".repeat(129)
+    "=x", "query=x&", "q=x&".repeat(129)
   ]) assert.equal(authorize("GET", `/api/roles/example/plans?${query}`).allowed, false, query);
+  assert.equal(authorize('GET','/api/roles/example/plans?limit').allowed,true);
+  assert.equal(authorize('GET','/api/roles/example/plans?').allowed,true);
   assert.equal(authorize("GET", "/api/roles/example/persona-document?file=other.md").allowed, false);
   assert.equal(authorize("GET", "/api/roles/example/plans?query=credential+discussion").allowed, true);
 });

@@ -1,5 +1,7 @@
 import { errorResponsePresentation } from "../shared/errorPresentation.js";
 import http from "node:http";
+import { validateLanAgentRequestBody } from "./lanAgentBodyAuthority.js";
+import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
 import {
   CodexHookContextService,
   CodexHookPlanStorageUnavailableError,
@@ -79,7 +81,10 @@ export function handleCodexHookApi(
 
   if (request.method === "POST" && pathname === "/api/codex-hook/context") {
     void readJsonBody(request)
-      .then((body) => service.handleHook(hookContextRequest(body, request)))
+      .then((body) => {
+        validateLanAgentRequestBody(request, body);
+        return service.handleHook(hookContextRequest(body, request));
+      })
       .then((data) => jsonResponse(response, 200, { code: 0, data }))
       .catch((error) => {
         if (error instanceof CodexHookPlanStorageUnavailableError) {
@@ -129,7 +134,10 @@ export function handleCodexHookApi(
 
   if (request.method === "PUT" || request.method === "PATCH") {
     void readJsonBody(request)
-      .then((body) => service.bindSession(sessionId, String(body.roleId || "")))
+      .then((body) => {
+        validateLanAgentRequestBody(request, body);
+        return service.bindSession(sessionId, String(body.roleId || ""));
+      })
       .then((data) => jsonResponse(response, 200, { code: 0, data }))
       .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
     return true;
@@ -137,6 +145,7 @@ export function handleCodexHookApi(
 
   if (request.method === "DELETE") {
     try {
+      assertTrustedLanAgentPrincipal(request);
       jsonResponse(response, 200, { code: 0, data: { removed: service.unbindSession(sessionId) } });
     } catch (error) {
       jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });

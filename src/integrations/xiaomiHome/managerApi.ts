@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { XiaomiHomeRequestAuthorityError, rethrowXiaomiHomeAuthorityError, type XiaomiHomeRequestAuthority } from "./requestAuthority.js";
 import { isIP } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -370,10 +371,12 @@ export class XiaomiHomeManagerApiClient {
     return token;
   }
 
-  private async request<T>(pathname: string, init: RequestInit = {}): Promise<T> {
+  private async request<T>(pathname: string, init: RequestInit = {}, authority?: XiaomiHomeRequestAuthority): Promise<T> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.config.requestTimeoutMs);
     try {
+      authority?.assert();
+      if (init.method === "POST") authority?.dispatch();
       const response = await this.fetchImpl(`${this.config.baseUrl}${pathname}`, {
         ...init,
         redirect: "manual",
@@ -384,15 +387,19 @@ export class XiaomiHomeManagerApiClient {
           ...(init.headers ?? {})
         }
       });
+      authority?.assert();
       if (response.status >= 300 && response.status < 400) {
         throw new XiaomiHomeManagerApiError(502, "xiaomi_home_redirect_rejected", "Home Assistant redirects are not allowed.");
       }
       const text = await response.text();
+      authority?.assert();
       if (!response.ok) {
         throw new XiaomiHomeManagerApiError(response.status, "xiaomi_home_provider_error", `Home Assistant request failed with HTTP ${response.status}.`);
       }
       return text ? JSON.parse(text) as T : undefined as T;
     } catch (error) {
+      authority?.assert();
+      rethrowXiaomiHomeAuthorityError(error);
       if (error instanceof XiaomiHomeManagerApiError) throw error;
       const code = error instanceof Error && error.name === "AbortError" ? "xiaomi_home_provider_timeout" : "xiaomi_home_provider_unreachable";
       throw new XiaomiHomeManagerApiError(503, code, "Home Assistant is unavailable.");
@@ -401,7 +408,7 @@ export class XiaomiHomeManagerApiClient {
     }
   }
 
-  async getHealth(): Promise<Record<string, unknown>> {
+  async getHealth(authority?: XiaomiHomeRequestAuthority): Promise<Record<string, unknown>> {
     const tokenConfigured = Boolean(String(this.credentialToken || "").trim());
     const credentialSource = tokenConfigured ? "protected" : "none";
     if (!tokenConfigured) {
@@ -415,8 +422,10 @@ export class XiaomiHomeManagerApiClient {
       };
     }
     try {
-      await this.request<Record<string, unknown>>("/api/");
+      await this.request<Record<string, unknown>>("/api/", {}, authority);
     } catch (error) {
+      authority?.assert();
+      rethrowXiaomiHomeAuthorityError(error);
       if (!(error instanceof XiaomiHomeManagerApiError)) throw error;
       return {
         status: error.status === 401 || error.status === 403
@@ -442,8 +451,8 @@ export class XiaomiHomeManagerApiClient {
     };
   }
 
-  async verifyAuthorization(): Promise<Readonly<{ providerName?: string; providerVersion?: string }>> {
-    const config = await this.request<Record<string, unknown>>("/api/config");
+  async verifyAuthorization(authority?: XiaomiHomeRequestAuthority): Promise<Readonly<{ providerName?: string; providerVersion?: string }>> {
+    const config = await this.request<Record<string, unknown>>("/api/config", {}, authority);
     const providerName = String(config.location_name || config.name || "").trim();
     const providerVersion = String(config.version || "").trim();
     return Object.freeze({
@@ -452,31 +461,31 @@ export class XiaomiHomeManagerApiClient {
     });
   }
 
-  async listResources(includeActions = false): Promise<XiaomiHomeResource[]> {
-    const states = await this.request<HomeAssistantState[]>("/api/states");
+  async listResources(includeActions = false, authority?: XiaomiHomeRequestAuthority): Promise<XiaomiHomeResource[]> {
+    const states = await this.request<HomeAssistantState[]>("/api/states", {}, authority);
     if (!Array.isArray(states)) throw new XiaomiHomeManagerApiError(502, "xiaomi_home_provider_invalid", "Home Assistant returned an invalid state list.");
     const services = includeActions ? await this.entityServices() : undefined;
     return states.map(state => this.resource(state, services)).sort((left, right) => left.resourceId.localeCompare(right.resourceId));
   }
 
-  async getResource(resourceId: string): Promise<XiaomiHomeResource> {
+  async getResource(resourceId: string, authority?: XiaomiHomeRequestAuthority): Promise<XiaomiHomeResource> {
     const entityId = xiaomiHomeEntityId(resourceId);
-    const state = await this.request<HomeAssistantState>(`/api/states/${encodeURIComponent(entityId)}`);
+    const state = await this.request<HomeAssistantState>(`/api/states/${encodeURIComponent(entityId)}`, {}, authority);
     if (!state || state.entity_id !== entityId) throw new XiaomiHomeManagerApiError(502, "xiaomi_home_provider_invalid", "Home Assistant returned an unexpected resource.");
     return this.resource(state);
   }
 
-  async listDevices() {
+  async listDevices(authority?: XiaomiHomeRequestAuthority) {
     const [resources, registry] = await Promise.all([
-      this.listResources(),
-      this.request<unknown>("/api/template", { method: "POST", body: JSON.stringify({ template: HOME_DEVICE_DIRECTORY_TEMPLATE }) })
+      this.listResources(false, authority),
+      this.request<unknown>("/api/template", { method: "POST", body: JSON.stringify({ template: HOME_DEVICE_DIRECTORY_TEMPLATE }) }, authority)
     ]);
     try { return deviceDirectory(resources, registry); }
     catch { throw new XiaomiHomeManagerApiError(502, "xiaomi_home_device_registry_invalid", "Home Assistant returned an invalid device directory."); }
   }
 
-  private async entityServices(): Promise<HomeServiceDomain[]> {
-    const services = await this.request<HomeServiceDomain[]>("/api/services");
+  private async entityServices(authority?: XiaomiHomeRequestAuthority): Promise<HomeServiceDomain[]> {
+    const services = await this.request<HomeServiceDomain[]>("/api/services", {}, authority);
     if (!Array.isArray(services) || services.some(item => !item || typeof item.domain !== "string"
       || !item.services || typeof item.services !== "object" || Array.isArray(item.services))) {
       throw new XiaomiHomeManagerApiError(502, "xiaomi_home_provider_invalid", "Home Assistant returned an invalid service catalog.");
@@ -484,8 +493,8 @@ export class XiaomiHomeManagerApiClient {
     return services;
   }
 
-  async getResourceActions(resourceId: string): Promise<XiaomiHomeResource> {
-    const [resource, services] = await Promise.all([this.getResource(resourceId), this.entityServices()]);
+  async getResourceActions(resourceId: string, authority?: XiaomiHomeRequestAuthority): Promise<XiaomiHomeResource> {
+    const [resource, services] = await Promise.all([this.getResource(resourceId, authority), this.entityServices(authority)]);
     return this.attachActions(resource, services);
   }
 
@@ -532,7 +541,7 @@ export class XiaomiHomeManagerApiClient {
       createdAt: receipt.createdAt, updatedAt: receipt.updatedAt, ...(receipt.result ? { receipt: receipt.result } : {}), retryAllowed: false };
   }
 
-  async executeAction(request: XiaomiHomeActionRequest, idempotencyKey: string): Promise<XiaomiHomeActionReceipt> {
+  async executeAction(request: XiaomiHomeActionRequest, idempotencyKey: string, authority?: XiaomiHomeRequestAuthority): Promise<XiaomiHomeActionReceipt> {
     if (!request || typeof request !== "object" || Array.isArray(request)
       || Object.keys(request).some(field => !["requestId", "resourceId", "capability", "arguments", "expectedStateVersion", "reason", "dryRun"].includes(field))
       || typeof request.resourceId !== "string" || typeof request.capability !== "string"
@@ -542,6 +551,7 @@ export class XiaomiHomeManagerApiClient {
       || request.requestId !== undefined && (typeof request.requestId !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/.test(request.requestId))) {
       throw new XiaomiHomeManagerApiError(400, "xiaomi_home_action_invalid", "Invalid action request fields.");
     }
+    authority?.assert();
     const key = idempotencyKey.trim();
     if (!key || key.length > 160 || !/^[A-Za-z0-9._:-]+$/.test(key)) {
       throw new XiaomiHomeManagerApiError(400, "xiaomi_home_idempotency_required", "A valid Idempotency-Key is required.");
@@ -602,74 +612,87 @@ export class XiaomiHomeManagerApiClient {
         audit: Object.freeze({ provider: "home_assistant", resourceId, capability: request.capability }),
         recoverExistingUncertain: true,
         deliver: async () => {
-          const entityAction = request.capability === HOME_ENTITY_ACTION_CAPABILITY;
-          const before = entityAction ? await this.getResourceActions(resourceId) : await this.getResource(resourceId);
-          if (before.stateVersion !== expectedStateVersion) {
-            return actionReceipt("failed", before.stateVersion, undefined, stateVersionChangedReceiptError);
-          }
           try {
-            if (!before.capabilities.includes(request.capability)) throw new XiaomiHomeManagerApiError(403, "xiaomi_home_capability_rejected", "The resource does not advertise this capability.");
-            // HA distinguishes unavailable from an unknown reading or a never-invoked action.
-            // Advertised generic actions can initialize those states; provider acceptance remains explicit.
-            if (before.state === "unavailable" || !before.available && !entityAction && !["button", "notify"].includes(before.kind)) throw new XiaomiHomeManagerApiError(409, "xiaomi_home_resource_unavailable", "The resource is unavailable.");
-            if (entityAction) {
-              const action = before.actions?.find(item => item.action === request.arguments?.action);
-              if (!action) throw new XiaomiHomeManagerApiError(403, "xiaomi_home_capability_rejected", "The resource no longer advertises this action.");
-              try { validateHomeActionValue(request.arguments, action.argumentsSchema); }
-              catch (error) { throw new XiaomiHomeManagerApiError(400, "xiaomi_home_action_invalid", (error as Error).message); }
+            authority?.assert();
+            const entityAction = request.capability === HOME_ENTITY_ACTION_CAPABILITY;
+            const before = entityAction
+              ? await this.getResourceActions(resourceId, authority)
+              : await this.getResource(resourceId, authority);
+            if (before.stateVersion !== expectedStateVersion) {
+              return actionReceipt("failed", before.stateVersion, undefined, stateVersionChangedReceiptError);
             }
-            if (request.capability === "home.media.select_source@1" || request.capability === "home.media.select_sound_mode@1") {
-              const options = before.attributes[request.capability.includes("select_source") ? "source_list" : "sound_mode_list"];
-              const selected = request.arguments?.[request.capability.includes("select_source") ? "source" : "soundMode"];
-              if (!Array.isArray(options) || !options.includes(selected)) throw new XiaomiHomeManagerApiError(400, "xiaomi_home_action_invalid", "Select a currently advertised source or sound mode.");
+            try {
+              if (!before.capabilities.includes(request.capability)) throw new XiaomiHomeManagerApiError(403, "xiaomi_home_capability_rejected", "The resource does not advertise this capability.");
+              // HA distinguishes unavailable from an unknown reading or a never-invoked action.
+              // Advertised generic actions can initialize those states; provider acceptance remains explicit.
+              if (before.state === "unavailable" || !before.available && !entityAction && !["button", "notify"].includes(before.kind)) throw new XiaomiHomeManagerApiError(409, "xiaomi_home_resource_unavailable", "The resource is unavailable.");
+              if (entityAction) {
+                const action = before.actions?.find(item => item.action === request.arguments?.action);
+                if (!action) throw new XiaomiHomeManagerApiError(403, "xiaomi_home_capability_rejected", "The resource no longer advertises this action.");
+                try { validateHomeActionValue(request.arguments, action.argumentsSchema); }
+                catch (error) { throw new XiaomiHomeManagerApiError(400, "xiaomi_home_action_invalid", (error as Error).message); }
+              }
+              if (request.capability === "home.media.select_source@1" || request.capability === "home.media.select_sound_mode@1") {
+                const options = before.attributes[request.capability.includes("select_source") ? "source_list" : "sound_mode_list"];
+                const selected = request.arguments?.[request.capability.includes("select_source") ? "source" : "soundMode"];
+                if (!Array.isArray(options) || !options.includes(selected)) throw new XiaomiHomeManagerApiError(400, "xiaomi_home_action_invalid", "Select a currently advertised source or sound mode.");
+              }
+              if (mapping.domain === "notify" && !entityAction) {
+                const target = await this.getResource(xiaomiHomeResourceId(String(mapping.data.entity_id)), authority);
+                if (target.state === "unavailable") throw new XiaomiHomeManagerApiError(409, "xiaomi_home_resource_unavailable", "Speech target is unavailable.");
+                const binding = this.speechBindings.find(item => item.mediaPlayerEntityId === before.entityId)!;
+                if (binding.encoding === "text" && "action params" in target.attributes) throw new XiaomiHomeManagerApiError(409, "xiaomi_home_speech_schema_changed", "Structured action targets require json-array encoding.");
+                if (binding.encoding === "json-array" && !/^\[[^,\[\]]+\(str\)\]$/.test(String(target.attributes["action params"] || ""))) throw new XiaomiHomeManagerApiError(409, "xiaomi_home_speech_schema_changed", "The speech target must advertise exactly one string parameter.");
+              }
+            } catch (error) {
+              if (error instanceof XiaomiHomeManagerApiError && [400, 403, 409].includes(error.status)) return actionReceipt("failed", before.stateVersion, undefined, error.code);
+              throw error;
             }
-            if (mapping.domain === "notify" && !entityAction) {
-              const target = await this.getResource(xiaomiHomeResourceId(String(mapping.data.entity_id)));
-              if (target.state === "unavailable") throw new XiaomiHomeManagerApiError(409, "xiaomi_home_resource_unavailable", "Speech target is unavailable.");
-              const binding = this.speechBindings.find(item => item.mediaPlayerEntityId === before.entityId)!;
-              if (binding.encoding === "text" && "action params" in target.attributes) throw new XiaomiHomeManagerApiError(409, "xiaomi_home_speech_schema_changed", "Structured action targets require json-array encoding.");
-              if (binding.encoding === "json-array" && !/^\[[^,\[\]]+\(str\)\]$/.test(String(target.attributes["action params"] || ""))) throw new XiaomiHomeManagerApiError(409, "xiaomi_home_speech_schema_changed", "The speech target must advertise exactly one string parameter.");
+            if (request.dryRun === true || !this.config.writeEnabled) {
+              return actionReceipt("planned", before.stateVersion);
             }
+            try {
+              await this.request(`/api/services/${mapping.domain}/${mapping.service}`, {
+                method: "POST",
+                body: JSON.stringify(mapping.data)
+              }, authority);
+            } catch (error) {
+              if (error instanceof XiaomiHomeManagerApiError && error.code === "xiaomi_home_provider_error" && error.status >= 400 && error.status < 500) return actionReceipt("failed", before.stateVersion, undefined, error.code);
+              throw error;
+            }
+            const media = HOME_MEDIA_ACTIONS.find(action => mediaCapability(action.name) === request.capability);
+            if (entityAction || mapping.domain === "notify" || media?.confirmation === "acceptance") return actionReceipt("accepted", before.stateVersion);
+            let after = await this.getResource(resourceId, authority);
+            for (let attempt = 0; attempt < 3 && !xiaomiHomeActionSatisfied(request, after); attempt += 1) {
+              await new Promise(resolve => setTimeout(resolve, 250));
+              after = await this.getResource(resourceId, authority);
+            }
+            const verified = xiaomiHomeActionSatisfied(request, after);
+            return actionReceipt(
+              verified ? "succeeded" : "uncertain",
+              before.stateVersion,
+              after,
+              verified ? undefined : "Home Assistant accepted the service call, but the target state was not confirmed by read-back."
+            );
           } catch (error) {
-            if (error instanceof XiaomiHomeManagerApiError && [400, 403, 409].includes(error.status)) return actionReceipt("failed", before.stateVersion, undefined, error.code);
+            if (error instanceof XiaomiHomeRequestAuthorityError && error.outcome === "not_started") {
+              return actionReceipt("failed", expectedStateVersion, undefined, "xiaomi_home_request_not_started");
+            }
             throw error;
           }
-          if (request.dryRun === true) {
-            return actionReceipt("planned", before.stateVersion);
-          }
-          try {
-            await this.request(`/api/services/${mapping.domain}/${mapping.service}`, {
-              method: "POST",
-              body: JSON.stringify(mapping.data)
-            });
-          } catch (error) {
-            if (error instanceof XiaomiHomeManagerApiError && error.code === "xiaomi_home_provider_error" && error.status >= 400 && error.status < 500) return actionReceipt("failed", before.stateVersion, undefined, error.code);
-            throw error;
-          }
-          const media = HOME_MEDIA_ACTIONS.find(action => mediaCapability(action.name) === request.capability);
-          if (entityAction || mapping.domain === "notify" || media?.confirmation === "acceptance") return actionReceipt("accepted", before.stateVersion);
-          let after = await this.getResource(resourceId);
-          for (let attempt = 0; attempt < 3 && !xiaomiHomeActionSatisfied(request, after); attempt += 1) {
-            await new Promise(resolve => setTimeout(resolve, 250));
-            after = await this.getResource(resourceId);
-          }
-          const verified = xiaomiHomeActionSatisfied(request, after);
-          return actionReceipt(
-            verified ? "succeeded" : "uncertain",
-            before.stateVersion,
-            after,
-            verified ? undefined : "Home Assistant accepted the service call, but the target state was not confirmed by read-back."
-          );
         },
         retryableRejection: result => result.status === "failed"
-          && result.error === stateVersionChangedReceiptError,
+          && (result.error === stateVersionChangedReceiptError || result.error === "xiaomi_home_request_not_started"),
         recover: async () => {
+          authority?.assert();
           try {
-            const after = await this.getResource(resourceId);
+            const after = await this.getResource(resourceId, authority);
             if (after.stateVersion !== expectedStateVersion && xiaomiHomeActionSatisfied(request, after)) {
               return { state: "completed", result: actionReceipt("succeeded", expectedStateVersion, after) } as const;
             }
-          } catch {
+          } catch (error) {
+            authority?.assert();
+            rethrowXiaomiHomeAuthorityError(error);
             // Recovery is deliberately read-only and exposes no provider or filesystem detail.
           }
           return {
@@ -679,10 +702,13 @@ export class XiaomiHomeManagerApiClient {
         }
       });
     } catch (error) {
+      authority?.assert();
+      rethrowXiaomiHomeAuthorityError(error);
       if (error instanceof XiaomiHomeManagerApiError) throw error;
       if (typeof (error as NodeJS.ErrnoException | undefined)?.code !== "string") throw error;
       throw new XiaomiHomeManagerApiError(503, "xiaomi_home_idempotency_unavailable", "The Xiaomi Home action receipt store is unavailable.");
     }
+    authority?.assert();
     if (outcome.state === "completed") {
       if (outcome.result.status === "failed" && outcome.result.error === stateVersionChangedReceiptError) {
         throw new XiaomiHomeManagerApiError(412, "xiaomi_home_state_version_changed", "The resource state changed; read it again before acting.");

@@ -2,18 +2,22 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { agentLoopModelOptions } from '../utils/agent-decision-protocol.js';
 const source = fs.readFileSync(new URL('../pages/home/index.ink', import.meta.url), 'utf8');
+const profileSource = fs.readFileSync(new URL('../utils/agent-profile-page.js', import.meta.url), 'utf8');
+const readiness = profileSource.slice(profileSource.indexOf('  isAiuiVoiceContextReady() {'), profileSource.indexOf('  invalidateAiuiVoiceContext() {')).trim().replace(/,$/, '');
 function extract(start, end) { return source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start))).trim().replace(/,$/, ''); }
 function fixture(storageFails = false) {
   const pending = [], saved = [], spoken = [];
-  const context = vm.createContext({ console, Promise, Number, String, navigator: { onLine: true },
+  const context = vm.createContext({ agentLoopModelOptions, console, Promise, Number, String, navigator: { onLine: true },
     setTimeout: (fn, ms) => { const timer = setTimeout(fn, ms); timer.unref(); return timer; }, clearTimeout,
     wx: { setStorageSync: (key, value) => { if (storageFails) throw Error('disk'); saved.push({ key, value }); } },
     lingzhuLanguageModelOptions: value => ({ ...value, tools: [] }),
     LanguageModel: { availability: async () => 'available', create: () => new Promise(resolve => pending.push(resolve)) }
   });
-  const methods = vm.runInContext(`({${extract('  handleTranscriptionResult(text) {', '  async executeLingzhuAgentPrompt(')},${extract('  async ensureChatModel() {', '  async ensureConfigurationModel() {')},${extract('  cleanupChatModel() {', '  async ensureChatModel() {')}})`, context);
-  const page = { ...methods, browseKnowledgeResultFromSpeech: () => false, selectKnowledgeRoleFromSpeech: () => false, prepareKnowledgeTools: async () => ({tools: [], runtime: null}), cleanupKnowledgeRuntime() {}, deviceAgentSystemInstructions: fallback => fallback, acknowledgeDeviceAgentProfile: async () => {}, data: { lingzhuAgentName: 'Old', lingzhuAgentId: 'id', lingzhuSystemPrompt: 'prompt' }, setData(patch) { Object.assign(this.data, patch); }, speakText(text) { spoken.push(text); } };
+  const methods = vm.runInContext(`({${readiness},${extract('  handleTranscriptionResult(text) {', '  async executeLingzhuAgentPrompt(')},${extract('  async ensureChatModel() {', '  async ensureConfigurationModel() {')},${extract('  cleanupChatModel() {', '  async ensureChatModel() {')}})`, context);
+  // These local-name fixtures have no configured Rabi credential scope.
+  const page = { ...methods, currentAgentProfileScope: () => '', browseKnowledgeResultFromSpeech: () => false, prepareRabiApiTools: async () => ({tools: [], runtime: null}), deviceAgentSystemInstructions: fallback => fallback, acknowledgeDeviceAgentProfile: async () => {}, data: { lingzhuAgentName: 'Old', lingzhuAgentId: 'id', lingzhuSystemPrompt: 'prompt' }, setData(patch) { Object.assign(this.data, patch); }, speakText(text) { spoken.push(text); } };
   return { page, pending, saved, spoken };
 }
 const turn = () => new Promise(resolve => setImmediate(resolve));

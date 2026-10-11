@@ -6,6 +6,6 @@ export function assertCurrentRemoteSurface({webgui, aiui, shared, runtime, owner
   for (const marker of ['gateway.value?.remoteAgentTargets','target.instanceId','target.agentId','<InstanceAgentSettings',':instance="target.instance"',':agent="target.agent"']) {
     if (!webgui.includes(marker)) throw new Error(`Missing current remote UI binding: ${marker}`);
   }
-  if (!owner.includes('return "local"') || !owner.includes('legacy-remote-observer')) throw new Error('Missing explicit inference owner boundary');
+  if (!owner.includes('this.ensureChatModel()') || !owner.includes('this.executeLingzhuAgentPrompt(delivery.prompt,{deviceContext:') || owner.includes('legacy-remote-observer')) throw new Error('Missing actual device inference owner boundary');
 }
 export function missingSharedFields(fields, exposed) { return fields.filter(field=>!exposed.has(field)); }

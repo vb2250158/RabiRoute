@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { AgentUploadStreamInput } from "./agentUploadStore.js";
+import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
+import { AgentUploadStoreError, type AgentUploadStreamInput } from "./agentUploadStore.js";
 import { getTrustedLanAgentSource, type TrustedLanAgentSource } from "./lanAgentBodyAuthority.js";
 import { ManagerPluginRequestTracker } from "./managerPluginRequestTracker.js";
 import type { ManagerPluginRouteHandler } from "./managerPluginRouteRegistry.js";
@@ -29,6 +30,7 @@ const uploadRepairs: Readonly<Record<string, string>> = Object.freeze({
   unsupported_content_encoding: "移除 Content-Encoding；上传原始未压缩请求体。",
   method_not_allowed: "仅支持 GET 查询或 PUT 上传。",
   file_too_large: "读取当前上传大小限制；不要截断文件或自动拆分重传。",
+  capacity: "上传存储配额已满：未过期的上传占满了总容量或文件数上限。配额拒绝发生在落盘之前，该 uploadId 从未提交，GET 它只会得到 not_found，没有原笔内容可核查。等待既有上传过期回收后再试；不要自动重传、拆分或更换 ID 绕过配额。",
   conflict: "同一 uploadId 已绑定不同内容；先 GET 原 ID 核对，不自动换 ID 重传。",
   integrity: "核对原始字节与 SHA256；先 GET 原 ID 确认状态，不自动重传。",
   not_found: "核对原 owner 和 uploadId；缺失不代表允许跨身份读取或自动上传。",
@@ -110,15 +112,21 @@ export function createAgentUploadRoutes(context: AgentUploadRoutesContext): {
     response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
     response.end(JSON.stringify(body));
   });
-  const authorize = async (source: TrustedLanAgentSource) => {
-    try { await context.assertAuthorized(source); } catch { throw new UploadHttpError(403, "forbidden"); }
+  const authorize = async (request: IncomingMessage, source: TrustedLanAgentSource) => {
+    try {
+      assertTrustedLanAgentPrincipal(request);
+      await context.assertAuthorized(source);
+      assertTrustedLanAgentPrincipal(request);
+    } catch { throw new UploadHttpError(403, "forbidden"); }
   };
   const run = async (request: IncomingMessage, url: URL, response: ServerResponse) => {
     let ownerKey: string | undefined;
     try {
-      const source = getTrustedLanAgentSource(request);
+      let source: TrustedLanAgentSource | undefined;
+      try { source = getTrustedLanAgentSource(request); }
+      catch { throw new UploadHttpError(403, "forbidden"); }
       if (!source) throw new UploadHttpError(403, "forbidden");
-      await authorize(source);
+      await authorize(request, source);
       if (request.method !== "GET" && request.method !== "PUT") {
         response.setHeader("Allow", "GET, PUT");
         throw new UploadHttpError(405, "method_not_allowed");
@@ -127,10 +135,10 @@ export function createAgentUploadRoutes(context: AgentUploadRoutesContext): {
       if (!uuidPattern.test(id)) throw new UploadHttpError(400, "invalid_input");
       const owner = { nodeId: source.nodeId, agentId: source.agentId };
       if (request.method === "GET") {
-        await authorize(source);
+        await authorize(request, source);
         const result = await context.store.get(owner, id);
         if (!result) throw new UploadHttpError(404, "not_found");
-        await authorize(source);
+        await authorize(request, source);
         json(response, 200, { code: 0, data: publicDto(result) });
         return;
       }
@@ -152,13 +160,22 @@ export function createAgentUploadRoutes(context: AgentUploadRoutesContext): {
       ownerKey = key;
       const size = request.headers["content-length"] === undefined ? undefined : Number(header(request, "content-length"));
       const result = await context.store.uploadStream({ owner, uploadId: id, fileName, content: readBinary(request, response, limit, timeout), size, sha256: sha256.toLowerCase(), beforeCommit: async () => {
-        await authorize(source);
+        await authorize(request, source);
         if (request.aborted || response.destroyed) throw new UploadHttpError(400, "upload_aborted");
+      }, assertCommitAuthorized: () => {
+        try { assertTrustedLanAgentPrincipal(request); }
+        catch { throw new AgentUploadStoreError("forbidden"); }
+        if (request.aborted || response.destroyed) throw new AgentUploadStoreError("upload_aborted");
       } });
+      try { assertTrustedLanAgentPrincipal(request); }
+      catch {
+        if (!response.destroyed) json(response, 403, { ...uploadFailure("forbidden"), uncertain: true });
+        return;
+      }
       if (!response.destroyed) json(response, 200, { code: 0, data: publicDto(result) });
     } catch (error) {
       const code = error instanceof UploadHttpError ? error.code : (error as { code?: string } | null)?.code;
-      const statuses: Record<string, number> = { not_found: 404, invalid_input: 400, conflict: 409, capacity: 507, integrity: 422, unsafe_storage: 500, storage_failure: 500 };
+      const statuses: Record<string, number> = { not_found: 404, invalid_input: 400, conflict: 409, capacity: 507, integrity: 422, unsafe_storage: 500, storage_failure: 500, forbidden: 403, upload_aborted: 400 };
       const status = error instanceof UploadHttpError ? error.status : (code && statuses[code]) || 500;
       if (!response.destroyed && !response.writableEnded) {
         // Close after the JSON response. Discard without buffering; server requestTimeout

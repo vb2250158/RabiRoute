@@ -25,11 +25,11 @@ export class TunnelStream extends Duplex {
   head(value: TunnelHead) { this.resolveHead(value); }
   async reply(head: TunnelHead) { await this.session.send({ type: "head", id: this.id, head }); }
   override _read() {
-    if (this.uncredited) { void this.session.send({ type: "window", id: this.id, bytes: this.uncredited }); this.uncredited = 0; }
+    if (this.uncredited) { void this.session.send({ type: "window", id: this.id, bytes: this.uncredited }).catch(() => {}); this.uncredited = 0; }
   }
   receive(bytes: Buffer) {
     if (bytes.length > 12_000 || this.readableLength + bytes.length > windowBytes + 12_000) throw new Error("Tunnel receive window exceeded.");
-    if (this.push(bytes)) void this.session.send({ type: "window", id: this.id, bytes: bytes.length });
+    if (this.push(bytes)) void this.session.send({ type: "window", id: this.id, bytes: bytes.length }).catch(() => {});
     else this.uncredited += bytes.length;
   }
   replenish(bytes: number) {
@@ -52,12 +52,13 @@ export class TunnelStream extends Duplex {
   override _final(callback: (error?: Error | null) => void) { void this.session.send({ type: "end", id: this.id }).then(() => callback(), callback); }
   override _destroy(error: Error | null, callback: (error?: Error | null) => void) {
     this.rejectHead(error || new Error("Tunnel request closed.")); this.wake?.(); this.wake = undefined;
-    if (this.session.streams.delete(this.id) && (!this.readableEnded || !this.writableFinished)) void this.session.send({ type: "reset", id: this.id });
+    if (this.session.streams.delete(this.id) && (!this.readableEnded || !this.writableFinished)) void this.session.send({ type: "reset", id: this.id }).catch(() => {});
     callback(error);
   }
 }
 export class TunnelSession extends EventEmitter {
   readonly streams = new Map<string, TunnelStream>();
+  private pendingRequests: { stream: TunnelStream; request: TunnelRequest }[] = [];
   closed = false;
   lastUsedAt = Date.now();
   private pingWaiters = new Map<string, { resolve(value: number): void; reject(error: Error): void; start: number; timer: ReturnType<typeof setTimeout> }>();
@@ -68,19 +69,32 @@ export class TunnelSession extends EventEmitter {
     channel.on("data", this.receive);
     channel.once("close", () => this.close());
   }
+  override on(event: string | symbol, listener: (...args: any[]) => void): this {
+    super.on(event, listener);
+    if (event === "request" && this.pendingRequests.length) {
+      const pending = this.pendingRequests; this.pendingRequests = [];
+      queueMicrotask(() => {
+        if (!this.closed) for (const item of pending) if (!item.stream.destroyed) this.emit("request", item.stream, item.request);
+      });
+    }
+    return this;
+  }
   send(frame: Frame): Promise<void> {
-    if (this.closed) return Promise.resolve();
+    if (this.closed) return Promise.reject(new Error("Tunnel disconnected; request result may be unknown."));
     const bytes = this.cipher.encode(frame);
-    const sent = this.serial.then(() => this.channel.send(bytes));
+    const sent = this.serial.then(() => {
+      if (this.closed) throw new Error("Tunnel disconnected; request result may be unknown.");
+      return this.channel.send(bytes);
+    });
     this.serial = sent.catch(() => this.close());
-    return this.serial;
+    return sent;
   }
   private receive = (bytes: Buffer) => {
     try {
       this.lastUsedAt = Date.now(); this.emit("activity");
       const frame = this.cipher.decode(bytes) as Frame;
       if (!frame || typeof frame.id !== "string" || frame.id.length > 80) throw new Error("Invalid tunnel frame.");
-      if (frame.type === "ping") { void this.send({ type: "pong", id: frame.id }); return; }
+      if (frame.type === "ping") { void this.send({ type: "pong", id: frame.id }).catch(() => {}); return; }
       if (frame.type === "pong") {
         const pending = this.pingWaiters.get(frame.id);
         if (pending) { clearTimeout(pending.timer); this.pingWaiters.delete(frame.id); pending.resolve(performance.now() - pending.start); }
@@ -89,7 +103,11 @@ export class TunnelSession extends EventEmitter {
       if (frame.type === "open") {
         if (this.caller || this.streams.size >= 16 || this.streams.has(frame.id) || !frame.request) throw new Error("Invalid tunnel stream.");
         const stream = new TunnelStream(frame.id, this); this.streams.set(frame.id, stream);
-        this.emit("request", stream, frame.request); return;
+        // A WebSocket can deliver Hello and open in one turn before its owner's
+        // establishTunnel.then installs serveTunnel. The stream limit bounds this queue.
+        if (this.listenerCount("request")) this.emit("request", stream, frame.request);
+        else this.pendingRequests.push({ stream, request: frame.request });
+        return;
       }
       const stream = this.streams.get(frame.id);
       if (!stream) return; // Late cancellation acknowledgements are harmless.
@@ -106,7 +124,7 @@ export class TunnelSession extends EventEmitter {
   open(request: TunnelRequest): TunnelStream {
     if (this.closed || !this.caller || this.streams.size >= 16) throw new Error("Tunnel unavailable or busy.");
     const stream = new TunnelStream(randomUUID(), this); this.streams.set(stream.id, stream);
-    this.lastUsedAt = Date.now(); void this.send({ type: "open", id: stream.id, request }); return stream;
+    this.lastUsedAt = Date.now(); void this.send({ type: "open", id: stream.id, request }).catch(() => {}); return stream;
   }
   ping(timeoutMs = 3_000): Promise<number> {
     if (this.closed) return Promise.reject(new Error("Tunnel disconnected."));
@@ -114,12 +132,12 @@ export class TunnelSession extends EventEmitter {
     const id = randomUUID();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.pingWaiters.delete(id); reject(new Error("Tunnel probe timed out.")); this.close(); }, timeoutMs);
-      this.pingWaiters.set(id, { resolve, reject, start: performance.now(), timer }); void this.send({ type: "ping", id });
+      this.pingWaiters.set(id, { resolve, reject, start: performance.now(), timer }); void this.send({ type: "ping", id }).catch(() => {});
     });
   }
   close() {
     if (this.closed) return;
-    this.closed = true; this.channel.removeListener("data", this.receive); this.channel.close();
+    this.closed = true; this.pendingRequests = []; this.channel.removeListener("data", this.receive); this.channel.close();
     for (const value of this.pingWaiters.values()) { clearTimeout(value.timer); value.reject(new Error("Tunnel disconnected.")); }
     this.pingWaiters.clear();
     for (const stream of this.streams.values()) stream.destroy(new Error("Tunnel disconnected; request result may be unknown."));

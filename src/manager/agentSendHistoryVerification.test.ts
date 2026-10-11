@@ -3,19 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import { createHash } from "node:crypto";
-import { prepareAgentSendRequest, type AgentSendRequest } from "../agentSend.js";
+import { mapAgentSendReplyResult, prepareAgentSendRequest, type AgentSendRequest } from "../agentSend.js";
+import { agentReplyDeliveryTrace, projectAgentReplyHistoryResult } from "../outbox.js";
 import { durableDeliveryRequestDigest } from "./durableDeliveryIdempotency.js";
 import { inspectOriginalAgentSendHistory, MAX_AGENT_SEND_HISTORY_BYTES } from "./agentSendHistoryVerification.js";
 
-// Isolated test capability mirrors the existing Outbox canonicalization; production
-// must inject the owner capability rather than this fixture implementation.
-function stable(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
-  return `{${Object.entries(value as Record<string, unknown>).filter(([, item]) => item !== undefined)
-    .sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`).join(",")}}`;
-}
 async function fixture(t: TestContext, caption = false, textPayload = false) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "send-history-test-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
@@ -26,11 +18,9 @@ async function fixture(t: TestContext, caption = false, textPayload = false) {
   const prepared = prepareAgentSendRequest(request);
   const { deliveryId: _id, ...payload } = request;
   const digest = durableDeliveryRequestDigest(payload);
-  const traceReplyRequest = (internal: typeof prepared.internal) => ({ deliveryId: String(internal.deliveryId),
-    deliveryRequestDigest: createHash("sha256").update(stable(internal)).digest("hex") });
-  const trace = traceReplyRequest(prepared.internal);
-  const options = { logPath, traceReplyRequest, mapResult: (result: import("../outbox.js").AgentReplyResult) => ({ ...result,
-    deliveryId: prepared.deliveryId, sender: prepared.sender, channel: prepared.channel, routeId: prepared.routeId, target: prepared.target }) };
+  const trace = agentReplyDeliveryTrace(prepared.internal);
+  const options = { logPath, traceReplyRequest: agentReplyDeliveryTrace,
+    projectResult: projectAgentReplyHistoryResult, mapResult: mapAgentSendReplyResult };
   const line = (event: string, data: Record<string, unknown> = {}) => JSON.stringify({ event, data: { ...trace, ...data } });
   const success = { ok: true, status: "sent", sentFileId: "example-file", instanceId: "example-instance" };
   const inspect = () => inspectOriginalAgentSendHistory(request, digest, options);
@@ -84,6 +74,30 @@ test("caption failed after upload and unrecognized terminal events never prove c
   const f = await fixture(t, true);
   for (const event of ["group_file_caption_failed", "send_file_success"]) {
     await f.write([f.line("group_file_uploaded", f.success), f.line(event, f.success)]); assert.equal((await f.inspect()).terminalComplete, undefined);
+  }
+});
+test("owner projection strips request, digest, caption and audit metadata", async t => {
+  const f = await fixture(t, true);
+  await f.write([f.line("group_file_uploaded", f.success), f.line("group_file_caption_sent", {
+    ...f.success, sentMessageId: "example-caption", text: "example caption", request: f.prepared.internal,
+    audit: { source: "example-internal-only" }, authorizationIncarnation: "example-private-incarnation"
+  })]);
+  const result = await f.inspect();
+  assert.equal(result.terminalComplete, true);
+  assert.equal(result.inspection.state, "completed");
+  if (result.inspection.state !== "completed") assert.fail("must project a completed result");
+  assert.deepEqual(result.inspection.result, mapAgentSendReplyResult({
+    ...f.success, status: "sent", sentMessageId: "example-caption"
+  }, f.request));
+  for (const key of ["request", "deliveryRequestDigest", "text", "audit", "authorizationIncarnation"]) {
+    assert.equal(Object.hasOwn(result.inspection.result, key), false);
+  }
+});
+test("invalid business fields and draft history cannot prove delivery", async t => {
+  const f = await fixture(t);
+  for (const change of [{ targetType: "unsupported" }, { sentFileName: 7 }, { instanceId: {} }, { draft: {} }]) {
+    await f.write([f.line("group_file_uploaded", { ...f.success, ...change })]);
+    await assert.rejects(f.inspect, /not authoritative/);
   }
 });
 test("outer digest mismatch does not inspect or map history", async t => {

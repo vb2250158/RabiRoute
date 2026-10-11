@@ -71,6 +71,30 @@ function fakeInstaller(calls: InstallerCall[]): {
   return { spawnInstaller, children };
 }
 
+test("model authority fences actual dispatch and accepted jobs have durable identity ownership", () => {
+  const fixture = makeFixture();
+  try {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const fake = fakeInstaller(calls);
+    const manager = new SpeechModelManager({ rootDir: fixture.root, modelRoot: fixture.modelRoot, platform: "win32", spawnInstaller: fake.spawnInstaller });
+    let checks = 0;
+    const rejection = new Error("revoked before dispatch");
+    assert.throws(() => manager.installRuntime(() => { if (++checks === 3) throw rejection; }), error => error === rejection);
+    assert.equal(calls.length, 0); assert.equal(manager.snapshot().activeJob, undefined);
+    let revoked = false;
+    manager.installRuntime(() => { if (revoked) throw rejection; });
+    revoked = true;
+    fake.children[0]!.emit("close", 0);
+    assert.equal(manager.snapshot().lastJob?.state, "completed");
+    manager.installRuntime();
+    const newId = manager.snapshot().activeJob?.id;
+    fake.children[0]!.emit("error", new Error("stale callback"));
+    assert.equal(manager.snapshot().activeJob?.id, newId);
+    fake.children[1]!.emit("close", 0);
+    assert.equal(manager.snapshot().lastJob?.id, newId);
+  } finally { fixture.cleanup(); }
+});
+
 function putFile(filename: string, content = "fixture model bytes"): void {
   fs.mkdirSync(path.dirname(filename), { recursive: true });
   fs.writeFileSync(filename, content);

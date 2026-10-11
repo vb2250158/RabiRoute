@@ -18,7 +18,7 @@ The intended final flow releases phone space after archival without waiting for 
 
 The authenticated owner is the phone installation's stable device identity, verified by tunnel handshake and public key, not a token-derived scope. Credential rotation requires renewed authorization, not reassignment of recordings. A new identity after reinstall cannot automatically inherit the old one. The target worker uses the stable PC device ID, not a temporary Manager generation ID.
 
-PC archive settings reuse connection authentication to establish `owner → role → archiveRoot`. Existing configuration resolves the role directory; the domain-relative path is `all-day-recording/media-archive`. Deployment paths and role values are not protocol defaults. Upload bodies cannot choose an owner, role or arbitrary path. A persistent UUID identifies the namespace. Missing NAS storage, a disabled binding or a mismatching marker fails closed, without substituting local cache storage.
+Restricted PC administrative configuration (trusted local management, or a still-enabled Agent authenticated at the shared ingress) establishes `owner → role → archiveRoot`; the phone resources tunnel does not gain administrative authority. Existing configuration resolves the role directory; the domain-relative path is `all-day-recording/media-archive`. Deployment paths and role values are not protocol defaults. Upload bodies cannot choose an owner, role or arbitrary path. A persistent UUID identifies the namespace. Missing NAS storage, a disabled binding or a mismatching marker fails closed, without substituting local cache storage.
 
 The protocol stores raw `pcm_s16le`, 16 kHz, mono PCM. Playback synthesizes a WAV header as needed, rather than retaining WAV and PCM as two authoritative media copies. Limits are independent:
 
@@ -60,7 +60,7 @@ Jobs freeze their model in a durable NAS intent and use stable job keys, single 
 | Contract / Android `RecordingArchiveContract` | Strict validation and cross-language golden hash implemented; not proof of working device uploads |
 | Store | Objects, immutable envelopes, strong receipts and namespace fencing implemented; isolated NAS file-mechanism tests passed; directory fsync `EPERM` and power-loss durability remain acceptance boundaries |
 | Bindings | Controlled role bindings and configuration CAS implemented; shares `resource-cache.json`; legacy directory updates must preserve bindings and share its lock |
-| Routes | Archive capabilities, objects, manifests, receipts and PC administration are wired in source; management writes reuse connection authentication and require a strong ETag and Idempotency-Key |
+| Routes | Archive capabilities, objects, manifests, receipts and PC administration are wired in source; management writes accept trusted local management or valid Agents, require strong ETag and Idempotency-Key, and recheck original authority at body, lock-wait, mutation and disclosure boundaries |
 | Catalog | Explicit rebuild, replaceable local cache and snapshot-bound cursors implemented; ordinary paging does not scan NAS, and not-ready does not masquerade as empty history |
 | Runtime | Manager runtime entry, administration API, lifecycle, catalog and ASR hooks are wired in source; installation/deployment acceptance is pending |
 | Jobs | State machine, frozen selection and the actual processing call chain are wired; source integration does not establish real-audio, NAS-failure or recovery acceptance |

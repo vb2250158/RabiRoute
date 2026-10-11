@@ -115,7 +115,8 @@ const body = (source, start, end) => {
 };
 const notification = body(service, "private Notification notification(", "private void showReviewShortcut(");
 includes(notification, ["PendingIntent.getActivity", "RabiRecordingHubActivity.class", "ACTION_PAUSE_RECORD", "ACTION_MARK", "setOngoing(true)", "VISIBILITY_PRIVATE"], "single capture status notification");
-assert.doesNotMatch(notification, /setAction\(ACTION_REVIEW\)|MainActivity.class/, "status click must open recording, not trigger Agent or chat");
+assert.doesNotMatch(notification, /setAction\(ACTION_REVIEW\)/, "status click must not trigger recording review automatically");
+assert.match(notification, /call == null \? new Intent\(this, com\.rabi\.link\.recording\.RabiRecordingHubActivity\.class\)/, "recording status click opens recording; an active call may open its call page");
 const chatNotification = body(service, "private void showAgentMessage(", "public static void clearConversationNotification(");
 includes(chatNotification, ['"rabi_chat_messages"', 'manager.notify("chat:" + conversationKey, 1, value)', "setAutoCancel(true)", "VISIBILITY_PRIVATE", "Uri.encode(conversationKey)", "EXTRA_ROUTE_PROFILE_ID"], "independent private per-conversation notification");
 assert.doesNotMatch(chatNotification, /REVIEW_NOTIFICATION_ID|setOngoing\(true\)|setContentText\(text\)|bigText\(text\)/, "ordinary messages must not overwrite foreground state or expose text on lockscreen");
@@ -133,12 +134,12 @@ const startTransport = body(service, "private void startConversation()", "privat
 assert.doesNotMatch(startTransport, /applyRecording|startPhoneCapture|startGlassesBackend|withRunning\(true/, "message start is transport-only");
 assert.match(service, /if \(ACTION_RECORD.equals\(action\)\) \{\s*applyRecording\(\);/, "explicit recording action is the capture entry");
 const startCapture = body(service, "public static void startRecording(", "public static void pauseRecording(");
-includes(startCapture, ["withRunning(true, System.currentTimeMillis()).save(context)", "setAction(ACTION_RECORD)", "withRunning(false, System.currentTimeMillis()).save(context)"], "durable explicit start with failure rollback");
+includes(startCapture, ["withEnabled(true, System.currentTimeMillis()).save(context)", "setAction(ACTION_RECORD)", "withRunning(false, System.currentTimeMillis()).save(context)"], "durable explicit start request with failure rollback");
 const restore = body(service, "if (ACTION_RESTORE.equals(action))", "if (ACTION_PREFERENCE.equals(action))");
 assert.doesNotMatch(restore, /applyRecording|startPhoneCapture|startGlassesBackend|withRunning\(true/, "boot restore must not acquire capture consent");
 const hubCreation = body(hub, "override fun onCreate(", "override fun onSaveInstanceState(");
 assert.doesNotMatch(hubCreation, /startRecording\(|withRunning\(true|auto_video/, "opening Hub or legacy intent must not start recording");
-includes(hub, ["RabiConversationService.startRecording(this)", "Manifest.permission.RECORD_AUDIO", "PackageManager.PERMISSION_GRANTED", "保存（不开始）", "AllDayRecordingSettings(false,", "RabiConversationService.pauseRecording", "transitionPending()"], "explicit Hub capture controls");
+includes(hub, ["RabiConversationService.startRecording(this)", "Manifest.permission.RECORD_AUDIO", "PackageManager.PERMISSION_GRANTED", "EventSplitSettings.save(this,", "EventSplitSettings.saveTranscribeLine(this,", "RabiConversationService.pauseRecording", "transitionPending()"], "explicit Hub capture controls");
 includes(recordingSettings, ['p.getBoolean("running", false)', 'p.getBoolean("autoResume", false)', 'value && !running ? now : windowStartedAt', '.commit()'], "capture consent and fresh resume window");
 assert.doesNotMatch(recordingSettings, /getBoolean\("autoStartVoiceService"|getBoolean\("continuousListening"/, "upgrades must not import legacy automatic microphone consent");
 const pauseCapture = body(service, "private void pauseRecordingInternal(", "private void finishCaptureTransition(");
@@ -209,14 +210,15 @@ assert.match(service, /public static void stop\(Context context\) \{\s*RabiConve
   "explicit stop must prevent a later reboot from silently restoring the service");
 assert.match(service, /public static void start\(Context context\) \{\s*RabiConversationServiceState\.setRestoreEnabled\(context, true\);/s,
   "an explicitly started message connection must survive process and device restart");
-assert.match(service, /phoneAudioCapture\.pause\(\);[\s\S]*?setInputMode\(RabiConversationSettings\.InputMode\.PAUSED\);[\s\S]*?startGlassesBackend\(\);/s,
-  "glasses mode must release phone capture and remain paused before starting the glasses bridge");
-const glassBt = body(service, "onGlassBtConnectionChanged(boolean connected)", "onGlassDeviceInfo");
-includes(glassBt, ["acceptsGlassCallback(callbackGeneration)", "captureSettings.running", '"audio".equals(captureSettings.mode)', '"glasses".equals(captureSettings.source)', "glassController.startAudioStream()", "setInputMode(RabiConversationSettings.InputMode.GLASSES)"], "generation-fenced glasses Bluetooth capture gate");
-assert.match(glassBt, /if \(connected\)[\s\S]*?startAudioStream\(\)[\s\S]*?setInputMode\(RabiConversationSettings\.InputMode\.GLASSES\)/s, "glasses capture requires connected callback and successful stream start");
+const sourceSwitch = body(service, "private void reconcileAudioSource()", "private void applyUploadPolicy()");
+includes(sourceSwitch, ["setInputMode(RabiConversationSettings.InputMode.PAUSED)", "phoneAudioCapture.pause()", "backend.endCapture(", "afterCaptureStopped = () -> startSelectedAudio("], "automatic source switch pauses phone capture and drains before selecting the next source");
+const glassBt = body(service, "private void glassConnectionChanged(boolean connected, long generation)", "private void stopGlassesBackend()");
+includes(glassBt, ["acceptsGlassCallback(generation)", "glassesAudioStarted = glassController.startAudioStream()", "automaticSource.disconnected()", "reconcileAudioSource()"], "generation-fenced glasses Bluetooth connection state");
+const glassPcm = body(service, "@Override public void onAudioPcm(", "private void glassConnectionChanged(");
+includes(glassPcm, ["acceptsGlassCallback(callbackGeneration)", "!glassesConnected", "!glassesAudioStarted", "automaticSource.receivedGlassesPcm", "reconcileAudioSource()"], "glasses input selects its source only after connected, started and actual PCM arrives");
 assert.match(service, /setInputMode\(RabiConversationSettings\.InputMode\.PHONE\);\s*startPhoneCapture\(\);/s,
   "phone mode must start phone capture only after mode selection");
-assert.match(service, /private void shutdown\(boolean explicitStop\) \{[\s\S]*unregisterNetworkEvents\(\);[\s\S]*backend\.stop\(\);/s,
+assert.match(service, /private void shutdown\(boolean explicitStop\) \{[\s\S]*unregisterNetworkEvents\(\);[\s\S]*target\.stop\(\);/s,
   "network events must remain registered for the service lifetime and unregister only during shutdown");
 assert.match(service, /private void markNetworkUnavailable\(\) \{[\s\S]*target\.onNetworkUnavailable\(\);[\s\S]*scheduleNetworkEventFallbackCheck\(\);/s,
   "known-offline state must arm the minute-scale callback safety check");
@@ -351,7 +353,7 @@ assert.match(backend, /RabiDurableAudioSpool\.Segment pending = audioSpool\.next
   "Android must commit a chunk sequence and clear durable PCM only after the PC acknowledges it");
 assert.match(backend, /ScheduledExecutorService audioStreamExecutor = Executors\.newSingleThreadScheduledExecutor\(\);[\s\S]*RabiSingleDrainGate audioStreamDrainGate/,
   "PCM uploads must coalesce producer wakeups into one scheduled drain instead of an unbounded task queue");
-assert.match(backend, /RabiDurableAudioSpool\.AppendResult written = audioSpool\.append\(item\.pcm, item\.source, item\.route, item\.captureId, item\.processingPolicy, item\.capturedAt, "received"\);[\s\S]*requestAudioStreamDrain\(\)/,
+assert.match(backend, /RabiDurableAudioSpool\.AppendResult written = audioSpool\.appendCompleteEvent\(part\.pcm, owner\.source, owner\.route,[\s\S]*?owner\.captureId, owner\.processingPolicy,[\s\S]*?"received", part\.eventId\);[\s\S]*requestAudioStreamDrain\(\)/,
   "PCM pressure must remain bounded before durable acknowledgement-sensitive upload");
 includes(backend, ["supportsCaptureProcessing", "expectedWorkerFencing", "processingPolicyFrozen", "processingPolicies"], "worker processing-policy fencing");
 assert(backend.includes('captureStreamId(deviceId, suffix, route, processingPolicy, captureId)'),
@@ -372,16 +374,16 @@ includes(audioSpool, [
 includes(service, [
   "backend.streamPcmFromSource(pcm, RabiGlassPcBackend.SOURCE_PHONE)",
   "glassController.startAudioStream()",
-  "backend.beginCapture(s.source, s.routeProfileId, s.processingPolicy)",
+  "backend.beginCapture(source, s.routeProfileId, s.processingPolicy)",
   "backend.streamPcmFromSource(chunk, RabiGlassPcBackend.SOURCE_GLASSES)"
 ], "host-owned Android audio streaming");
 includes(service, [
-  "inputMode != RabiConversationSettings.InputMode.GLASSES" ,
+  "inputMode == RabiConversationSettings.InputMode.GLASSES" ,
   "phoneAudioCapture.pause()",
-  "backend.pauseAudioStream()",
+  "backend.endCapture(",
   "onGlassBtConnectionChanged(boolean connected)",
   "setInputMode(RabiConversationSettings.InputMode.GLASSES)",
-  "眼镜已断开 · 采集保持暂停",
+  "眼镜已断开 · 自动使用手机",
   "ACTION_PREFERENCE"
 ], "single-source phone/glasses mode switching");
 assert(!service.includes("segmenter.accept("), "Android main conversation path must not perform VAD segmentation");
@@ -464,11 +466,11 @@ includes(relay, [
   "attachments.length === 0",
   "routeProfileId",
   "targetDeviceKinds",
-  "proactivityPreference",
-  "preferenceKind",
-  "explicitPreference",
-  "channelType"
-], "portable Relay envelope");
+  "inputFormat: 'opaque-v1'",
+  "Transport input must be a JSON object.",
+  "    raw,",
+  "ingressPath: new URL(req.url"
+], "portable opaque Relay envelope");
 
 console.log("Rabi mobile endpoint audit passed: unified all-day recording owner, explicit capture consent, independent chat notifications, route isolation, attachments, receipts, reliable queues, host ASR and 84 configuration actions are wired.");
 return true;

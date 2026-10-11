@@ -199,7 +199,16 @@ export class IsolatedPluginExecutor implements PluginExecutor {
       new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), this.#terminationTimeoutMs); })
     ]);
     if (timer) clearTimeout(timer);
-    if (!completed && lease.child.exitCode === null) lease.child.kill("SIGKILL");
+    if (!completed && lease.child.exitCode === null) {
+      lease.child.kill("SIGKILL");
+      let exitTimer: NodeJS.Timeout | undefined;
+      try {
+        await Promise.race([
+          lease.settled,
+          new Promise<void>(resolve => { exitTimer = setTimeout(resolve, this.#terminationTimeoutMs); })
+        ]);
+      } finally { if (exitTimer) clearTimeout(exitTimer); }
+    }
   }
 
   async #activate(candidate: PluginCandidate, identity: PluginIdentity, context: PluginContext): Promise<void> {
@@ -308,6 +317,10 @@ export class IsolatedPluginExecutor implements PluginExecutor {
           ]);
           await failureEvent.termination;
           observed.stopHeartbeat?.();
+          if (this.leases.list().some(lease => lease.id === observed.lease.id)) {
+            context.lifecycle.fail(new Error(`${failureEvent.error.message} Previous process lease is still active; replacement was not started.`));
+            return;
+          }
           if (stopping || context.lifecycle.signal.aborted || active !== observed) continue;
           lastFailure = failureEvent.error;
           while (!stopping && !context.lifecycle.signal.aborted) {

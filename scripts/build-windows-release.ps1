@@ -82,10 +82,15 @@ $requiredPortableRuntimeFiles = @(
     "scripts/lib/discover-manager-url.mjs",
     "apps/rabi-agent/lib/manager-client.mjs",
     "apps/rabi-agent/lib/manager-cli.mjs",
-    # The compiled runtime imports ../../packages from dist/manager; copy even in untracked local snapshots.
+    # MCP knowledge tools reuse these canonical contracts independently of Relay.
     "packages/rabi-knowledge-contract/schema.mjs",
     "packages/rabi-knowledge-contract/tools.mjs",
     "packages/rabi-knowledge-contract/receipt.mjs",
+    "packages/rabi-api-contract/request.mjs",
+    # PC persona/profile owners need these even when Relay no longer imports them.
+    "packages/rabilink-agent-contract/profile.mjs",
+    "packages/rabilink-agent-contract/state.mjs",
+    "packages/rabilink-agent-contract/persona.mjs",
     "apps/rabi-mcp/lib/knowledge-tools.mjs",
     "apps/rabi-mcp/lib/knowledge-receipt.mjs",
     "scripts/lib/release-tracked-manifest.ps1",
@@ -99,7 +104,7 @@ $requiredPortableRuntimeFiles = @(
 )
 $relayRuntimeFiles = Get-Content -LiteralPath (Join-Path $repo 'scripts/rabilink-relay-runtime-files.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 foreach ($relative in $relayRuntimeFiles) {
-    if ($relative -notmatch '^(scripts/(lib/)?[a-z0-9-]+|packages/rabi-knowledge-contract/(schema|tools|receipt))\.mjs$') { throw 'Unsafe Relay runtime manifest path' }
+    if ($relative -notmatch '^(scripts/(lib/)?[a-z0-9-]+|packages/(rabi-knowledge-contract/(schema|tools|receipt)|rabi-api-contract/request|rabilink-agent-contract/(profile|state|persona)))\.mjs$') { throw 'Unsafe Relay runtime manifest path' }
     $requiredPortableRuntimeFiles += $relative
 }
 
@@ -332,7 +337,8 @@ foreach ($relative in $required) {
 }
 
 Write-Step "Creating a privacy-safe runtime payload"
-if (Test-Path -LiteralPath $OutputRoot) { Remove-Item -LiteralPath $OutputRoot -Recurse -Force }
+. (Join-Path $scriptDir 'lib/release-output-lifecycle.ps1')
+Reset-ReleasePayloadOutput -OutputRoot $OutputRoot -ProtectedRoots @($desktopRuntime, $hostRuntime) -Version $Version
 New-Item -ItemType Directory -Force -Path $payload | Out-Null
 
 foreach ($relative in @("dist", "ribiwebgui\dist")) {
@@ -582,7 +588,7 @@ if ($distributionReparsePoints) {
 }
 if (-not $SkipSmokeTest) {
     Write-Step "Smoke testing bootstrap -> current.json -> immutable Core"
-    $smokeProcess = Start-Process -FilePath (Join-Path $distribution "RabiRouteHost.exe") -ArgumentList "--self-test" -WorkingDirectory $distribution -Wait -PassThru
+    $smokeProcess = Start-Process -FilePath (Join-Path $distribution "RabiRouteHost.exe") -ArgumentList "--self-test" -WorkingDirectory $distribution -WindowStyle Hidden -Wait -PassThru
     if ($smokeProcess.ExitCode -ne 0) { throw "Versioned distribution self-test failed with exit code $($smokeProcess.ExitCode)." }
 }
 

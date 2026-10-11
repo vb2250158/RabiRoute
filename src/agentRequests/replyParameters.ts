@@ -4,8 +4,12 @@ export function agentReplyRequest({ source, target, requestId }: Pick<AgentCommu
   "source" | "target" | "requestId">): Record<string, unknown> {
   return {
     action: "send", threadId: source.threadId, cwd: source.workspace,
+    ...(source.endpoint?.kind === "instance" || source.endpoint?.kind === "device" ? { instanceBinding: {
+      instanceId: source.endpoint.instanceId, agentId: source.endpoint.agentId
+    }, ...(source.endpoint.kind === "device" ? { agentAdapter: "deviceAgent" } : {}) } : {}),
+    ...(source.endpoint?.kind === "local" ? { agentTargetId: `local:${source.endpoint.provider}`, agentAdapter: source.agentAdapter } : {}),
     messageSource: { type: "agent", agentAdapter: target.agentAdapter,
-      sessionId: target.threadId, sessionName: target.threadName || target.threadId, workspace: target.workspace },
+      sessionId: target.threadId, sessionName: target.threadName || target.endpoint?.agentId || target.threadId, workspace: target.workspace },
     sourceThreadId: target.threadId, sourceAgentType: target.agentType || "agent",
     inReplyToRequestId: requestId,
     result: "<结果>", nextAction: "<下一步>", responsePolicy: "none"

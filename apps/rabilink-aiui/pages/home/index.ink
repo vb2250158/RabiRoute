@@ -1,7 +1,7 @@
 <script type="application/json" def>
 {
   "navigationBarTitleText": "RabiLink AIUI",
-  "description": "打开 RabiLink AIUI 完整交互页；适合在独立窗口或 modal 中持续使用，聊天内卡片仅显示当前状态并可展开进入。transcription 进入连接会话：前台持续转录只写入 Rabi 会话账本，不逐句打断 Agent；Codex 在线程空闲时主动审阅，触摸板单击可立即引导审阅，并持续显示、播报回复和主动消息。configuration 打开同页配置助手，由 AIUI 原生 ASR 和 LanguageModel 理解自然语言，再通过白名单工具执行配置动作。两种模式可用触摸板滑动切换，不退出当前页面；不要在页面参数中手工声明 target。",
+  "description": "打开 RabiLink AIUI 完整交互页；适合在独立窗口或 modal 中持续使用，聊天内卡片仅显示当前状态并可展开进入。transcription 进入连接会话：乐奇原生模型在眼镜执行消息与通用接口工具；ASR 在推理与 TTS 期间保持输入，最终文字引导同一推理循环。configuration 打开同页配置助手，由 AIUI 原生 ASR 和 LanguageModel 理解自然语言，再通过白名单工具执行配置动作。两种模式可用触摸板滑动切换，不退出当前页面；不要在页面参数中手工声明 target。",
   "schema": {
     "data": {
       "type": "object",
@@ -58,22 +58,20 @@
 
 <script setup>
 import wx from "wx";
-import { resolveAgentRuntimeMode, usesRemoteAgent, agentTurnDestination } from "../../utils/agent-runtime-mode.js";
 import {
   claimRabiLinkDeviceToken,
-  getRabiLinkMessageStream,
   getMobileWebgui,
   getMobileAgentOptions,
   getMobileRoutes,
   getMobileState,
+  getMobileDeviceStatus,
   postMobileWebgui,
   sendMobileProof,
   selectMobileTarget,
   setMobileAgentBinding,
-  publishRabiLinkVoiceInput,
   publishRabiLinkDeviceLogs,
-  requestRabiLinkConversationReview
 } from "../../utils/rabilink-api.js";
+import { pairPhoneEyeTransport, clearPhoneEyeTransport, phoneEyeTransportStatus } from '../../utils/phone-eye-transport.js';
 import {
   CONFIG_PANELS,
   GATEWAY_JSON_FIELDS,
@@ -144,21 +142,23 @@ import {
 } from "../../utils/config-surface.js";
 import { rabiLinkDefaults } from "../../utils/rabilink-defaults.js";
 import { agentProfilePageMethods } from "../../utils/agent-profile-page.js";
-import { knowledgeToolPageMethods } from "../../utils/knowledge-tool-page.js";
+import { apiResultPageMethods } from "../../utils/api-result-page.js";
+import { deviceAgentPageMethods } from "../../utils/device-agent-page.js";
+import { apiToolPageMethods } from "../../utils/api-tool-page.js";
+import { aiuiConversationPageMethods } from "../../utils/aiui-conversation-page.js";
+import { guidancePageMethods } from "../../utils/guidance-page.js";
+import { createAgentTurnRuntime } from "../../utils/agent-turn-runtime.js";
+import { agentLoopModelOptions } from "../../utils/agent-decision-protocol.js";
 import { installHudDisplay } from "../../utils/hud-text.js";
 import {
-  loadAgentMessageQueue,
   loadCloudLogQueue,
   loadDeviceCredential,
   loadSettings,
-  loadTranscriptQueue,
   maskToken,
   removeDeviceCredential,
-  saveAgentMessageQueue,
   saveCloudLogQueue,
   saveDeviceCredential,
   saveSettings,
-  saveTranscriptQueue,
   tokenStorageKey
 } from "../../utils/rabilink-store.js";
 import { createTranscriptPolicy } from "../../utils/transcript-policy.js";
@@ -211,12 +211,8 @@ const RABILINK_RELEASE_VERSION = "__RABILINK_RELEASE_VERSION__";
 const TRANSCRIPTION_RESTART_DELAY_MS = 220;
 const TRANSCRIPTION_ERROR_RETRY_MS = 1200;
 const TRANSCRIPTION_MAX_RETRY_DELAY_MS = 10000;
-const TRANSCRIPT_FLUSH_RETRY_MS = 5000;
 const TRANSCRIPTION_RAPID_END_THRESHOLD_MS = 800;
 const TRANSCRIPTION_MAX_CONSECUTIVE_FAILURES = 5;
-const AGENT_POLL_RETRY_DELAY_MS = 250;
-const AGENT_TTS_RETRY_DELAY_MS = 600;
-const AGENT_TTS_MAX_ATTEMPTS = 3;
 const TTS_PLAYBACK_MIN_MS = 1800;
 const TTS_PLAYBACK_MAX_MS = 90000;
 const STARTUP_ACTIVATION_DELAY_MS = 160;
@@ -641,11 +637,17 @@ const WEBGUI_TOOL_PATHS = {
 
 export default {
   ...agentProfilePageMethods,
-  ...knowledgeToolPageMethods,
+  ...apiResultPageMethods,
+  ...deviceAgentPageMethods,
+  ...apiToolPageMethods,
+  ...aiuiConversationPageMethods,
+  ...guidancePageMethods,
   data: {
+    phoneBridgeSetup: false,
+    phoneBridgeStatus: '手机直连',
     deviceAgentProfileStatus: "尚未读取设备 Agent 配置",
-    knowledgeToolStatus: "知识工具未选择角色",
-    knowledgeToolHudText: "知识工具 · 点击刷新",
+    knowledgeToolStatus: "Rabi 通用接口未连接",
+    knowledgeToolHudText: "Rabi 接口 · 点击刷新",
     knowledgeToolResultText: "",
     modelProbe: false,
     relayBaseUrl: "",
@@ -884,8 +886,6 @@ export default {
     lingzhuSystemPrompt: "",
     agentStatus: "等待语音",
     agentReplyText: "Agent 的回复会显示在这里",
-    agentCursor: "",
-    agentPolling: false,
     agentSpeaking: false,
     agentSpeakingCue: "",
     transcriptionDesired: true,
@@ -959,7 +959,6 @@ export default {
 
   onLoad(query = {}) {
     installHudDisplay(this);
-    this.agentRuntimeMode = resolveAgentRuntimeMode(query.agentRuntimeMode);
     if (query.modelProbe === true || query.modelProbe === "true") {
       this.pageVisible = true;
       this.destroyed = false;
@@ -1027,7 +1026,6 @@ export default {
     this.pageReady = false;
     this.pageVisible = true;
     this.destroyed = false;
-    this.transcriptQueue = [];
     this.flushingTranscripts = false;
     this.transcriptFlushRetryTimer = null;
     this.transcriptionRestartTimer = null;
@@ -1038,12 +1036,6 @@ export default {
     this.modeFrameTimer = null;
     this.modeFrameGeneration = 0;
     this.hudRelayoutTimer = null;
-    this.agentPollTimer = null;
-    this.agentPollGeneration = 0;
-    this.agentShouldPoll = false;
-    this.agentSeenMessageIds = new Set();
-    this.agentMessageQueue = [];
-    this.agentSpeechQueuedId = "";
     this.speechQueue = [];
     this.speechActive = false;
     this.speechGeneration = 0;
@@ -1099,8 +1091,6 @@ export default {
       transcriptionSyncLabel: "移动 Agent 在线",
       agentStatus: `${lingzhuAgentName}就绪`,
       agentReplyText: `你好，我是${lingzhuAgentName}。有什么想和我聊聊或者需要帮你的吗？`,
-      agentCursor: "",
-      agentPolling: false,
       agentSpeaking: false,
       currentTime: clockLabel(),
       voiceRuntimeMode: AIUI_NATIVE_VOICE_MODE,
@@ -1129,14 +1119,13 @@ export default {
       return;
     }
     this.startDeviceStatus();
+    void this.initializeAiuiVoiceContext();
     if (this.startupActivated && this.pageReady && this.data.isTranscriptionMode) {
       if (this.data.transcriptionDesired) {
         this.startTranscriptionClock();
         this.scheduleTranscriptionRestart(0);
       }
-      void this.flushTranscriptQueue();
-      if (this.agentShouldPoll) this.scheduleAgentPoll(0);
-      this.drainAgentMessageQueue();
+      this.reconcileDeviceAgentReceipts();
     } else if (this.startupActivated && this.pageReady && this.data.isConfigurationMode && this.data.assistantListeningDesired) {
       this.scheduleTranscriptionRestart(0);
     }
@@ -1171,24 +1160,13 @@ export default {
     const token = this.data.token || settings.token || "";
     const tokenKey = tokenStorageKey(token);
     const legacyTokenKey = token ? maskToken(token) : "";
-    const transcriptQueue = loadTranscriptQueue(tokenKey);
-    const cursorMatchesToken = settings.agentCursorTokenKey === tokenKey
-      || Boolean(legacyTokenKey && settings.agentCursorTokenKey === legacyTokenKey);
-    const agentCursor = cursorMatchesToken ? settings.agentCursor : "";
-    const agentMessageQueue = loadAgentMessageQueue(tokenKey, legacyTokenKey);
     const cloudLogQueue = loadCloudLogQueue(tokenKey, legacyTokenKey);
-    this.transcriptQueue = transcriptQueue;
-    this.agentMessageQueue = agentMessageQueue;
     this.cloudLogTokenKey = tokenKey;
     this.cloudLogQueue = [
       ...(Array.isArray(this.cloudLogQueue) ? this.cloudLogQueue : []),
       ...cloudLogQueue
     ].filter((entry, index, rows) => rows.findIndex((candidate) => candidate.id === entry.id) === index);
     saveCloudLogQueue(this.cloudLogQueue, tokenKey);
-    this.transcriptPolicy?.seedAccepted(transcriptQueue);
-    if (legacyTokenKey && settings.agentCursorTokenKey === legacyTokenKey) {
-      saveSettings({ agentCursor, agentCursorTokenKey: tokenKey });
-    }
     this.setData({
       relayBaseUrl: settings.relayBaseUrl || this.data.relayBaseUrl,
       token,
@@ -1196,8 +1174,7 @@ export default {
       targetDeviceId: this.data.targetDeviceId || settings.targetDeviceId,
       routeCatalogContentHash: settings.routeCatalogContentHash,
       routeCatalogRouteConfigHash: settings.routeCatalogRouteConfigHash,
-      agentCursor,
-      transcriptionPendingCount: transcriptQueue.length,
+      transcriptionPendingCount: 0,
       transcriptionSyncLabel: "手机 RabiLink 已连接"
     });
     try {
@@ -1220,7 +1197,8 @@ export default {
     } catch (_) {}
     // Device-owned profile overrides legacy name/prompt only when a real device credential exists.
     this.restoreDeviceAgentProfile();
-    void this.refreshDeviceAgentProfile().then(() => this.refreshKnowledgeTools());
+    this.recoverAiuiConversations();
+    void this.initializeAiuiVoiceContext();
     this.appendLog("RabiLink AIUI 首屏已就绪，后台能力开始启动。");
     this.scheduleCloudLogFlush(0);
     if (this.pageVisible) this.startDeviceStatus();
@@ -1244,8 +1222,7 @@ export default {
       this.scheduleTranscriptionRestart(STARTUP_ASR_DELAY_MS);
     }
     if (this.pageVisible && this.data.isTranscriptionMode) {
-      void this.flushTranscriptQueue();
-      this.drainAgentMessageQueue();
+      this.reconcileDeviceAgentReceipts();
     }
   },
 
@@ -1253,11 +1230,11 @@ export default {
     if (this.data.modelProbe) { this.pageVisible = false; this.cancelHostModelProbe(); return; }
     console.info("[RabiLink AIUI] page:onHide");
     this.pageVisible = false;
+    this.invalidateAiuiVoiceContext();
+    this.stopDeviceAgentOwner();
     void this.flushCloudLogs();
     this.clearDeviceTokenClaimTimer();
-    this.clearTranscriptFlushRetry();
     this.stopDeviceStatus();
-    this.suspendAgentPolling();
     this.cancelSpeech();
     this.destroyConfigurationModel();
     this.clearTranscriptionRestart();
@@ -1280,11 +1257,11 @@ export default {
     this.restoreCloudConsoleCapture();
     this.destroyed = true;
     this.pageVisible = false;
+    this.invalidateAiuiVoiceContext();
+    this.stopDeviceAgentOwner();
     this.stopDeviceStatus();
-    this.stopAgentPolling();
     this.cancelSpeech();
     this.destroyConfigurationModel();
-    this.clearTranscriptFlushRetry();
     if (this.transcriptionStartupTimer) {
       clearTimeout(this.transcriptionStartupTimer);
       this.transcriptionStartupTimer = null;
@@ -1375,7 +1352,7 @@ export default {
   async resolveBatterySnapshot() {
     if (!this.data.token) return false;
     try {
-      const state = await getMobileState(this.config(), 4000);
+      const state = await getMobileDeviceStatus(this.config(), 4000);
       if (this.destroyed || !this.pageVisible) return false;
       if (this.applyRelayBatteryState(state)) return true;
     } catch {
@@ -1403,7 +1380,12 @@ export default {
     const keyword = String(event?.keyword || "").trim();
     this.appendLog(keyword ? `唤醒词：${keyword}` : "收到语音唤醒。");
     if (this.data.agentSpeaking || this.data.assistantModelBusy) {
-      this.interruptConversation("voice-wakeup");
+      this.aiuiSpeechSuppressed = !!this.deviceAgentTurnActive;
+      this.cancelSpeech();
+      if (!this.recognition) {
+        if (this.data.isTranscriptionMode) this.resumeTranscription("wakeup");
+        else if (this.data.isConfigurationMode) this.resumeConfigurationListening("wakeup");
+      }
       return;
     }
     if (this.data.needsDeviceSetup) {
@@ -1440,8 +1422,6 @@ export default {
     if (currentToken.startsWith("rbd_") && serialNumber) {
       removeDeviceCredential(this.data.relayBaseUrl, serialNumber);
     }
-    this.clearTranscriptFlushRetry();
-    this.suspendAgentPolling();
     this.setData({
       token: "",
       maskedToken: "未设置",
@@ -1478,11 +1458,7 @@ export default {
       if (!token.startsWith("rbd_")) throw new Error("服务器没有返回有效的眼镜设备凭证。");
       const persisted = saveDeviceCredential(this.data.relayBaseUrl, serialNumber, token);
       const tokenKey = tokenStorageKey(token);
-      const transcriptQueue = loadTranscriptQueue(tokenKey);
-      const agentMessageQueue = loadAgentMessageQueue(tokenKey);
       const cloudLogQueue = loadCloudLogQueue(tokenKey);
-      this.transcriptQueue = transcriptQueue;
-      this.agentMessageQueue = agentMessageQueue;
       this.cloudLogTokenKey = tokenKey;
       this.cloudLogQueue = [
         ...(Array.isArray(this.cloudLogQueue) ? this.cloudLogQueue : []),
@@ -1499,13 +1475,13 @@ export default {
         transcriptionDesired: this.data.isTranscriptionMode && !this.asrHostPolicy.requiresInteractiveWakeup,
         transcriptionState: "准备连接",
         transcriptionText: "眼镜已绑定",
-        transcriptionPendingCount: transcriptQueue.length,
-        transcriptionSyncLabel: transcriptQueue.length ? "准备补传" : "准备连接",
+        transcriptionPendingCount: 0,
+        transcriptionSyncLabel: "准备连接",
         agentStatus: "设备凭证已领取",
         agentReplyText: persisted ? "正在连接 RabiLink。" : "已连接；本地存储不可用，重启后需在后台重新绑定。"
       });
       this.restoreDeviceAgentProfile();
-      void this.refreshDeviceAgentProfile().then(() => this.refreshKnowledgeTools());
+      void this.initializeAiuiVoiceContext();
       this.appendLog("眼镜已通过 SN 领取设备凭证，开始连接 Relay。");
       this.scheduleCloudLogFlush(0);
       if (this.pageVisible && this.data.isTranscriptionMode) {
@@ -1555,46 +1531,14 @@ export default {
   },
 
   interruptConversation(reason = "touch") {
-    this.cancelKnowledgePresentation();
+    this.aiuiGuidanceQueue = [];
+    this.rabiApiRuntime?.cancelPresentation();
+    this.cleanupChatModel();
+    this.deviceAgentTurnActive = false;
     console.info("[RabiLink AIUI] barge-in interrupted:", reason);
     this.promptCancelled = true;
     this.promptGeneration = Number(this.promptGeneration || 0) + 1;
-    if (this.activeStream && typeof this.activeStream.cancel === "function") {
-      try { this.activeStream.cancel(); } catch (_) {}
-      this.activeStream = null;
-    }
-    this.speechUntil = 0;
-    this.speechActive = false;
-    this.speechQueue = [];
-    if (this.speakingTimer) {
-      clearTimeout(this.speakingTimer);
-      this.speakingTimer = null;
-    }
-    if (this.currentSpeechTimer) {
-      clearTimeout(this.currentSpeechTimer);
-      this.currentSpeechTimer = null;
-    }
-    const synth = (typeof speechSynthesis !== "undefined" && speechSynthesis)
-      || (typeof window !== "undefined" && window.speechSynthesis)
-      || (typeof globalThis !== "undefined" && globalThis.speechSynthesis);
-    if (synth) {
-      if (typeof synth.cancel === "function") {
-        try { synth.cancel(); } catch (_) {}
-      }
-      const UtteranceCtor = (typeof SpeechSynthesisUtterance === "function" && SpeechSynthesisUtterance)
-        || (typeof window !== "undefined" && window.SpeechSynthesisUtterance)
-        || (typeof globalThis !== "undefined" && globalThis.SpeechSynthesisUtterance);
-      if (typeof synth.speak === "function" && UtteranceCtor) {
-        try {
-          const cut = new UtteranceCtor(" ");
-          cut.volume = 0;
-          synth.speak(cut, "immediate");
-        } catch (_) {}
-      }
-    }
-    if (typeof wx !== "undefined" && wx.speech && typeof wx.speech.stopTTS === "function") {
-      try { wx.speech.stopTTS(); } catch (_) {}
-    }
+    this.cancelSpeech();
     this.setData({
       agentSpeaking: false,
       assistantModelBusy: false,
@@ -1602,7 +1546,8 @@ export default {
       transcriptionListening: true,
       transcriptionState: "正在聆听"
     });
-    this.scheduleTranscriptionRestart(50);
+    if (this.data.isTranscriptionMode) this.resumeTranscription(reason);
+    else this.resumeConfigurationListening(reason);
   },
 
   onPageTap(event) {
@@ -1615,7 +1560,7 @@ export default {
       if (!this.data.transcriptionListening) {
         this.resumeTranscription("tap");
       } else {
-        void this.requestConversationReview("tap");
+        void this.startDeviceAgentOwner();
       }
     }
   },
@@ -1631,8 +1576,7 @@ export default {
       if (code === "arrowdown" || code === "arrowright") {
         this.requestConfigurationAssistant("gesture");
       } else if (code === "enter" || code === "globalhook") {
-        if (this.hasBlockedAgentMessages()) this.retryModeAction();
-        else void this.requestConversationReview("touchpad");
+        void this.startDeviceAgentOwner();
       } else {
         handled = false;
       }
@@ -1650,52 +1594,18 @@ export default {
   config() {
     return {
       relayBaseUrl: this.data.relayBaseUrl,
-      token: this.data.token
+      token: this.data.token,
+      phoneBridgeRef: phoneEyeTransportStatus({relayBaseUrl:this.data.relayBaseUrl,token:this.data.token}).ref,
+      targetDeviceId: this.data.targetDeviceId || ''
     };
   },
+  openPhoneBridgeSetup(){this._phonePairingCode='';this._phoneBridgeURL='';this.setData({phoneBridgeSetup:true,phoneBridgeStatus:'输入手机设置显示的地址和配对码'});},
+  onPhoneBridgeUrl(event){this._phoneBridgeURL=String(event.detail.value||'');},
+  onPhoneBridgeCode(event){this._phonePairingCode=String(event.detail.value||'');},
+  async pairPhoneBridge(){try{await pairPhoneEyeTransport(this.config(),this._phoneBridgeURL,this._phonePairingCode);this._phonePairingCode='';this.setData({phoneBridgeSetup:false,phoneBridgeStatus:'手机直连已配对'});}catch{this._phonePairingCode='';this.setData({phoneBridgeStatus:'配对未确认，请核对地址和新配对码'});}},
+  closePhoneBridgeSetup(){this._phonePairingCode='';this.setData({phoneBridgeSetup:false});},
+  disconnectPhoneBridge(){clearPhoneEyeTransport();this.setData({phoneBridgeSetup:false,phoneBridgeStatus:'使用中转连接'});},
 
-  async requestConversationReview(reason = "touchpad") {
-    if (!usesRemoteAgent(this.agentRuntimeMode)) {
-      this.setData({ agentStatus: "本机 AIUI Agent 就绪，请直接说话" });
-      return false;
-    }
-    const now = Date.now();
-    if (now - Number(this.lastReviewRequestAt || 0) < 800) return false;
-    this.lastReviewRequestAt = now;
-    if (!this.data.token) {
-      this.setData({
-        agentStatus: "尚未连接，无法提醒 Agent",
-        transcriptionSyncLabel: "等待智能体连接"
-      });
-      return false;
-    }
-    this.setData({
-      agentStatus: "正在提醒 Agent 审阅记录",
-      transcriptionSyncLabel: "发送审阅提醒"
-    });
-    try {
-      await requestRabiLinkConversationReview(this.config(), {
-        id: `review-${now}`,
-        requestedAt: now,
-        sessionId: this.data.transcriptionSessionId
-      });
-      this.setData({
-        connected: true,
-        agentStatus: "已提醒 Agent 审阅会话记录",
-        transcriptionSyncLabel: "记录已同步"
-      });
-      this.appendLog(`已通过${reason === "touchpad" ? "触摸板" : "页面"}提醒 Agent 审阅统一会话账本。`);
-      return true;
-    } catch (error) {
-      this.setData({
-        connected: false,
-        agentStatus: "审阅提醒发送失败",
-        transcriptionSyncLabel: "待重试"
-      });
-      this.appendLog(`审阅提醒发送失败：${error?.message || error}`);
-      return false;
-    }
-  },
 
   async connectTranscriptionRelay() {
     if (!this.data.token) {
@@ -1707,7 +1617,7 @@ export default {
     }
     try {
       const state = await getMobileState(this.config());
-      this.applyRelayBatteryState(state);
+      void this.refreshBatteryStatus();
       const workers = state.workers || [];
       const selectedWorker = state.selectedWorker || {};
       const selectedId = selectedWorker.id || selectedWorker.guid || this.data.targetDeviceId || "";
@@ -1720,14 +1630,12 @@ export default {
         workers,
         workerIndex,
         targetDeviceId: selectedId,
-        transcriptionSyncLabel: this.transcriptQueue.length ? "同步记录" : "记录已同步",
-        agentStatus: "持续记录中，单击请 Agent 审阅"
+        transcriptionSyncLabel: "连接已确认",
+        agentStatus: "连接已确认，单击接收设备消息"
       });
-      this.agentShouldPoll = true;
-      if (this.data.isTranscriptionMode) this.scheduleAgentPoll(0);
       if (selectedId) saveSettings({ targetDeviceId: selectedId });
       this.appendLog(`连接对话链路已连接，目标 PC：${selectedWorker.name || selectedId || "未绑定"}。`);
-      await this.flushTranscriptQueue();
+      this.reconcileDeviceAgentReceipts();
       return true;
     } catch (error) {
       const message = error?.message || String(error);
@@ -1738,7 +1646,7 @@ export default {
       this.setData({
         connected: false,
         statusText: "Relay 连接失败",
-        transcriptionSyncLabel: this.transcriptQueue.length ? "待重试" : "离线"
+        transcriptionSyncLabel: "离线"
       });
       this.appendLog(`转写链路连接失败：${message}`);
       return false;
@@ -2205,7 +2113,7 @@ export default {
 
   async refreshAll() {
     await this.refreshDeviceAgentProfile();
-    await this.refreshKnowledgeTools();
+    await this.refreshApiTools();
     await this.connectRelay();
     if (this.data.connected) {
       await this.refreshRoutes();
@@ -2216,7 +2124,7 @@ export default {
   async connectRelay() {
     await this.runAction("连接 Relay", async () => {
       const state = await getMobileState(this.config());
-      this.applyRelayBatteryState(state);
+      void this.refreshBatteryStatus();
       const workers = state.workers || [];
       const selectedWorker = state.selectedWorker || {};
       const selectedId = selectedWorker.id || selectedWorker.guid || this.data.targetDeviceId;
@@ -2238,7 +2146,7 @@ export default {
         action: "connect-relay",
         status: "connected"
       });
-      await this.flushTranscriptQueue();
+      this.reconcileDeviceAgentReceipts();
     });
   },
 
@@ -4240,11 +4148,8 @@ export default {
 
   retryModeAction() {
     if (this.data.isTranscriptionMode) {
-      this.retryFailedAgentMessages();
-      this.agentShouldPoll = true;
-      this.setData({ agentStatus: "重新连接队列", transcriptionSyncLabel: "连接中" });
       void this.connectTranscriptionRelay();
-      void this.flushTranscriptQueue();
+      this.reconcileDeviceAgentReceipts();
       return;
     }
     this.retryConfigurationIntent();
@@ -4292,7 +4197,7 @@ export default {
 
   resumeTranscription(reason = "ui") {
     if (!this.data.isTranscriptionMode) {
-      this.switchToTranscription("voice");
+      this.switchToTranscription(reason);
       return;
     }
     const source = typeof reason === "string" ? reason : "ui";
@@ -4316,13 +4221,14 @@ export default {
       agentStatus: `${this.data.lingzhuAgentName || "灵珠智能体"}就绪`
     });
     this.startTranscriptionClock();
-    this.scheduleTranscriptionRestart(0);
-    void this.flushTranscriptQueue();
+    this.startTranscription({ interactive: true });
+    this.reconcileDeviceAgentReceipts();
   },
 
   switchToTranscription(reason = "ui") {
     const source = typeof reason === "string" ? reason : "ui";
-    const waitsForInteractiveWakeup = this.asrHostPolicy?.requiresInteractiveWakeup === true;
+    const startsFromInteraction = ["gesture", "tap", "button", "wakeup"].includes(source);
+    const waitsForInteractiveWakeup = !startsFromInteraction;
     this.cancelSpeech();
     this.destroyConfigurationModel();
     this.stopRecognition(false);
@@ -4341,7 +4247,7 @@ export default {
       transcriptionStartedAt: startedAt,
       transcriptionElapsed: "00:00",
       transcriptionState: waitsForInteractiveWakeup ? "浏览器调试：点麦克风开始" : "准备聆听",
-      agentStatus: "持续记录中，单击请 Agent 审阅"
+      agentStatus: "准备聆听，单击接收设备消息"
     }, () => {
       this.appendLog(`已切到连接对话：${source}。`);
       if (waitsForInteractiveWakeup) {
@@ -4351,8 +4257,8 @@ export default {
         this.scheduleTranscriptionRestart(0);
       }
       void this.connectTranscriptionRelay();
-      this.drainAgentMessageQueue();
     });
+    if (startsFromInteraction) this.startTranscription({ interactive: true });
   },
 
   selectTranscriptionMode() {
@@ -4368,10 +4274,10 @@ export default {
   requestConfigurationAssistant(reason = "ui") {
     const source = typeof reason === "string" ? reason : "ui";
     if (this.data.isConfigurationMode) return;
-    const waitsForInteractiveWakeup = this.asrHostPolicy?.requiresInteractiveWakeup === true;
+    const startsFromInteraction = ["gesture", "tap", "button", "wakeup"].includes(source);
+    const waitsForInteractiveWakeup = !startsFromInteraction;
     this.clearTranscriptionRestart();
     this.stopTranscriptionClock();
-    this.suspendAgentPolling();
     this.cancelSpeech();
     this.stopRecognition(true);
     this.commitModeFrame({
@@ -4392,6 +4298,7 @@ export default {
       this.appendLog(`已切到配置助手：${source}。`);
       if (!waitsForInteractiveWakeup) this.scheduleTranscriptionRestart(0);
     });
+    if (startsFromInteraction) this.startTranscription({ interactive: true });
   },
 
   resumeConfigurationListening(reason = "ui") {
@@ -4415,179 +4322,9 @@ export default {
       assistantStatus: "准备聆听",
       assistantReplyText: "请直接描述配置需求。"
     });
-    this.scheduleTranscriptionRestart(0);
+    this.startTranscription({ interactive: true });
   },
 
-  suspendAgentPolling() {
-    this.agentPollGeneration = Number(this.agentPollGeneration || 0) + 1;
-    if (this.agentPollTimer) {
-      clearTimeout(this.agentPollTimer);
-      this.agentPollTimer = null;
-    }
-    if (this.data.agentPolling) this.setData({ agentPolling: false });
-  },
-
-  stopAgentPolling() {
-    this.agentShouldPoll = false;
-    this.suspendAgentPolling();
-  },
-
-  scheduleAgentPoll(delayMs = 80) {
-    if (!usesRemoteAgent(this.agentRuntimeMode)) return;
-    if (!this.agentShouldPoll || !this.data.token || this.data.token === "mobile-bound") return;
-    if (this.destroyed || !this.pageVisible || !this.data.isTranscriptionMode) return;
-    if (this.agentPollTimer) return;
-    const generation = Number(this.agentPollGeneration || 0);
-    this.agentPollTimer = setTimeout(() => {
-      this.agentPollTimer = null;
-      if (generation !== this.agentPollGeneration) return;
-      void this.pollAgentMessages(generation);
-    }, Math.max(0, Number(delayMs || 0)));
-  },
-
-  persistAgentMessages(messages = []) {
-    const next = Array.isArray(this.agentMessageQueue) ? [...this.agentMessageQueue] : [];
-    const knownIds = new Set(next.map((item) => String(item?.id || "")).filter(Boolean));
-    let added = 0;
-    for (const message of Array.isArray(messages) ? messages : []) {
-      const id = String(message?.deliveryId || message?.id || message?.taskMessageId || "").trim();
-      const text = String(message?.text || "").trim();
-      if (!id || !text || knownIds.has(id) || this.agentSeenMessageIds.has(id)) continue;
-      knownIds.add(id);
-      next.push({
-        id,
-        text,
-        createdAt: Number(message?.createdAt || Date.now()),
-        proactive: message?.proactive === true,
-        source: String(message?.source || "").trim(),
-        attempts: 0
-      });
-      added += 1;
-    }
-    this.agentMessageQueue = saveAgentMessageQueue(next, tokenStorageKey(this.data.token));
-    return added;
-  },
-
-  finishPersistedAgentMessage(messageId, error = null) {
-    const id = String(messageId || "").trim();
-    if (!id) return;
-    const queue = Array.isArray(this.agentMessageQueue) ? this.agentMessageQueue : [];
-    const index = queue.findIndex((item) => item?.id === id);
-    this.agentSpeechQueuedId = "";
-    if (index < 0) return 0;
-    if (error) {
-      const attempts = Math.min(AGENT_TTS_MAX_ATTEMPTS, Number(queue[index]?.attempts || 0) + 1);
-      const failed = { ...queue[index], attempts };
-      const next = [...queue.slice(0, index), ...queue.slice(index + 1), failed];
-      this.agentMessageQueue = saveAgentMessageQueue(next, tokenStorageKey(this.data.token));
-      return attempts;
-    }
-    this.agentMessageQueue = saveAgentMessageQueue(
-      queue.filter((item) => item?.id !== id),
-      tokenStorageKey(this.data.token)
-    );
-    this.agentSeenMessageIds.add(id);
-    return 0;
-  },
-
-  retryFailedAgentMessages() {
-    const queue = Array.isArray(this.agentMessageQueue) ? this.agentMessageQueue : [];
-    if (!queue.some((item) => Number(item?.attempts || 0) >= AGENT_TTS_MAX_ATTEMPTS)) return false;
-    this.agentMessageQueue = saveAgentMessageQueue(
-      queue.map((item) => ({ ...item, attempts: 0 })),
-      tokenStorageKey(this.data.token)
-    );
-    this.drainAgentMessageQueue();
-    return true;
-  },
-
-  hasBlockedAgentMessages() {
-    const queue = Array.isArray(this.agentMessageQueue) ? this.agentMessageQueue : [];
-    return queue.length > 0
-      && queue.every((item) => Number(item?.attempts || 0) >= AGENT_TTS_MAX_ATTEMPTS);
-  },
-
-  drainAgentMessageQueue() {
-    if (!usesRemoteAgent(this.agentRuntimeMode)) return;
-    if (this.destroyed || !this.pageVisible || !this.data.isTranscriptionMode) return;
-    if (this.speechActive || this.agentSpeechQueuedId) return;
-    const queue = Array.isArray(this.agentMessageQueue) ? this.agentMessageQueue : [];
-    const item = queue.find((candidate) => Number(candidate?.attempts || 0) < AGENT_TTS_MAX_ATTEMPTS);
-    if (!item?.id || !item?.text) {
-      if (this.hasBlockedAgentMessages()) this.setData({ agentStatus: "TTS 失败，单击重试" });
-      return;
-    }
-    this.setData({
-      agentReplyText: item.text,
-      agentStatus: item.proactive ? "主动消息" : "Agent 消息"
-    });
-    this.agentSpeechQueuedId = item.id;
-    const queued = this.enqueueSpeech(item.text, {
-      agentSpeech: true,
-      agentMessageId: item.id
-    });
-    if (!queued) {
-      this.agentSpeechQueuedId = "";
-      this.setData({ agentStatus: "消息已保存，等待 TTS" });
-    }
-  },
-
-  async pollAgentMessages(generation = this.agentPollGeneration) {
-    if (!usesRemoteAgent(this.agentRuntimeMode)) return;
-    if (!this.agentShouldPoll || generation !== this.agentPollGeneration || !this.data.token || this.data.token === "mobile-bound") return;
-    if (this.destroyed || !this.pageVisible || !this.data.isTranscriptionMode) return;
-    const isAgentActive = Boolean(this.data.assistantModelBusy || this.data.agentSpeaking || this.speechActive);
-    const activeName = this.data.lingzhuAgentName || "智能体";
-    this.setData({
-      agentPolling: true,
-      ...(!isAgentActive && {
-        agentStatus: this.data.transcriptionListening ? "正在聆听" : `${activeName}就绪`
-      })
-    });
-    try {
-      const batch = await getRabiLinkMessageStream(this.config(), this.data.agentCursor, 25000);
-      if (generation !== this.agentPollGeneration || !this.agentShouldPoll) return;
-      const nextCursor = String(batch.nextCursor || this.data.agentCursor || "").trim();
-      const messages = Array.isArray(batch.messages) ? batch.messages : [];
-      this.persistAgentMessages(messages);
-      this.setData({ agentCursor: nextCursor, connected: true });
-      saveSettings({ agentCursor: nextCursor, agentCursorTokenKey: tokenStorageKey(this.data.token) });
-      this.drainAgentMessageQueue();
-      if (this.agentSeenMessageIds.size > 500) this.agentSeenMessageIds.clear();
-      const stillActive = Boolean(this.data.assistantModelBusy || this.data.agentSpeaking || this.speechActive);
-      this.setData({
-        agentPolling: false,
-        ...(!stillActive && {
-          agentStatus: this.hasBlockedAgentMessages()
-            ? "TTS 失败，单击重试"
-            : (this.data.transcriptionListening ? "正在聆听" : `${activeName}就绪`)
-        }),
-        transcriptionSyncLabel: this.transcriptQueue.length ? "待同步" : "记录已同步"
-      });
-      this.scheduleAgentPoll(80);
-    } catch (error) {
-      if (generation !== this.agentPollGeneration || !this.agentShouldPoll) return;
-      if (isRabiLinkPollTimeout(error)) {
-        this.setData({
-          agentPolling: false,
-          agentStatus: this.data.transcriptionListening ? "持续记录中" : "下行队列在线",
-          transcriptionSyncLabel: this.transcriptQueue.length ? "待同步" : "记录已同步"
-        });
-        this.scheduleAgentPoll(AGENT_POLL_RETRY_DELAY_MS);
-        return;
-      }
-      const message = error?.message || String(error);
-      this.agentShouldPoll = false;
-      this.setData({
-        connected: false,
-        agentPolling: false,
-        agentStatus: "回复连接中断",
-        agentReplyText: message,
-        transcriptionSyncLabel: "待重试"
-      });
-      this.appendLog(`连接对话消息流中断：${message}`);
-    }
-  },
 
   startTranscriptionClock() {
     this.stopTranscriptionClock();
@@ -4625,36 +4362,21 @@ export default {
     }
   },
 
-  transcriptionRetryDelay() {
-    const failures = Math.max(1, Number(this.transcriptionFailureCount || 1));
-    const exponent = Math.min(4, failures - 1);
-    return Math.min(TRANSCRIPTION_MAX_RETRY_DELAY_MS, TRANSCRIPTION_ERROR_RETRY_MS * (2 ** exponent));
-  },
-
-  scheduleTranscriptionRestart(delayMs = TRANSCRIPTION_RESTART_DELAY_MS) {
+  scheduleTranscriptionRestart() {
     this.clearTranscriptionRestart();
-    if (!this.pageReady || !this.pageVisible || this.destroyed) return;
-    const wantsTranscription = this.data.isTranscriptionMode && this.data.transcriptionDesired;
-    const wantsConfiguration = this.data.isConfigurationMode
-      && this.data.assistantListeningDesired
-      && !this.data.busy
-      && !this.data.assistantModelBusy;
-    if ((!wantsTranscription && !wantsConfiguration) || this.recognition) return;
-    const speechRemaining = Math.max(0, (this.speechUntil || 0) - Date.now());
-    const actualDelay = speechRemaining > 0 ? Math.max(Number(delayMs || 0), speechRemaining + 150) : Math.max(0, Number(delayMs || 0));
-    this.transcriptionRestartTimer = setTimeout(() => {
-      this.transcriptionRestartTimer = null;
-      this.startTranscription();
-    }, actualDelay);
+    if (!this.pageReady || !this.pageVisible || this.destroyed || this.recognition) return;
+    if (this.data.isTranscriptionMode && this.data.transcriptionDesired) {
+      this.setData({ transcriptionDesired: false, transcriptionListening: false,
+        transcriptionState: "点击或唤醒以继续聆听" });
+    } else if (this.data.isConfigurationMode && this.data.assistantListeningDesired) {
+      this.setData({ assistantListeningDesired: false, assistantListening: false,
+        assistantStatus: "点击或唤醒以继续聆听" });
+    }
   },
 
-  startTranscription() {
-    if (!this.pageReady || !this.pageVisible || this.destroyed) return;
-    const speechRemaining = (this.speechUntil || 0) - Date.now();
-    if (speechRemaining > 0) {
-      this.scheduleTranscriptionRestart(speechRemaining + 150);
-      return;
-    }
+  startTranscription({ interactive = false } = {}) {
+    if (!interactive) { this.scheduleTranscriptionRestart(); return; }
+    if (!this.pageVisible || this.destroyed) return;
     const purpose = this.data.isConfigurationMode ? "configuration" : "transcription";
     const wantsRecognition = purpose === "configuration"
       ? this.data.assistantListeningDesired && !this.data.busy && !this.data.assistantModelBusy
@@ -4687,10 +4409,14 @@ export default {
       if (roundFinished) return;
       roundFinished = true;
       if (purpose === "configuration") console.log(`[RabiLink AIUI] configuration-asr:${outcome}`);
+      else console.log(`[RabiLink AIUI] transcription-asr:${outcome}`);
       const ownedRecognition = this.recognition === recognition;
       if (ownedRecognition) {
         this.recognition = null;
         this.recognitionPurpose = "";
+        if (outcome !== "end") {
+          try { this.asrAdapter.stop(recognition); } catch (_) {}
+        }
       }
       this.setData(purpose === "configuration"
         ? { assistantListening: false }
@@ -4701,48 +4427,19 @@ export default {
         : this.data.isTranscriptionMode && this.data.transcriptionDesired;
       if (!stillWanted || outcome === "fatal") return;
 
-      const elapsedMs = Date.now() - roundStartedAt;
-      const rapidEmptyRound = outcome === "end"
-        && !roundHadResult
-        && elapsedMs < TRANSCRIPTION_RAPID_END_THRESHOLD_MS;
-      const failedRound = outcome === "error" || outcome === "start-error" || rapidEmptyRound;
-      if (failedRound) {
-        this.transcriptionFailureCount = Number(this.transcriptionFailureCount || 0) + 1;
-        if (this.transcriptionFailureCount >= TRANSCRIPTION_MAX_CONSECUTIVE_FAILURES) {
-          this.setData(purpose === "configuration"
-            ? {
-                assistantListeningDesired: false,
-                assistantStatus: "ASR 暂不可用",
-                assistantReplyText: "请重新唤醒后继续说配置命令。"
-              }
-            : {
-                transcriptionDesired: false,
-                transcriptionState: "ASR 暂不可用，点击继续"
-              });
-          this.appendLog("ASR 连续快速失败，已暂停自动重试。");
-          return;
-        }
-        const retryDelay = this.transcriptionRetryDelay();
-        this.setData(purpose === "configuration"
-          ? { assistantStatus: `ASR 暂不可用，${Math.ceil(retryDelay / 1000)} 秒后重试` }
-          : { transcriptionState: `ASR 暂不可用，${Math.ceil(retryDelay / 1000)} 秒后重试` });
-        this.scheduleTranscriptionRestart(retryDelay);
-        return;
-      }
-
       this.transcriptionFailureCount = 0;
-      this.setData(purpose === "configuration"
-        ? { assistantStatus: "准备继续聆听" }
-        : { transcriptionState: "准备继续聆听" });
-      this.scheduleTranscriptionRestart(TRANSCRIPTION_RESTART_DELAY_MS);
+      this.scheduleTranscriptionRestart();
     };
     try {
       recognition = this.asrAdapter.createRound({
+        continuous: purpose === "transcription",
         interimResults: true,
         onInterim: (result) => {
+          if (this.recognition !== recognition || this.destroyed || !this.pageVisible) return;
           this.transcriptionFailureCount = 0;
           const text = String(result?.text || "").trim();
           if (!text) return;
+          if (purpose === "transcription" && !this.stopAiuiPlaybackForInput(text)) return;
           if (purpose === "configuration") {
             this.setData({
               assistantUserText: text,
@@ -4757,6 +4454,7 @@ export default {
           }
         },
         onFinal: (result) => {
+          if (this.recognition !== recognition || this.destroyed || !this.pageVisible) return;
           roundHadResult = true;
           this.transcriptionFailureCount = 0;
           if (purpose === "configuration") this.handleConfigurationSpeechResult(result.text);
@@ -4769,12 +4467,12 @@ export default {
             ? {
                 assistantListening: false,
                 assistantListeningDesired: fatal ? false : this.data.assistantListeningDesired,
-                assistantStatus: fatal ? "麦克风不可用" : "识别中断，准备重试"
+                assistantStatus: fatal ? "麦克风不可用" : "识别中断，等待点击"
               }
             : {
                 transcriptionListening: false,
                 transcriptionDesired: fatal ? false : this.data.transcriptionDesired,
-                transcriptionState: fatal ? "麦克风不可用" : "识别中断，准备重试"
+                transcriptionState: fatal ? "麦克风不可用" : "识别中断，等待点击"
               });
           this.appendLog(`${purpose === "configuration" ? "配置" : "转写"}识别失败：${errorCode}`);
           finishRound(fatal ? "fatal" : "error");
@@ -4797,7 +4495,7 @@ export default {
       : {
           transcriptionListening: true,
           transcriptionState: "正在聆听",
-          agentStatus: this.hasBlockedAgentMessages() ? "TTS 失败，单击重试" : "正在聆听"
+      agentStatus: "正在聆听"
         });
     try {
       this.asrAdapter.start(recognition);
@@ -4852,11 +4550,42 @@ export default {
     return true;
   },
 
+  queueAiuiVoiceInitialInput(text) {
+    const scope = this.currentAgentProfileScope();
+    this.synchronizeAgentProfileScope(scope);
+    const queue = this.aiuiVoiceInitialInputs || [];
+    if (queue.length >= 16 || text.length > 16000) {
+      this.setData({ agentStatus: "待确认语音输入已满，请稍后再说", transcriptionText: text });
+      return false;
+    }
+    this.aiuiVoiceInitialInputs = [...queue, { text, scope }];
+    this.setData({ agentStatus: "正在确认人格与设备连接，已保留语音输入", transcriptionText: text });
+    void this.initializeAiuiVoiceContext();
+    return true;
+  },
+
+  flushAiuiVoiceInitialInputs() {
+    if (this.destroyed || !this.pageVisible || !this.isAiuiVoiceContextReady()) return;
+    const scope = this.currentAgentProfileScope();
+    const inputs = this.aiuiVoiceInitialInputs || [];
+    this.aiuiVoiceInitialInputs = [];
+    for (const input of inputs) {
+      if (input.scope !== scope || this.destroyed || !this.pageVisible) continue;
+      this.handleTranscriptionResult(input.text);
+    }
+  },
+
   handleTranscriptionResult(text) {
     const value = String(text || "").trim();
-    if (!value) return;
+    if (!value || ((this.speechActive || this.data.agentSpeaking) && this.isAiuiPlaybackEcho?.(value))) return;
+    if (this.deviceAgentTurnActive) {
+      this.stopAiuiPlaybackForInput(value);
+      this.enqueueAiuiGuidance(value);
+      this.setData({ transcriptionText: value, transcriptionSyncLabel: "语音引导已接收" });
+      return;
+    }
+    if (!this.isAiuiVoiceContextReady()) { this.queueAiuiVoiceInitialInput(value); return; }
     if (this.browseKnowledgeResultFromSpeech(value)) return;
-    if (this.selectKnowledgeRoleFromSpeech(value)) return;
     if (/^(退出应用|退出|关闭应用|关掉应用)$/i.test(value)) {
       this.setData({ transcriptionText: value, agentStatus: "正在退出应用" });
       try {
@@ -4922,7 +4651,7 @@ export default {
     }
     if (parsed.command === VOICE_COMMANDS.RETRY_TRANSCRIPTS) {
       this.setData({ transcriptionText: value });
-      void this.flushTranscriptQueue();
+      this.reconcileDeviceAgentReceipts();
       return;
     }
     const policyResult = this.transcriptPolicy?.evaluate(value, Date.now())
@@ -4935,371 +4664,134 @@ export default {
       this.appendLog(`ASR 已过滤（${policyResult.reason}）：${value}`);
       return;
     }
-    if (this.data.agentSpeaking) {
-      this.interruptConversation("voice");
-    }
+    this.stopAiuiPlaybackForInput(value);
     const sequence = this.data.transcriptionSequence + 1;
     const finalUserText = policyResult.text || value;
-    const segment = {
-      id: transcriptSegmentId(sequence),
-      text: finalUserText,
-      sessionId: this.data.transcriptionSessionId,
-      sequence,
-      createdAt: Date.now(),
-      transcriptPolicy: this.transcriptPolicy?.version || ""
-    };
-    const destination = agentTurnDestination(this.agentRuntimeMode, this.data.token);
-    if (destination === "remote") {
-      this.transcriptQueue = saveTranscriptQueue(
-        [...this.transcriptQueue, segment],
-        tokenStorageKey(this.data.token)
-      );
-    }
     const activeAgentName = this.data.lingzhuAgentName || "灵珠智能体";
     this.setData({
       transcriptionText: finalUserText,
       transcriptionSequence: sequence,
-      transcriptionPendingCount: this.transcriptQueue.length,
+      transcriptionPendingCount: 0,
       transcriptionSyncLabel: "语音已识别",
       agentStatus: `${activeAgentName}思考中...`
     });
     this.appendLog(`ASR ${sequence}：${finalUserText}`);
-    if (destination === "local") {
-      void this.executeLingzhuAgentPrompt(finalUserText);
-    } else if (destination === "remote") {
-      void this.flushTranscriptQueue();
-    } else {
-      this.setData({ agentStatus: "兼容远端模式未连接", transcriptionSyncLabel: "未发送，也未切换本地推理" });
-    }
+    void this.executeLingzhuAgentPrompt(finalUserText);
   },
 
-  async simulateStreamOutput(fullText, currentAgentName, isPromptActive) {
-    if (!fullText || !isPromptActive()) return;
-    this.setData({
-      assistantModelBusy: true,
-      agentStatus: `${currentAgentName}回复中...`,
-      agentReplyText: "",
-      assistantReplyText: ""
-    });
-    let accumulated = "";
-    let pending = "";
-    const boundary = /[。！？!?；;\n]|\.(?=\s|$)/g;
-    const chars = Array.from(fullText);
-    for (let i = 0; i < chars.length; i += 2) {
-      if (!isPromptActive()) break;
-      const piece = chars.slice(i, i + 2).join("");
-      accumulated += piece;
-      pending += piece;
-      this.setData({
-        agentReplyText: accumulated,
-        assistantReplyText: accumulated,
-        agentStatus: `${currentAgentName}回复中...`
-      });
-      let match;
-      while ((match = boundary.exec(pending)) !== null) {
-        if (!isPromptActive()) break;
-        const end = match.index + match[0].length;
-        const sentence = pending.slice(0, end);
-        pending = pending.slice(end);
-        this.speakText(sentence, "enqueue");
-        boundary.lastIndex = 0;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 40));
+  async executeChatTool(event, runtime) {
+    if (event.functionName === "rabi_api_help" || event.functionName === "rabi_api_call") {
+      if (!runtime || runtime !== this.chatModelApiRuntime) throw new Error("API_NOT_CONNECTED");
+      return runtime.handleToolCall(event);
     }
-    if (isPromptActive() && pending && pending.trim()) {
-      this.speakText(pending.trim(), "enqueue");
-      pending = "";
-    }
-    if (isPromptActive()) {
-      this.setData({
-        assistantModelBusy: false,
-        agentStatus: `${currentAgentName}就绪`
-      });
-    }
+    if (event.functionName !== "close_app") throw new Error("TOOL_NOT_AVAILABLE");
+    this.setData({ agentStatus: "正在退出应用" });
+    if (typeof wx.exitMiniProgram === "function") wx.exitMiniProgram();
+    else if (typeof this.finish === "function") this.finish();
+    else throw new Error("宿主未提供退出接口");
+    return { local: true, terminal: true, requested: true };
   },
 
-  async executeLingzhuAgentPrompt(userText) {
+  async executeLingzhuAgentPrompt(userText, { guided = false, ticket = null, deviceContext = null } = {}) {
     if (this.destroyed || !this.pageVisible || !userText) return;
-    this.applyPendingDeviceAgentProfile();
-    this.applyPendingKnowledgeTools();
+    if (this.deviceAgentTurnActive) { this.enqueueAiuiGuidance(userText); return; }
+    if (!this.isAiuiVoiceContextReady()) {
+      const initialized = await this.initializeAiuiVoiceContext();
+      if (!initialized.ok || !this.isAiuiVoiceContextReady() || this.destroyed || !this.pageVisible)
+        return { state: "failed", text: "", errorCode: "VOICE_CONTEXT_UNCONFIRMED" };
+      if (this.deviceAgentTurnActive) { this.enqueueAiuiGuidance(userText); return; }
+    }
+    if (!guided) this.applyPendingDeviceAgentProfile();
+    this.applyPendingApiTools();
+    const nativeDeviceContext = deviceContext || this.deviceAgentTurnContext?.();
     this.deviceAgentTurnActive = true;
+    this.aiuiSpeechSuppressed = false;
     const promptGeneration = Number(this.promptGeneration || 0) + 1;
     this.promptGeneration = promptGeneration;
     this.promptCancelled = false;
     const currentAgentName = this.data.lingzhuAgentName || "灵珠智能体";
-
-    const isPromptActive = () => {
-      return this.promptGeneration === promptGeneration
-        && !this.destroyed
-        && this.pageVisible
-        && !this.promptCancelled;
-    };
-
+    const current = () => this.promptGeneration === promptGeneration && !this.destroyed
+      && this.pageVisible && !this.promptCancelled;
+    let runtime = null, pendingSpeech = "", historyReply = "", historyTicket = null;
     try {
-      this.setData({
-        assistantModelBusy: true,
-        agentStatus: `${currentAgentName}思考中...`
-      });
-
-      if (typeof navigator !== "undefined" && navigator.onLine === false) {
-        throw new Error("网络不可用，请检查网络连接");
-      }
-
+      historyTicket = ticket || this.beginAiuiConversation?.(userText) || null;
+      this.setData({ assistantModelBusy: true, agentStatus: `${currentAgentName}思考中...`,
+        agentReplyText: "", assistantReplyText: "" });
+      if (typeof navigator !== "undefined" && navigator.onLine === false) throw new Error("网络不可用，请检查网络连接");
       const model = await this.ensureChatModel();
-      if (!isPromptActive()) return;
-
-      if (!model) {
-        throw new Error("大模型会话未初始化");
-      }
-
-      let stream = null;
-      try {
-        if (typeof model.promptStreaming === "function") {
-          stream = await Promise.resolve(model.promptStreaming(userText));
-        }
-      } catch (streamErr) {
-        console.warn("[RabiLink AIUI] promptStreaming error, trying prompt():", streamErr);
-      }
-
-      let reader = null;
-      if (stream) {
-        if (typeof stream.read === "function") {
-          reader = stream;
-        } else if (typeof stream.getReader === "function") {
-          try {
-            reader = stream.getReader();
-          } catch (readerErr) {
-            console.warn("[RabiLink AIUI] stream.getReader failed:", readerErr);
+      if (!current()) return;
+      if (!model) throw new Error("大模型会话未初始化");
+      const tools = this.chatModelApiRuntime;
+      runtime = createAgentTurnRuntime({ model, tools: this.chatModelAgentTools || [], turnId: "turn-" + promptGeneration,
+        executeTool: event => current() ? this.executeChatTool(event, tools) : { cancelled: true },
+        takeGuidance: () => {
+          if (!current() || !this.aiuiGuidanceQueue?.length) return [];
+          const queued = this.aiuiGuidanceQueue.splice(0, 16);
+          for (const entry of queued) {
+            this.finishAiuiConversation?.(historyTicket, historyReply);
+            historyTicket = entry.ticket || this.beginAiuiConversation?.(entry.text) || null;
+            historyReply = "";
           }
-        }
-      }
-
-      if (reader && typeof reader.read === "function") {
-        this.activeStream = stream;
-        let accumulated = "";
-        let pending = "";
-        const boundary = /[。！？!?；;\n]|\.(?=\s|$)/g;
-        const deadline = Date.now() + 90000;
-        let emptyChunkCount = 0;
-        while (isPromptActive() && Date.now() < deadline) {
-          const chunkPromise = reader.read();
-          const chunk = await Promise.race([
-            chunkPromise,
-            new Promise((_, reject) => setTimeout(() => reject(new Error("大模型流式响应超时")), 30000))
-          ]).catch((err) => {
-            console.warn("[RabiLink AIUI] stream chunk read error:", err);
-            return { done: true };
-          });
-          if (!isPromptActive()) {
-            console.info("[RabiLink AIUI] prompt cancelled by barge-in");
-            break;
+          pendingSpeech = "";
+          this.aiuiSpeechSuppressed = false;
+          this.setData({ agentReplyText: "", assistantReplyText: "", agentStatus: "下一步已采用语音引导" });
+          return queued.map(entry => entry.text);
+        },
+        onText: ({ delta, text }) => {
+          if (!current()) return;
+          historyReply = text;
+          this.setData({ agentReplyText: text, assistantReplyText: text });
+          pendingSpeech += delta;
+          const boundary = /[。！？!?；;\n]|\.(?=\s|$)/g;
+          let match;
+          while ((match = boundary.exec(pendingSpeech)) !== null) {
+            const end = match.index + match[0].length;
+            this.speakText(pendingSpeech.slice(0, end), "enqueue");
+            pendingSpeech = pendingSpeech.slice(end); boundary.lastIndex = 0;
           }
-          if (!chunk || chunk.done) break;
-          const piece = typeof chunk.value === "string"
-            ? chunk.value
-            : (chunk.value?.text || (chunk.value ? String(chunk.value) : ""));
-          if (piece) {
-            emptyChunkCount = 0;
-            accumulated += piece;
-            pending += piece;
-            this.setData({
-              agentReplyText: accumulated,
-              assistantReplyText: accumulated,
-              agentStatus: `${currentAgentName}回复中...`
-            });
-            let match;
-            while ((match = boundary.exec(pending)) !== null) {
-              if (!isPromptActive()) break;
-              const end = match.index + match[0].length;
-              const sentence = pending.slice(0, end);
-              pending = pending.slice(end);
-              this.speakText(sentence, "enqueue");
-              boundary.lastIndex = 0;
-            }
-            await new Promise((resolve) => setTimeout(resolve, 20));
-          } else {
-            emptyChunkCount += 1;
-            if (emptyChunkCount >= 10) break;
-            await new Promise((resolve) => setTimeout(resolve, 40));
-          }
+        },
+        onState: ({ state }) => {
+          if (!current()) return;
+          const labels = { thinking: `${currentAgentName}思考中...`, responding: `${currentAgentName}回复中...`,
+            "executing-tool": "正在调用 Rabi 接口", uncertain: "工具请求未确认，请查看工具状态" };
+          if (labels[state]) this.setData({ agentStatus: labels[state] });
         }
-        if (isPromptActive() && pending && pending.trim()) {
-          this.speakText(pending.trim(), "enqueue");
-          pending = "";
-        }
-        if (this.activeStream === stream) this.activeStream = null;
-        if (isPromptActive()) {
-          if (!accumulated.trim()) {
-            if (typeof model.prompt === "function") {
-              const reply = await Promise.race([
-                model.prompt(userText),
-                new Promise((_, reject) => setTimeout(() => reject(new Error("大模型请求超时")), 30000))
-              ]);
-              if (!isPromptActive()) return;
-              const text = String(reply || "").trim();
-              if (text) {
-                await this.simulateStreamOutput(text, currentAgentName, isPromptActive);
-                return;
-              }
-            }
-            throw new Error("大模型未返回任何内容");
-          }
-          this.setData({
-            assistantModelBusy: false,
-            agentStatus: `${currentAgentName}就绪`
-          });
-        }
-      } else if (typeof model.prompt === "function") {
-        const reply = await Promise.race([
-          model.prompt(userText),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("大模型请求超时")), 30000))
-        ]);
-        if (!isPromptActive()) return;
-        const text = String(reply || "").trim();
-        if (!text) {
-          throw new Error("大模型未返回任何内容");
-        }
-        await this.simulateStreamOutput(text, currentAgentName, isPromptActive);
-      } else {
-        throw new Error("宿主模型未提供 prompt 或 promptStreaming 接口");
-      }
-    } catch (error) {
-      if (!isPromptActive()) return;
-      console.warn("[RabiLink AIUI] Lingzhu prompt failed:", error);
-      this.activeStream = null;
-      if (this.chatModel) {
-        try { this.chatModel.destroy(); } catch (_) {}
-        this.chatModel = null;
-      }
-      let errText = error?.message || String(error || "大模型调用异常");
-      if (/network|offline|fetch|Failed to fetch/i.test(errText)
-          || (typeof navigator !== "undefined" && navigator.onLine === false)) {
-        errText = "网络不可用，请检查网络连接";
-      }
-      this.setData({
-        assistantModelBusy: false,
-        agentStatus: "模型调用失败",
-        agentReplyText: errText,
-        assistantReplyText: errText
       });
-      this.speakText(errText, "enqueue");
-      this.setData({ deviceAgentProfileStatus: "模型应用失败，配置未确认生效" });
+      this.chatTurnRuntime = runtime;
+      const modelInput = nativeDeviceContext ? userText + "\n\n[设备 Agent 连接上下文]\n当前设备会话来源见下方。新正式 Agent 请求 POST /api/agent/threads 可显式选择任何经鉴权的目标 PC；已有回传参数的正式回复必须使用以下 targetDeviceId（原投递账本所在 PC），不要用人格来源 PC 或设备所在 PC 替代它。此目标只定位原请求账本，不改变普通接口的默认人格 PC、聊天记录来源或权限。\n" + JSON.stringify(nativeDeviceContext) : userText;
+      const result = await runtime.run(modelInput);
+      if (!current() || result.state === "cancelled") return;
+      if (pendingSpeech.trim()) this.speakText(pendingSpeech.trim(), "enqueue");
+      this.setData({ assistantModelBusy: false,
+        agentStatus: result.state === "uncertain" ? "工具请求未确认，请查看工具状态"
+          : result.text.trim() ? (this.ttsAdapter?.canSynthesize?.()
+            ? `${currentAgentName}就绪` : "已回复，TTS 不可用：宿主未提供可停止播放器") : "工具结果已返回" });
+      return result;
+    } catch (error) {
+      if (!current()) return;
+      console.warn("[RabiLink AIUI] host turn failed:", error?.code || error?.message);
+      this.cleanupChatModel();
+      const messages = { AIUI_HISTORY_STORAGE_FAILED: "聊天记录保存失败，请检查设备存储", TURN_TIMEOUT: "模型响应超时，当前请求已停止", TURN_EMPTY_RESPONSE: "模型未返回文本或工具请求",
+        TURN_DECISION_INVALID: "模型动作格式无效，未执行该动作", TURN_TOOL_NOT_AVAILABLE: "模型请求了未连接的工具", TURN_STEP_LIMIT: "本轮步骤已达上限，请查看当前结果",
+        TURN_TOOL_LIMIT: "本轮接口调用已达上限", TURN_OBSERVATION_LIMIT: "接口结果过大，请使用目标接口的分页或查询方式",
+        TURN_STREAM_INVALID: "宿主流式接口不可用", TURN_MODEL_UNAVAILABLE: "宿主未提供模型请求接口" };
+      let message = messages[error?.code] || "模型请求失败，请重试";
+      if (typeof navigator !== "undefined" && navigator.onLine === false) message = "网络不可用，请检查网络连接";
+      this.setData({ assistantModelBusy: false, agentStatus: "模型调用失败", agentReplyText: message, assistantReplyText: message });
+      this.speakText(message, "enqueue");
+      return { state: "failed", text: historyReply, errorCode: error?.code || "DEVICE_AGENT_MODEL_FAILED" };
     } finally {
+      this.finishAiuiConversation?.(historyTicket, historyReply);
       if (this.promptGeneration === promptGeneration) {
+        if (this.chatTurnRuntime === runtime) this.chatTurnRuntime = null;
         this.deviceAgentTurnActive = false;
-        this.applyPendingDeviceAgentProfile();
+        this.resumeDeviceAgentClaim?.();
+        if (this.aiuiGuidanceQueue?.length) this.drainAiuiGuidance();
+        else this.applyPendingDeviceAgentProfile();
       }
     }
   },
 
-  clearTranscriptFlushRetry() {
-    if (!this.transcriptFlushRetryTimer) return;
-    clearTimeout(this.transcriptFlushRetryTimer);
-    this.transcriptFlushRetryTimer = null;
-  },
-
-  scheduleTranscriptFlushRetry(delayMs = TRANSCRIPT_FLUSH_RETRY_MS) {
-    this.clearTranscriptFlushRetry();
-    if (this.destroyed || !this.pageVisible || !this.data.token || !this.transcriptQueue.length) return;
-    this.transcriptFlushRetryTimer = setTimeout(() => {
-      this.transcriptFlushRetryTimer = null;
-      if (this.destroyed || !this.pageVisible) return;
-      console.info("[RabiLink AIUI] transcript-sync:retry", {
-        pending: this.transcriptQueue.length
-      });
-      void this.flushTranscriptQueue();
-    }, Math.max(0, Number(delayMs) || 0));
-  },
-
-  async flushTranscriptQueue() {
-    if (!usesRemoteAgent(this.agentRuntimeMode)) return;
-    if (this.flushingTranscripts || !this.transcriptQueue.length) {
-      if (!this.transcriptQueue.length) {
-        this.clearTranscriptFlushRetry();
-        this.setData({
-          transcriptionPendingCount: 0,
-          transcriptionSyncLabel: this.data.token ? "记录已同步" : "等待智能体连接"
-        });
-      }
-      return;
-    }
-    const config = this.config();
-    const relayBaseUrl = String(config?.relayBaseUrl || "").trim();
-    if (!relayBaseUrl) return;
-    if (!this.data.token) {
-      this.setData({
-        transcriptionPendingCount: this.transcriptQueue.length,
-        transcriptionSyncLabel: "等待智能体连接"
-      });
-      return;
-    }
-    this.flushingTranscripts = true;
-    try {
-      while (this.transcriptQueue.length && !this.destroyed) {
-        const segment = this.transcriptQueue[0];
-        console.info("[RabiLink AIUI] transcript-sync:start", {
-          id: segment.id,
-          sequence: segment.sequence,
-          pending: this.transcriptQueue.length
-        });
-        this.setData({
-          transcriptionPendingCount: this.transcriptQueue.length,
-          transcriptionSyncLabel: "保存会话记录"
-        });
-        await Promise.race([
-          publishRabiLinkVoiceInput(config, segment),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("同步超时")), 5000))
-        ]);
-        this.agentShouldPoll = true;
-        if (this.data.isTranscriptionMode) this.scheduleAgentPoll(0);
-        if (this.transcriptQueue[0]?.id === segment.id) {
-          this.transcriptQueue = saveTranscriptQueue(
-            this.transcriptQueue.slice(1),
-            tokenStorageKey(this.data.token)
-          );
-        }
-        console.info("[RabiLink AIUI] transcript-sync:stored", {
-          id: segment.id,
-          sequence: segment.sequence,
-          pending: this.transcriptQueue.length
-        });
-        this.setData({
-          connected: true,
-          transcriptionSyncedCount: this.data.transcriptionSyncedCount + 1,
-          transcriptionPendingCount: this.transcriptQueue.length,
-          transcriptionSyncLabel: this.transcriptQueue.length ? "继续同步" : "记录已同步"
-        });
-        await new Promise((resolve) => setTimeout(resolve, 30));
-      }
-    } catch (error) {
-      const message = String(error?.message || error || "连接失败");
-      if (this.handleRelayAuthenticationFailure(error)) {
-        console.warn("[RabiLink AIUI] transcript-sync:failed", {
-          kind: "auth",
-          pending: this.transcriptQueue.length,
-          message
-        });
-        this.appendLog(`会话记录鉴权失败：${message}`);
-        return;
-      }
-      const pcOffline = /selected rabi pc is offline|rabi pc.*offline|pc.*离线/i.test(message);
-      this.setData({
-        connected: false,
-        transcriptionPendingCount: this.transcriptQueue.length,
-        transcriptionSyncLabel: pcOffline ? "PC 离线 · 已保存" : "网络中断 · 已保存",
-        agentStatus: pcOffline ? "PC 离线 · 等待重连" : "Relay 连接中断 · 自动重试"
-      });
-      console.warn("[RabiLink AIUI] transcript-sync:failed", {
-        kind: pcOffline ? "pc-offline" : "network",
-        pending: this.transcriptQueue.length,
-        message
-      });
-      this.appendLog(`会话记录同步失败：${message}`);
-      this.scheduleTranscriptFlushRetry();
-    } finally {
-      this.flushingTranscripts = false;
-    }
-  },
 
   stopRecognition(graceful = false) {
     const recognition = this.recognition;
@@ -5316,17 +4808,18 @@ export default {
   },
 
   cleanupChatModel() {
+    this.chatTurnRuntime?.cancel();
+    this.chatTurnRuntime = null;
     this.chatModelGeneration = Number(this.chatModelGeneration || 0) + 1;
     const model = this.chatModel;
     this.chatModel = null;
     this.chatModelPromise = null;
     this.chatModelDeviceProfile = null;
-    this.chatModelKnowledgeRuntime = null;
-    this.chatModelReadonlyToolsCount = 0;
-    this.chatModelKnowledgeScope = "";
-    this.chatModelKnowledgeRole = "";
-    this.chatModelKnowledgeCatalog = null;
-    this.cleanupKnowledgeRuntime();
+    this.chatModelApiRuntime = null;
+    this.chatModelAgentTools = [];
+    this.chatModelApiToolsCount = 0;
+    this.chatModelApiScope = "";
+    this.cleanupRabiApiRuntime?.();
     try { model?.destroy?.(); } catch (_) {}
   },
 
@@ -5411,11 +4904,12 @@ export default {
           systemPrompt: currentSystemPrompt
         });
 
-        const knowledge = await this.prepareKnowledgeTools();
+        // One generic Manager transport; no role-filtered second execution path.
+        const knowledge = await this.prepareRabiApiTools();
         if (generation !== Number(this.chatModelGeneration || 0) || this.destroyed) { knowledge.runtime?.dispose(); return null; }
-        options.tools = [...options.tools, ...knowledge.tools];
+        const loop = agentLoopModelOptions(options, knowledge.tools);
         const session = await Promise.race([
-          Promise.resolve(ModelCtor.create(options)).then(session => {
+          Promise.resolve(ModelCtor.create(loop.options)).then(session => {
             if (generation !== Number(this.chatModelGeneration || 0) || this.destroyed) {
               try { session?.destroy?.(); } catch (_) {}
               return null;
@@ -5428,33 +4922,12 @@ export default {
           try { session?.destroy?.(); } catch (_) {}
           return null;
         }
-        if (session && typeof session.addEventListener === "function") {
-          session.addEventListener("toolcall", (event) => {
-            if (!event || event.isComplete === false) return;
-            if (generation !== Number(this.chatModelGeneration || 0) || this.destroyed) return;
-            if (event.functionName !== "close_app") { this.handleKnowledgeToolCall(event, knowledge.runtime); return; }
-            if (event.functionName === "close_app") {
-              console.info("[RabiLink AIUI] chat toolcall: close_app");
-              this.setData({ agentStatus: "正在退出应用" });
-              try {
-                if (typeof wx !== "undefined" && typeof wx.exitMiniProgram === "function") {
-                  wx.exitMiniProgram();
-                } else if (typeof this.finish === "function") {
-                  this.finish();
-                }
-              } catch (err) {
-                console.warn("[RabiLink AIUI] close_app failed:", err);
-              }
-            }
-          });
-        }
         this.chatModel = session;
+        this.chatModelAgentTools = loop.tools;
         this.chatModelDeviceProfile = appliedProfile;
-        this.chatModelKnowledgeRuntime = knowledge.runtime;
-        this.chatModelReadonlyToolsCount = knowledge.tools.length;
-        this.chatModelKnowledgeScope = knowledge.scope || "";
-        this.chatModelKnowledgeRole = knowledge.role || "";
-        this.chatModelKnowledgeCatalog = knowledge.catalog || null;
+        this.chatModelApiRuntime = knowledge.runtime;
+        this.chatModelApiToolsCount = knowledge.tools.length;
+        this.chatModelApiScope = knowledge.scope || "";
         void this.acknowledgeDeviceAgentProfile(appliedProfile);
         return session;
       } catch (err) {
@@ -5735,7 +5208,7 @@ export default {
     if (parsed.command === VOICE_COMMANDS.SWITCH_TO_TRANSCRIPTION) return this.switchToTranscription("voice");
     if (parsed.command === VOICE_COMMANDS.PAUSE_TRANSCRIPTION) return this.pauseTranscription();
     if (parsed.command === VOICE_COMMANDS.RESUME_TRANSCRIPTION) return this.resumeTranscription();
-    if (parsed.command === VOICE_COMMANDS.RETRY_TRANSCRIPTS) return this.flushTranscriptQueue();
+    if (parsed.command === VOICE_COMMANDS.RETRY_TRANSCRIPTS) return this.reconcileDeviceAgentReceipts();
     if (parsed.command === VOICE_COMMANDS.CONNECT_RELAY) return this.connectRelay();
     if (parsed.command === VOICE_COMMANDS.BIND_WORKER) return this.bindSelectedWorker();
     if (parsed.command === VOICE_COMMANDS.READ_ROUTES) return this.refreshRoutes();
@@ -5870,9 +5343,8 @@ export default {
   speakText(text, mode = "enqueue", options = {}) {
     const trimmed = String(text || "").trim();
     if (!trimmed) return false;
-
-    this.clearTranscriptionRestart();
-    this.stopRecognition(false);
+    if (this.aiuiSpeechSuppressed && this.deviceAgentTurnActive && !options.agentMessageId) return false;
+    if (!this.recognition) this.scheduleTranscriptionRestart(0);
 
     const activeName = this.data.lingzhuAgentName || "智能体";
 
@@ -5887,15 +5359,18 @@ export default {
     if (canSynthesize) {
       if (mode === "immediate") {
         this.cancelSpeech();
-      } else if (this.currentSpeechAudioPlayer) {
+      } else if (this.currentSpeechAudioPlayer || this.currentSpeechTask) {
         this.speechQueue = this.speechQueue || [];
         this.speechQueue.push({ text: trimmed, mode, options });
         return true;
       }
 
+      const speechGeneration = Number(this.speechGeneration || 0);
+      this.aiuiPlaybackText = trimmed;
+      this.transcriptPolicy?.rememberPlayback(trimmed, Date.now());
       let finished = false;
       const finishPlayback = (error = null) => {
-        if (finished) return;
+        if (finished || Number(this.speechGeneration || 0) !== speechGeneration) return;
         finished = true;
         if (this.speakingTimer) {
           clearTimeout(this.speakingTimer);
@@ -5915,15 +5390,11 @@ export default {
         if (error) this.appendLog(`TTS 播放失败：${error?.message || error}`);
         else this.transcriptPolicy?.rememberPlayback(trimmed, Date.now());
 
-        const failedAttempts = options.agentMessageId
-          ? this.finishPersistedAgentMessage(options.agentMessageId, error || null)
-          : 0;
-
         this.setData({
           agentSpeaking: false,
           agentSpeakingCue: "",
           agentStatus: error
-            ? (failedAttempts >= AGENT_TTS_MAX_ATTEMPTS ? "TTS 失败，单击重试" : "TTS 失败，正在重试")
+            ? "TTS 播放失败"
             : "可以继续说话",
           transcriptionState: this.data.transcriptionDesired ? "准备继续聆听" : "已暂停",
           assistantStatus: this.data.assistantListeningDesired ? "准备继续聆听" : this.data.assistantStatus
@@ -5937,14 +5408,7 @@ export default {
         if ((wantsTranscription || wantsConfiguration) && this.pageVisible && !this.destroyed) {
           this.scheduleTranscriptionRestart(TRANSCRIPTION_RESTART_DELAY_MS);
         }
-        if (!error) {
-          this.drainAgentMessageQueue();
-        } else {
-          setTimeout(
-            () => this.drainAgentMessageQueue(),
-            failedAttempts >= AGENT_TTS_MAX_ATTEMPTS ? 0 : AGENT_TTS_RETRY_DELAY_MS * Math.max(1, failedAttempts)
-          );
-        }
+
       };
 
       try {
@@ -5953,6 +5417,7 @@ export default {
           voice: options.voice || "female-tianmei",
           volume: typeof options.volume === "number" ? options.volume : 1,
           onCue: (cue) => {
+            if (Number(this.speechGeneration || 0) !== speechGeneration) return;
             const word = String(cue?.text || "").trim();
             if (word) {
               this.setData({
@@ -5964,6 +5429,7 @@ export default {
         });
 
         if (synthPromise && typeof synthPromise.then === "function") {
+          this.currentSpeechTask = synthPromise;
           this.speechActive = true;
           this.setData({
             agentSpeaking: true,
@@ -5971,8 +5437,9 @@ export default {
           });
 
           synthPromise.then(({ task, player }) => {
-            if (this.destroyed || !this.pageVisible || !this.speechActive) {
+            if (this.destroyed || !this.pageVisible || !this.speechActive || Number(this.speechGeneration || 0) !== speechGeneration) {
               try { task.abort?.(); } catch (_) {}
+              try { player.destroy?.(); } catch (_) {}
               return;
             }
             this.currentSpeechTask = task;
@@ -5988,6 +5455,7 @@ export default {
 
             if (task.finished && typeof task.finished.then === "function") {
               task.finished.then((info) => {
+                if (finished || this.destroyed || !this.pageVisible || Number(this.speechGeneration || 0) !== speechGeneration) return;
                 const durationMs = (info?.duration ? Number(info.duration) * 1000 : 0) || this.speechDelay(trimmed);
                 this.playerSafetyTimer = setTimeout(() => finishPlayback(null), durationMs + 800);
               }).catch((err) => {
@@ -5998,9 +5466,10 @@ export default {
             player.play();
             console.info("[RabiLink AIUI] SpeechAudioPlayer playing with synchronized subtitles:", trimmed);
           }).catch((err) => {
+            if (Number(this.speechGeneration || 0) !== speechGeneration) return;
             this.currentSpeechTask = null;
             this.currentSpeechAudioPlayer = null;
-            this.speakFallback(trimmed, mode, options, finishPlayback);
+            finishPlayback(err);
           });
 
           this.transcriptPolicy?.rememberPlayback(trimmed, Date.now());
@@ -6010,108 +5479,12 @@ export default {
           this.speechUntil = Math.max(this.speechUntil || 0, Date.now()) + duration;
           return true;
         }
-      } catch (_) {}
+      } catch (error) { finishPlayback(error); return false; }
     }
 
-    return this.speakFallback(trimmed, mode, options);
-  },
-
-  speakFallback(trimmed, mode = "enqueue", options = {}, onFinish = null) {
-    let played = false;
-    let finished = false;
-    const finish = onFinish || ((error = null) => {
-      if (finished) return;
-      finished = true;
-      if (this.speakingTimer) {
-        clearTimeout(this.speakingTimer);
-        this.speakingTimer = null;
-      }
-      this.speechUntil = 0;
-      this.speechActive = false;
-      if (error) this.appendLog(`TTS 失败：${error?.message || error}`);
-      else this.transcriptPolicy?.rememberPlayback(trimmed, Date.now());
-
-      const failedAttempts = options.agentMessageId
-        ? this.finishPersistedAgentMessage(options.agentMessageId, error || null)
-        : 0;
-
-      this.setData({
-        agentSpeaking: false,
-        agentSpeakingCue: "",
-        agentStatus: error
-          ? (failedAttempts >= AGENT_TTS_MAX_ATTEMPTS ? "TTS 失败，单击重试" : "TTS 失败，正在重试")
-          : "可以继续说话",
-        transcriptionState: this.data.transcriptionDesired ? "准备继续聆听" : "已暂停",
-        assistantStatus: this.data.assistantListeningDesired ? "准备继续聆听" : this.data.assistantStatus
-      });
-
-      if (this.speechQueue && this.speechQueue.length) {
-        this.startNextSpeech();
-        return;
-      }
-
-      const wantsTranscription = this.data.isTranscriptionMode && this.data.transcriptionDesired;
-      const wantsConfiguration = this.data.isConfigurationMode && this.data.assistantListeningDesired;
-      if ((wantsTranscription || wantsConfiguration) && this.pageVisible && !this.destroyed) {
-        this.scheduleTranscriptionRestart(TRANSCRIPTION_RESTART_DELAY_MS);
-      }
-
-      if (!error) {
-        this.drainAgentMessageQueue();
-      } else {
-        setTimeout(
-          () => this.drainAgentMessageQueue(),
-          failedAttempts >= AGENT_TTS_MAX_ATTEMPTS ? 0 : AGENT_TTS_RETRY_DELAY_MS * Math.max(1, failedAttempts)
-        );
-      }
-    });
-
-    if (this.ttsAdapter && typeof this.ttsAdapter.speak === "function") {
-      try {
-        const playback = this.ttsAdapter.speak(trimmed, {
-          messageId: options.agentMessageId,
-          mode,
-          voice: options.voice || "female-tianmei",
-          onEnd: () => finish(null),
-          onError: (err) => finish(err || new Error("tts-error"))
-        });
-        if (playback) {
-          this.currentUtterance = playback.utterance;
-          this.currentTtsAttempt = playback.attempt;
-        }
-        played = true;
-      } catch (err) {
-        console.warn("[RabiLink AIUI] ttsAdapter.speak error:", err);
-        finish(err);
-      }
-    }
-
-    if (!played && typeof wx !== "undefined" && wx.speech && typeof wx.speech.playTTS === "function") {
-      try {
-        wx.speech.playTTS(trimmed);
-        played = true;
-        console.info("[RabiLink AIUI] wx.speech.playTTS called:", trimmed);
-      } catch (err) {
-        console.warn("[RabiLink AIUI] wx.speech.playTTS error:", err);
-      }
-    }
-
-    this.transcriptPolicy?.rememberPlayback(trimmed, Date.now());
-    const duration = typeof this.speechPlaybackWatchdogMs === "function"
-      ? this.speechPlaybackWatchdogMs(trimmed)
-      : this.speechDelay(trimmed);
-    this.speechUntil = Math.max(this.speechUntil || 0, Date.now()) + duration;
-    this.speechActive = true;
-
-    const activeName = this.data.lingzhuAgentName || "智能体";
-    this.setData({
-      agentSpeaking: true,
-      transcriptionState: `${activeName}正在播报`
-    });
-
-    if (this.speakingTimer) clearTimeout(this.speakingTimer);
-    this.speakingTimer = setTimeout(() => finish(null), duration);
-    return played;
+    this.setData({ agentStatus: "TTS 不可用：宿主未提供可停止播放器", agentSpeaking: false });
+    this.appendLog("TTS 不可用：需要 speechSynthesis.synthesize 和 SpeechAudioPlayer。");
+    return false;
   },
 
   enqueueSpeech(text, options = {}) {
@@ -6136,7 +5509,6 @@ export default {
     this.speechQueue = [];
     this.speechUntil = 0;
     this.speechActive = false;
-    this.agentSpeechQueuedId = "";
     this.currentUtterance = null;
     this.currentTtsAttempt = null;
     if (this.speakingTimer) {
@@ -6163,9 +5535,6 @@ export default {
         if (typeof this.currentSpeechTask.abort === "function") this.currentSpeechTask.abort();
       } catch (_) {}
       this.currentSpeechTask = null;
-    }
-    if (this.ttsAdapter && typeof this.ttsAdapter.cancel === "function") {
-      try { this.ttsAdapter.cancel(); } catch (_) {}
     }
     if (this.data.agentSpeaking || this.data.agentSpeakingCue) {
       this.setData({ agentSpeaking: false, agentSpeakingCue: "" });
@@ -6510,7 +5879,8 @@ export default {
               <text class="hudStatusPillText">{{hudDisplayStatus}}</text>
             </view>
           </view>
-          <view class="hudTopRight">
+        <view class="hudTopRight">
+          <text catchtap="openPhoneBridgeSetup">{{phoneBridgeStatus}}</text>
             <text class="hudClockText">{{currentTime}}</text>
             <view class="hudBatteryGroup">
               <text class="hudBatteryIcon">{{batteryCharging ? '⚡' : '🔋'}}</text>
@@ -6531,17 +5901,26 @@ export default {
             </view>
           </view>
           <view class="hudFooterRow">
-            <text class="hudBargeInText">{{agentSpeaking ? '⚡ 单击打断' : '⚡ 单击打断 / 审阅 · 双击退出'}}</text>
+            <text class="hudBargeInText">{{agentSpeaking ? '⚡ 单击打断' : '⚡ 单击打断 / 接收 · 双击退出'}}</text>
             <text class="releaseVersion">v{{releaseVersion}}</text>
           </view>
-          <text class="agentProfileStatus" catchtap="refreshAgentAndKnowledgeTools">{{hudDisplayKnowledge}}</text>
+          <text class="agentProfileStatus" catchtap="refreshAgentAndApiTools">{{hudDisplayKnowledge}}</text>
         </view>
+      </view>
+      <view class="phoneBridgeSetup {{phoneBridgeSetup ? '' : 'statusHidden'}}">
+        <text>{{phoneBridgeStatus}}</text>
+        <input placeholder="手机连接地址" bindinput="onPhoneBridgeUrl" />
+        <input placeholder="配对码" password="true" bindinput="onPhoneBridgeCode" />
+        <text catchtap="pairPhoneBridge">配对</text>
+        <text catchtap="disconnectPhoneBridge">使用中转</text>
+        <text catchtap="closePhoneBridgeSetup">关闭</text>
       </view>
     </view>
   </view>
 </page>
 
 <style>
+.phoneBridgeSetup { position:absolute; left:16px; top:48px; width:416px; padding:16px; background-color:#000000; color:#40ff5e; display:flex; flex-direction:column; gap:12px; z-index:30; }
 .pageScroll {
   width: var(--app-width, 480px);
   height: var(--rabilink-surface-height, 352px);

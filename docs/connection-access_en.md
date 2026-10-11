@@ -6,6 +6,12 @@ Status: implemented in 0.3.25. Authenticate a connection once, then use its prov
 
 Local operations use the Manager address published by the current Host. LAN WebGUI uses its existing connection key, remote Agents use their enrolled node credential and registered Agent identity, and devices in the same RabiLink application reuse application authentication. Requests continue carrying the existing credential without another pairing or feature grant. Revoked connections, disabled Agents and stopped services still take effect.
 
+## Full functionality by default; only explicit configuration disables it
+
+After connection authentication succeeds, RabiLink and remote Agents can use every public RabiPC API by default. No second per-API or per-feature grant is required; absent permission settings do not mean denial. Only capabilities explicitly disabled by the user in WebGUI or configuration files are restricted, and only within the declared scope. An existing remote-Agent enrollment switch controls admission, not a second default-off feature layer after admission.
+
+Plan, persona, workspace, Route, Skill and API catalogs do not grant or revoke API permissions. Pull/merge, publication checks and risk reviews must not invent disabled settings, require extra credentials, remove connection leases or disable pairing. Request-format and revision checks prevent incorrect or duplicate execution; they are not another user-authorization layer.
+
 ## Removed duplicate restrictions
 
 | Entry | Current behavior |
@@ -30,7 +36,7 @@ Files remain inside their owning directories. Path traversal, symlink escapes an
 
 Installers, Host lifecycle and operations that only make sense locally still execute on the local PC. Remote business access does not disguise requests as local traffic. Camera capture, event subscriptions, Route enablement and user-configured approval workflows are feature choices and are not automatically enabled or deleted by this change.
 
-QQ original-message, history and attachment reads retain the direct-local management boundary from 0.3.23 and reject LAN Agent, Relay and P2P proxies. Authenticated remote connections can access model-directory settings but cannot use that connection to read raw QQ media.
+QQ original-message, history and attachment reads reuse current connection authentication. Enabled, authenticated LAN Agent, Relay and P2P sources can call these APIs without a separate persona, workspace or Route grant. Proxy identity must be proven by the current connection; bare headers cannot impersonate an authenticated source, and in-flight responses must stop when the connection is revoked.
 
 The `/api/internal/` persona projection endpoints bind Manager child processes to their current Route and persona identity. Ordinary Agents use the public persona APIs without projection credentials. Instance ID resets and Host lifecycle belong to the current installed Host; requests from another PC cannot become local Host commands.
 

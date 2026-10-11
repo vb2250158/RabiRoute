@@ -14,9 +14,13 @@ import type { ManagerOperationalEvent, ManagerOperationalLog } from "./operation
 import { ManagerPluginRequestTracker } from "./managerPluginRequestTracker.js";
 import type { ManagerPluginRouteHandler } from "./managerPluginRouteRegistry.js";
 import { hasLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
+import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
+import { hasAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
+import type { RabiLinkAgentPrincipal } from "./rabiLinkAgentDevices.js";
 
 export type AgentThreadControlRoutesContext = {
   getTrustedRemoteSource?: (request: http.IncomingMessage) => AgentThreadRemoteSource | undefined;
+  getTrustedDeviceSource?: (request: http.IncomingMessage) => RabiLinkAgentPrincipal | undefined;
   readJsonBody: <T>(request: http.IncomingMessage) => Promise<T>;
   jsonResponse: (response: http.ServerResponse, statusCode: number, body: unknown) => void;
   agentRequests: AgentRequestStore;
@@ -28,7 +32,8 @@ export type AgentThreadControlRoutesContext = {
   ) => AgentThreadRequestOptions;
   handleAgentThreadRequest: (
     request: AgentThreadRequest,
-    options: AgentThreadRequestOptions
+    options: AgentThreadRequestOptions,
+    trustedDeviceSource?: RabiLinkAgentPrincipal
   ) => Promise<AgentThreadRequestResult>;
   agentThreadRequestFailureData: (
     error: unknown,
@@ -65,13 +70,16 @@ async function handleAgentThreadBody(
   body: AgentThreadRequest,
   response: http.ServerResponse,
   context: AgentThreadControlRoutesContext,
-  remoteSource?: AgentThreadRemoteSource
+  remoteSource?: AgentThreadRemoteSource,
+  requestAuthority?: () => void,
+  trustedDeviceSource?: RabiLinkAgentPrincipal
 ): Promise<void> {
   const managedBody = context.applyManagedAgentThreadDefaults(body);
   try {
     const result = await context.handleAgentThreadRequest(
       managedBody,
-      { ...context.agentThreadRequestOptions(managedBody, {
+      context.agentThreadRequestOptions(managedBody, {
+        remoteSource, requestAuthority,
         agentRequests: context.agentRequests,
         onMessageProcessingHandoff: (event) => {
           const item = context.messageProcessingBoard.submitOutcome(event.requirementId, {
@@ -88,7 +96,8 @@ async function handleAgentThreadBody(
             status: item.status
           });
         }
-      }), remoteSource }
+      }),
+      trustedDeviceSource
     );
 
     const communication = result.data.communication && typeof result.data.communication === "object"
@@ -174,10 +183,16 @@ function handleAgentThreads(
   trackHandledOperation(requestBody
     .then((body) => {
       const remoteSource = context.getTrustedRemoteSource?.(request);
-      if (hasLanAgentBodyGuard(request) && !remoteSource) {
+      const devicePrincipal = context.getTrustedDeviceSource?.(request);
+      const deviceSource = devicePrincipal?.deviceOwner ? devicePrincipal : undefined;
+      const sourceEvent = body.action === "send" || (body.action === "create" && Boolean(body.prompt));
+      if (sourceEvent && hasLanAgentBodyGuard(request) && !remoteSource && !deviceSource?.deviceOwner) {
         throw new Error("Remote Agent trusted source session is unavailable.");
       }
-      return handleAgentThreadBody(body, response, context, remoteSource);
+      return handleAgentThreadBody(body, response, context, remoteSource, () => {
+        assertTrustedLanAgentPrincipal(request);
+        hasAuthenticatedConnectionRequest(request);
+      }, deviceSource);
     })
     .catch((error) => {
       context.jsonResponse(response, 400, {

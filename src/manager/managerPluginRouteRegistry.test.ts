@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import test from "node:test";
+import { runPluginActivation } from "../plugin-kernel/pluginActivationContext.js";
+import type { PluginIdentity } from "../plugin-kernel/types.js";
 import {
   ManagerPluginRouteRegistry,
   type ManagerPluginRouteDeclaration,
@@ -75,6 +77,63 @@ test("Manager plugin route registry disposer removes only its registration batch
 
   assert.equal(registry.handle(request, url, response), true);
   assert.deepEqual(calls, ["second"]);
+});
+
+test("Manager plugin route registry preserves owner, video and peer batches from one activation", () => {
+  const published = new Set(["live"]);
+  const registry = new ManagerPluginRouteRegistry(() => published);
+  const identity: PluginIdentity = {
+    applicationGenerationId: "generation", managerInstanceId: "manager", activationId: "live",
+    instanceId: "manager:rabilink-relay", pluginId: "io.rabiroute.manager.rabilink-relay",
+    version: "1.0.0", revision: "fixture", host: "manager"
+  };
+  const calls: string[] = [];
+  const registrations = ["owners", "video", "peer"].map(name => runPluginActivation(identity, () =>
+    registry.register(identity.instanceId, [exact(name, "/api/" + name, () => { calls.push(name); return true; })])
+  ));
+  for (const name of ["owners", "video", "peer"]) {
+    assert.equal(registry.handle(request, new URL("http://127.0.0.1/api/" + name), response), true);
+  }
+  assert.deepEqual(calls, ["owners", "video", "peer"]);
+  assert.equal(registry.snapshot()[0]?.routeCount, 3);
+  registrations[1]!();
+  assert.equal(registry.handle(request, new URL("http://127.0.0.1/api/video"), response), false);
+  assert.equal(registry.handle(request, new URL("http://127.0.0.1/api/owners"), response), true);
+  assert.equal(registry.handle(request, new URL("http://127.0.0.1/api/peer"), response), true);
+  assert.equal(registry.snapshot()[0]?.routeCount, 2);
+});
+
+test("Manager plugin route registry publishes complete new activation and isolates old or unpublished batches", () => {
+  const published = new Set(["old"]);
+  const registry = new ManagerPluginRouteRegistry(() => published);
+  const base: PluginIdentity = {
+    applicationGenerationId: "generation", managerInstanceId: "manager", activationId: "old",
+    instanceId: "manager:test", pluginId: "io.rabiroute.test", version: "1.0.0",
+    revision: "fixture", host: "manager"
+  };
+  const calls: string[] = [];
+  const add = (activationId: string, route: string) => runPluginActivation({ ...base, activationId }, () =>
+    registry.register(base.instanceId, [exact(route, "/api/" + route, () => { calls.push(activationId); return true; })])
+  );
+  const disposeOld = add("old", "shared");
+  add("old", "old-only");
+  add("new", "shared");
+  add("new", "new-only");
+  const invoke = (route: string) => registry.handle(request, new URL("http://127.0.0.1/api/" + route), response);
+  assert.equal(invoke("shared"), true);
+  assert.equal(invoke("new-only"), false);
+  assert.deepEqual(calls, ["old"]);
+  published.add("new");
+  assert.equal(invoke("shared"), true);
+  assert.equal(invoke("new-only"), true);
+  assert.equal(invoke("old-only"), false);
+  assert.deepEqual(calls, ["old", "new", "new"]);
+  disposeOld();
+  assert.equal(registry.snapshot()[0]?.routeCount, 2);
+  published.delete("old");
+  published.delete("new");
+  assert.equal(invoke("shared"), false);
+  assert.deepEqual(registry.snapshot(), []);
 });
 
 test("Manager plugin route registry rejects empty owners and route ids", () => {

@@ -20,6 +20,7 @@ export type InstanceAgent = {
 
 export type AgentInstance = {
   instanceId: string;
+  name?: string;
   local: boolean;
   address?: string;
   connected: boolean;

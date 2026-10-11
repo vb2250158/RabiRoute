@@ -1,3 +1,5 @@
+import { createDeviceAgentAdapter } from "./deviceAgentAdapter.js";
+import { configuredInstanceBinding } from "./instanceClient.js";
 import { notifyCodex } from "../codexRuntime.js";
 import { notifyCopilotCli } from "../copilotCli.js";
 import { notifyMarvis } from "../marvis.js";
@@ -14,6 +16,7 @@ import { notifyAstrbot } from "./astrbotAdapter.js";
 import type { AgentAdapter, AgentAdapterDefinition } from "./contracts.js";
 
 const factories = Object.freeze({
+  deviceAgent: (): AgentAdapter => createDeviceAgentAdapter(configuredInstanceBinding("deviceAgent")),
   codex: (): AgentAdapter => ({
     type: "codex",
     deliver: async (envelope, options) => {

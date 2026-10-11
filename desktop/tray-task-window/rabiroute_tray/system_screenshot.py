@@ -848,6 +848,16 @@ def capture_desktop(project_root: Path, screens: list[Any] | None = None) -> Pat
     return save_screenshot_image(project_root, capture_desktop_image(screens), "capture")
 
 
+class ScreenshotColorCopyFormat(Enum):
+    HTML = "HTML"
+    RGB = "RGB"
+
+    def format_color(self, color: QColor) -> str:
+        if self is ScreenshotColorCopyFormat.RGB:
+            return f"rgb({color.red()}, {color.green()}, {color.blue()})"
+        return color.name().upper()
+
+
 class ScreenshotColorPreviewWindow(QFrame):
     """Mouse-transparent color magnifier rendered independently from the capture overlay."""
 
@@ -857,7 +867,9 @@ class ScreenshotColorPreviewWindow(QFrame):
         self._color_name = ""
         self.magnifier = QLabel(self)
         self.swatch = QLabel(self)
-        self.hex_label = QLabel(self)
+        self.value_label = QLabel(self)
+        self.copy_hint = QLabel("C 取色", self)
+        self.format_hint = QLabel("Shift 切换 RGB / HTML", self)
         self._configure_window()
         self._configure_layout()
 
@@ -872,7 +884,7 @@ class ScreenshotColorPreviewWindow(QFrame):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.setFixedSize(126, 150)
+        self.setFixedSize(224, 156)
         colors = _screenshot_theme_colors()
         self.setStyleSheet(
             f"background: {colors['toolbar']}; color: white; border: 1px solid {colors['selection']}; border-radius: 6px;"
@@ -880,26 +892,37 @@ class ScreenshotColorPreviewWindow(QFrame):
 
     def _configure_layout(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(5, 5, 7, 5)
-        layout.setSpacing(6)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(3)
         self.magnifier.setFixedSize(110, 110)
         self.magnifier.setStyleSheet("border: 0;")
-        self.swatch.setFixedSize(34, 24)
-        self.hex_label.setStyleSheet("border: 0; font-family: Consolas, 'Courier New', monospace; font-weight: 600;")
+        self.swatch.setFixedSize(18, 18)
+        self.value_label.setStyleSheet("border: 0; font-family: Consolas, 'Courier New', monospace; font-weight: 600;")
+        for hint in (self.copy_hint, self.format_hint):
+            hint.setStyleSheet("border: 0; font-size: 12px;")
         details = QHBoxLayout()
         details.setContentsMargins(0, 0, 0, 0)
-        details.setSpacing(6)
+        details.setSpacing(5)
         details.addWidget(self.swatch)
-        details.addWidget(self.hex_label)
+        details.addWidget(self.value_label)
         details.addStretch(1)
+        shortcuts = QHBoxLayout()
+        shortcuts.setContentsMargins(0, 0, 0, 0)
+        shortcuts.setSpacing(8)
+        shortcuts.addWidget(self.copy_hint)
+        shortcuts.addWidget(self.format_hint)
+        shortcuts.addStretch(1)
         layout.addWidget(self.magnifier, 0, Qt.AlignmentFlag.AlignHCenter)
         layout.addLayout(details)
+        layout.addLayout(shortcuts)
 
-    def present(self, position: QPoint, magnifier: QImage, color: QColor) -> None:
+    def present(self, position: QPoint, magnifier: QImage, color: QColor, copy_format: ScreenshotColorCopyFormat) -> None:
         self.move(position)
         if not self.isVisible():
             self.show()
-            self.raise_()
+        # The capture overlay can be raised after this independent tip is shown.
+        # Keep it above candidate highlights without taking focus or mouse input.
+        self.raise_()
         self._magnifier_pixmap.convertFromImage(magnifier)
         self.magnifier.setPixmap(self._magnifier_pixmap)
         color_name = color.name().upper()
@@ -908,7 +931,7 @@ class ScreenshotColorPreviewWindow(QFrame):
             self.swatch.setStyleSheet(
                 f"background: {color_name}; border: 1px solid rgba(255, 255, 255, 180); border-radius: 3px;"
             )
-            self.hex_label.setText(color_name)
+        self.value_label.setText(copy_format.format_color(color))
 
 
 class ScreenshotCaptureOverlay(QWidget):
@@ -963,13 +986,14 @@ class ScreenshotCaptureOverlay(QWidget):
         self._candidate_click_pending = False
         self._pointer_position: QPoint | None = None
         self._color_preview: QColor | None = None
+        self._color_copy_format = ScreenshotColorCopyFormat.HTML
         self._toolbar = QFrame(self)
         self._text_properties_bar = QFrame(self)
         self._history_label = QLabel(self)
         self._color_tip = ScreenshotColorPreviewWindow()
         self._color_magnifier = self._color_tip.magnifier
         self._color_swatch = self._color_tip.swatch
-        self._color_hex_label = self._color_tip.hex_label
+        self._color_value_label = self._color_tip.value_label
         self._selection_tool_button = QPushButton("调整", self._toolbar)
         self._rectangle_tool_button = QPushButton("框", self._toolbar)
         self._arrow_tool_button = QPushButton("箭头", self._toolbar)
@@ -2012,7 +2036,9 @@ class ScreenshotCaptureOverlay(QWidget):
             self._global_rect(QRect(self._color_tip_position(self._pointer_position), QSize(1, 1))).topLeft(),
             magnifier,
             self._color_preview,
+            self._color_copy_format,
         )
+
     def _color_tip_position(self, cursor: QPoint) -> QPoint:
         margin = 14
         size = self._color_tip.size()
@@ -2087,7 +2113,7 @@ class ScreenshotCaptureOverlay(QWidget):
         if color is None:
             return False
         self._color_preview = color
-        self.color_copy_requested.emit(color.name().upper())
+        self.color_copy_requested.emit(self._color_copy_format.format_color(color))
         self._update_color_tip()
         return True
 
@@ -2481,6 +2507,22 @@ class ScreenshotCaptureOverlay(QWidget):
         if event.key() == Qt.Key.Key_Z and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             self._undo_annotation()
             return
+        if (
+            event.key() == Qt.Key.Key_Shift
+            and event.modifiers() in (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.ShiftModifier)
+            and self._color_preview is not None
+            and self._selection.isEmpty()
+            and self._drag_start is None
+        ):
+            if not event.isAutoRepeat():
+                self._color_copy_format = (
+                    ScreenshotColorCopyFormat.RGB
+                    if self._color_copy_format is ScreenshotColorCopyFormat.HTML
+                    else ScreenshotColorCopyFormat.HTML
+                )
+                self._update_color_tip()
+            event.accept()
+            return
         if event.key() == Qt.Key.Key_C and event.modifiers() == Qt.KeyboardModifier.NoModifier:
             self.copy_current_color()
             return
@@ -2522,7 +2564,6 @@ class PinnedImageWindow(QWidget):
         self._zoom = 1.0
         self._drag_offset: QPoint | None = None
         self._remove_when_closed = True
-        self._toolbar = QFrame(self)
         self._image_label = QLabel(self)
         self._configure_window()
         self._configure_layout()
@@ -2553,17 +2594,6 @@ class PinnedImageWindow(QWidget):
         self.setStyleSheet(f"background: {colors['surface']}; border: 1px solid {colors['border']}; border-radius: 8px;")
 
     def _configure_layout(self) -> None:
-        colors = _screenshot_theme_colors()
-        self._toolbar.setStyleSheet(f"background: {colors['toolbar']}; border: 0; border-radius: 7px;")
-        toolbar_layout = QHBoxLayout(self._toolbar)
-        toolbar_layout.setContentsMargins(5, 5, 5, 5)
-        toolbar_layout.setSpacing(2)
-        for label, callback in (("复制", self._copy), ("保存", self._save), ("关闭", self.close)):
-            button = QPushButton(label, self._toolbar)
-            button.setStyleSheet("QPushButton { color: white; border: 0; padding: 4px 8px; } QPushButton:hover { background: #334155; border-radius: 5px; }")
-            button.clicked.connect(callback)
-            toolbar_layout.addWidget(button)
-        self._toolbar.hide()
         self._image_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self._image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -2574,8 +2604,6 @@ class PinnedImageWindow(QWidget):
         self.resize(pixmap.size())
         self._image_label.setPixmap(pixmap)
         self._image_label.setGeometry(self.rect())
-        self._toolbar.adjustSize()
-        self._toolbar.move(max(6, self.width() - self._toolbar.width() - 6), 6)
 
     def _copy(self) -> None:
         QApplication.clipboard().setImage(self._source)
@@ -2590,16 +2618,6 @@ class PinnedImageWindow(QWidget):
     def _set_opacity(self, value: float) -> None:
         self.setWindowOpacity(max(0.1, min(1.0, value)))
         self.state_changed.emit()
-
-    def enterEvent(self, event) -> None:
-        self._toolbar.show()
-        self._toolbar.raise_()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event) -> None:
-        if not self._toolbar.underMouse():
-            self._toolbar.hide()
-        super().leaveEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -2987,6 +3005,7 @@ class SystemScreenshotController(QObject):
         overlay.raise_()
         overlay.activateWindow()
         overlay.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
+        overlay._update_color_preview()
         overlay_handle = int(overlay.winId())
         self._window_candidates_task = start_qt_task(
             lambda: screenshot_window_candidates((overlay_handle,)),

@@ -1,6 +1,28 @@
 import type { IncomingMessage } from "node:http";
-import { isLanAgentCredentialToken, type LanAgentAuthority } from "./lanAgentAuthority.js";
+import { isLanAgentCredentialToken, type LanAgentAuthority, type LanAgentAuthorizationLease } from "./lanAgentAuthority.js";
 import { validateAgentApiRequestTarget } from "./agentApiPolicy.js";
+
+type AdmissionPolicy = Readonly<{ enabled: boolean; incarnation: string }>;
+type RequestPrincipal = { authority: LanAgentAuthority; token: string; lease: LanAgentAuthorizationLease;
+  admission: AdmissionPolicy; readAdmission: () => AdmissionPolicy };
+// Only successful credential-first ingress can issue a request principal.
+const principals = new WeakMap<IncomingMessage, RequestPrincipal>();
+const admittedRequests = new WeakSet<IncomingMessage>();
+
+export function hasTrustedLanAgentPrincipal(request: IncomingMessage): boolean { return principals.has(request); }
+export function assertTrustedLanAgentPrincipal(request: IncomingMessage): LanAgentAuthorizationLease | undefined {
+  const principal = principals.get(request);
+  if (!principal) {
+    if (admittedRequests.has(request) || request.headers?.["x-rabiroute-agent-id"] !== undefined) throw new Error("Remote Agent request principal is unavailable.");
+    return undefined;
+  }
+  const policy = principal.readAdmission();
+  if (!policy.enabled || policy.incarnation !== principal.admission.incarnation) {
+    throw new Error("Remote Agent admission was disabled or replaced.");
+  }
+  principal.authority.assertAuthorizationLease(principal.token, principal.lease);
+  return principal.lease;
+}
 
 export type LanAgentRequestAccess =
   | { kind: "unrelated" }
@@ -14,7 +36,29 @@ export function isLanNodeMetadataRequest(request: IncomingMessage, authority: La
 }
 
 /** Run before local/admin exemptions and independently authorized legacy routes. */
-export function evaluateLanAgentRequest(request: IncomingMessage, authority: LanAgentAuthority, enabled: boolean): LanAgentRequestAccess {
+export function evaluateLanAgentRequest(request: IncomingMessage, authority: LanAgentAuthority, enabled: boolean,
+  readAdmission: () => AdmissionPolicy = () => ({ enabled, incarnation: "static-test-policy" })): LanAgentRequestAccess {
+  const captured = principals.get(request);
+  if (!captured && admittedRequests.has(request)) {
+    return { kind: "denied", status: 403, error: "LAN_AGENT_DISABLED_OR_REVOKED" };
+  }
+  if (captured) {
+    try { assertTrustedLanAgentPrincipal(request); }
+    catch {
+      principals.delete(request);
+      return { kind: "denied", status: 403, error: "LAN_AGENT_DISABLED_OR_REVOKED" };
+    }
+    // Nested route evaluation must never replace the original request's admission fence.
+    const currentBearer = typeof request.headers.authorization === "string"
+      ? request.headers.authorization.match(/^Bearer\s+(.+)$/i)?.[1] ?? "" : "";
+    if (currentBearer !== captured.token || request.headers["x-rabiroute-agent-id"] !== captured.lease.agentId) {
+      principals.delete(request);
+      return { kind: "denied", status: 401, error: "LAN_AGENT_CREDENTIAL_REQUIRED" };
+    }
+    readAdmission = captured.readAdmission;
+  }
+  const admission = captured?.admission ?? readAdmission();
+  enabled = enabled && admission.enabled;
   const bearer = typeof request.headers.authorization === "string" ? request.headers.authorization.match(/^Bearer\s+(.+)$/i)?.[1] ?? "" : "";
   const agentHeader = request.headers["x-rabiroute-agent-id"];
   const legacyHeader = request.headers["x-rabiroute-webgui-token"];
@@ -33,17 +77,14 @@ export function evaluateLanAgentRequest(request: IncomingMessage, authority: Lan
     || legacyHeader !== undefined || url.searchParams.has("webgui_token") || url.searchParams.has("token")) {
     return { kind: "denied", status: 401, error: "LAN_AGENT_CREDENTIAL_REQUIRED" };
   }
-  const identity = authority.authorize(bearer, agentHeader);
+  const identity = captured?.lease ?? authority.acquireAuthorizationLease(bearer, agentHeader);
   if (!identity) return { kind: "denied", status: 403, error: "LAN_AGENT_DISABLED_OR_REVOKED" };
   if (!validateAgentApiRequestTarget(request.method ?? "GET", target).allowed) {
     return { kind: "denied", status: 403, error: "LAN_AGENT_INVALID_REQUEST_TARGET" };
   }
-  // Generic hooks have no authenticated remote owner mapping. Keep the own-Agent
-  // context path rather than allowing callers to claim another session's identity.
-  if (url.pathname.startsWith("/api/codex-hook/")) {
-    return { kind: "denied", status: 403, error: "LAN_AGENT_SOURCE_NOT_SUPPORTED" };
-  }
-  // One authenticated connection uses the provided APIs; the catalog is discovery,
-  // not a second permission grant. Handlers still validate their request contracts.
+  // An enabled authenticated Agent uses the shared public route policy.
+  // The catalog describes contracts, not a second remote-only permission grant.
+  admittedRequests.add(request);
+  principals.set(request, captured ?? { authority, token: bearer, lease: identity, admission, readAdmission });
   return { kind: "agent", nodeId: identity.nodeId, agentId: agentHeader };
 }

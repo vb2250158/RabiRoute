@@ -110,6 +110,38 @@ function tempRolesRoot(t: test.TestContext): { rolesRoot: string; roleDir: strin
   return { rolesRoot, roleDir };
 }
 
+test("revoked queued mutation is never dispatched and following mutations continue", async t => {
+  const { rolesRoot } = tempRolesRoot(t);
+  const sent: ManagerStorageMutationRequest[] = [];
+  const child = new FakeChild(12345, request => sent.push(request), (_signal, fixture) => fixture.close());
+  const pool = new ManagerStorageMutationPool({ rolesRoot, applicationGenerationId: "authority-generation",
+    managerInstanceId: "authority-manager", childFactory: () => child });
+  t.after(() => pool.stop());
+  const task = { type: "plan_create", input: {} } as const;
+  const first = pool.execute("YeYu", "first", task, operation("authority-first"));
+  let revoked = false;
+  let checks = 0;
+  const denied = pool.execute("YeYu", "denied", task, { ...operation("authority-denied"),
+    authorize: () => { checks++; if (revoked) throw new Error("private authority diagnostic"); } });
+  const deniedAssertion = assert.rejects(denied, (error: unknown) => {
+    assert.ok(error instanceof ManagerStorageMutationError);
+    assert.equal(error.code, "authorization_revoked");
+    assert.doesNotMatch(error.message, /private authority diagnostic/);
+    return true;
+  });
+  const third = pool.execute("YeYu", "third", task, operation("authority-third"));
+  assert.equal(sent.length, 1);
+  revoked = true;
+  child.respond(sent[0], { id: "first" });
+  await first;
+  await deniedAssertion;
+  assert.equal(checks, 2);
+  assert.deepEqual(sent.map(request => request.requestId), ["authority-first", "authority-third"]);
+  assert.equal("authorize" in sent[1], false);
+  child.respond(sent[1], { id: "third" });
+  await third;
+});
+
 for (const mode of ["real-close", "unconfirmed"] as const) {
   test(`explicit storage pool stop settles without unrelated live handles: ${mode}`, { timeout: 20_000 }, async t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "storage-stop-exit-"));

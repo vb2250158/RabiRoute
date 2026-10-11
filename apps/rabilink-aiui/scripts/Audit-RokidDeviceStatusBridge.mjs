@@ -20,6 +20,8 @@ const mainActivity = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/l
 const sdk = read("packages/android-sdk/rabiroute-sdk/src/main/java/com/rabiroute/sdk/RabiRouteSdk.kt");
 const aiui = read("apps/rabilink-aiui/pages/home/index.ink");
 const relay = read("scripts/rabilink-relay-server.mjs");
+const pcOwner = read("src/manager/rabiLinkMobileOwner.ts");
+const api = read("apps/rabilink-aiui/utils/rabilink-api.js");
 
 const statusOnlyStart = controller.indexOf("boolean connectStatusOnly(String token)");
 const statusOnlyEnd = controller.indexOf("\n    public boolean connectGlassAppSession", statusOnlyStart);
@@ -35,12 +37,13 @@ assert.match(relaySettings, /putBoolean\(KEY_STATUS_SYNC_ENABLED, true\)/, "A su
 // Current publisher is owned by the existing conversation service, not MainActivity startup.
 
 assert.match(sdk, /fun publishMobileDeviceStatus\(/, "The Android SDK must expose the authenticated status publisher.");
-assert.match(sdk, /\/api\/rabilink\/mobile\/device-status/, "The Android SDK must target the Relay device-status endpoint.");
-assert.match(relay, /function writeMobileDeviceStatus\(/, "Relay must persist phone status by app.");
-assert.match(relay, /deviceStatus: readMobileDeviceStatus\(app\)/, "Relay mobile state must include deviceStatus.");
-assert.match(aiui, /applyRelayBatteryState\(state\)/, "AIUI must consume Relay status after connecting.");
+assert.match(sdk, /requestMobileManager\(relayBaseUrl,token,mobileBusinessOwner\(relayBaseUrl,token\),"\/api\/rabilink\/mobile\/device-status"/, "The Android SDK must publish status through the connection owner's generic Manager transport.");
+assert.doesNotMatch(relay, /function writeMobileDeviceStatus\(/, "Relay must not own phone status business state.");
+assert.match(pcOwner, /deviceStatus/, "PC must own authenticated status storage.");
+assert.match(api, /getMobileDeviceStatus[\s\S]*?connectionOwnerDeviceId[\s\S]*?requestManagerJson/, "AIUI status must use the authenticated connection owner PC.");
+assert.match(aiui, /getMobileDeviceStatus\(this\.config\(\), 4000\)/, "AIUI must read PC-owned status over generic transport.");
 assert.match(aiui, /normalizeRelayBatterySnapshot/, "AIUI must reject stale Relay battery snapshots.");
 assert.match(aiui, /batterySource: source/, "AIUI must retain the real battery source.");
 
 assert.ok(fs.existsSync(path.join(androidRoot, "app", "src", "main", "java", "com", "rabi", "link", "RabiLinkRelaySettings.kt")));
-console.log("Rokid device-status bridge audit passed: conversation-owned publisher, consent/credential gates, authenticated Relay, stale-safe AIUI.");
+console.log("Rokid device-status bridge audit passed: conversation-owned publisher, consent/credential gates, PC-owned status and stale-safe AIUI.");

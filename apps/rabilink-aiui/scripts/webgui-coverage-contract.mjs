@@ -11,16 +11,19 @@ add('/gateways/:param/weixin-login', METHODS, 'unsupported', 'PC', 'pc-only');
 add('/gateways/:param/agent-delivery-test', METHODS, 'unsupported', 'PC', 'pc-only');
 for (const endpoint of [
 '/api/agent/threads','/api/role-panel/messages','/api/roles/:param/plans/:param/feedback','/api/message/napcat-ensure-ready','/api/speech/asr','/api/speech/tts',
-'/api/agent-adapters/hooks/update','/api/lan-agent/enrollments','/api/lan-agent/instances','/api/lan-agent/instances/:param/agents','/api/lan-agent/instances/:param/agents/:param/authorization','/api/lan-agent/nodes','/api/lan-agent/nodes/:param/update','/api/message/napcat-login-action','/api/message/napcat-login-panel','/api/scan/agents/dsh',
+'/api/agent-adapters/hooks/update','/api/lan-agent/enrollments','/api/lan-agent/instances','/api/lan-agent/instances/:param/name','/api/lan-agent/instances/:param/agents','/api/lan-agent/instances/:param/agents/:param/authorization','/api/lan-agent/nodes','/api/lan-agent/nodes/:param/update','/api/message/napcat-login-action','/api/message/napcat-login-panel','/api/scan/agents/dsh',
 '/api/agent/xiaomi-home/auth','/api/agent/xiaomi-home/auth/refresh','/api/agent/xiaomi-home/deployment:dynamic','/api/agent/xiaomi-home/resources','/api/agent/xiaomi-home/settings','/api/desktop-pet/roles/:param','/api/desktop-pet/roles/:param/packs','/api/desktop-pet/roles/:param/packs/import','/api/desktop/settings','/api/message-processing/board','/api/performance/batches','/api/performance/config','/api/performance/logs','/api/plugins/catalog','/api/plugins/modules:dynamic','/api/resource-cache/settings','/api/video:dynamic','/api/webgui-access',
 '/api/roles/:param/all-day-recording','/api/roles/:param/all-day-recording/settings','/api/roles/:param/chat-history','/api/roles/:param/persona-document']) add(endpoint, METHODS, 'unsupported', 'PC', 'pc-only');
 add('/api/roles/:param/plan-marker-statuses', METHODS, 'dedicated', 'PC', 'device-knowledge', 'plan_statuses');
 add('/api/rabilink/peer/:dynamic', METHODS, 'dynamic-prefix', 'PC', 'peer-authorization', 'Prefix is not a complete endpoint or generic permission');
 for (const endpoint of ['/api/roles/:param/skills','/api/roles/:param/skills/:param']) add(endpoint, ['GET'], 'pc-helper', 'PC', 'role-skill-browser', 'ribiwebgui/tests/roleSkillClient.test.ts');
 for (const [endpoint, methods, mode, evidence] of [
-['/api/rabilink/device/agent-profile',['GET'],'device-profile','scripts/rabilink-agent-profile-http.test.mjs'],
-['/api/rabilink/device/agent-profile/applied',['POST'],'device-profile','scripts/rabilink-agent-profile-http.test.mjs'],
-['/api/rabilink/device/knowledge',['POST'],'device-knowledge','scripts/rabilink-knowledge-e2e.test.ts'],
-['/manage/api/apps/:param/devices/:param/agent-profile',['GET','PUT'],'owner-profile','scripts/rabilink-agent-profile-http.test.mjs'],
+['/api/rabilink/device/api',['POST'],'device-public-api','scripts/rabilink-device-api.test.mjs'],
 ]) add(endpoint, methods, 'dedicated', 'Relay', mode, evidence);
+for (const [endpoint, methods] of [
+['/api/rabilink/agent-devices/self/profile',['GET']],
+['/api/rabilink/agent-devices/self/profile/receipt',['POST']],
+['/api/roles/:param/chat-history/aiui',['POST']]
+]) add(endpoint, methods, 'pc-helper', 'PC', 'generic-manager-http', 'apps/rabilink-aiui/scripts/Smoke-GenericManagerTransport.mjs');
+add('/api/device-agents', ['GET'], 'pc-helper', 'PC', 'device-agent-catalog', 'src/agentAdapters/deviceAgentOwner.test.ts');
 export const contracts = Object.freeze(rows);

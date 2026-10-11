@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { browserUuid } from "../../browserUuid";
 import { userFacingError } from "../../userFacingError";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { DesktopTheme } from "@shared/desktopSettingsContract";
@@ -186,7 +187,7 @@ async function saveDesktopSettings(): Promise<void> {
 }
 
 function customThemeId(): CustomInterfaceTheme["id"] {
-  return `custom:${crypto.randomUUID().toLowerCase()}`;
+  return `custom:${browserUuid()}`;
 }
 
 function clonedTheme(baseTheme: InterfaceThemeBase): Pick<CustomInterfaceTheme, "baseTheme" | "colors" | "styles"> {

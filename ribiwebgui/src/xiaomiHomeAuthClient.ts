@@ -1,4 +1,5 @@
 import type { XiaomiHomeAuthorizationSnapshot } from "@shared/xiaomiHomeAuthContract";
+import { browserUuid } from "./browserUuid";
 
 export type XiaomiHomeConnectInput = Readonly<{
   accessToken: string;
@@ -48,7 +49,7 @@ async function lifecycleHeaders(operationId: string): Promise<Record<string, str
 }
 
 function operationId(kind: string): string {
-  return `xiaomi-home-${kind}-${crypto.randomUUID()}`;
+  return `xiaomi-home-${kind}-${browserUuid()}`;
 }
 
 async function read(): Promise<XiaomiHomeAuthorizationSnapshot> {

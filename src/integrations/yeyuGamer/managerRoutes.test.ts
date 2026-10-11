@@ -19,7 +19,7 @@ import {
 } from "./managerRoutes.js";
 
 function request(method: string, remoteAddress = "127.0.0.1"): http.IncomingMessage {
-  return { method, socket: { remoteAddress } } as unknown as http.IncomingMessage;
+  return { method, headers: { host: "127.0.0.1:8790" }, socket: { remoteAddress } } as unknown as http.IncomingMessage;
 }
 
 function receipt(): YeYuGamerCommandReceipt {

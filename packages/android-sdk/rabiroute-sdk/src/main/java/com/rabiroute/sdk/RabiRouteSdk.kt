@@ -199,8 +199,54 @@ data class RabiAgentBinding(
 class RabiRouteSdk @JvmOverloads constructor(
     private val managerBaseUrls: List<String> = emptyList(),
     private val rabiLinkPorts: List<Int> = listOf(8794),
-    private val timeoutMs: Int = 650
+    private val timeoutMs: Int = 650,
+    private val managerTransport: RabiLinkManagerHttpTransport? = null
 ) {
+    /** Any current or future public Manager HTTP path; no per-operation Relay adapter. */
+    fun requestMobileManager(relayBaseUrl: String, token: String, targetDeviceId: String, path: String,
+                             method: String = "GET", body: String? = null, headers: Map<String,String> = emptyMap(),
+                             operationId: String? = null): JSONObject {
+        require(path.startsWith("/") && !path.startsWith("//") && !path.contains('\\') && !path.contains('\r') && !path.contains('\n'))
+        val directory = getMobileState(relayBaseUrl,token)
+        val id = targetDeviceId.ifBlank { directory.selectedTargetDeviceId }
+        val target = directory.workers.firstOrNull { it.id == id || it.guid == id } ?: error("Target PC is not in the authenticated connection directory")
+        val requestHeaders = headers.toMutableMap()
+        requestHeaders.putIfAbsent("content-type","application/json; charset=utf-8")
+        val mutation = method !in listOf("GET","HEAD","OPTIONS")
+        if(mutation) {
+            require(!operationId.isNullOrBlank()) { "A caller-owned original operationId is required" }
+            requestHeaders.putIfAbsent("idempotency-key",operationId)
+        }
+        if(managerTransport != null) {
+            val response = managerTransport.request(relayBaseUrl,token,target,method,path,requestHeaders,body?.toByteArray(Charsets.UTF_8) ?: ByteArray(0))
+            check(response.statusCode in 200..299) { "Manager HTTP ${response.statusCode}; a dispatched write may need readback" }
+            val json = JSONObject(String(response.body,Charsets.UTF_8))
+            requireManagerBusinessSuccess(json)
+            return json
+        }
+        // A platform without an injected native transport has buffered HTTP Relay
+        // capability only. This is an explicit downgrade, never a simulated P2P path.
+        val request = JSONObject().put("method",method).put("path",path).put("headers",JSONObject().apply { requestHeaders.forEach { (key,value) -> put(key,value) } })
+        body?.let { request.put("bodyBase64",java.util.Base64.getEncoder().encodeToString(it.toByteArray(Charsets.UTF_8))) }
+        operationId?.let { request.put("operationId",it) }
+        val envelope = requestJson("${relayBaseUrl.trimEnd('/')}/api/rabilink/device/api","POST",
+            JSONObject().put("targetDeviceId",target.id).put("request",request).toString(),mapOf("X-RabiLink-Token" to token),readTimeoutMs=45000)
+        val result = envelope.getJSONObject("data").getJSONObject("structuredContent")
+        check(result.optBoolean("ok") && !result.optBoolean("uncertain")) { "Manager request unconfirmed; inspect the original request before retrying" }
+        return result.getJSONObject("data").also(::requireManagerBusinessSuccess)
+    }
+
+    private fun requireManagerBusinessSuccess(json: JSONObject) {
+        val code = json.opt("code")
+        check((!json.has("code") || code is Number && code.toDouble() == 0.0) && json.optBoolean("ok",true)) {
+            "Manager business response did not confirm the operation: ${json.optString("code")}"
+        }
+    }
+
+    private fun mobileRouteTarget(relayBaseUrl: String,token: String,targetDeviceId: String): RabiLinkPc {
+        val state=getMobileState(relayBaseUrl,token); val target=targetDeviceId.ifBlank { state.selectedTargetDeviceId }
+        return state.workers.firstOrNull { it.id == target || it.guid == target } ?: error("Route target is not connected")
+    }
     fun scanLan(context: Context): List<RabiInstance> {
         val discoveredEndpoints = RabiRouteNsdDiscovery(context, timeoutMs).discoverManagerEndpoints()
         val discoveredInstances = discoveredEndpoints.map { endpoint ->
@@ -490,6 +536,13 @@ class RabiRouteSdk @JvmOverloads constructor(
         )
     }
 
+    /** Authenticated connection roster only; profiles and personas are PC-owned. */
+    fun getDeviceConnections(relayBaseUrl: String, token: String): JSONObject {
+        val reply = requestJson("${relayBaseUrl.trimEnd('/')}/api/rabilink/devices/connections", "GET", null,
+            mapOf("X-RabiLink-Token" to token), readTimeoutMs = 10000)
+        return reply.optJSONObject("data") ?: error("Invalid device connection directory")
+    }
+
     fun getMobileState(relayBaseUrl: String, token: String): RabiLinkMobileState {
         val json = requestJson(
             "${relayBaseUrl.trimEnd('/')}/api/rabilink/mobile/state",
@@ -592,13 +645,8 @@ class RabiRouteSdk @JvmOverloads constructor(
             .put("batteryLevel", batteryLevel.coerceIn(0, 100))
             .put("charging", charging)
             .put("observedAt", observedAt)
-        val json = requestJson(
-            "${relayBaseUrl.trimEnd('/')}/api/rabilink/mobile/device-status",
-            "POST",
-            payload.toString(),
-            mapOf("X-RabiLink-Token" to token),
-            readTimeoutMs = 10000
-        )
+        val json = requestMobileManager(relayBaseUrl,token,mobileBusinessOwner(relayBaseUrl,token),"/api/rabilink/mobile/device-status","POST",payload.toString(),
+            operationId="device-status:" + observedAt.replace(Regex("[^A-Za-z0-9:._-]"),"_"))
         val status = json.getJSONObject("deviceStatus")
         return RabiLinkDeviceStatus(
             batteryLevel = status.getInt("batteryLevel"),
@@ -622,11 +670,13 @@ class RabiRouteSdk @JvmOverloads constructor(
         return mobileStateFromJson(json)
     }
 
+    private fun mobileBusinessOwner(relayBaseUrl: String, token: String): String =
+        getMobileState(relayBaseUrl, token).rawJson.optString("connectionOwnerDeviceId").ifBlank { error("MOBILE_OWNER_PC_NOT_CONFIGURED") }
+
     fun mobileAsrSettings(relayBaseUrl: String, token: String, priority: List<String>? = null): RabiLinkAsrSettings {
-        val json = requestJson("${relayBaseUrl.trimEnd('/')}/api/rabilink/mobile/asr-settings",
-            if(priority == null) "GET" else "PATCH",
-            priority?.let { JSONObject().put("priority", JSONArray(it)).toString() },
-            mapOf("X-RabiLink-Token" to token), readTimeoutMs = 10000)
+        val json = requestMobileManager(relayBaseUrl,token,mobileBusinessOwner(relayBaseUrl,token),"/api/rabilink/mobile/asr-settings",
+            if(priority == null) "GET" else "PATCH",priority?.let { JSONObject().put("priority",JSONArray(it)).toString() },
+            operationId=priority?.let { "asr-priority:" + java.util.UUID.randomUUID() })
         val rows = json.getJSONArray("workers")
         return RabiLinkAsrSettings((0 until rows.length()).map { rabiLinkPcFromJson(rows.getJSONObject(it)) }, json.optString("selectedWorkerId"))
     }
@@ -645,27 +695,14 @@ class RabiRouteSdk @JvmOverloads constructor(
         token: String,
         targetDeviceId: String = ""
     ): RabiRouteCatalogResult {
-        val target = targetQuery(targetDeviceId)
-        val profiles = if (target.isBlank()) "?includeProfiles=true" else "$target&includeProfiles=true"
-        val json = requestJson(
-            "${relayBaseUrl.trimEnd('/')}/api/rabilink/mobile/routes$profiles",
-            "GET",
-            null,
-            mapOf("X-RabiLink-Token" to token),
-            readTimeoutMs = 45000
-        )
+        val worker = mobileRouteTarget(relayBaseUrl,token,targetDeviceId)
+        val json = requestMobileManager(relayBaseUrl,token,worker.id,"/api/rabi/instances/${encodePath(worker.guid.ifBlank { worker.id })}/routes?includeProfiles=true&presentation=mobile")
         return routeCatalogResult(json)
     }
 
     fun getMobileAgentOptions(relayBaseUrl: String, token: String, routeId: String, targetDeviceId: String = ""): JSONObject {
-        val target = targetQuery(targetDeviceId)
-        return requestJson(
-            "${relayBaseUrl.trimEnd('/')}/api/rabilink/mobile/routes/${encodePath(routeId)}/agent-options$target",
-            "GET",
-            null,
-            mapOf("X-RabiLink-Token" to token),
-            readTimeoutMs = 45000
-        ).getJSONObject("data")
+        val worker = mobileRouteTarget(relayBaseUrl,token,targetDeviceId)
+        return requestMobileManager(relayBaseUrl,token,worker.id,"/api/rabi/instances/${encodePath(worker.guid.ifBlank { worker.id })}/routes/${encodePath(routeId)}/agent-options").getJSONObject("data")
     }
 
     fun setMobileAgentBinding(
@@ -677,14 +714,9 @@ class RabiRouteSdk @JvmOverloads constructor(
         expectedContentHash: String,
         targetDeviceId: String = ""
     ): JSONObject {
-        val target = targetQuery(targetDeviceId)
-        val response = requestJson(
-            "${relayBaseUrl.trimEnd('/')}/api/rabilink/mobile/routes/${encodePath(routeId)}/agent-binding$target",
-            "PATCH",
-            binding.toJson().toString(),
-            mapOf("X-RabiLink-Token" to token) + routeMutationHeaders(operationId, expectedContentHash),
-            readTimeoutMs = 45000
-        )
+        val worker = mobileRouteTarget(relayBaseUrl,token,targetDeviceId)
+        val response = requestMobileManager(relayBaseUrl,token,worker.id,"/api/rabi/instances/${encodePath(worker.guid.ifBlank { worker.id })}/routes/${encodePath(routeId)}/agent-binding",
+            "PATCH",binding.toJson().toString(),routeMutationHeaders(operationId,expectedContentHash),operationId)
         requireCommittedMutationReceipt(response, operationId)
         return response.getJSONObject("data")
     }

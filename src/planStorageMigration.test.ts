@@ -415,7 +415,7 @@ test("the next startup recovers hard termination around canonical lifecycle publ
       const canonicalPlanHash = sha256File(data.destinationPlanFile);
       const repeatedLifecycleRecovery = recoverPlanLifecycleTransitions(data.roleDir);
       const repeatedMigration = migrate(data.roleDir);
-      assert.deepEqual(repeatedLifecycleRecovery, { results: [], failures: [] });
+      assert.deepEqual(repeatedLifecycleRecovery, { results: [], abandoned: [], failures: [] });
       assert.deepEqual(repeatedMigration.failures, []);
       assert.equal(repeatedMigration.migrated, 0);
       assert.deepEqual(repeatedMigration.receipts, []);

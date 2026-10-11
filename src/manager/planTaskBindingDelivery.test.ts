@@ -82,15 +82,17 @@ test("replacement plan binding does not write when the task ID is unchanged", ()
   }), null);
 });
 
-test("replacement plan binding rejects a task in a different workspace", () => {
+test("replacement plan binding accepts a task in another workspace and records that workspace", () => {
   const source = plan({
     agentType: "codex",
     sessionId: "019f0000-0000-7000-8000-000000000006",
     workspace: "C:\\work\\example"
   });
 
-  assert.throws(() => replacementPlanTaskBinding(source, {
+  const replacement = replacementPlanTaskBinding(source, {
     id: "019f0000-0000-7000-8000-000000000007",
     cwd: "C:\\work\\other"
-  }), /belongs to another workspace/);
+  });
+  assert.equal(replacement?.sessionId, "019f0000-0000-7000-8000-000000000007");
+  assert.equal(replacement?.workspace, "C:\\work\\other");
 });

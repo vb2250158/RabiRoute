@@ -6,7 +6,7 @@ param(
     [string]$RemoteRoot = "C:\opt\rabilink-relay",
     [string]$CaddyVersion = "2.8.4",
     [int]$PublicHttpPort = 0,
-    [switch]$RuntimeOnly,
+    [switch]$RuntimeOnly = $true,
     [switch]$PrepareOnly
 )
 
@@ -128,10 +128,10 @@ $bundleDataRoot = Join-Path $bundleRoot "data"
 New-Item -ItemType Directory -Path $bundleDataRoot -Force | Out-Null
 # One explicit runtime closure drives staging and remote backup; never copy only the entry.
 $runtimeManifest = Join-Path $PSScriptRoot "rabilink-relay-runtime-files.json"
-$relayRuntimeFiles = @(Get-Content -LiteralPath $runtimeManifest -Raw | ConvertFrom-Json)
+$relayRuntimeFiles = [string[]](Get-Content -LiteralPath $runtimeManifest -Raw | ConvertFrom-Json)
 if ($relayRuntimeFiles.Count -eq 0) { throw "Relay runtime manifest is empty." }
 foreach ($relative in $relayRuntimeFiles) {
-    if ($relative -notmatch '^(scripts/(lib/)?[a-z0-9-]+|packages/rabi-knowledge-contract/(schema|tools|receipt))\.mjs$') { throw "Invalid Relay runtime manifest entry." }
+    if ($relative -notmatch '^(scripts|packages)/[a-z0-9][a-z0-9/._-]*\.mjs$' -or @($relative.Split('/') | Where-Object { $_ -in @('.', '..', '') }).Count -gt 0) { throw "Invalid Relay runtime manifest entry." }
     if (-not (Test-Path -LiteralPath (Join-Path $repoRoot $relative) -PathType Leaf)) { throw "Required Relay runtime module is missing: $relative" }
 }
 New-Item -ItemType Directory -Force -Path (Join-Path $bundleRoot "scripts") | Out-Null
@@ -356,6 +356,152 @@ if ($RuntimeOnly) {
         Remove-Item -LiteralPath (Join-Path $bundleRoot $file) -Force
     }
 }
+$relayLayoutFunctions = @'
+function Get-RelayFileHash {
+    param([string]$LiteralPath)
+    $stream = [IO.File]::OpenRead($LiteralPath)
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try { return @{ Hash = [BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace('-', '') } }
+    finally { $algorithm.Dispose(); $stream.Dispose() }
+}
+function Resolve-RelayLayoutPath {
+    param([string]$Root, [string]$Relative)
+    $rootPath = [IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
+    if (-not [IO.Path]::IsPathRooted($Root) -or $rootPath -eq [IO.Path]::GetPathRoot($rootPath).TrimEnd('\', '/')) {
+        throw "Relay root must be an absolute service directory."
+    }
+    $target = [IO.Path]::GetFullPath((Join-Path $rootPath $Relative))
+    if (-not $target.StartsWith($rootPath + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Relay layout target escapes the service directory."
+    }
+    if ((Test-Path -LiteralPath $target) -and (((Get-Item -LiteralPath $target -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) { throw "Relay layout cannot traverse a linked target." }
+    $ancestor = Split-Path $target
+    while ($ancestor -and ($ancestor -eq $rootPath -or $ancestor.StartsWith($rootPath + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase))) {
+        if (Test-Path -LiteralPath $ancestor) {
+            if (((Get-Item -LiteralPath $ancestor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Relay layout cannot traverse a linked directory." }
+        }
+        $ancestor = Split-Path $ancestor
+    }
+    return $target
+}
+function Get-LegacyRelayRuntimeFiles {
+    param([string]$Root, [string[]]$RuntimeFiles)
+    $legacy = @($RuntimeFiles | Where-Object { $_.StartsWith('scripts/') } | ForEach-Object { $_.Substring(8) })
+    $legacy += @('rabilink-knowledge-grant.mjs', 'rabilink-knowledge-grant-ui.mjs')
+    $retiredNames = @('rabilink-agent-profile', 'rabilink-agent-profile-state', 'rabilink-agent-profile-ui-receipt', 'rabilink-aiui-persona', 'rabilink-profile-skills-editor', 'rabilink-profile-mcp-editor', 'rabilink-knowledge-access', 'rabilink-knowledge-grant', 'rabilink-knowledge-grant-ui', 'rabilink-knowledge-operations')
+    foreach ($name in $retiredNames) { $legacy += @("$name.mjs", "scripts/$name.mjs") }
+    $legacy += @('lib/rabilink-asr-priority.mjs', 'scripts/lib/rabilink-asr-priority.mjs', 'packages/rabilink-agent-contract/profile.mjs', 'packages/rabilink-agent-contract/state.mjs', 'packages/rabilink-agent-contract/persona.mjs', 'packages/rabilink-agent-contract/request-csrf.mjs', 'packages/rabi-knowledge-contract/schema.mjs', 'packages/rabi-knowledge-contract/tools.mjs', 'packages/rabi-knowledge-contract/receipt.mjs')
+    $repoManifest = Resolve-RelayLayoutPath -Root $Root -Relative 'scripts/rabilink-relay-runtime-files.json'
+    if (Test-Path -LiteralPath $repoManifest -PathType Leaf) {
+        foreach ($relative in [string[]](Get-Content -LiteralPath $repoManifest -Raw | ConvertFrom-Json)) {
+            if ($relative -notmatch '^(scripts|packages)/[a-z0-9][a-z0-9/._-]*\.mjs$' -or @($relative.Split('/') | Where-Object { $_ -in @('.', '..', '') }).Count -gt 0) { throw "Invalid prior Relay runtime manifest entry." }
+            if ($relative -notin $RuntimeFiles) { $legacy += $relative }
+        }
+    }
+    $oldManifest = Resolve-RelayLayoutPath -Root $Root -Relative 'rabilink-relay-runtime-files.json'
+    if (Test-Path -LiteralPath $oldManifest -PathType Leaf) {
+        foreach ($relative in [string[]](Get-Content -LiteralPath $oldManifest -Raw | ConvertFrom-Json)) {
+            if ($relative -notmatch '^(lib/)?[a-z0-9-]+\.mjs$') { throw "Invalid legacy Relay runtime manifest entry." }
+            $legacy += $relative
+        }
+    }
+    return @($legacy | Sort-Object -Unique)
+}
+function Backup-RelayRuntimeLayout {
+    param([string]$Root, [string]$BackupRoot, [string[]]$Files)
+    foreach ($relative in ($Files | Sort-Object -Unique)) {
+        $source = Resolve-RelayLayoutPath -Root $Root -Relative $relative
+        if (Test-Path -LiteralPath $source -PathType Leaf) {
+            $backupFile = Resolve-RelayLayoutPath -Root $BackupRoot -Relative $relative
+            New-Item -ItemType Directory -Force -Path (Split-Path $backupFile) | Out-Null
+            Copy-Item -LiteralPath $source -Destination $backupFile -Force
+            if ((Get-RelayFileHash -LiteralPath $source).Hash -ne (Get-RelayFileHash -LiteralPath $backupFile).Hash) { throw "Relay backup readback mismatch: $relative" }
+        }
+    }
+}
+function Remove-LegacyRelayRuntimeLayout {
+    param([string]$Root, [string[]]$LegacyFiles)
+    $removed = @()
+    foreach ($relative in @($LegacyFiles + @('scripts/rabilink-knowledge-grant.mjs', 'scripts/rabilink-knowledge-grant-ui.mjs'))) {
+        if ($relative -notmatch '^(lib/)?[a-z0-9-]+\.mjs$' -and $relative -notmatch '^(scripts|packages)/[a-z0-9][a-z0-9/._-]*\.mjs$') { throw "Invalid legacy Relay runtime manifest entry." }
+        $target = Resolve-RelayLayoutPath -Root $Root -Relative $relative
+        if (Test-Path -LiteralPath $target -PathType Leaf) {
+            Remove-Item -LiteralPath $target -Force
+            $removed += $relative
+        }
+    }
+    $oldManifest = Resolve-RelayLayoutPath -Root $Root -Relative 'rabilink-relay-runtime-files.json'
+    if (Test-Path -LiteralPath $oldManifest -PathType Leaf) { Remove-Item -LiteralPath $oldManifest -Force }
+    return $removed
+}
+function Backup-RelayPrivateState {
+    param([string]$Root, [string]$BackupRoot)
+    $dataPath = Resolve-RelayLayoutPath -Root $Root -Relative 'data'
+    if (-not (Test-Path -LiteralPath $dataPath)) { return }
+    $pending = New-Object 'System.Collections.Generic.Queue[string]'
+    $pending.Enqueue('data')
+    while ($pending.Count -gt 0) {
+        $relativeDirectory = $pending.Dequeue()
+        $directory = Resolve-RelayLayoutPath -Root $Root -Relative $relativeDirectory
+        foreach ($entry in Get-ChildItem -LiteralPath $directory -Force) {
+            if (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Relay state backup cannot traverse links." }
+            $relative = $relativeDirectory + '/' + $entry.Name
+            if ($entry.PSIsContainer) { $pending.Enqueue($relative) }
+            else { Backup-RelayRuntimeLayout -Root $Root -BackupRoot $BackupRoot -Files @($relative) }
+        }
+    }
+}
+function Restore-RelayRuntimeLayout {
+    param([string]$Root, [string]$BackupRoot)
+    $manifestPath = Resolve-RelayLayoutPath -Root $BackupRoot -Relative 'code-layout.json'
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    if ($manifest.version -ne 1) { throw "Unsupported Relay rollback snapshot." }
+    foreach ($row in $manifest.files) {
+        if ($row.path -match '^(data|logs)/') { throw "Rollback must not overwrite live private state." }
+        [void](Resolve-RelayLayoutPath -Root $Root -Relative $row.path)
+        $source = Resolve-RelayLayoutPath -Root $BackupRoot -Relative $row.path
+        if ((Get-RelayFileHash -LiteralPath $source).Hash -ne $row.sha256) { throw "Rollback snapshot hash mismatch." }
+    }
+    foreach ($relative in $manifest.absent) {
+        if ($relative -match '^(data|logs)/') { throw "Rollback must not remove live private state." }
+        [void](Resolve-RelayLayoutPath -Root $Root -Relative $relative)
+    }
+    foreach ($row in $manifest.files) {
+        $source = Resolve-RelayLayoutPath -Root $BackupRoot -Relative $row.path
+        $target = Resolve-RelayLayoutPath -Root $Root -Relative $row.path
+        New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
+        Copy-Item -LiteralPath $source -Destination $target -Force
+        if ((Get-RelayFileHash -LiteralPath $target).Hash -ne $row.sha256) { throw "Rollback readback hash mismatch." }
+    }
+    foreach ($relative in $manifest.absent) {
+        if ($relative -match '^(data|logs)/') { throw "Rollback must not remove live private state." }
+        $target = Resolve-RelayLayoutPath -Root $Root -Relative $relative
+        if (Test-Path -LiteralPath $target -PathType Leaf) { Remove-Item -LiteralPath $target -Force }
+    }
+}
+'@
+
+
+New-AsciiFile -Path (Join-Path $bundleRoot 'rollback-rabilink-relay.ps1') -Content @"
+param([Parameter(Mandatory=`$true)][string]`$Root, [Parameter(Mandatory=`$true)][string]`$BackupRoot)
+`$ErrorActionPreference = 'Stop'
+$relayLayoutFunctions
+`$task = Get-ScheduledTask -TaskName 'RabiLinkRelay' -ErrorAction SilentlyContinue
+if (`$task) { Stop-ScheduledTask -TaskName 'RabiLinkRelay' -ErrorAction SilentlyContinue }
+Get-CimInstance Win32_Process -Filter "name = 'node.exe'" |
+    Where-Object { `$_.CommandLine -like "*`$Root*rabilink-relay-server.mjs*" } |
+    ForEach-Object { Stop-Process -Id `$_.ProcessId -Force -ErrorAction SilentlyContinue }
+Restore-RelayRuntimeLayout -Root `$Root -BackupRoot `$BackupRoot
+Unregister-ScheduledTask -TaskName 'RabiLinkRelay' -Confirm:`$false -ErrorAction SilentlyContinue
+`$taskXml = Resolve-RelayLayoutPath -Root `$BackupRoot -Relative 'relay-task.xml'
+if (Test-Path -LiteralPath `$taskXml) {
+    Register-ScheduledTask -TaskName 'RabiLinkRelay' -Xml (Get-Content -LiteralPath `$taskXml -Raw) -Force | Out-Null
+    Start-ScheduledTask -TaskName 'RabiLinkRelay'
+}
+Write-Host 'Relay code and original task restored. Live data was not rolled back.'
+"@
+$deploymentArtifactFiles = @(Get-ChildItem -LiteralPath $bundleRoot -Recurse -File | ForEach-Object { $_.FullName.Substring($bundleRoot.Length + 1).Replace('\', '/') } | Where-Object { $_ -notmatch '^(data|logs)/' })
+
 if (Test-Path -LiteralPath $bundleZip) {
     Remove-Item -LiteralPath $bundleZip -Force
 }
@@ -389,67 +535,8 @@ try {
 }
 
 # These same bounded migration functions are exercised locally by the closure test.
-$relayLayoutFunctions = @'
-function Resolve-RelayLayoutPath {
-    param([string]$Root, [string]$Relative)
-    $rootPath = [IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
-    if (-not [IO.Path]::IsPathRooted($Root) -or $rootPath -eq [IO.Path]::GetPathRoot($rootPath).TrimEnd('\', '/')) {
-        throw "Relay root must be an absolute service directory."
-    }
-    $target = [IO.Path]::GetFullPath((Join-Path $rootPath $Relative))
-    if (-not $target.StartsWith($rootPath + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-        throw "Relay layout target escapes the service directory."
-    }
-    $ancestor = Split-Path $target
-    while ($ancestor -and ($ancestor -eq $rootPath -or $ancestor.StartsWith($rootPath + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase))) {
-        if (Test-Path -LiteralPath $ancestor) {
-            if (((Get-Item -LiteralPath $ancestor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Relay layout cannot traverse a linked directory." }
-        }
-        $ancestor = Split-Path $ancestor
-    }
-    return $target
-}
-function Get-LegacyRelayRuntimeFiles {
-    param([string]$Root, [string[]]$RuntimeFiles)
-    $legacy = @($RuntimeFiles | Where-Object { $_.StartsWith('scripts/') } | ForEach-Object { $_.Substring(8) })
-    $legacy += @('rabilink-knowledge-grant.mjs', 'rabilink-knowledge-grant-ui.mjs')
-    $oldManifest = Resolve-RelayLayoutPath -Root $Root -Relative 'rabilink-relay-runtime-files.json'
-    if (Test-Path -LiteralPath $oldManifest -PathType Leaf) {
-        foreach ($relative in @(Get-Content -LiteralPath $oldManifest -Raw | ConvertFrom-Json)) {
-            if ($relative -notmatch '^(lib/)?[a-z0-9-]+\.mjs$') { throw "Invalid legacy Relay runtime manifest entry." }
-            $legacy += $relative
-        }
-    }
-    return @($legacy | Sort-Object -Unique)
-}
-function Backup-RelayRuntimeLayout {
-    param([string]$Root, [string]$BackupRoot, [string[]]$Files)
-    foreach ($relative in ($Files | Sort-Object -Unique)) {
-        $source = Resolve-RelayLayoutPath -Root $Root -Relative $relative
-        if (Test-Path -LiteralPath $source -PathType Leaf) {
-            $backupFile = Resolve-RelayLayoutPath -Root $BackupRoot -Relative $relative
-            New-Item -ItemType Directory -Force -Path (Split-Path $backupFile) | Out-Null
-            Copy-Item -LiteralPath $source -Destination $backupFile -Force
-        }
-    }
-}
-function Remove-LegacyRelayRuntimeLayout {
-    param([string]$Root, [string[]]$LegacyFiles)
-    $removed = @()
-    foreach ($relative in @($LegacyFiles + @('scripts/rabilink-knowledge-grant.mjs', 'scripts/rabilink-knowledge-grant-ui.mjs'))) {
-        if ($relative -notmatch '^(lib/)?[a-z0-9-]+\.mjs$' -and $relative -notmatch '^scripts/rabilink-knowledge-grant(-ui)?\.mjs$') { throw "Invalid legacy Relay runtime manifest entry." }
-        $target = Resolve-RelayLayoutPath -Root $Root -Relative $relative
-        if (Test-Path -LiteralPath $target -PathType Leaf) {
-            Remove-Item -LiteralPath $target -Force
-            $removed += $relative
-        }
-    }
-    $oldManifest = Resolve-RelayLayoutPath -Root $Root -Relative 'rabilink-relay-runtime-files.json'
-    if (Test-Path -LiteralPath $oldManifest -PathType Leaf) { Remove-Item -LiteralPath $oldManifest -Force }
-    return $removed
-}
-'@
 $relayRuntimeLiteral = ($relayRuntimeFiles | ForEach-Object { "'$_'" }) -join ", "
+$deploymentArtifactLiteral = ($deploymentArtifactFiles | ForEach-Object { "'$_'" }) -join ", "
 $runtimeOnlyLiteral = if ($RuntimeOnly) { '$true' } else { '$false' }
 $remoteSetup = @"
 `$runtimeOnly = $runtimeOnlyLiteral
@@ -463,49 +550,8 @@ New-Item -ItemType Directory -Force -Path `$remoteRoot | Out-Null
 New-Item -ItemType Directory -Force -Path `$backupRoot | Out-Null
 `$runtimeFiles = @($relayRuntimeLiteral)
 `$legacyRuntimeFiles = @(Get-LegacyRelayRuntimeFiles -Root `$remoteRoot -RuntimeFiles `$runtimeFiles)
-Backup-RelayRuntimeLayout -Root `$remoteRoot -BackupRoot `$backupRoot -Files (`$runtimeFiles + `$legacyRuntimeFiles + @("rabilink-relay-runtime-files.json", "scripts/rabilink-relay-runtime-files.json", "scripts/rabilink-knowledge-grant.mjs", "scripts/rabilink-knowledge-grant-ui.mjs", "start-rabilink-relay.ps1", "Caddyfile", "package.json"))
-if (-not `$runtimeOnly -and (Test-Path -LiteralPath (Join-Path `$remoteRoot "ribiwebgui"))) {
-    Copy-Item -LiteralPath (Join-Path `$remoteRoot "ribiwebgui") -Destination (Join-Path `$backupRoot "ribiwebgui") -Recurse -Force
-}
-try {
-    New-Item -ItemType Directory -Path `$stagingRoot | Out-Null
-    Expand-Archive -Path `$zipPath -DestinationPath `$stagingRoot
-    foreach (`$relative in `$runtimeFiles) {
-        if (-not (Test-Path -LiteralPath (Join-Path `$stagingRoot `$relative) -PathType Leaf)) { throw "Relay runtime module missing from staged archive: `$relative" }
-    }
-    Get-ChildItem -LiteralPath `$stagingRoot -Force | ForEach-Object {
-        Copy-Item -LiteralPath `$_.FullName -Destination `$remoteRoot -Recurse -Force
-    }
-} finally {
-    if (Test-Path -LiteralPath `$stagingRoot) {
-        `$stagingPath = [IO.Path]::GetFullPath(`$stagingRoot)
-        `$tempPrefix = [IO.Path]::GetFullPath(`$env:TEMP).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
-        if (-not `$stagingPath.StartsWith(`$tempPrefix, [StringComparison]::OrdinalIgnoreCase)) { throw "Relay staging cleanup escapes TEMP." }
-        Remove-Item -LiteralPath `$stagingRoot -Recurse -Force
-    }
-}
-New-Item -ItemType Directory -Force -Path "`$remoteRoot\logs" | Out-Null
-
-if (-not `$runtimeOnly) {
-if (Get-Service W3SVC -ErrorAction SilentlyContinue) {
-    Stop-Service W3SVC -Force -ErrorAction SilentlyContinue
-    Set-Service W3SVC -StartupType Disabled
-}
-
-Stop-ScheduledTask -TaskName "RabiLinkCaddy" -ErrorAction SilentlyContinue
-Get-Process caddy -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-
-`$caddyDir = "C:\caddy"
-`$caddyExe = Join-Path `$caddyDir "caddy.exe"
-New-Item -ItemType Directory -Force -Path `$caddyDir | Out-Null
-$remotePublicHttpFirewall
-if (-not (Test-Path -LiteralPath `$caddyExe)) {
-    `$caddyZip = "C:\Windows\Temp\caddy.zip"
-    Invoke-WebRequest -Uri "https://github.com/caddyserver/caddy/releases/download/v$CaddyVersion/caddy_${CaddyVersion}_windows_amd64.zip" -OutFile `$caddyZip
-    Expand-Archive -Path `$caddyZip -DestinationPath `$caddyDir -Force
-}
-}
-
+`$previousTask = Get-ScheduledTask -TaskName 'RabiLinkRelay' -ErrorAction SilentlyContinue
+if (`$previousTask) { Export-ScheduledTask -TaskName 'RabiLinkRelay' | Set-Content -LiteralPath (Join-Path `$backupRoot 'relay-task.xml') -Encoding UTF8 }
 `$taskName = "RabiLinkRelay"
 Stop-ScheduledTask -TaskName `$taskName -ErrorAction SilentlyContinue
 `$processSnapshot = @(Get-CimInstance Win32_Process)
@@ -541,6 +587,67 @@ Start-Sleep -Seconds 1
 Get-CimInstance Win32_Process -Filter "name = 'node.exe'" |
     Where-Object { `$_.CommandLine -like "*rabilink-relay-server.mjs*" } |
     ForEach-Object { Stop-Process -Id `$_.ProcessId -Force -ErrorAction SilentlyContinue }
+`$codeFiles = @(@($deploymentArtifactLiteral) + `$runtimeFiles + `$legacyRuntimeFiles + @('rabilink-relay-runtime-files.json', 'scripts/rabilink-relay-runtime-files.json', 'start-rabilink-relay.ps1', 'health-check.ps1', 'Caddyfile', 'package.json'))
+`$wsDirectory = Resolve-RelayLayoutPath -Root `$remoteRoot -Relative 'node_modules/ws'
+if (Test-Path -LiteralPath `$wsDirectory) {
+    `$codeFiles += @(Get-ChildItem -LiteralPath `$wsDirectory -Recurse -File | ForEach-Object { `$_.FullName.Substring(`$remoteRoot.TrimEnd('\', '/').Length + 1).Replace('\', '/') })
+}
+try {
+    Backup-RelayPrivateState -Root `$remoteRoot -BackupRoot `$backupRoot
+    Backup-RelayRuntimeLayout -Root `$remoteRoot -BackupRoot `$backupRoot -Files `$codeFiles
+} catch {
+    if (`$previousTask) { Start-ScheduledTask -TaskName 'RabiLinkRelay' -ErrorAction SilentlyContinue }
+    throw
+}
+`$codeLayout = @{ version = 1; files = @(); absent = @() }
+foreach (`$relative in (`$codeFiles | Sort-Object -Unique)) {
+    `$source = Resolve-RelayLayoutPath -Root `$remoteRoot -Relative `$relative
+    if (Test-Path -LiteralPath `$source -PathType Leaf) { `$codeLayout.files += @{ path = `$relative; sha256 = (Get-RelayFileHash -LiteralPath `$source).Hash } }
+    else { `$codeLayout.absent += `$relative }
+}
+`$codeLayout | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path `$backupRoot 'code-layout.json') -Encoding UTF8
+if (-not `$runtimeOnly -and (Test-Path -LiteralPath (Join-Path `$remoteRoot "ribiwebgui"))) {
+    Copy-Item -LiteralPath (Join-Path `$remoteRoot "ribiwebgui") -Destination (Join-Path `$backupRoot "ribiwebgui") -Recurse -Force
+}
+try {
+    New-Item -ItemType Directory -Path `$stagingRoot | Out-Null
+    Expand-Archive -Path `$zipPath -DestinationPath `$stagingRoot
+    foreach (`$relative in `$runtimeFiles) {
+        if (-not (Test-Path -LiteralPath (Join-Path `$stagingRoot `$relative) -PathType Leaf)) { throw "Relay runtime module missing from staged archive: `$relative" }
+    }
+    Get-ChildItem -LiteralPath `$stagingRoot -Force | Where-Object { -not `$runtimeOnly -or `$_.Name -notin @('data', 'logs') } | ForEach-Object {
+        Copy-Item -LiteralPath `$_.FullName -Destination `$remoteRoot -Recurse -Force
+    }
+} finally {
+    if (Test-Path -LiteralPath `$stagingRoot) {
+        `$stagingPath = [IO.Path]::GetFullPath(`$stagingRoot)
+        `$tempPrefix = [IO.Path]::GetFullPath(`$env:TEMP).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+        if (-not `$stagingPath.StartsWith(`$tempPrefix, [StringComparison]::OrdinalIgnoreCase)) { throw "Relay staging cleanup escapes TEMP." }
+        Remove-Item -LiteralPath `$stagingRoot -Recurse -Force
+    }
+}
+New-Item -ItemType Directory -Force -Path "`$remoteRoot\logs" | Out-Null
+
+if (-not `$runtimeOnly) {
+if (Get-Service W3SVC -ErrorAction SilentlyContinue) {
+    Stop-Service W3SVC -Force -ErrorAction SilentlyContinue
+    Set-Service W3SVC -StartupType Disabled
+}
+
+Stop-ScheduledTask -TaskName "RabiLinkCaddy" -ErrorAction SilentlyContinue
+Get-Process caddy -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
+`$caddyDir = "C:\caddy"
+`$caddyExe = Join-Path `$caddyDir "caddy.exe"
+New-Item -ItemType Directory -Force -Path `$caddyDir | Out-Null
+$remotePublicHttpFirewall
+if (-not (Test-Path -LiteralPath `$caddyExe)) {
+    `$caddyZip = "C:\Windows\Temp\caddy.zip"
+    Invoke-WebRequest -Uri "https://github.com/caddyserver/caddy/releases/download/v$CaddyVersion/caddy_${CaddyVersion}_windows_amd64.zip" -OutFile `$caddyZip
+    Expand-Archive -Path `$caddyZip -DestinationPath `$caddyDir -Force
+}
+}
+
 Unregister-ScheduledTask -TaskName `$taskName -Confirm:`$false -ErrorAction SilentlyContinue
 `$removedLegacyFiles = @(Remove-LegacyRelayRuntimeLayout -Root `$remoteRoot -LegacyFiles `$legacyRuntimeFiles)
 @{ timestamp = [DateTime]::UtcNow.ToString('o'); entry = 'scripts/rabilink-relay-server.mjs'; backupRoot = `$backupRoot; removedLegacyFiles = `$removedLegacyFiles } |

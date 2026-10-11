@@ -1,38 +1,46 @@
-# AIUI 设备 Agent 配置 HTTP（实验实现）
+# AIUI 设备 Agent 配置 HTTP（实验）
 
 [English](aiui-agent-profile-http_en.md) | 简体中文
 
-Relay 复用应用 `deviceBindings` 保存设备配置，不保存模型或 MCP 凭据。源码与本机隔离 HTTP 测试已完成，尚未部署或真机验收。
+设备配置由明确登记的 RabiPC 保存，Relay 只保存鉴权和固定连接归属。新版采用公共 Manager 接口；旧 Relay 配置、知识授权和配置编辑器入口已退役，所有客户端必须更新。旧业务数据不自动导入新配置。
 
-## 管理账号
+## 身份与数据归属
 
-`GET /manage/api/apps/:appId/devices/:bindingId/agent-profile` 返回 `{code:0,data:{profile,applied,savedRevision}}`。要求管理账号已认证且为该应用 owner。
+手机入口为“全天记录 → 设备 → 眼镜 → 眼镜设置 → 当前使用的人格”。AIUI 绑定人格后使用该人格身份、指引、Skill 和聊天记录，模型仍由乐奇配置。未绑定人格也能调用公共接口；绑定不限制权限、工作区或其它人格操作。启用 remoteAgent 后，已鉴权 Agent 可调用目标 PC 的全部公共 API，后续新增公共 API 沿同一通用传输使用。
 
-`PUT` 同路径，JSON 正文为 `{expectedRevision,idempotencyKey,profile}`。要求 `Content-Type: application/json`、`X-RabiLink-Profile-Write: 1`；拒绝 `Sec-Fetch-Site: cross-site`，提供 Origin 时必须与请求 Host 同 host/port。自定义头触发浏览器预检；该合同不授予凭据 CORS。反向代理必须保留公开 Host，不能靠伪造转发头绕过。管理认证沿既有账号会话/Basic 合同，不能使用设备 token 写配置。
+设备凭据登记时必须明确 `connectionTargetDeviceId`，它是该绑定固定的配置 owner PC。切换 PC B 的人格时，配置仍由 owner PC A 保存，工具与聊天记录默认调用人格来源 B；其它同应用 PC 可显式选为调用目标。配置归属只决定数据保存位置，不授予或限制调用者权限。
 
-profile 为 `{revision,id,name,systemPrompt,skills,mcp}`；revision 从 1 递增，expectedRevision 首次为 0。skills 为 `{id,title,content,enabled}`，mcp 仅 `{id,label,enabled}` 引用，不接受 token、URL 或执行命令。具体限额由 `scripts/rabilink-agent-profile.mjs` 校验。
+Relay 的 `GET /api/rabilink/devices/connections` 返回连接目录，不包含人格或 Skill。应用级公共设置首次通过 `PATCH /api/rabilink/mobile/connection` 的 `{connectionOwnerDeviceId}` 明确登记固定 owner，不从默认消息目标推断。已有固定归属不能通过修改默认目标或重置同一绑定凭据改变。
 
-CAS 失败返回 412，同键异意图 409；同键同正文返回原回执。每设备最多保留 128 个操作回执，满后失败关闭，不淘汰幂等键导致旧意图重放。生产长期运行前需补充受控回执生命周期，当前不可宣称无限配置更新。
+PC 首次确认连接归属后持久缓存元数据，已确认设备可在公网不可用时通过 LAN 继续使用；未知设备须先发现，不能猜 owner。同一应用作用域下发现相同设备的归属冲突时失败关闭。更换连接作用域隔离配置和缓存。
 
-## 手机管理界面
+身份来自经过验证的本地隧道或 Relay worker。Manager 仅在真正 loopback、本代 `x-rabilink-tunnel-local` 和受管传输成立时信任注入的设备 ID；正文和客户端自报头不能建立身份。应用管理凭据可保存指定设备配置，不能冒充眼镜确认应用；设备自身回执须来自原设备绑定。
 
-手机浏览器登录 Relay `/manage`，在应用的已绑定眼镜列表点击“Agent 设置”。ID、名称和系统提示使用表单；Skill 使用可视化条目编辑 ID、标题、指引内容与启用状态，可添加和删除；最多 16 项，每项内容 8000 字符、总内容 24000 字符，按钮至少 44px。JSON 高级模式与可视模式互斥，切入时同步草稿，返回或保存时必须通过同一 profile 校验；错误 JSON 保留原文本且不发送，不另建配置真源。MCP 提供固定 `rabi-knowledge` 的启用开关及显示名称表单；无引用时仅在明确开启后添加，关闭保留条目与名称。未知引用按原顺序和启用状态只读保留，并说明此应用不支持；只有高级 JSON 明确编辑才改变或删除。已有 16 项且没有已知引用时禁止追加，不淘汰原项。高级 JSON 与表单共用一个草稿且互斥，无效文本保留并阻止发送。授权请另开设备“知识授权”；不接受 URL、Token、command，不安装第三方服务或扩展权限。页面分别显示已保存版本、模型应用回执和“MCP 未验证”，不把引用保存当作连接成功。
+## 公共 PC 接口
 
-初次回读、保存中及待确认时冻结全部字段和 Skill 操作。保存前校验完整 profile。迟到响应若账号已改变，不清原待确认正文、不更新版本，也不将旧面板重新加入新账号的阻塞集合。网络失败或不完整回执会冻结原正文和幂等键，只允许回读，不自动重发或换键；发送前先将精确正文和幂等键保存到当前标签页 `sessionStorage`，按已认证账号 ID、应用 ID 和绑定 ID 隔离，存储失败则不发送；不保存 Token。硬刷新后只有同账号通过设备归属 GET 校验才恢复待确认请求，不自动重放。成功回执须通过完整 profile 规范化比对及 applied 字段校验，只有键和版本相同不足以确认。待确认写入按原键查询 `GET /manage/api/apps/:appId/devices/:bindingId/agent-profile/operations/:key` 的历史回执（`{code:0,data:{receipt}}`），因此当前配置被更高版本覆盖后仍可确认旧写入；`receipt:null` 不代表失败，不触发重发。确认成功或明确拒绝后清理记录，退出账号隐藏原编辑器，其他账号不能恢复它。关闭标签页或清除浏览器数据仍可能丢失记录，因此页面会提示离开风险，并阻止应用列表刷新覆盖编辑器。412 必须回读最新配置再确认；128 条回执容量满时明确提示维护，不通过换键绕过。回读会覆盖未保存的编辑，请先自行保留草稿。
+| 方法与路径 | 结果 |
+| --- | --- |
+| `GET /api/rabilink/agent-devices` | 当前应用连接作用域内的已保存配置列表 |
+| `GET /api/rabilink/agent-devices/{deviceId}/profile` | `{code:0,data:{profile,applied,savedRevision}}` |
+| `PUT` 同路径 | 保存 `{expectedRevision,idempotencyKey,profile}` |
+| `GET /api/rabilink/agent-devices/{deviceId}/profile/operations/{key}` | `{code:0,data:{receipt}}`，按原键读取历史回执 |
+| `POST /api/rabilink/agent-devices/self/profile/receipt` | 原设备确认 `{idempotencyKey,appliedRevision,status,errorCode?}` |
+| `POST /api/rabilink/persona-template` | `{roleId,skillIds}`，读取被请求 PC 的人格模板 |
 
-管理页实际 JavaScript 的 Node 内置最小 DOM 模拟测试（非浏览器布局测试、无外部依赖）覆盖安全文本渲染、双击去重、写入头、刷新恢复、跨账号隔离、存储失败拒发、异常回读、412 和容量错误；本次相关测试 18/18 通过；真实 Chrome 320/390/768px 下可视化添加 Skill、保存与 GET 回读一致，错误高级 JSON 零写入且文本保留，无横向溢出，按钮至少 44px。未知回执和迟到账号隔离由实际页面 DOM 测试覆盖。后续 MCP 选择器相关纯测试与实际页面 DOM 测试 13/13 通过；Chrome 320/390/768px 开启引用、修改名称、保存并 GET 回读一致，同时保留原 Skill；无效高级 JSON 零 PUT 且原文保留，无横向溢出或页面错误。未知启用项保留、16 项边界、字段校验与冻结由纯测试覆盖。尚未部署或手机真机验收；MCP 选择器新增第 14 个 Relay 模块，已冻结的 13 模块候选 `0.3.15-d1ae4d594048` 不含此后续界面，原版本证据不能替代新界面验收。
+Android 使用通用加密 Manager Tunnel，顺序为 LAN → P2P → Relay。当前 AIUI 宿主只有 `wx.request` 时使用 `/api/rabilink/device/api` 的 buffered HTTP Relay 降级；这条降级不宣称已支持 LAN/P2P。请求固定 `targetDeviceId`，Relay 不读取 `personaRef` 或 `profileRevision` 来决定路由。见[通用接口传输](../apps/rabilink-aiui/docs/generic-api-transport.md)与[Relay 合同](rabilink-relay-server.md)。
 
-## 设备
+profile 为 `{revision,id,name,systemPrompt,skills,mcp,personaRef?}`。`personaRef` 为 `null` 或 `{roleId,sourceDeviceId}`；保存时核对该来源 PC 确实存在该人格。Skill 为 `{id,title,content,enabled}`；MCP 为 `{id,label,enabled}` 引用，不能包含 Token、URL 或执行命令。引用不是授权，保存也不代表连接或工具执行成功。
 
-设备凭据通过现有 `x-rabilink-token` 请求头携带，仅接受已启用绑定的独立设备凭据；应用 token 拒绝。
+限额由 `packages/rabilink-agent-contract/profile.mjs` 唯一定义：ID/名称 128 字符，系统指引 8000 字符，Skill 最多 16 项、单项正文 8000、正文总量 24000，MCP 最多 16 项。模板读取支持 Manager 的原始 JSON envelope 或一次解包回调，前后核对来源 application generation。
 
-- `GET /api/rabilink/device/agent-profile`：仅自身配置。
-- `POST /api/rabilink/device/agent-profile/applied`：正文 `{idempotencyKey,appliedRevision,status,errorCode?}`。status 为 `applied` 或 `failed`，失败必须带受限 errorCode。不得确认未保存版本或倒退已应用版本。
+## 写入与回执
 
-已保存不等于眼镜已应用；设备应用回执也不能替代真实 MCP 连接或工具执行证据。
+profile revision 从 1 递增，首次 `expectedRevision` 为 0。CAS 冲突返回 412，同键异意图返回 409，同键同意图返回原回执。每设备保留最多 128 个操作回执，容量满时失败关闭，不淘汰原键。客户端同时保留通用请求 `operationId` 与 profile `idempotencyKey`，不能在超时后换键重放写入。
 
-## 存储与验证
+结果不确定时回读原操作回执和资源。`receipt:null` 不能证明原写入失败；更高版本覆盖当前配置后仍可按原键核对旧回执。设备应用回执的 `status` 为 `applied` 或 `failed`，失败须带受限 `errorCode`；不得确认未保存版本或倒退已应用版本。已保存、设备已应用、实际 Skill/工具执行和硬件唤醒是不同证据。
 
-现有单 Relay 进程内同步读改写，无 await 间隙；完整文件写到同目录独占临时文件，fsync 后 rename。读取或已存配置校验失败时拒绝继续，不以空数据覆盖旧文件。未声明多进程共享文件写入安全或跨平台断电事务保证。
+PC 按应用连接作用域保存配置和回执。异步来源读取后、写入前再次核对 scope 与来源身份。文件写入使用同目录临时文件、fsync、旧文件快照和完整回读，失败恢复快照；损坏存储失败关闭。没有宣称多进程共享文件写入或跨平台断电事务保证。
 
-隔离 fixture 启动真实 Relay，仅使用临时账号、设备和文件，验证身份、CSRF、CAS、幂等、重启恢复及损坏存储失败关闭。不操作公网 Relay 或真实用户配置。
+## 验证状态
+
+隔离测试启动真实 Relay 与 PC owner，仅使用临时账号、凭据和文件，覆盖通用 HTTP、固定目标、管理保存、设备自身应用回执、冒领拒绝、CAS、原键查询、重启恢复和旧入口退役。公网部署、真实眼镜按键唤醒、ASR/TTS 并行与引导、乐奇登录和未发布版本上传须单独验收，不能由 fixture 代替。完整流程见[验收清单](aiui-agent-acceptance.md)。

@@ -4,6 +4,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { buildPackageStaging } from "./Build-RabiLinkAiuiPackage.mjs";
+import { publicApiTransportPolicy } from "./Audit-WebguiCoverage.mjs";
 
 const projectRoot = path.resolve(import.meta.dirname, "..");
 const files = {
@@ -184,22 +185,18 @@ assert(pageInk.includes("createAiuiAsrInputAdapter") && pageInk.includes("create
 assert(!pageInk.includes("new SpeechSynthesisUtterance") && !pageInk.includes("speechSynthesis.speak("), "AIUI home page must not bypass the TTS adapter.");
 assert(voiceRuntimeSource.includes("requiresApiKey: false") && voiceRuntimeSource.includes("networkFallback: false"), "AIUI native voice capabilities must explicitly reject API-key and network fallback requirements.");
 for (const behavior of [
-  "startTranscription()",
+  "startTranscription({ interactive = false } = {})",
   "scheduleTranscriptionRestart(",
-  "flushTranscriptQueue()",
+  "startDeviceAgentOwner()",
   "requestConfigurationAssistant(",
   "switchToTranscription(",
   "executeConfigurationIntent(",
-  "pollAgentMessages("
+  "deviceAgentPageMethods"
 ]) {
   assert(pageInk.includes(behavior), `AIUI dual-mode runtime is missing ${behavior}.`);
 }
-assert(
-  read(files.rabilinkApi).includes('"/rokid/rabilink/input"')
-    && read(files.rabilinkApi).includes('`/rokid/rabilink/messages?${query.toString()}`')
-    && !read(files.rabilinkApi).includes('"/rokid/rabilink/tasks"'),
-  "AIUI must use a message input endpoint and one cursor-based downlink stream without a glasses-side task lifecycle."
-);
+assert(!pageInk.includes("speakFallback") && !voiceRuntimeSource.includes("synthesis.speak("), "Agent speech must use an owned stoppable synthesis player without a shared-player fallback.");
+assert(!read(files.rabilinkApi).includes("/rokid/rabilink/input") && !read(files.rabilinkApi).includes("/rokid/rabilink/messages"), "Retired observer endpoints must not remain in the client.");
 const agentsMd = read(files.agentsMd);
 assert(agentsMd.includes("mode=transcription") && agentsMd.includes("mode=configuration"), "Agent instructions must route both product modes through the same page tool.");
 assert(agentsMd.includes("不需要额外导入 RabiLinkMessage"), "Agent instructions must explicitly remove the separate RabiLinkMessage plugin requirement.");
@@ -553,22 +550,21 @@ function webguiCalls(source) {
     }));
 }
 
-function relayAllowsWebguiPath(source, call) {
-  return source.includes(`upperMethod === "${call.method}"`)
-    && source.includes(`pathname === "${call.path}"`);
+function managerTransportAllows(call) {
+  return publicApiTransportPolicy(call.method, call.path);
 }
 
 const rabilinkApi = read(files.rabilinkApi);
 const relayServer = read(files.relayServer);
 assert(
-  rabilinkApi.includes("/api/rabilink/mobile/webgui")
-    && relayServer.includes('url.pathname === "/api/rabilink/mobile/webgui"'),
-  "Relay/mobile API contract is missing /api/rabilink/mobile/webgui."
+  !rabilinkApi.includes("/api/rabilink/mobile/webgui")
+    && rabilinkApi.includes("requestManagerJson")
+    && rabilinkApi.includes("/api/rabilink/device/api"),
+  "Configuration helpers must use the generic Manager HTTP transport."
 );
 for (const endpoint of [
   "/api/rabilink/mobile/state",
-  "/api/rabilink/mobile/target",
-  "/api/rabilink/mobile/routes"
+  "/api/rabilink/mobile/target"
 ]) {
   assert(
     rabilinkApi.includes(endpoint) && relayServer.includes(endpoint),
@@ -579,11 +575,11 @@ for (const endpoint of [
 const calls = webguiCalls(pageInk);
 assert(calls.length > 0, "AIUI page must call at least one mobile WebGUI endpoint.");
 const missingWebguiPaths = calls
-  .filter((call) => !relayAllowsWebguiPath(relayServer, call))
+  .filter((call) => !managerTransportAllows(call))
   .map((call) => `${call.method} ${call.path}`);
 assert(
   missingWebguiPaths.length === 0,
-  `Relay mobile WebGUI whitelist does not cover AIUI calls: ${missingWebguiPaths.join(", ")}`
+  `Generic Manager transport does not cover AIUI calls: ${missingWebguiPaths.join(", ")}`
 );
 
 for (const path of [
@@ -602,8 +598,8 @@ for (const path of [
 ]) {
   assert(pageInk.includes(`"${path}"`), `AIUI tool surface must declare ${path}.`);
   assert(
-    relayAllowsWebguiPath(relayServer, { method: "POST", path }),
-    `Relay mobile WebGUI whitelist must allow POST ${path}.`
+    managerTransportAllows({ method: "POST", path }),
+    `Generic Manager transport must allow POST ${path}.`
   );
 }
 
@@ -613,8 +609,8 @@ for (const path of [
 ]) {
   assert(pageInk.includes(`"${path}"`), `AIUI tool surface must declare ${path}.`);
   assert(
-    relayAllowsWebguiPath(relayServer, { method: "GET", path }),
-    `Relay mobile WebGUI whitelist must allow GET ${path}.`
+    managerTransportAllows({ method: "GET", path }),
+    `Generic Manager transport must allow GET ${path}.`
   );
 }
 
@@ -625,8 +621,8 @@ for (const action of ["start", "stop", "restart", "delete", "manual-trigger"]) {
   );
 }
 assert(
-  relayServer.includes("\\/gateways\\/[^/]+\\/") && relayServer.includes("manual-trigger") && relayServer.includes("delete"),
-  "Relay mobile WebGUI whitelist must allow route runtime actions."
+  ["manual-trigger", "delete"].every(action => managerTransportAllows({method:"POST",path:`/api/rabi/instances/fixture/gateways/fixture/${action}`})),
+  "Generic Manager transport must allow route runtime actions."
 );
 assert(!pageInk.includes("startManager") && !pageInk.includes("shutdownManager"), "AIUI must not own the PC application lifecycle.");
 assert(!relayServer.includes('pathname === "/manager/start"') && !relayServer.includes('pathname === "/manager/shutdown"'), "Relay must not proxy PC application lifecycle commands.");

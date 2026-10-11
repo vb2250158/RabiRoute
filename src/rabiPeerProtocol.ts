@@ -66,16 +66,20 @@ export class RabiPeerDispatcher {
       if (request.targetDeviceId !== identity.deviceId) throw new Error("peer_target_changed");
       const describe = request.capability === "system" && request.operation === "describe";
       if (!describe && request.generation !== identity.generation) throw new Error("peer_generation_changed");
-      const registered = this.options.operations.find(item => item.capability === request.capability && item.operation === request.operation);
+      // peer-rpc-v1 is a transport control channel. Business APIs use the generic
+      // Manager tunnel, even if an obsolete caller accidentally registers an operation.
+      const transportControl = (capability: string, operation: string) => capability === "transport" && ["offer", "tunnel"].includes(operation);
+      const registered = this.options.operations.find(item => transportControl(item.capability, item.operation) && item.capability === request.capability && item.operation === request.operation);
       if (describe) {
         reply.data = { identity, operations: this.options.operations
-          .filter(item => this.options.allowed().includes(`${item.capability}.${item.operation}`))
-          .map(({ capability, operation }) => ({ capability, operation, readOnly: true })) };
+          .filter(item => transportControl(item.capability, item.operation) && this.options.allowed().includes(`${item.capability}.${item.operation}`))
+          .map(({ capability, operation }) => ({ capability, operation, readOnly: false, controlPlane: true })) };
       } else {
         if (!registered || !this.options.allowed().includes(`${request.capability}.${request.operation}`)) throw new Error("peer_operation_denied");
         reply.data = await registered.execute(request.input);
       }
       if (this.options.identity().generation !== identity.generation || this.options.token() !== token) throw new Error("peer_generation_changed");
+      if (!describe && !this.options.allowed().includes(`${request.capability}.${request.operation}`)) throw new Error("peer_operation_denied");
       reply.ok = true;
     } catch (error) {
       // Business errors can contain local paths or content. Only protocol errors cross the boundary.

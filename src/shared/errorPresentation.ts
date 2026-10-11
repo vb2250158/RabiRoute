@@ -22,6 +22,9 @@ const reasons: Record<string, [string, string]> = {
   request_failed: ["请求未完成，服务器未提供更具体原因。", "The request did not complete and no more specific cause was provided."],
 };
 const exact: Record<string, string> = {
+  "Manager read worker termination is still in progress; retry shortly.": "读取服务正在恢复，请稍后重试。",
+  "Manager read worker termination is still in progress.": "读取服务正在恢复，请稍后重试。",
+  "Manager read workers are busy; retry shortly.": "读取服务暂时繁忙，请稍后重试。",
   "DSH authentication configuration has no matching endpoint.": "旧 DSH 连接配置没有当前地址的条目；这不证明会话不存在或 Agent 无权查询。",
   "DSH authentication configuration is unreadable.": "无法读取旧 DSH 连接配置，请检查指定配置文件是否存在且可读。",
   "DSH authentication configuration is invalid JSON.": "旧 DSH 连接配置不是有效 JSON。",

@@ -125,6 +125,7 @@ export type CodexDesktopBridgeOptions = {
 };
 
 type CodexDesktopTurnDelivery = {
+  assertAuthorized?: () => void | Promise<void>;
   threadId: string;
   prompt: string;
   cwd: string;
@@ -608,8 +609,9 @@ export class CodexDesktopBridge {
     }
   }
 
-  private async request(method: string, params: unknown, version = 1, beforeInitialized = false, requestId = randomUUID()): Promise<IpcResponse> {
+  private async request(method: string, params: unknown, version = 1, beforeInitialized = false, requestId = randomUUID(), assertAuthorized?: () => void | Promise<void>): Promise<IpcResponse> {
     if (!beforeInitialized) await this.connect();
+    await assertAuthorized?.();
     const response = new Promise<IpcResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
@@ -743,7 +745,7 @@ export class CodexDesktopBridge {
           cwd: params.cwd,
           createdAt: Date.now()
         }
-      }, desktopIpcProtocolVersion.followerSteerTurn, false, requestId);
+      }, desktopIpcProtocolVersion.followerSteerTurn, false, requestId, params.assertAuthorized);
       const error = responseError(response, method);
       if (error) throw error;
       this.deliveryEvent(params, "steer_accepted", { method, requestId, elapsedMs: Date.now() - startedAt, outcome: "accepted" });
@@ -822,7 +824,7 @@ export class CodexDesktopBridge {
       const response = await this.request(method, {
         conversationId: params.threadId,
         turnStart: this.startTurnEnvelope(params)
-      }, desktopIpcProtocolVersion.followerStartTurn, false, requestId);
+      }, desktopIpcProtocolVersion.followerStartTurn, false, requestId, params.assertAuthorized);
       const error = responseError(response, method);
       if (error) throw error;
       this.deliveryEvent(params, "start_accepted", { method, requestId, elapsedMs: Date.now() - startedAt, outcome: "accepted", action: "started" });
