@@ -6,6 +6,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.32 - 2026-10-12
+
+- Read Codex Hook role sources and knowledge through the bounded storage process. Serialize requests per session; reject late results after unbinding or ownership changes, and do not stamp successful context after read failures.
+- Await original evidence before committing critical-fact outcomes, then recheck request identity and requirement revision. Slow storage does not block health requests.
+- Read existing plan-advance workflow and policy asynchronously without materializing workflow inside requests. Preserve revision checks and unreadable-storage failures.
+- Use an independent DSH authentication exchange for calls with cancellation signals, so one cancelled request does not affect others.
+- Source synchronization only; installed-runtime and physical-device acceptance remain separate.
+
 ## 0.3.31 - 2026-10-11
 
 - Merge upstream 0.3.30 with local pet, all-day recording, speech and home-device changes. Preserve the public API contract for authenticated remote Agents and request checks after explicit user disable settings.

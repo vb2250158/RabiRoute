@@ -44,6 +44,13 @@ export class PlanAdvanceStore {
       return doc;
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; return { version: 1, policies: {}, receipts: {} }; }
   }
+  async readAsync(): Promise<AdvanceDocument> {
+    try {
+      const doc = JSON.parse(await fs.promises.readFile(this.file, "utf8")) as AdvanceDocument;
+      if (doc.version !== 1 || !doc.policies || !doc.receipts) throw new Error("Invalid advance store.");
+      return doc;
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; return { version: 1, policies: {}, receipts: {} }; }
+  }
   edit<T>(fn: (doc: AdvanceDocument) => T): T {
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     return withFileLockSync(this.file + ".lock", () => {
@@ -51,7 +58,7 @@ export class PlanAdvanceStore {
       atomicWriteFileSync(this.file, JSON.stringify(doc, null, 2) + "\n"); return result;
     });
   }
-  policy(workspace: string) { const doc = this.read(); const key = advanceHash(planWorkspaceIdentity(workspace)); const policy = doc.policies[key] ?? emptyAdvancePolicy(); return { policy, revision: advanceHash(policy) }; }
+  policy(workspace: string, doc: AdvanceDocument = this.read()) { const key = advanceHash(planWorkspaceIdentity(workspace)); const policy = doc.policies[key] ?? emptyAdvancePolicy(); return { policy, revision: advanceHash(policy) }; }
   save(workspace: string, policy: AdvancePolicy, revision: string): void {
     this.edit(doc => {
       const key = advanceHash(planWorkspaceIdentity(workspace)); const previous = doc.policies[key] ?? emptyAdvancePolicy();

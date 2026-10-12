@@ -48,7 +48,12 @@ import { listOpenPlanFeedbackRecoveryCandidates } from "./planFeedbackRecoveryDi
 import type { GatewayDiagnosticsWorkerInput } from "./gatewayDiagnosticsSnapshot.js";
 import { readGatewayStatusInWorker } from "./gatewayStatusSnapshot.js";
 
+import { verifyCriticalProjectFactRecord, type CriticalProjectFactRecordVerificationInput } from "../messageProcessing/criticalFactRecord.js";
+import { readCodexHookContextInput, type CodexHookContextReadRequest } from "./codexHookContextRead.js";
+
 export type ManagerReadWorkerTask =
+  | { type: "codex_hook_context_read"; input: CodexHookContextReadRequest }
+  | { type: "critical_fact_record_verify"; input: CriticalProjectFactRecordVerificationInput }
   | { type: "all_day_recording_read"; input: import("./allDayRecordingReadStorage.js").AllDayReadJob }
   | { type: "gateway_status_snapshot"; statusPath: string }
   | { type: "desktop_pet_catalog"; roleId: string; roleDir: string; cacheRoot: string; options: import("./desktopPetRoutes.js").DesktopPetPackCatalogOptions }
@@ -299,6 +304,11 @@ async function execute(task: ManagerReadWorkerTask): Promise<unknown> {
     }
     case "knowledge_search_delta":
       return readKnowledgeStorageDelta(task.roleDir, task.previous);
+    case "critical_fact_record_verify":
+      verifyCriticalProjectFactRecord(task.input);
+      return true;
+    case "codex_hook_context_read":
+      return readCodexHookContextInput(task.input);
     case "role_knowledge_catalog_snapshot":
       return readRoleKnowledgeCatalogSnapshot(task.roleDir) satisfies RoleKnowledgeCatalogSnapshot;
     case "role_plan_catalog": {

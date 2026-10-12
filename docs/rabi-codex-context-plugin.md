@@ -10,6 +10,8 @@
 
 该插件只注册并执行自身 `PLUGIN_ROOT` 下的 Hook。安装、升级和运行均不改写其他插件的 `hooks.json`、市场条目或启用状态，可与独立的语言风格 Hook 同时加载。
 
+Manager 将人格资料与知识召回的物理读取交给受限存储进程，保留原有召回与查看时间规则。同一会话的上下文请求按顺序处理；每次异步读取后复核会话归属与绑定，解绑或变更会拒绝迟到结果。读取失败不记录成功指纹，可恢复后重试，慢存储期间健康请求仍可响应。
+
 ## 人格可配置的 Stop 追问
 
 `personaConfig.json.codexHooks.planFollowup` 拥有 `enabled`（默认 false）、`cooldownSeconds`（默认 300）和有序 `rules`。每条规则包含稳定 `id`、`enabled`、`statusKeys` 和 `prompt`。状态 key 引用该人格状态目录，没有内置业务状态触发列表。Manager 在唯一业务任务绑定下匹配第一条规则，返回 `followup: { decision: "block", reason }`，插件只转换为 Codex Stop 输出。配置保存复用人格 Repository，UI 位于「自动化 → Agent Hook」。

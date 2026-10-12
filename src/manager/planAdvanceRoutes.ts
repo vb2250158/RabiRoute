@@ -1,7 +1,7 @@
 import type http from "node:http";
 import { getPlanAsync, type PlanItem } from "../roleKnowledge.js";
 import { listPlanFeedbackAsync } from "../planFeedbackStore.js";
-import { ensurePersonaPlanWorkflow } from "../personaPlanWorkflow.js";
+import type { PersonaPlanWorkflowReadResult } from "../personaPlanWorkflow.js";
 import { planWorkspaceIdentity, parseWorkspacePlanQuery } from "../planWorkspaceQuery.js";
 import { planAgentStatusService } from "./planAgentStatus.js";
 import { managerKnowledgePageWorkerPool } from "./managerReadWorkerPool.js";
@@ -28,18 +28,22 @@ export function handlePlanAdvanceApi(request: http.IncomingMessage, url: URL, re
     const body = request.method === "GET" ? {} : await bodyOf(request);
     const workspace = planWorkspaceIdentity(String(body.workspace ?? url.searchParams.get("workspace") ?? ""));
     if (!workspace) throw new Error("Absolute workspace required.");
-    const store = new PlanAdvanceStore(dir); const workflow = ensurePersonaPlanWorkflow(dir).workflow;
+    // Startup migration owns workflow materialization; request handlers only read
+    // through the bounded storage process so slow shared files cannot stop /health.
+    const workflowResult = await managerKnowledgePageWorkerPool.run<PersonaPlanWorkflowReadResult | null>({ type: "role_plan_workflow", roleDir: dir });
+    if (!workflowResult) throw new Error("Role plan workflow is warming; retry shortly.");
+    const store = new PlanAdvanceStore(dir); const workflow = workflowResult.workflow;
     if (match[2] === "settings") {
       if (request.method === "PUT") store.save(workspace, parseAdvancePolicy(body.policy, workflow), String(body.revision || ""));
       else if (request.method !== "GET") throw new Error("Unsupported method.");
-      json(response, 200, { code: 0, data: { ...store.policy(workspace), statuses: workflow.statuses, roles: workflow.roles } }); return;
+      json(response, 200, { code: 0, data: { ...store.policy(workspace, await store.readAsync()), statuses: workflow.statuses, roles: workflow.roles } }); return;
     }
     if (request.method !== "POST") throw new Error("POST required.");
     const sessionIds = body.sessionIds;
     if (!Array.isArray(sessionIds) || sessionIds.length > 20000 || sessionIds.some(id => typeof id !== "string" || !id)) throw new Error("Session inventory required.");
     const trigger = String(body.trigger || "manual") as AdvanceTrigger;
     if (!["manual", "startup", "change", "idle", "due"].includes(trigger)) throw new Error("Invalid trigger.");
-    const { policy } = store.policy(workspace);
+    const { policy } = store.policy(workspace, await store.readAsync());
     if (!Object.values(policy.rules).some(rule => rule.enabled)) { json(response, 200, { code: 0, data: { items: [], total: 0, nextCursor: "" } }); return; }
     let ids: string[]; let nextCursor = ""; let total = 0;
     if (body.planIds !== undefined) {
@@ -53,7 +57,7 @@ export function handlePlanAdvanceApi(request: http.IncomingMessage, url: URL, re
       }));
       ids = page.items.map(item => item.id); total = page.total; nextCursor = page.nextCursor || "";
     }
-    const doc = store.read();
+    const doc = await store.readAsync();
     const plans = (await Promise.all(ids.map(id => getPlanAsync(dir, id)))).filter((plan): plan is PlanItem => !!plan);
     const evaluated = await Promise.all(plans.map(async plan => {
       const item = evaluateAdvance({ plan, workflow, policy, workspace, trigger, now: Date.now(), feedback: await listPlanFeedbackAsync(dir, plan.id), receipt: doc.receipts[store.receiptKey(workspace, plan.id)] });

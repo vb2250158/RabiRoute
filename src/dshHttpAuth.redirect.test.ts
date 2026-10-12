@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { connectDshOwner } from "./dshHttpAuth.js";
+import { connectDshOwner, dshAuthenticatedFetch } from "./dshHttpAuth.js";
 import { DshConnectionStore } from "./dshConnectionStore.js";
 
 test("current DSH relative root redirect connects, foreign or token redirects never do", async () => {
@@ -28,4 +28,56 @@ test("current DSH relative root redirect connects, foreign or token redirects ne
     }
     assert.equal(rpcCount, 1);
   } finally { globalThis.fetch = priorFetch; rmSync(root, { recursive: true, force: true }); }
+});
+
+test("cancelled legacy authentication cannot block or cancel another caller", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "dsh-exchange-cancellation-"));
+  const priorFetch = globalThis.fetch;
+  const priorAuth = process.env.RABI_DSH_AUTH_FILE;
+  const priorState = process.env.RABIROUTE_STATE_ROOT;
+  const origin = "http://127.0.0.1:39292";
+  const cookieName = `dsh-auth-${createHash("sha256").update(new URL(origin).host).digest("base64url")}`;
+  const launchLogPath = path.join(root, "launch.log");
+  const configPath = path.join(root, "auth.json");
+  writeFileSync(launchLogPath, `dsh web: ${origin}/?token=synthetic_test\n`);
+  writeFileSync(configPath, JSON.stringify({ endpoints: [{ baseUrl: origin, launchLogPath }] }));
+  process.env.RABI_DSH_AUTH_FILE = configPath;
+  process.env.RABIROUTE_STATE_ROOT = root;
+  const controller = new AbortController();
+  let entered!: () => void;
+  const firstExchange = new Promise<void>(resolve => { entered = resolve; });
+  let release!: () => void;
+  let exchanges = 0, rpcCount = 0;
+  globalThis.fetch = async (input, init) => {
+    if (new URL(String(input)).pathname === "/") {
+      if (++exchanges === 1) {
+        entered();
+        await new Promise<void>((_, reject) => {
+          release = () => reject(new Error("fixture exchange interrupted"));
+          init?.signal?.addEventListener("abort", release, { once: true });
+        });
+      }
+      return new Response(null, { status: 303, headers: { location: "./",
+        "set-cookie": `${cookieName}=v1.fixture.sig; Path=/; HttpOnly; SameSite=Strict; Max-Age=3600` } });
+    }
+    rpcCount++;
+    return Response.json({ ok: true });
+  };
+  try {
+    const cancelled = dshAuthenticatedFetch(origin, "session/list", "{}", undefined, controller.signal);
+    const rejection = assert.rejects(cancelled, /authentication exchange failed/);
+    await firstExchange;
+    const other = await dshAuthenticatedFetch(origin, "session/list", "{}", undefined, AbortSignal.timeout(1000));
+    assert.equal(other.status, 200);
+    controller.abort();
+    await rejection;
+    assert.equal(exchanges, 2);
+    assert.equal(rpcCount, 1);
+  } finally {
+    release?.();
+    globalThis.fetch = priorFetch;
+    if (priorAuth === undefined) delete process.env.RABI_DSH_AUTH_FILE; else process.env.RABI_DSH_AUTH_FILE = priorAuth;
+    if (priorState === undefined) delete process.env.RABIROUTE_STATE_ROOT; else process.env.RABIROUTE_STATE_ROOT = priorState;
+    rmSync(root, { recursive: true, force: true });
+  }
 });

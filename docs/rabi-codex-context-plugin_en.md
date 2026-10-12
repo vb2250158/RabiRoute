@@ -6,6 +6,8 @@ English | <a href="./rabi-codex-context-plugin.md">简体中文</a>
 
 # Rabi Codex Context plugin
 
+Manager delegates physical role-source and knowledge reads to the bounded storage process while preserving recall and viewed-time policies. Context requests run in order per session; after each asynchronous read, Manager rechecks session ownership and binding and rejects late results after changes or unbinding. Failed reads do not stamp successful context and can be retried after recovery. Health requests remain responsive during slow storage.
+
 ## Persona-configured Stop follow-ups
 
 `personaConfig.json.codexHooks.planFollowup` owns `enabled` (default false), `cooldownSeconds` (default 300), and ordered `rules`. Each rule has a stable `id`, `enabled`, `statusKeys`, and `prompt`. Status keys reference the persona's catalog; no business-state trigger list is built in. Manager matches the first rule for the uniquely bound business task and returns `followup: { decision: "block", reason }`. The thin plugin converts this to Codex Stop output. Persona Repository persists settings from Automation → Agent Hook.

@@ -255,10 +255,10 @@ export async function dshAuthenticatedFetch(baseUrl: string, method: string, bod
     const cacheKey = `${origin}\n${logPath}`;
     const cached = cookies.get(cacheKey);
     if (cached && cached.expires > Date.now()) cookie = cached.value;
-    else if (assertAuthorized) {
+    else if (assertAuthorized || signal) {
       // A revoked caller must neither populate a shared exchange nor poison another caller.
       cookie = (await exchange(origin, logPath, false, signal, assertAuthorized)).cookie;
-      await assertAuthorized();
+      await assertAuthorized?.();
     } else {
       let work = pending.get(cacheKey);
       if (!work) {

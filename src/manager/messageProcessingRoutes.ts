@@ -56,7 +56,7 @@ export type MessageProcessingApiContext = {
   };
   operationalLog: Pick<ManagerOperationalLog, "record">;
   recallKnowledge: (source: RegisterMessageGroupRequirementInput["source"]) => KnowledgeRecallMatch[];
-  verifyCriticalFactRecord: (input: CriticalFactVerificationInput) => void;
+  verifyCriticalFactRecord: (input: CriticalFactVerificationInput) => void | Promise<void>;
   setPlanBaseline: (
     requirement: MessageProcessingRequirement,
     roleId?: string,
@@ -119,16 +119,16 @@ function publishBoardChange(
   });
 }
 
-function verifyOutcomeRecords(
+async function verifyOutcomeRecords(
   context: MessageProcessingApiContext,
   requirement: MessageProcessingRequirement | undefined,
   body: MessageProcessingOutcomeInput
-): void {
+): Promise<void> {
   const roleId = String(body.roleId || requirement?.source.roleId || "").trim() || undefined;
   for (const disposition of body.knowledgeMatchDispositions || []) {
     for (const action of disposition.actions || []) {
       if (!action.recordType || !action.recordId || !action.verifiedAt) continue;
-      context.verifyCriticalFactRecord({
+      await context.verifyCriticalFactRecord({
         roleId,
         requirement: requirement
           ? { ...requirement, criticalFacts: [{ kind: "scope", evidence: action.evidence }] }
@@ -144,7 +144,7 @@ function verifyOutcomeRecords(
       });
     }
   }
-  context.verifyCriticalFactRecord({
+  await context.verifyCriticalFactRecord({
     roleId,
     requirement: requirement && body.projectFactAssessment?.status === "critical"
       ? { ...requirement, criticalFacts: body.projectFactAssessment.facts }
@@ -254,9 +254,13 @@ export function handleMessageProcessingApi(
   if (request.method === "POST" && outcomeMatch) {
     const requirementId = decodeURIComponent(outcomeMatch[1]);
     runTrackedOperation(context, readJsonBody<MessageProcessingOutcomeInput>(request)
-      .then((body) => {
+      .then(async (body) => {
         const requirement = context.board.getRequirement(requirementId);
-        verifyOutcomeRecords(context, requirement, body);
+        await verifyOutcomeRecords(context, requirement, body);
+        validateLanAgentRequestBody(request, body);
+        if (requirement && context.board.getRequirement(requirementId)?.updatedAt !== requirement.updatedAt) {
+          throw new Error("Message processing requirement changed; retry verification.");
+        }
         return { body, data: context.board.submitOutcome(requirementId, body) };
       })
       .then(({ body, data }) => {
@@ -275,12 +279,12 @@ export function handleMessageProcessingApi(
   if (request.method === "POST" && knowledgeCallbackMatch) {
     const requirementId = decodeURIComponent(knowledgeCallbackMatch[1]);
     runTrackedOperation(context, readJsonBody<KnowledgeMatchCallbackInput>(request)
-      .then((body) => {
+      .then(async (body) => {
         const requirement = context.board.getRequirement(requirementId);
         if (!requirement) throw new Error(`Message processing requirement not found: ${requirementId}`);
         const roleId = String(requirement.source.roleId || "").trim() || undefined;
         if ((body.result === "updated" || body.result === "created") && body.recordType && body.recordId) {
-          context.verifyCriticalFactRecord({
+          await context.verifyCriticalFactRecord({
             roleId,
             requirement: {
               ...requirement,
@@ -295,6 +299,10 @@ export function handleMessageProcessingApi(
               verifiedAt: body.verifiedAt
             }
           });
+        }
+        validateLanAgentRequestBody(request, body);
+        if (context.board.getRequirement(requirementId)?.updatedAt !== requirement.updatedAt) {
+          throw new Error("Message processing requirement changed; retry verification.");
         }
         return context.board.recordKnowledgeCallback(requirementId, body);
       })

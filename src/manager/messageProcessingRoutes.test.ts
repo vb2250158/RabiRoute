@@ -132,7 +132,7 @@ function createFixture() {
         revisionAt: "2026-08-20T00:00:00.000Z"
       }];
     },
-    verifyCriticalFactRecord: (input) => remember("verify", input),
+    verifyCriticalFactRecord: (input) => { remember("verify", input); },
     setPlanBaseline: (item, roleId, planId) => remember("baseline", item, roleId, planId),
     scheduleKnowledgeCallbackReminder: (item) => remember("schedule", item),
     publishEvent: (eventType, data) => remember("event", eventType, data),
@@ -147,6 +147,7 @@ function createFixture() {
 async function startServer(context: MessageProcessingApiContext) {
   const server = http.createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    if (url.pathname === "/health") { response.end("ready"); return; }
     if (handleMessageProcessingApi(request, url, response, context)) return;
     response.writeHead(404, { "content-type": "application/json" });
     response.end(JSON.stringify({ fallback: true }));
@@ -440,4 +441,58 @@ test("registers complete asynchronous message-processing request chains", async 
   } finally {
     await app.close();
   }
+});
+
+function verificationGate() {
+  let release!: () => void;
+  const promise = new Promise<void>(resolve => { release = resolve; });
+  return { promise, release };
+}
+async function bounded<T>(promise: Promise<T>): Promise<T> {
+  let timer!: ReturnType<typeof setTimeout>;
+  try { return await Promise.race([promise, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("Storage blocked independent request")), 1000); })]); }
+  finally { clearTimeout(timer); }
+}
+for (const operation of ["outcome", "knowledge-callback"] as const) {
+  test(`${operation} keeps health responsive and waits for asynchronous evidence before committing`, async () => {
+    const fixture = createFixture(), entered = verificationGate(), wait = verificationGate();
+    fixture.context.verifyCriticalFactRecord = async () => { entered.release(); await wait.promise; };
+    const app = await startServer(fixture.context);
+    const body = operation === "outcome" ? { decision: "reply" } : {
+      knowledgeId: "memory-old", knowledgeType: "recent_memory", result: "updated", responseAction: "reply",
+      recordType: "memory", recordId: "memory-new", evidence: "message-1", verifiedAt: "2026-08-21T01:00:00.000Z"
+    };
+    const pending = post(app.baseUrl, `/api/message-processing/requirements/${operation === "outcome" ? "req-outcome" : "req-callback"}/${operation}`, body);
+    try {
+      await bounded(entered.promise);
+      assert.equal(await (await bounded(fetch(app.baseUrl + "/health"))).text(), "ready");
+      assert.equal(fixture.calls.some(call => call.name === "submitOutcome" || call.name === "recordKnowledgeCallback"), false);
+      wait.release(); assert.equal((await bounded(pending)).status, 200);
+      assert.equal(fixture.calls.some(call => call.name === (operation === "outcome" ? "submitOutcome" : "recordKnowledgeCallback")), true);
+    } finally { wait.release(); await pending.catch(() => {}); await app.close(); }
+  });
+}
+test("asynchronous evidence failure never commits an outcome", async () => {
+  const fixture = createFixture();
+  fixture.context.verifyCriticalFactRecord = async () => { throw new Error("Physical evidence unavailable"); };
+  const app = await startServer(fixture.context);
+  try {
+    const response = await post(app.baseUrl, "/api/message-processing/requirements/req-outcome/outcome", { decision: "reply" });
+    assert.equal(response.status, 400);
+    assert.equal(fixture.calls.some(call => call.name === "submitOutcome" || call.name === "baseline" || call.name === "event"), false);
+  } finally { await app.close(); }
+});
+test("outcome verification rejects a requirement changed while storage was pending", async () => {
+  const fixture = createFixture(), entered = verificationGate(), wait = verificationGate();
+  const originalGet = fixture.context.board.getRequirement;
+  let changed = false;
+  fixture.context.board.getRequirement = id => { const item = originalGet(id); return item && changed ? { ...item, updatedAt: "2026-08-21T01:01:00.000Z" } : item; };
+  fixture.context.verifyCriticalFactRecord = async () => { entered.release(); await wait.promise; };
+  const app = await startServer(fixture.context);
+  const pending = post(app.baseUrl, "/api/message-processing/requirements/req-outcome/outcome", { decision: "reply" });
+  try {
+    await bounded(entered.promise); changed = true; wait.release();
+    assert.equal((await bounded(pending)).status, 400);
+    assert.equal(fixture.calls.some(call => call.name === "submitOutcome"), false);
+  } finally { wait.release(); await pending.catch(() => {}); await app.close(); }
 });

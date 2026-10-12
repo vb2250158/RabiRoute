@@ -591,7 +591,7 @@ import {
   normalizeRolePlanPageLimit,
   previewRolePlan
 } from "../roleKnowledgePagination.js";
-import { verifyCriticalProjectFactRecord } from "../messageProcessing/criticalFactRecord.js";
+import { verifyCriticalProjectFactRecordInWorker as verifyCriticalProjectFactRecord } from "./criticalFactRead.js";
 import {
   planFeedbackResponseId,
   planFeedbackSummary,
@@ -1663,6 +1663,7 @@ const agentCompletionDelivery = new AgentCompletionDeliveryService({
   }
 });
 const codexHookContextService = new CodexHookContextService({
+  readContext: input => managerKnowledgePageWorkerPool.run({ type: "codex_hook_context_read", input }),
   deliverAgentCompletion: async request => {
     const results = await agentCompletionDelivery.handle(request);
     for (const result of results) {

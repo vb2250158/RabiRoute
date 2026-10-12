@@ -3,6 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import http from "node:http";
+import { readCodexHookContextInput, type CodexHookContextReadRequest } from "./codexHookContextRead.js";
 import { planJsonFile } from "../planStorageLayout.js";
 import {
   listRecentMemories,
@@ -24,7 +26,88 @@ function publishFixtureRoleKnowledge(roleDir: string): void {
   publishRoleKnowledgeCatalogSnapshot(roleDir, readRoleKnowledgeCatalogSnapshot(roleDir));
 }
 
+test("async hook reads keep HTTP health responsive through both physical read phases", async t => {
+  let release: (() => void) | undefined;
+  let arrived: (() => void) | undefined;
+  let arrival = new Promise<void>(resolve => { arrived = resolve; });
+  const reads: CodexHookContextReadRequest[] = [];
+  const { root, service } = fixture({ readContext: async input => {
+    reads.push(input);
+    await new Promise<void>(resolve => { release = resolve; arrived?.(); });
+    return readCodexHookContextInput(input);
+  } });
+  const server = http.createServer((req, res) => {
+    if (req.url === "/health") { res.end("ready"); return; }
+    void service.handleHook({ sessionId: "async-health", eventName: "UserPromptSubmit",
+      prompt: "[rabi:use YeYu] 统一管理", managerBaseUrl: "http://127.0.0.1:8790", turnId: "turn-health" })
+      .then(result => res.end(JSON.stringify(result)), error => { res.statusCode = 500; res.end(String(error)); });
+  });
+  t.after(async () => { release?.(); await new Promise<void>(resolve => server.close(() => resolve())); fs.rmSync(root, { recursive: true, force: true }); });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const url = `http://127.0.0.1:${address.port}`;
+  const pending = fetch(`${url}/hook`).then(res => res.json());
+  await arrival;
+  assert.equal(service.getBinding("async-health"), null);
+  assert.equal(await (await fetch(`${url}/health`, { signal: AbortSignal.timeout(1000) })).text(), "ready");
+  arrival = new Promise<void>(resolve => { arrived = resolve; });
+  release?.();
+  await arrival;
+  assert.equal(service.getBinding("async-health")?.baseFingerprint, undefined);
+  assert.equal(await (await fetch(`${url}/health`, { signal: AbortSignal.timeout(1000) })).text(), "ready");
+  release?.();
+  const result = await pending;
+  assert.match(result.additionalContext, /plan-hook/);
+  assert.ok(service.getBinding("async-health")?.baseFingerprint);
+  assert.deepEqual(reads.map(input => input.kind), ["role_source", "knowledge"]);
+});
+
+test("unbind during an async read fences the late reply and the queue recovers", async t => {
+  let release: (() => void) | undefined;
+  let arrived: (() => void) | undefined;
+  const arrival = new Promise<void>(resolve => { arrived = resolve; });
+  let delay = true;
+  const { root, service } = fixture({ readContext: async input => {
+    if (delay) await new Promise<void>(resolve => { release = resolve; arrived?.(); });
+    return readCodexHookContextInput(input);
+  } });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  service.bindSession("async-off", "YeYu");
+  const pending = service.handleHook({ sessionId: "async-off", eventName: "SessionStart", managerBaseUrl: "http://127.0.0.1:8790" });
+  const rejected = assert.rejects(pending, /binding changed/);
+  await arrival;
+  service.unbindSession("async-off");
+  delay = false;
+  release?.();
+  await rejected;
+  assert.equal(service.getBinding("async-off"), null);
+  const next = await service.handleHook({ sessionId: "async-off", eventName: "UserPromptSubmit", prompt: "[rabi:use YeYu]", managerBaseUrl: "http://127.0.0.1:8790" });
+  assert.equal(next.binding?.roleId, "YeYu");
+});
+
+test("async read failure does not stamp context and queued checkpoints retain deduplication", async t => {
+  let fail = true;
+  const { root, service } = fixture({ readContext: async input => {
+    if (fail) throw new Error("physical read unavailable");
+    return readCodexHookContextInput(input);
+  } });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  service.bindSession("async-retry", "YeYu");
+  const request: CodexHookContextRequest = { sessionId: "async-retry", eventName: "UserPromptSubmit", prompt: "触发器和注入器", turnId: "turn-retry", managerBaseUrl: "http://127.0.0.1:8790" };
+  await assert.rejects(service.handleHook(request), /physical read unavailable/);
+  assert.equal(service.getBinding(request.sessionId)?.baseFingerprint, undefined);
+  fail = false;
+  const [prompt, checkpoint] = await Promise.all([
+    service.handleHook(request),
+    service.handleHook({ ...request, eventName: "PreToolUse", toolName: "read", toolInput: { path: "触发器和注入器" } })
+  ]);
+  assert.match(prompt.additionalContext, /memory-hook/);
+  assert.equal(checkpoint.additionalContext, "");
+});
+
 function fixture(options: {
+  readContext?: CodexHookContextServiceOptions["readContext"];
   deliverPlanTaskCompletion?: (delivery: PlanTaskCompletionDelivery) => Promise<void>;
   deliverAgentCompletion?: (request: CodexHookContextRequest) => Promise<import("./agentCompletionDelivery.js").CompletionDeliveryResult[]>;
   hookEnabled?: (request: CodexHookContextRequest) => boolean;
@@ -86,7 +169,8 @@ function fixture(options: {
       isManagedAgentSession: options.isManagedAgentSession,
       recordAgentRequestStop: options.recordAgentRequestStop,
       planStorageReady: options.planStorageReady,
-      memoryConsolidationInputIds: options.memoryConsolidationInputIds
+      memoryConsolidationInputIds: options.memoryConsolidationInputIds,
+      readContext: options.readContext
     })
   };
 }

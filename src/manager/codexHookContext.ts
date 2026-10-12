@@ -2,7 +2,8 @@ import crypto, { randomUUID } from "node:crypto";
 import { planCanAutoAdvance } from "../planState.js";
 import fs from "node:fs";
 import path from "node:path";
-import { rabiContextManager, type RabiContextTriggerKind } from "../context/rabiContextManager.js";
+import { type RabiContextTriggerKind } from "../context/rabiContextManager.js";
+import { readCodexHookContextInput, type CodexHookContextReadRequest, type CodexHookContextReadReply, type CodexHookRoleSource } from "./codexHookContextRead.js";
 import { ensurePlanStorageLayout, listPlans, RoleKnowledgeCacheUnavailableError, type PlanItem } from "../roleKnowledge.js";
 import { ensurePersonaPlanWorkflow, planStatusDefinition } from "../personaPlanWorkflow.js";
 import { buildRoleKnowledgeContextView } from "../routing/roleKnowledgeContext.js";
@@ -156,6 +157,7 @@ export class CodexHookPlanStorageUnavailableError extends Error {
 }
 
 export type CodexHookContextServiceOptions = {
+  readContext?: (input: CodexHookContextReadRequest) => Promise<CodexHookContextReadReply>;
   deliverAgentCompletion?: (request: CodexHookContextRequest) => Promise<import("./agentCompletionDelivery.js").CompletionDeliveryResult[]>;
   rolesRoot: () => string;
   storePath: string;
@@ -385,6 +387,8 @@ export function parseCodexHookControl(prompt: string): CodexHookControl | null {
 }
 
 export class CodexHookContextService {
+  private readonly readContext?: CodexHookContextServiceOptions["readContext"];
+  private readonly contextQueues = new Map<string, { tail: Promise<void>; pending: number }>();
   private readonly rolesRoot: () => string;
   private readonly storePath: string;
   private readonly deliverPlanTaskCompletion?: (delivery: PlanTaskCompletionDelivery) => Promise<void>;
@@ -400,6 +404,7 @@ export class CodexHookContextService {
   private readonly deliverAgentCompletion?: CodexHookContextServiceOptions["deliverAgentCompletion"];
 
   constructor(options: CodexHookContextServiceOptions) {
+    this.readContext = options.readContext;
     this.deliverAgentCompletion = options.deliverAgentCompletion;
     this.rolesRoot = options.rolesRoot;
     this.storePath = path.resolve(options.storePath);
@@ -464,12 +469,16 @@ export class CodexHookContextService {
     this.assertSessionPersonaOwner?.(sessionId);
     const id = this.requireSessionId(sessionId);
     const role = this.requireRole(roleId);
+    return this.bindValidatedSession(id, role.roleId);
+  }
+
+  private bindValidatedSession(id: string, roleId: string): CodexHookSessionBinding {
     const store = this.readStore();
     const previous = store.sessions[id];
     const timestamp = nowIso();
     const binding: CodexHookSessionBinding = {
       sessionId: id,
-      roleId: role.roleId,
+      roleId,
       createdAt: previous?.createdAt ?? timestamp,
       updatedAt: timestamp
     };
@@ -529,10 +538,53 @@ export class CodexHookContextService {
         additionalContext: ""
       };
     }
-    return this.handleContext(request);
+    return this.readContext ? this.queueContext(request) : this.handleContext(request);
   }
 
   handleContext(request: CodexHookContextRequest): CodexHookContextResult {
+    const steps = this.contextSteps(request);
+    let step = steps.next();
+    while (!step.done) step = steps.next(readCodexHookContextInput(step.value));
+    return step.value;
+  }
+
+  private queueContext(request: CodexHookContextRequest): Promise<CodexHookContextResult> {
+    const sessionId = this.requireSessionId(request.sessionId);
+    const queue = this.contextQueues.get(sessionId) ?? { tail: Promise.resolve(), pending: 0 };
+    if (queue.pending >= 8 || (!queue.pending && this.contextQueues.size >= 32)) {
+      return Promise.reject(new Error("Codex hook context queue is full; retry."));
+    }
+    queue.pending++;
+    this.contextQueues.set(sessionId, queue);
+    const result = queue.tail.then(() => this.handleContextAsync(request));
+    queue.tail = result.then(() => undefined, () => undefined).finally(() => {
+      if (--queue.pending === 0) this.contextQueues.delete(sessionId);
+    });
+    return result;
+  }
+
+  private async handleContextAsync(request: CodexHookContextRequest): Promise<CodexHookContextResult> {
+    const steps = this.contextSteps(request);
+    let step = steps.next();
+    while (!step.done) {
+      const bindingBefore = JSON.stringify(this.getBinding(request.sessionId));
+      const reply = await this.readContext!(step.value);
+      this.assertSessionPersonaOwner?.(request.sessionId, request.cwd);
+      if (JSON.stringify(this.getBinding(request.sessionId)) !== bindingBefore) {
+        throw new Error("Codex hook binding changed while context was loading; retry.");
+      }
+      step = steps.next(reply);
+    }
+    return step.value;
+  }
+
+  private *readRoleContext(roleId: string): Generator<CodexHookContextReadRequest, CodexHookRoleSource, CodexHookContextReadReply> {
+    const reply = yield { kind: "role_source", rolesRoot: this.rolesRoot(), roleId };
+    if (reply.kind !== "role_source") throw new Error("Invalid Codex hook role source reply.");
+    return reply.source;
+  }
+
+  private *contextSteps(request: CodexHookContextRequest): Generator<CodexHookContextReadRequest, CodexHookContextResult, CodexHookContextReadReply> {
     this.assertSessionPersonaOwner?.(request.sessionId, request.cwd);
     const sessionId = this.requireSessionId(request.sessionId);
     if (!["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse"].includes(request.eventName)) {
@@ -543,6 +595,7 @@ export class CodexHookContextService {
     let binding = this.getBinding(sessionId);
     let action: CodexHookContextResult["action"] = control?.action ?? "none";
     let forceBase = request.eventName === "SessionStart";
+    let roleSource: CodexHookRoleSource | undefined;
 
     if (control?.action === "off") {
       this.unbindSession(sessionId);
@@ -554,7 +607,8 @@ export class CodexHookContextService {
     }
 
     if (control?.action === "bind") {
-      binding = this.bindSession(sessionId, control.roleId);
+      roleSource = yield* this.readRoleContext(control.roleId);
+      binding = this.bindValidatedSession(sessionId, roleSource.roleId);
       forceBase = true;
     }
 
@@ -576,7 +630,7 @@ export class CodexHookContextService {
           additionalContext: "[Rabi]\n当前会话没有绑定 Rabi 人格，无法刷新。"
         };
       }
-      this.requireRole(binding.roleId);
+      roleSource = yield* this.readRoleContext(binding.roleId);
       forceBase = true;
     }
 
@@ -586,10 +640,8 @@ export class CodexHookContextService {
 
     if (!binding) return { action, binding: null, additionalContext: "" };
 
-    const role = this.requireRole(binding.roleId);
-    const persona = readText(path.join(role.roleDir, "persona.md"));
-    const growth = readText(path.join(role.roleDir, "growth.md"));
-    const skills = readText(path.join(role.roleDir, "skills.md"));
+    const role = roleSource ?? (yield* this.readRoleContext(binding.roleId));
+    const { persona, growth, skills } = role;
     const baseFingerprint = fingerprint([persona, growth, skills]);
     const managerBaseUrl = normalizeManagerBaseUrl(request.managerBaseUrl);
     const turnId = String(request.turnId || "").trim() || undefined;
@@ -619,7 +671,7 @@ export class CodexHookContextService {
     const includeBase = !dedicated && (forceBase || binding.baseFingerprint !== baseFingerprint);
     const sameTurn = Boolean(turnId && binding.lastTurnId === turnId && (!dedicated || binding.activeRunId === scopedRunId));
     const seenContextKeys = new Set(sameTurn ? binding.turnContextKeys ?? [] : []);
-    const contextResolution = rabiContextManager.resolve({
+    const contextReply = yield { kind: "knowledge", trigger: {
       kind: triggerKind(request.eventName),
       source: "codex_hook",
       roleId: role.roleId,
@@ -631,7 +683,9 @@ export class CodexHookContextService {
       toolName: request.toolName,
       seenContextKeys: [...seenContextKeys],
       consolidationInputMemoryIds
-    });
+    } };
+    if (contextReply.kind !== "knowledge") throw new Error("Invalid Codex hook knowledge reply.");
+    const contextResolution = contextReply.resolution;
     const isReasoningCheckpoint = contextResolution.policy.presentation === "recall_delta";
     const unseenEntries = contextResolution.entries.filter((entry) => !seenContextKeys.has(entry.key));
     const shouldRender = includeBase
