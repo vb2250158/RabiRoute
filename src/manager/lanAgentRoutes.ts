@@ -28,7 +28,7 @@ export type LanAgentRoutesContext = {
   authority?: LanAgentAuthority;
   resources?: AgentResourceCatalog;
   enabled?: () => boolean;
-  managerIdentity?: () => { applicationGenerationId: string; managerInstanceId: string; health: unknown };
+  managerIdentity?: () => { guid?: string; applicationGenerationId: string; managerInstanceId: string; health: unknown };
   releases: LanAgentReleaseStore;
   localAgents?: () => InstanceAgent[];
   handleInstanceHook?: (instanceId: string, agentId: string, body: Record<string, unknown>, request: http.IncomingMessage) => Promise<unknown>;

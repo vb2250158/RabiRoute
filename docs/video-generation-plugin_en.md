@@ -8,18 +8,30 @@ Image nodes support Z-Image Turbo text-to-image with PNG output and the official
 
 Canvas nodes support dragging, left-button marquee selection, middle-button panning, a minimap, duplication and removal. Editors sit below selected nodes. Projects, cards and parameters save automatically on the server and restore by project ID after refresh. Save failures and concurrent conflicts display errors. Jobs and assets are persisted separately; see [media projects and autosave](video-projects_en.md).
 
-Audio cards synthesize through RabiSpeech and display voice, speed, language and style controls according to model capabilities. Fixed voices come from the local VITS configuration; pause tags insert silence in the browser. Generated audio is saved with the project and can be uploaded as a video reference, subject to reference limits.
+Audio cards synthesize through RabiSpeech and display voice, speed, language and style controls according to model capabilities. Fixed voices come from the selected computer's VITS configuration; pause tags insert silence in the browser. Generated audio is saved with the project and can be uploaded as a video reference, subject to reference limits. After switching projects, remaining audio fragments from the old project are not sent to the new project's computer.
 
 
 Aspect presets include 16:9, 4:3, 1:1, 3:4, 9:16 and 21:9. The 480P and 720P target tiers use the short edge and align both dimensions to multiples of 32. Actual dimensions are displayed, for example 1280×736 for 16:9 at the 720P tier. Combinations above 1032192 total pixels are unavailable; an oversized aspect change preserves the current settings and asks for a lower resolution first. The page currently offers the listed aspect and resolution presets; custom dimensions can be submitted through the protected job API.
 
-`io.rabiroute.manager.video` adds a separate Media Workbench page at `/#/video`, alongside Speech. Manager owns plugin lifecycle, authentication, process leases and events. The plugin owns jobs and results; local ComfyUI performs H3 inference. Requests do not enter an Agent and videos are not automatically sent anywhere.
+`io.rabiroute.manager.video` adds a separate Media Workbench page at `/#/video`, alongside Speech. Manager owns plugin lifecycle, authentication, process leases and events. The plugin owns jobs and results; ComfyUI on the selected computer performs H3 inference. Requests do not enter an Agent and videos are not automatically sent anywhere.
 
 The dark workbench provides text, first/last frame and multimodal reference modes in a centered preview card and compact composer. The left toolbar opens job history on demand; selecting a job closes it. Download and parameter reuse sit below the preview. Image, video and audio references form a horizontal strip with clickable prompt labels; frames can be swapped. The bottom toolbar opens model selection and video parameters. A duration slider spans approximately 0.92–10.83 seconds in 17-frame steps, matching H3's supported frame counts. The job API retains width, height, frame count and seed fields. Filtering history preserves the preview; narrow screens retain the history toggle and a vertical creation area.
 
 Text and first/last frames use MiniMax H3 FL2VA INT8; image, video and audio references use separate Ref2VA INT8 weights. Both models offer standard and fast routes with optional generated audio. See [workflow profiles and validation](video-workflow-profiles_en.md) for candidates, dependencies and compatibility with older API requests. Audio references condition generation; they do not guarantee dubbing, lip sync or direct soundtrack copying. Environment readiness, model availability, inference and visual acceptance remain separate checks.
 
 First and last images may differ from the output dimensions and from each other. The generation workflow uses ComfyUI's `ResizeAndPadImage` to scale each original proportionally and center it with black padding at the selected output size, without cropping or stretching. Original images and drafts remain unchanged. The page displays the actual target size. Each PNG is limited to 9 MB and 1–4096 pixels per axis; extreme aspect ratios that scale an axis below one pixel are rejected explicitly. Missing adaptation nodes produce an update message before queueing a frame job, without blocking text-to-video.
+
+## Choose a model-serving computer
+
+Opening a RabiPC's URL shows that computer's workbench, projects and work history. The selector only changes the models and compute used by that workbench. Existing direct URL and API access remains available.
+
+The Model-serving computer selector at the top of the workbench offers this computer and connected RabiPCs. The choice is saved in the current project and restored after refresh, independently of the Speech workspace server selection. When the chosen computer already has usable models, the workspace computer needs no CUDA, ComfyUI or model installation. Selection does not initialize models automatically.
+
+The current Manager owns projects, assets, jobs and work history. Previews and downloads always use local resources. Only model discovery, model management, runtime control and inference use the selected computer; asset inspection can also use its decoder. Inference inputs are temporary remote copies. Results are downloaded and checked locally before the workspace job succeeds. Remote execution receipts stay outside that computer's work history and share its GPU queue with local generation.
+
+Both computers must support `computeProtocol: 1`. Temporary inputs and receipts live under `data/video/compute`. Successful work cleans up its inputs and outputs while retaining a minimal idempotency receipt without the prompt; replaying its key never executes again. Uncertain operations retain their copies. Later compute requests remove inputs and outputs of terminal jobs, and unreferenced inputs, older than 24 hours while preserving active inputs. Disconnects, timeouts and failures neither fall back to local inference nor replay work. The local failure record remains; resuming that target requires an explicit start. Reusing the original idempotency key reads the original local job. Switching computers does not migrate or delete saved work.
+
+Audio cards likewise use only the chosen computer's models and synthesis. Playback, pause insertion and project storage remain in the current workspace. Model management displays and operates on the chosen computer's directories and installation state.
 
 ## Request authority and revocation
 
@@ -72,7 +84,7 @@ Prompts reference `<Picture 1>`, `<Video 1>` and `<Audio 1>`, numbered separatel
 
 ### Common endpoints
 
-Use the current Manager address published by Host READY and verified against `/meta`. Other computers use Rabi's authenticated LAN entry, never a directly exposed ComfyUI port. RabiLink Relay does not yet forward video APIs.
+Use the current Manager address published by Host READY and verified against `/meta`. Other computers use Rabi's authenticated LAN entry, never a directly exposed ComfyUI port. The generic RabiLink Manager tunnel carries model and compute APIs.
 
 | Request | Result |
 | --- | --- |
@@ -93,13 +105,15 @@ Use the current Manager address published by Host READY and verified against `/m
 | `GET /api/video/projects` / `POST /api/video/projects` | List / create a project |
 | `GET /api/video/projects/:id` / `PUT /api/video/projects/:id` | Read / save with revision |
 
+Status, model management, runtime control, asset uploads and job submission accept the `computeDeviceId` query parameter; an empty value selects this computer. Projects, job reads, cancellation and media URLs always belong to the current Manager. The peer compute protocol exposes `GET /api/video/compute/status`, `POST /api/video/compute/runtime/start|stop`, `GET /api/video/compute/events` (state notifications only), `POST /api/video/compute/assets`, `DELETE /api/video/compute/assets/:id`, `POST /api/video/compute/jobs`, `GET /api/video/compute/jobs/:id`, `GET /api/video/compute/jobs/:id/events` (actual job progress), `GET /api/video/compute/jobs/:id/image|video`, and terminal `DELETE /api/video/compute/jobs/:id`. Submission requires the original idempotency key and catalog-validated generation parameters, never raw workflows. Audio model and synthesis requests accept the same compute target without modifying the global Speech server selection.
+
 ```json
 {"model":"minimax-h3-fl2va","prompt":"A paper boat floats on a quiet pond, locked camera.","width":512,"height":512,"frames":22,"seed":1}
 ```
 
 Optional `firstFrame` and `lastFrame` accept raw PNG Base64, at most 9 MB each. Dimensions are multiples of 32, at least 256, with at most 1032192 pixels. Frame counts follow `17k+5`, from 22 to 260, at 24 FPS. A 512×512, 22-frame request is a smoke test only.
 
-The same key and parameters return the original job; changed parameters return 409. Replay the original key after a lost response. At most eight jobs may remain pending. Failure or lost progress connection stops the plugin's provider and interrupts queued jobs, preventing unknown GPU work from overlapping another job. No automatic resubmission occurs. A running job cannot be cancelled individually; exiting Rabi interrupts it.
+The same key and parameters return the original job; changed parameters return 409. Replay the original key after a lost response. At most eight jobs may remain pending. Local inference failure stops the plugin-owned provider. Remote failure blocks that target and interrupts local jobs not yet submitted there; it does not stop another computer's process. No automatic resubmission occurs. A running job cannot be cancelled individually; exiting the workspace Rabi interrupts the local job record; accepted remote inference may continue and needs receipt reconciliation.
 
 Local jobs reside under `data/video/jobs`, inputs/results under `data/video/provider-input` and `data/video/provider-output`, and logs under `logs/video`. History is not automatically deleted, compressed or migrated. APIs do not reveal local file paths. `succeeded` means the MP4 referenced by this H3 receipt exists and has a valid container header; visual quality and motion still require review.
 

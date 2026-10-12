@@ -6,6 +6,17 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.33 - 2026-10-12
+
+- The media workspace can select a connected model-service computer. Projects, assets, jobs, and results remain local; only inference uses the peer, and uncertain outcomes retain the original receipt without automatic replay.
+- Remote Agents support ordinary request headers and binary or streaming bodies while protecting authentication and transport headers. Startup, crash recovery, and update handoff use one owner and drain old tasks before committing an update.
+- QQ group-file receipts capture account and configuration identity before and after upload. Verification accepts original delivery evidence only and reports missing or conflicting bindings. Configurable text-length confirmation is bound to the complete original request.
+- NapCat supervision distinguishes QQ login, OneBot readiness, and the instance WebSocket connection. Recovery reuses the bound-account workflow and avoids duplicate launches and configuration writes during health checks.
+- Message archive queries use a bounded read cache, and knowledge queries reconcile changed documents. Multiple interfaces advertise one Manager identity, and discovery merges addresses for the same instance.
+- Speech and media pages share peer-service selection. DSH plugin names are localized, and synchronous hot-patch helpers avoid redundant revision leases.
+
+- QQ favorite stickers are read from the current account and revalidated before sending. Read tests seed their data directly, and the scan responsiveness test uses production build output.
+
 ## 0.3.32 - 2026-10-12
 
 - Read Codex Hook role sources and knowledge through the bounded storage process. Serialize requests per session; reject late results after unbinding or ownership changes, and do not stamp successful context after read failures.

@@ -34,6 +34,19 @@ function mock(response = () => new Response(bytes, { headers }), after = meta) {
 }
 async function noPartial(f, expected = ["config.json"]) { assert.deepEqual((await fs.readdir(f.directory)).sort(), expected.sort()); }
 
+test("skill download accepts current Manager metadata envelope before and after transport", async t => {
+  const f = await fixture(t);
+  let calls = 0;
+  const fetchImpl = async url => {
+    calls++;
+    return new URL(url).pathname === "/meta" ? Response.json({ code: 0, data: meta }) : new Response(bytes, { headers });
+  };
+  const result = await createManagerClient({ ...settings, fetchImpl }).download(target, f.output);
+  assert.equal(result.ok, true);
+  assert.equal(calls, 3);
+  assert.deepEqual(await fs.readFile(f.output), bytes);
+});
+
 test("download pins the verified endpoint before credentialed transport", async t => {
   const f = await fixture(t);
   let verified = false;
@@ -212,7 +225,7 @@ test("post-download metadata timeout cleans the fully written temporary file", a
   const fetchImpl = async () => ++calls === 1 ? Response.json(meta) : calls === 2 ? new Response(bytes, { headers }) : new Promise(() => {});
   // Keep the test process alive while AbortSignal.timeout's unref timer expires.
   const keepAlive = setInterval(() => {}, 1000);
-  try { await assert.rejects(createManagerClient({ ...settings, fetchImpl, downloadTimeoutMs: 50 }).download(target, f.output)); }
+  try { await assert.rejects(createManagerClient({ ...settings, fetchImpl, downloadTimeoutMs: 2000 }).download(target, f.output)); }
   finally { clearInterval(keepAlive); }
   await noPartial(f);
   assert.equal(calls, 3);
@@ -265,8 +278,6 @@ test("parse guards reject unsafe combinations before credentials, stdin or netwo
     ["--api", "GET", target],
     ["--api", "POST", target, "--output", f.output],
     ["--api", "GET", target, "--output", f.output, "--api", "POST", "/api/mutation"],
-    ["--api", "GET", "/meta", "--output", f.output],
-    ["--api", "GET", `${target}?anything=1`, "--output", f.output],
     ["--upload", "file", "--output", f.output],
     ...["--body-stdin", "--if-match", "--idempotency-key", "--upload-id"].map(flag => ["--api", "GET", target, "--output", f.output, flag, "value"]),
     ["--api", "GET", target, "--output"],

@@ -20,6 +20,12 @@ GET /api/roles/:roleId/knowledge/search?query=:query&mode=keywords&limit=10
 
 ## 搜索顺序
 
+消息检索是最近匹配片段：`limit` 默认 50、最多 200；`maxChars` 默认及最多 200,000，含记录开销且首条可超预算。`count` 仅本次返回数，`coverage` 不证明完整，少于 `limit` 也可能受字符预算影响。消息接口没有 `cursor/offset/nextCursor`，不能套用下文知识索引的分页合同；不要按最早时间减一秒续查，同秒多条会遗漏。整月或全量统计先核验来源与覆盖，不把片段当全量。
+
+归档冷查询会读取候选文件；小 `limit` 与关键词不缩小扫描量。先用已知会话和 Unix 秒 `from/to` 缩小范围，再按需要扩大；不要并发扫描全部历史。503/超时后说明实际错误，缩小范围或按消息查询规则补查正式来源，不无限重试原重查询。详细合同与成本见 [消息端历史接口](../../docs/rabi-agent-interfaces.md#查询消息端历史消息)。
+
+Host、`/meta` 和知识索引请求通常用 5 秒客户端预算；历史归档冷读可给客户端最多 35 秒预算，读池执行预算 30 秒且排队另计，提前断开会取消读取。这是客户端超时设置，不是接口 query 参数。400 先按 `errorCode/repair` 修正参数，不归为连接故障；503/超时不循环延长时限重试。
+
 1. 先判断用户在找什么：预定安排和历史决定优先查相关计划及记忆；当前生效值还要回到配置、服务或运行证据核验。用户指定精确文件、要求源码调查或禁止 Rabi 查询时，直接按用户范围处理。读取已知的规则、连接配置和必要接口定义不受此顺序限制。
 2. Rabi 在线才做前置查询。复用本轮已核验的 Manager 身份；否则通过现有连接工具或 `RabiRouteHost.exe --command status --json` 获取 `managerBaseUrl`、`applicationGenerationId`、`managerInstanceId`。源码模式只使用当前结构化 READY 或显式注入的完整地址。读取 `<managerBaseUrl>/meta`，确认 `health.live=true`、`health.requiredReady=true`、`health.state` 为 `healthy` 或 `degraded` 且地址、generation 与实例一致。
 3. Host 未在线、没有 READY、健康或身份核对失败、查询超时或接口不可用时，本轮跳过 Rabi，直接普通搜索。不等待上线，不扫描端口、不读取退役实例锁、不启动或重启 Host/Manager，不为了可选查询修复服务或遍历角色文件。请求使用有限超时，建议每次 5 秒；身份失效最多重新发现一次，已确认离线后本轮不逐次探测。鉴权仅使用已有授权配置，不输出凭据；没有访问权限就跳过。

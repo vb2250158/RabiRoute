@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { prepareAgentSendRequest, type AgentSendRequest, type AgentSendResult } from "../agentSend.js";
+import { agentSendIdempotencyPayload, prepareAgentSendRequest, type AgentSendRequest, type AgentSendResult } from "../agentSend.js";
 import {
   durableDeliveryReceiptPath,
   durableDeliveryRequestDigest,
@@ -60,7 +60,7 @@ function prepareInput(deliveryId: unknown, originalRequest: AgentSendRequest) {
     throw new Error("Original AgentSendRequest deliveryId does not match deliveryId.");
   }
   const prepared = prepareAgentSendRequest(request);
-  const { deliveryId: _deliveryId, ...payload } = request;
+  const payload = agentSendIdempotencyPayload(request);
   return { deliveryId: normalizedId, request, prepared, payload, digest: durableDeliveryRequestDigest(payload) };
 }
 

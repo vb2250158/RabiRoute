@@ -92,15 +92,15 @@ setx NAPCAT_QUICK_PASSWORD "<qq-password>"
 
 The NapCat bound to each Route has an **Auto login when Rabi starts** switch, enabled by default. After the Manager begins listening, it queues background work that reuses the correct live account or starts the bound NapCat Shell, selects an existing quick-login identity, and repairs OneBot HTTP/WebSocket configuration. Different Routes run concurrently, while work bound to the same QQ account remains serialized. Manager startup and WebGUI access do not wait for these steps.
 
-Turning the switch off skips startup auto login only. **Start and manage login**, health checks, manual start, and restart remain available. CAPTCHA, QR login, and new-device confirmation are recorded as requiring user action and can be completed later in the same Route card.
+Turning the switch off skips both startup auto login and runtime automatic recovery. **Start and manage login**, health checks, manual start, and restart remain available. CAPTCHA, QR login, and new-device confirmation are recorded as requiring user action and can be completed later in the same Route card.
 
 ## Process supervision
 
-The RabiRoute Manager supervises route subprocesses it starts and reloads affected routes after changes under `data/route/*/adapterConfig.json` or `data/roles/*/personaConfig.json`. NapCat startup auto login runs once per Manager start. Later exits, disconnects, or expired login state remain visible through health status and user actions.
+The RabiRoute Manager supervises route subprocesses it starts and reloads affected routes after changes under `data/route/*/adapterConfig.json` or `data/roles/*/personaConfig.json`. Enabled NapCat instances with automatic login enabled are observed every 30 seconds. Three consecutive failures trigger bound-account quick login or OneBot repair, with at least five minutes between attempts and a 90-second launch grace period. HTTP, the matching instance's WebSocket and the Gateway process are checked separately; HTTP readiness does not prove inbound recovery. Recovery never switches QQ accounts, creates duplicate instances or force-kills unknown processes. QR/security verification, account conflicts and mismatches still require user action. A transient login-probe failure is not evidence of required human verification. A waiting latch clears only on confirmed process absence, an explicit quick-login identity for the bound account, or owner-confirmed login with unavailable transport; ordinary unreachable observations do not interrupt an operator scanning a QR code. Outer watcher failures use cancellable backoff under the same owner without repeating startup login. Stop and plugin disposal cancel pending recovery.
 
 Let Windows Host start Rabi, then use the Route's **Auto login when Rabi starts** setting to start its bound NapCat. Do not also supervise the same instance with a scheduled task or service: an external supervisor could start it again after unbinding.
 
-If NapCat exits, QQ is signed out, or quick login fails, first use **Start and manage login** in the corresponding Route. If recovery fails, inspect NapCat logs, WebSocket state, HTTP `get_login_info`, and the latest Manager diagnostics.
+Automatic recovery logs observations, attempts and results. If recovery fails or QR verification is needed, use **Start and manage login** in the corresponding Route and inspect NapCat logs, WebSocket state, HTTP `get_login_info`, and recent errors. HTTP reachability or acceptance of a repair request is not complete recovery. This repair has isolated-test coverage; actual disconnects, long-running cooldowns and inbound messages require separate post-deployment acceptance.
 
 ## RabiRoute health check
 

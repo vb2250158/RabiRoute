@@ -5,8 +5,9 @@ export type HotPatchLease = Readonly<{
   release(): void;
 }>;
 
-export function retainHotPatchResult<T>(result: T, lease: HotPatchLease): T {
+export function retainHotPatchResult<T>(result: T, suppliedLease: HotPatchLease | (() => HotPatchLease)): T {
   if (result && typeof (result as { then?: unknown }).then === "function") {
+    const lease = typeof suppliedLease === "function" ? suppliedLease() : suppliedLease;
     return Promise.resolve(result).then(value => {
       try { return retainHotPatchResult(value, lease); }
       catch (error) { lease.release(); throw error; }
@@ -17,9 +18,10 @@ export function retainHotPatchResult<T>(result: T, lease: HotPatchLease): T {
   }
   const tag = Object.prototype.toString.call(result);
   if (tag !== "[object Generator]" && tag !== "[object AsyncGenerator]") {
-    lease.release();
+    if (typeof suppliedLease !== "function") suppliedLease.release();
     return result;
   }
+  const lease = typeof suppliedLease === "function" ? suppliedLease() : suppliedLease;
   const target = result as object;
   let completed = false;
   let pending = 0;

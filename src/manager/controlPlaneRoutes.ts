@@ -1,4 +1,5 @@
 import { ResourceCache, resourceCacheHandler } from "./resourceCache.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { RecordingArchiveRuntime } from "./recordingArchiveRuntime.js";
 import { RecordingArchiveAsrRuntime } from "./recordingArchiveAsrRuntime.js";
 import { recordingArchiveAdminHandler } from "./recordingArchiveAdminRoutes.js";
@@ -160,6 +161,7 @@ import type { ReviewedReplySourceEvidence } from "../replyImageDescriptions.js";
 import {
   handleAgentSend,
   inspectAgentSendDelivery,
+  mapAgentSendReplyResult,
   prepareAgentSendRequest,
   validateAgentSendReplyImageDescriptions,
   type AgentSendRequest,
@@ -169,7 +171,14 @@ import type {
   AgentPlanFeedbackSubmitRequest,
   AgentPlanFeedbackSubmitResult
 } from "../outbox.js";
+import { agentReplyHistorySource, agentReplyCurrentQqBinding } from "../outbox.js";
+import { getLoginInfo } from "../napcat.js";
+import { verifyQqFileCurrentPresence } from "./agentDeliveryVerification.js";
+import { inspectOriginalAgentSendHistory } from "./agentSendHistoryVerification.js";
+import { createAgentSendVerificationEvidenceVerifier } from "./agentSendVerificationEvidence.js";
+import { verifyAgentSendDelivery, settleAgentSendDelivery } from "./agentSendReconciliation.js";
 import { evaluateAgentSendLanguageStyle } from "../agentSendLanguageStyle.js";
+import { AgentSendMessageLengthGuard } from "../agentSendMessageLength.js";
 import { agentSendRequestTemplateForSource } from "../agentSendTemplate.js";
 import {
   MessageProcessingBoardStore,
@@ -357,7 +366,7 @@ import { handleMessageProcessingApi } from "./messageProcessingRoutes.js";
 import { ManagerGatewayRuntimeService } from "./managerGatewayRuntimeService.js";
 import { GenerationHandoffLease } from "./generationHandoffLease.js";
 import { NapcatSupervisorService } from "./napcatSupervisorService.js";
-import { runNapcatGuardianLoop } from "../messageEndpoints/napcatGuardian.js";
+import { runNapcatGuardianLoop, napcatGuardianDepsFor } from "../messageEndpoints/napcatGuardian.js";
 import { MessageProcessingAutomationService } from "./messageProcessingAutomationService.js";
 import { KnowledgeCallbackReminderService } from "./knowledgeCallbackReminderService.js";
 import { PlanFeedbackRecoveryService } from "./planFeedbackRecoveryService.js";
@@ -1700,6 +1709,7 @@ const codexHookContextService = new CodexHookContextService({
   planStorageReady: () => planStorageStartupStatus().state === "ready"
 });
 const languageStyleValidator = new LanguageStyleValidator();
+const messageLengthGuard = new AgentSendMessageLengthGuard();
 const fenneNotePlaybackUrl = process.env.FENNOTE_PLAYBACK_URL?.trim() ?? "";
 const fenneNoteReplyUrl = process.env.FENNOTE_REPLY_URL?.trim() ?? "";
 const fenneNotePlaybackToken = process.env.FENNOTE_PLAYBACK_TOKEN ?? "";
@@ -1820,9 +1830,10 @@ const peerLanServer = new PeerLanServer({
 });
 const selectionSpeechSettings = new SelectionSpeechSettingsStore(selectionSpeechSettingsPath(rootDir));
 const desktopSettings = new DesktopSettingsStore(desktopSettingsPath(rootDir));
+const speechComputeTarget = new AsyncLocalStorage<string>();
 const speechControl = new ManagerSpeechControl({
-  localSpeech: createPeerSpeechAdapter(() => activePeerTunnel),
-  contextKey: () => activePeerTunnel?.selected() || "",
+  localSpeech: createPeerSpeechAdapter(() => activePeerTunnel, () => speechComputeTarget.getStore()),
+  contextKey: () => speechComputeTarget.getStore() ?? (activePeerTunnel?.selected() || ""),
   serviceUrl: () => speechServiceUrl(),
   personas: routeCatalogPersonas,
   route: (routeId) => {
@@ -2412,43 +2423,6 @@ async function writeAdapterConfigFile(definition: GatewayDefinition): Promise<vo
   } catch (error) {
     throw routeCatalogMutationFailure(error);
   }
-}
-
-async function backfillNapcatInstanceWebuiUrl(
-  definition: GatewayDefinition,
-  instanceId: string,
-  webuiUrl: unknown
-): Promise<string | null> {
-  const value = String(webuiUrl || "").trim();
-  if (!value) return null;
-  const instances = sharedNormalizeNapCatInstances(definition);
-  const target = instances.find((item) => item.id === instanceId);
-  if (!target || target.webuiUrl === value) return null;
-  target.webuiUrl = value;
-  definition.napcatInstances = instances;
-  const primary = instances.find((item) => item.enabled !== false) ?? instances[0];
-  if (primary) {
-    definition.napcatWebuiUrl = primary.webuiUrl;
-    definition.napcatWebuiToken = primary.webuiToken ?? "";
-  }
-  await writeAdapterConfigFile(definition);
-  return value;
-}
-
-function correctedNapcatWebuiUrlFromHealth(health: Record<string, unknown>): string {
-  const webui = (health.webui ?? {}) as Record<string, unknown>;
-  return String(webui.correctedUrl || webui.correctedWebuiUrl || "").trim();
-}
-
-function addHealthDiagnostic(health: Record<string, unknown>, message: string): Record<string, unknown> {
-  const diagnostics = Array.isArray(health.diagnostics) ? health.diagnostics : [];
-  return {
-    ...health,
-    diagnostics: [
-      ...diagnostics,
-      message
-    ]
-  };
 }
 
 function napcatInstanceIgnoreKeys(instance: Partial<NapCatInstanceDefinition> & { botUserId?: unknown }): string[] {
@@ -3638,42 +3612,6 @@ async function repairAllNapcatInstances(): Promise<Record<string, unknown>> {
     napcatHealth: (await napcatScanHealthPayload()).payload,
     gatewayPayload: standaloneGatewayPayload()
   };
-}
-
-async function checkNapcatHealthWithBackfill(body: NapcatHealthRequest): Promise<Record<string, unknown>> {
-  let result = await testNapcatHealthEndpoint(napcatManagerCtx(), body) as Record<string, unknown>;
-  const correctedWebuiUrl = correctedNapcatWebuiUrlFromHealth(result);
-  if (!correctedWebuiUrl) return result;
-
-  const runtime = body.gatewayId
-    ? runtimes.get(body.gatewayId)
-    : [...runtimes.values()].find(item => {
-        const instances = item.definition.napcatInstances ?? sharedNormalizeNapCatInstances(item.definition);
-        return instances.some(instance =>
-          (body.instanceId && instance.id === body.instanceId)
-          || (body.httpUrl && instance.httpUrl === body.httpUrl)
-          || (body.webuiUrl && instance.webuiUrl === body.webuiUrl)
-        );
-      });
-  const instances = runtime
-    ? runtime.definition.napcatInstances ?? sharedNormalizeNapCatInstances(runtime.definition)
-    : [];
-  const instance = runtime
-    ? instances.find(item => item.id === body.instanceId)
-      ?? instances.find(item => body.httpUrl && item.httpUrl === body.httpUrl)
-      ?? instances.find(item => body.webuiUrl && item.webuiUrl === body.webuiUrl)
-    : undefined;
-  if (!runtime || !instance) return result;
-
-  const backfilled = await backfillNapcatInstanceWebuiUrl(
-    runtime.definition,
-    instance.id,
-    correctedWebuiUrl
-  );
-  if (!backfilled) return result;
-  instance.webuiUrl = backfilled;
-  result = addHealthDiagnostic(result, `已根据 NapCat webui.json 自动修正 WebUI 地址：${backfilled}`);
-  return result;
 }
 
 async function napcatScanHealthPayload(): Promise<{
@@ -5449,6 +5387,49 @@ function recordMessageProcessingSend(request: AgentSendRequest, result: AgentSen
   }
 }
 
+async function maintainAgentSendReceipt(
+  deliveryId: string,
+  request: AgentSendRequest,
+  options: { requestAuthority?: () => void },
+  settle: boolean
+): Promise<AgentCommunicationHttpResponse> {
+  const replyOptions = () => ({
+    rootDir, routeRoot, rolesRoot,
+    runtimes: [...runtimes.values()].map(runtime => ({
+      ...runtime.definition,
+      napcatInstances: (runtime.definition.napcatInstances ?? sharedNormalizeNapCatInstances(runtime.definition))
+        .map(instance => ({ ...instance, accessToken: instance.accessToken ?? "" }))
+    }))
+  });
+  const verify = createAgentSendVerificationEvidenceVerifier({
+    inspect: async (originalRequest, requestDigest) => {
+      const prepared = prepareAgentSendRequest(originalRequest);
+      const source = agentReplyHistorySource(prepared.internal, replyOptions());
+      return inspectOriginalAgentSendHistory(originalRequest, requestDigest, {
+        ...source, mapResult: mapAgentSendReplyResult
+      });
+    },
+    verifyCurrentPresence: original => verifyQqFileCurrentPresence(original, {
+      readCurrentBinding: expected => {
+        options.requestAuthority?.();
+        const current = agentReplyCurrentQqBinding({ routeProfileId: expected.routeId,
+          groupId: expected.groupId, instanceId: expected.instanceId }, replyOptions());
+        return current ? { ...current, selfId: expected.selfId, readAllowed: true } : undefined;
+      },
+      readAccountIdentity: async (current, signal) => {
+        signal.throwIfAborted();
+        options.requestAuthority?.();
+        const login = await getLoginInfo(current.endpoint, { timeoutMs: 2_000 });
+        signal.throwIfAborted();
+        options.requestAuthority?.();
+        return login.userId === undefined ? undefined : { selfId: String(login.userId) };
+      }
+    })
+  });
+  const reconcile = settle ? settleAgentSendDelivery : verifyAgentSendDelivery;
+  return reconcile(deliveryId, request, { rootDir, verify, requestAuthority: options.requestAuthority });
+}
+
 async function performAgentSend(
   request: AgentSendRequest,
   options: { remoteSource?: TrustedLanAgentSource; withManagedGroupFile?: import("../outbox.js").AgentReplyOptions["withManagedGroupFile"] } = {}
@@ -5527,9 +5508,25 @@ async function performAgentSend(
 
   const existingReceipt = readAgentSendReceipt(rootDir, String(request.deliveryId || ""));
   let languageStyleValidation: AgentSendResult["languageStyleValidation"];
+  let messageLengthValidation: AgentSendResult["messageLengthValidation"];
   if (!existingReceipt) {
+    const lengthDecision = messageLengthGuard.evaluate(request, replyOptions);
+    messageLengthValidation = lengthDecision.metadata;
     const styleDecision = await evaluateAgentSendLanguageStyle(request, replyOptions, languageStyleValidator);
     languageStyleValidation = styleDecision.metadata;
+    if (lengthDecision.blocked) {
+      return {
+        statusCode: 409,
+        body: {
+          ok: false, status: "message_length_confirmation_required",
+          errorCode: "AGENT_SEND_MESSAGE_LENGTH_CONFIRMATION_REQUIRED",
+          reason: `消息正文共 ${messageLengthValidation!.characterCount} 字，超过 ${messageLengthValidation!.threshold} 字。先精简到当前问题需要的内容；确需保留原文时，以同一 deliveryId 和完整原请求再次调用，附带 messageLengthConfirmation。`,
+          deliveryId: prepared.deliveryId, sender: prepared.sender, channel: prepared.channel,
+          routeId: prepared.routeId, target: prepared.target, messageLengthValidation,
+          ...(languageStyleValidation ? { languageStyleValidation } : {})
+        }
+      };
+    }
     if (styleDecision.blocked) {
       return {
         statusCode: 409,
@@ -5542,7 +5539,8 @@ async function performAgentSend(
           channel: prepared.channel,
           routeId: prepared.routeId,
           target: prepared.target,
-          languageStyleValidation
+          languageStyleValidation,
+          ...(messageLengthValidation ? { messageLengthValidation } : {})
         }
       };
     }
@@ -5552,6 +5550,7 @@ async function performAgentSend(
     assertReviewedAgentSendMayDeliver(gate);
     return {
       ...await handleAgentSend(request, replyOptions, reviewedReplySource),
+      ...(messageLengthValidation ? { messageLengthValidation } : {}),
       ...(languageStyleValidation ? { languageStyleValidation } : {})
     };
   };
@@ -7415,6 +7414,16 @@ function writeSpeechModelManagerJson(
 }
 
 function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse): boolean {
+  // Per-request compute selection leaves the speech workstation and device I/O selection intact.
+  if (["/api/speech/models","/api/speech/tts"].includes(requestUrl.pathname) && requestUrl.searchParams.has("computeDeviceId")) {
+    assertTrustedLanAgentPrincipal(request);
+    const deviceId = requestUrl.searchParams.get("computeDeviceId") || "";
+    if (deviceId.length > 200) {jsonResponse(response,400,{code:-1,message:"模型服务电脑编号无效。"});return true;}
+    return speechComputeTarget.run(deviceId, () => handleSpeechApiRequest(request,requestUrl,response));
+  }
+  return handleSpeechApiRequest(request,requestUrl,response);
+}
+function handleSpeechApiRequest(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse): boolean {
   if (!requestUrl.pathname.startsWith("/api/speech/")) return false;
   const guard = stickySpeechAuthority(() => { assertTrustedLanAgentPrincipal(request); });
   guard();
@@ -9413,6 +9422,7 @@ export type StartManagerOptions = {
   instanceLock?: ManagerInstanceLock;
   planStorageStartupLifecycle?: PlanStorageStartupLifecycle;
   routeCatalogStartupLifecycle?: RouteCatalogStartupLifecycle;
+  routeCatalogStartupAttemptFactory?: ConstructorParameters<typeof RouteCatalogStartupLifecycle>[0]["attemptFactory"];
 };
 
 export async function startManager(options: StartManagerOptions = {}): Promise<void> {
@@ -9614,6 +9624,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       });
       managerRuntimeOwner.register("plan_storage_startup", () => planLifecycle.stop());
       const routeLifecycle = options.routeCatalogStartupLifecycle ?? new RouteCatalogStartupLifecycle({
+      attemptFactory: options.routeCatalogStartupAttemptFactory,
       input: () => ({
         rootDir,
         routeRoot,
@@ -9678,11 +9689,13 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       throw new Error("Remote Agent upload authorization was revoked or rebound.");
     }
   };
+  const lanAgentReleaseStore = new LanAgentReleaseStore({ rootDir, agentRoot: path.join(packageRoot, "apps", "rabi-agent") });
   const lanAgentRegistry = new LanAgentRegistry({
     statePath: path.join(rootDir, "data", ".runtime", "lan-agent-tasks.json"),
     authenticateNode: token => lanAgentAuthority.authenticate(token),
     registerAgentCatalog: (token, agents) => lanAgentAuthority.registerAgentCatalog(token, agents),
-    isAgentEnabled: (nodeId, agentId) => lanAgentAuthority.isAgentEnabled(nodeId, agentId)
+    isAgentEnabled: (nodeId, agentId) => lanAgentAuthority.isAgentEnabled(nodeId, agentId),
+    currentRelease: () => lanAgentReleaseStore.publication()
   });
   instanceAgentSessions = binding => {
     const agent = lanAgentRegistry.getInstanceAgent(binding.instanceId, binding.agentId);
@@ -9717,7 +9730,6 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     instanceAgentSessions = () => [];
     lanAgentRegistry.close();
   });
-  const lanAgentReleaseStore = new LanAgentReleaseStore({ rootDir, agentRoot: path.join(packageRoot, "apps", "rabi-agent") });
   const webPluginModules = new WebPluginModuleRegistry();
   const wearableCompanionRuntimeIdentity = createWearableCompanionRuntimeIdentity({
     hostOwned: Boolean(managerHostIdentity),
@@ -9735,7 +9747,11 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   );
   const managerPluginHostServices: readonly HostService[] = Object.freeze([
     Object.freeze({ capability: "host.manager.video@1", value: Object.freeze({
-      createRuntime: (identity: Parameters<typeof createVideoRuntime>[1]) => createVideoRuntime(rootDir, identity, managerPluginProcessLeases, managerReadOnly)
+      createRuntime: (identity: Parameters<typeof createVideoRuntime>[1]) => createVideoRuntime(rootDir, identity, managerPluginProcessLeases, managerReadOnly, async (deviceId, pathname, init) => {
+        if (!activePeerTunnel) throw new Error("Peer tunnel is not ready.");
+        await activePeerTunnel.ensureApplicationConnection(deviceId);
+        return activePeerTunnel.fetch(deviceId, "manager", pathname, init);
+      })
     }) }),
     Object.freeze({
       capability: "host.manager.wearable-companion-runtime@1",
@@ -9761,6 +9777,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       lanAgentAuthority,
       agentResourceCatalog: new AgentResourceCatalog({ rootDir: packageRoot }),
       lanAgentManagerIdentity: () => ({
+        guid: rabiGlobalConfig.read().rabiGuid,
         applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
         managerInstanceId,
         health: managerHealthPayload().health
@@ -10109,6 +10126,12 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       ManagerPluginRequestTracker,
       agentRequests,
       agentSendReceiptResponse,
+      maintenance: Object.freeze({
+        verify: (deliveryId: string, request: AgentSendRequest, options: { requestAuthority?: () => void }) =>
+          maintainAgentSendReceipt(deliveryId, request, options, false),
+        settle: (deliveryId: string, request: AgentSendRequest, options: { requestAuthority?: () => void }) =>
+          maintainAgentSendReceipt(deliveryId, request, options, true)
+      }),
       codexHookContextService,
       createAgentCommunicationRoutes,
       createAgentUploadRoutes,
@@ -10212,7 +10235,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     Object.freeze({ capability: "host.manager.napcat-control@1", value: Object.freeze({
       ManagerPluginRequestTracker,
       addManagedNapcatInstance,
-      checkNapcatHealthWithBackfill,
+      testNapcatHealth: testNapcatHealthEndpoint,
       configureNapcatOneBot,
       ensureNapcatInstanceReady,
       handleNapcatControlApi,
@@ -10264,6 +10287,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       NapcatSupervisorService,
       autoLoginNapcatInstancesOnRabiStart,
       runNapcatGuardianLoop,
+      napcatGuardianDepsFor,
       napcatGuardianInstances,
       observeNapcatGuardianInstance,
       relaunchNapcatGuardianInstance,

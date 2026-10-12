@@ -41,6 +41,7 @@ export type AgentSendRequest = {
   payload?: unknown;
   tracking?: unknown;
   styleValidation?: unknown;
+  messageLengthConfirmation?: unknown;
 };
 
 export type AgentSendResult = AgentReplyResult & {
@@ -56,11 +57,24 @@ export type AgentSendResult = AgentReplyResult & {
     styleSkillUrl: string;
     result?: LanguageStyleValidationResult;
   };
+  messageLengthValidation?: {
+    characterCount: number;
+    threshold: number;
+    confirmed: boolean;
+    confirmationToken?: string;
+    expiresAt?: string;
+  };
 };
 
 export type AgentSendDeliveryInspection =
   | { state: "completed"; result: AgentSendResult }
   | Exclude<AgentReplyDeliveryInspection, { state: "completed" }>;
+
+/** Confirmation is a transient review proof, not part of the durable message identity. */
+export function agentSendIdempotencyPayload(request: AgentSendRequest): Omit<AgentSendRequest, "deliveryId" | "messageLengthConfirmation"> {
+  const { deliveryId: _deliveryId, messageLengthConfirmation: _confirmation, ...payload } = request;
+  return payload;
+}
 
 type NormalizedAgentSend = {
   deliveryId: string;
@@ -71,6 +85,7 @@ type NormalizedAgentSend = {
   replyImageDescriptions: string[];
   target: Record<string, unknown>;
   styleValidation: StyleValidationMode;
+  messageLengthConfirmation?: string;
   internal: AgentReplyRequest;
 };
 
@@ -107,9 +122,9 @@ export const AGENT_SEND_REQUEST_CONTRACT = freezeChannelHelp({
   version: 1,
   kind: "partial-field-allowlist",
   allowedFields: {
-    request: ["deliveryId", "sender", "routeId", "channel", "params", "payload", "tracking", "styleValidation"],
+    request: ["deliveryId", "sender", "routeId", "channel", "params", "payload", "tracking", "styleValidation", "messageLengthConfirmation"],
     sender: ["agentType", "sessionId"],
-    payload: ["type", "text", "path", "url", "fileName", "fileId", "fileSha256", "planAttachment", "segments"]
+    payload: ["type", "text", "path", "url", "fileName", "fileId", "fileSha256", "planAttachment", "segments", "stickerId"]
   },
   channelValues: AGENT_SEND_CHANNEL_HELP.map(item => item.channel),
   paramsAllowedFields: Object.fromEntries(AGENT_SEND_CHANNEL_HELP.map(item => [item.channel, Object.keys(item.params)])),
@@ -208,10 +223,19 @@ function planAttachmentReference(
 
 function payloadFields(payload: Record<string, unknown>, channel: AgentSendChannel): Pick<AgentReplyRequest, "payload" | "payloadType" | "text"> {
   assertOnlyFields(payload, AGENT_SEND_REQUEST_CONTRACT.allowedFields.payload, "payload");
-  const type = textValue(payload.type, "payload.type") as "text" | "image" | "voice" | "file" | "markdown";
-  if (!(["text", "image", "voice", "file", "markdown"] as string[]).includes(type)) {
-    throw new Error("payload.type must be text, image, voice, file, or markdown.");
+  const type = textValue(payload.type, "payload.type") as "text" | "image" | "voice" | "file" | "markdown" | "sticker";
+  if (!(["text", "image", "voice", "file", "markdown", "sticker"] as string[]).includes(type)) {
+    throw new Error("payload.type must be text, image, voice, file, markdown, or sticker.");
   }
+  if (type === "sticker") {
+    assertOnlyFields(payload, ["type", "text", "stickerId"], "payload");
+    if (channel !== "napcat" || typeof payload.stickerId !== "string" || !/^[a-f0-9]{32}$/.test(payload.stickerId)) {
+      throw new Error("payload.type=sticker requires channel=napcat and a stickerId from the selected account's sticker list.");
+    }
+    const text = textValue(payload.text, "payload.text", false);
+    return { payloadType: "image", text, payload: { type: "sticker", stickerId: payload.stickerId, ...(text ? { text } : {}) } };
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, "stickerId")) throw new Error("payload.stickerId requires payload.type=sticker.");
   if (type === "markdown") {
     if (channel !== "napcat" || ["path", "url", "fileName", "fileId", "fileSha256", "planAttachment", "segments"].some(key => Object.prototype.hasOwnProperty.call(payload, key))) {
       throw new Error("payload.type=markdown requires channel=napcat and payload.text only.");
@@ -331,6 +355,10 @@ function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
   }
   const tracking = objectValue(request.tracking, "tracking", false);
   const styleValidation = normalizeStyleValidationMode(request.styleValidation);
+  const messageLengthConfirmation = request.messageLengthConfirmation;
+  if (messageLengthConfirmation != null && (typeof messageLengthConfirmation !== "string" || !/^\d{13}\.[a-f0-9]{64}$/.test(messageLengthConfirmation))) {
+    throw new Error("messageLengthConfirmation must be the token returned by the length check.");
+  }
   assertOnlyFields(tracking, ["requirementId", "sendContextReviewToken"], "tracking");
   const requirementId = textValue(tracking.requirementId, "tracking.requirementId", false);
   const replyContext: Record<string, unknown> = requirementId
@@ -454,7 +482,7 @@ function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
     throw new Error(`Send channel has no normalizer: ${unhandledChannel}`);
   }
 
-  return { deliveryId, sender, routeId, channel, allowAdditionalReply, replyImageDescriptions, target, styleValidation, internal };
+  return { deliveryId, sender, routeId, channel, allowAdditionalReply, replyImageDescriptions, target, styleValidation, messageLengthConfirmation: messageLengthConfirmation ?? undefined, internal };
 }
 
 export function prepareAgentSendRequest(request: AgentSendRequest): NormalizedAgentSend {

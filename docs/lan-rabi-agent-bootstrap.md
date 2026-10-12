@@ -22,7 +22,7 @@
 
 提示词含短期接入票据，不再携带共享 WebGUI 管理 Token。只能粘贴到目标电脑的私密任务中，不要写入仓库、群聊、日志、截图或命令历史。复制使用安全剪贴板或页面回退，支持局域网 HTTP；HTTP 不提供传输加密，只在可信网络中使用。
 
-接入成功后，用节点凭据访问 `GET /api/lan-agent/self`，确认自身 `nodeId` 与 `connected`。新接入的 Agent 默认启用，页面的 **是否启用Agent** 默认勾选，与本机开关同名；启用后按本机 Agent 的方式使用，无需另开 API 或 skills 授权。远端开关由 Manager 保存，修改后立即 PUT 生效，离线也可停用，不依赖“保存到实例”。停用后，后续任务与受限 API、资源请求被拒绝；保存工作目录、任务和模型不会重新启用 Agent。界面只显示 Manager 返回的状态，读取失败不会假定已启用。已有绑定的旧关闭状态保持不变，重连不会重新启用；无法区分旧版从未授权和主动停用时，也保留关闭，由管理员确认后开启。
+接入成功后，连接器自动使用原节点凭据核对当前 Manager；Agent 不需要手动检查身份、重新绑定或另申请功能许可。`GET /api/lan-agent/self` 是诊断入口，返回真实 `guid`、generation、instance、`nodeId` 与 WebSocket `connected`；`connected=false` 不等于节点凭据失效，也不应作为已鉴权 HTTP 接口的第二道许可。新接入的 Agent 默认启用，页面的 **是否启用Agent** 默认勾选，与本机开关同名；启用后按本机 Agent 的方式使用，无需另开 API 或 skills 授权。远端开关由 Manager 保存，修改后立即 PUT 生效，离线也可停用，不依赖“保存到实例”。停用后，后续任务与受限 API、资源请求被拒绝；保存工作目录、任务和模型不会重新启用 Agent。界面只显示 Manager 返回的状态，读取失败不会假定已启用。已有绑定的旧关闭状态保持不变，重连不会重新启用；无法区分旧版从未授权和主动停用时，也保留关闭，由管理员确认后开启。
 
 连接器本地显式 `enabled=false` 仍会拒绝执行，不因节点已接入而绕过；Manager 的停用与撤销同样保留。仅携带有效节点凭据、未指定 Agent 的精确 `GET /meta` 可用于连接诊断，不授予业务或管理权限。普通业务必须满足存活与必需依赖就绪条件；精确元数据诊断只检查身份。
 
@@ -68,11 +68,21 @@ Codex owner 不可用时失败，不使用 `codex app-server`。DSH API 或绑�
 
 接入进程变量：`RABI_MANAGER_URL`、`RABI_AGENT_BOOTSTRAP_TICKET`、`RABI_NODE_ID`、`RABI_AGENT_DEFAULT_CWD`、`RABI_AGENT_ALLOWED_CWDS`、`RABI_AGENT_RELEASE_PUBLIC_KEY_SHA256`。Codex 使用 `RABI_AGENT_TYPE=codex-desktop` 和 `RABI_AGENT_CODEX_THREAD_ID`；DSH 使用 `RABI_AGENT_TYPE=dsh`、`RABI_AGENT_DSH_URL`、`RABI_AGENT_DSH_SESSION_ID`。这些值由远端 Agent 发现并写入私有配置，不要求用户输入。
 
-`node rabi-agent.mjs --bootstrap` 是常驻进程，应隐藏并脱离安装终端运行。首次接入后刷新节点页面。在线节点可请求更新；程序自行下载、校验并切换，30 秒内未连回则保留原版本。Manager 地址变更后应重新复制当前提示词更新连接，不猜端口。
+`node rabi-agent.mjs --bootstrap` 是常驻进程，应隐藏并脱离安装终端运行。首次接入后刷新节点页面。Manager 在已认证连接事件中发布当前内容摘要；新版连接器默认自动更新，只有私有配置显式 `autoUpdate=false` 时关闭。相同版本号但内容变化也会更新，下载仍验证原固定公钥、签名及全部文件哈希。Manager 地址变化由连接器按原稳定 `guid` 有界发现并自动核验，不要求 Agent 手动检查身份、重新绑定、兑换票据或索要新 token；不能扫描或猜端口。发现失败报告具体阶段，不解释成 Manager 离线。
 
-更新以已签名清单 `manifestPayload` 的 JSON SHA-256 内容摘要识别发布，不只比较 package semver；因此同版本号的不同内容也能更新。下载放入摘要命名的不可变目录，复用已有目录前重新核对发布身份及逐文件 hash。候选进程 READY 前不改共享启动器或 Hook；READY 后先安装读取指针的稳定启动器与 Hook shim，再原子切换 `current-release` 指针，失败保留原版本。shim 每次调用读取当前指针，再动态加载对应发布的 Hook helper。
+更新以已签名清单 `manifestPayload` 的 JSON SHA-256 内容摘要识别发布。下载放入摘要命名的不可变目录，复用前重新核对发布身份及逐文件 hash。更新 single-flight；候选先通过 IPC 报告 prepared，不连接、不执行业务。旧端最多等待 30 秒排空已接收任务；未排空保留原版本，不取消或重发任务。旧连接关闭确认后候选才激活并重读最新绑定；连接成功后原子切换 `current-release`，提交完成才释放候选执行并报告 updated。失败先确认候选退出，再恢复旧指针、启动器及 Hook 字节并重连；未确认退出不启动竞争 owner。shim 每次读取当前指针。旧候选不支持 IPC 交接时安全失败，不退回抢占连接。以上为源码与隔离夹具合同，真实双机升级仍须单独验收。
 
-仍按 semver 判断的旧连接器不能仅靠新清单自行安装此修复。首次迁移须复制新接入提示词、执行一次新 bootstrap，保留现有 `nodeCredential`，不要删除节点；此后才按内容摘要更新。旧 DSH 进程可能已缓存旧 helper，首次迁移须重新加载插件或宿主；覆盖磁盘文件不等于该进程已热更新。此更新合同不代表所有现有远端已完成迁移，应逐节点核对实际发布摘要和 Hook 行为。
+旧连接器缺少内容摘要、IPC 交接或动态发现能力时，不能仅凭新清单宣称自动迁移完成。必要的首次安装只更新连接器及稳定启动器，保留原 `nodeCredential`、nodeId、Agent、会话和工作区绑定；已有有效凭据不兑换新票据、不删除或重绑节点。旧 DSH 进程可能缓存 helper，磁盘替换不等于该进程已热更新；按原宿主受管重载并核对实际摘要与 Hook 行为。
+
+自启范围是**当前用户登录后**的连接器，不承诺 Codex/DSH Desktop 登录前可用。Windows 使用隐藏 VBS 登录入口；macOS 使用当前用户 launchd `RunAtLoad`、失败保活与 30 秒退避；Linux 优先用户级 systemd `Restart=on-failure`，不可用时明确报告 desktop 登录回退，不启用 linger 或系统服务。稳定启动器只持有一个 owner，异常退出有界指数退避并重读最新指针；正常退出或 `--stop` 不自动复活。更新候选通过 IPC 交给同一启动器监管，旧 worker 退出不启动第二个。以上有临时进程、Windows VBS 和三平台配置夹具覆盖，未据此宣称远端真实重启或 macOS/Linux 原生登录验收。
+
+### 生命周期与历史入口收尾
+
+- Manager 的节点注册表拥有远端启停及目录投影；远端私有配置拥有凭据、工作区与宿主绑定。目录、Skill 和 Route 不是额外接口许可。Host 独占本机 Manager 生命周期；远端稳定启动器独占连接器 worker 生命周期，两者不创建备用业务 Runtime。
+- 启动器及 endpoint 配置写入分别由操作系统内核 listener 拥有互斥，崩溃释放。Windows 使用按 canonical 配置路径 hash 的 named pipe；Unix 使用单个 hash 派生回环 listener，冲突明确 busy、不扫描或抢占。仅用于本机互斥／控制，不是 Manager 发现地址。旧 `launcher-owner.json`、`.recovery`、pathname socket 和 `.endpoint-lock` 不再参与判断或写入，也不根据陈旧 PID 删除它们。迁移前须退出旧连接器，不能混跑旧 writer。
+- endpoint 写入只合并已核验地址与身份，并对原节点、凭据及 endpoint 字段作 CAS；不会覆盖并发更新的 Agent、工作区或 `autoUpdate`。稳定启动器的控制诊断不作为锁真源，停止复用同一内核 owner。
+- 技能 ZIP 下载与普通 HTTP 调用复用同一 `/meta` 解包和身份合同，不保留裸对象专属副本。更新后的共享 Hook 按已提交指针读取；重复运行旧 bootstrap 不回退已有有效发布指针。提交后再次核验失败的候选非零退出，由原启动器恢复，不能保持 IPC 假存活或报告 updated。
+- 上述收尾按实际调用链检查；不代表所有远端历史启动项均已真机清理。Windows 临时进程与配置夹具、macOS/Linux 模拟命令和实机登录验收须分别报告。
 
 ## 实例身份与管理
 
@@ -140,7 +150,7 @@ node rabi-agent.mjs --api POST /api/agent/send --agent <agentId> --body-stdin
 
 `--upload-id` 为必填、预先保存的稳定 UUID，不自动生成。上传 HTTP 使用 `PUT /api/agent/uploads/<UUID>`、`application/octet-stream`、同 UUID 的 `Idempotency-Key`、URI 编码 basename 的 `x-rabiroute-file-name` 和内容摘要 `x-rabiroute-content-sha256`。同路径 GET 返回 `{code:0,data:{id,fileName,size,sha256,expiresAt}}`，到期时间为 ISO，不返回本地 path。默认单文件 2 GiB（2048 MiB，硬上限）、总量 4 GiB、最多 100 个、TTL 24 小时；HTTP 上传总并发上限为 4，跨 owner 合计。超时、503、切代或不确定回执后先重新发现并核对 Manager，再 GET 原 UUID；不自动重试或换 ID。
 
-大包上传使用流式二进制传输、流式落盘及增量 SHA-256 校验，期限 30 分钟，不把整包装进 JSON 或内存。可在「RabiLink → 配置」保存 `agentUploads.maxFileMiB`（整数 `1..2048`，默认 `2048`），持久化到 `data/Config.json`，重启 Manager 后生效；本机管理员也可使用原权限保护的 `PATCH /api/rabi/identity`，远端 Agent 无权增大配置。
+大包上传使用流式二进制传输、流式落盘及增量 SHA-256 校验，期限 30 分钟，不把整包装进 JSON 或内存。可在「RabiLink → 配置」保存 `agentUploads.maxFileMiB`（整数 `1..2048`，默认 `2048`），持久化到 `data/Config.json`，重启 Manager 后生效；已鉴权且未被显式禁用的远端 Agent 同样可通过 `PATCH /api/rabi/identity` 修改，遵守共同参数、强 ETag 与幂等合同，不另申请功能许可。
 
 已用 734 MiB（769654784 字节）的受控文件完成真实客户端到 loopback Manager、磁盘及模拟 NapCat 的 size/SHA-256 集成验收；生成和接收均按 64 KiB 小块，大于 8 MiB 的 Buffer 分配/拼接被测试防线拒绝。大测试由 `RABI_TEST_LARGE_UPLOAD=1` 显式启用，临时文件自动清理。**尚未验证真实 QQ 平台接收这一大小的文件**，仍须核对 NapCat/QQ 限制及群权限。旧连接器需要新版 bootstrap（保留已有节点凭据），旧 Hook 缓存需要重载宿主；仅更新 Manager 不会让旧客户端支持大包。
 

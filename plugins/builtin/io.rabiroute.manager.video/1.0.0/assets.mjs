@@ -15,7 +15,7 @@ export class VideoAssets {
     return record;
   }
   async file(id, access) { const record = await this.read(id, access); return { record, file: await safeTarget(this.root, `${id}.${assetTypes[record.kind].extension}`, access) }; }
-  async upload(request, kind, access) {
+  async upload(request, kind, access, inspect) {
     const fs = checkedFs(access); access?.assert();
     const type = Object.hasOwn(assetTypes, kind) ? assetTypes[kind] : undefined;
     if (!type) throw new VideoError("不支持的参考素材类型。");
@@ -23,10 +23,12 @@ export class VideoAssets {
     if (this.pending) throw new VideoError("请等待当前素材检查完成。", 409);
     if (Number(request.headers["content-length"]) > type.maxBytes) throw new VideoError("参考素材文件过大。", 413);
     this.pending = true;
+    let uploadedFile;
     try {
-      if (this.runtime.installed && !await this.runtime.installed(access)) throw new VideoError("请先在模型管理中安装视频运行环境，再上传参考素材。", 409);
+      if (!inspect && this.runtime.installed && !await this.runtime.installed(access)) throw new VideoError("请先在模型管理中安装视频运行环境，再上传参考素材。", 409);
       await fs.mkdir(this.root, { recursive: true });
       const id = randomUUID(), file = await safeTarget(this.root, `${id}.${type.extension}`, access);
+      uploadedFile = file;
       const handle = await fs.open(file, "wx"); let size = 0;
       const timer = setTimeout(() => request.destroy(), 120000);
       try { for await (const chunk of request) { access?.assert(); size += chunk.length; if (size > type.maxBytes) throw new VideoError("参考素材文件过大。", 413); access?.beforeMutation(); await handle.writeFile(chunk); access?.assert(); } }
@@ -34,12 +36,23 @@ export class VideoAssets {
       access?.assert();
       if (!size || this.closed) throw new VideoError("素材上传未完成。");
       let metadata;
-      try { metadata = await this.runtime.inspectAsset(id, kind, access); }
-      catch { access?.assert(); throw new VideoError("素材无法解码或超出限制，请检查格式、尺寸、帧率和时长。", 422); }
+      try { metadata = inspect ? await inspect(kind, file, access) : await this.runtime.inspectAsset(id, kind, access); }
+      catch (error) { access?.assert(); if (inspect && error instanceof VideoError) throw error; throw new VideoError("素材无法解码或超出限制，请检查格式、尺寸、帧率和时长。", 422); }
       if (this.closed) throw new VideoError("素材服务正在关闭。", 503);
       const record = { id, kind, size, ...metadata };
       await fs.writeFile(await safeTarget(this.root, `${id}.json`, access), JSON.stringify(record), { flag: "wx" });
       return record;
+    } catch (error) {
+      // Failed inspection has no asset record; discard only the file created by this upload.
+      if (uploadedFile) { access?.beforeMutation(); await fs.rm(uploadedFile,{force:true}); }
+      throw error;
     } finally { this.pending = false; }
+  }
+  async remove(id, access) {
+    if (this.runtime.readOnly || this.closed) throw new VideoError("素材服务只读或正在关闭。",423);
+    if (!/^[a-f0-9-]{36}$/.test(id)) throw new VideoError("素材编号无效。");
+    const fs = checkedFs(access);
+    access?.beforeMutation();
+    for (const extension of ["json",...Object.values(assetTypes).map(type=>type.extension)]) await fs.rm(await safeTarget(this.root,`${id}.${extension}`,access),{force:true});
   }
 }

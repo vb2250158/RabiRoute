@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Rabi context integration",
+    "description": "Connect DSH lifecycle events and conversation context to Rabi Manager."
+  }
+}

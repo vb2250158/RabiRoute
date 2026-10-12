@@ -71,21 +71,29 @@ export class AutomaticCodeRuntime {
     const inherited = this.context.getStore();
     const active = inherited?.active ? inherited : inherited?.boundary?.active ? inherited.boundary : undefined;
     const revision = active?.revision ?? this.current;
-    const scope: ExecutionScope = { revision, active: true, holds: 0, boundary: active?.boundary };
+    const module = this.modules.get(moduleId)!;
+    let functions = revision.functions.get(moduleId);
+    if (!functions) {
+      const definition = revision.definitions.get(moduleId);
+      if (definition && definition.shapeHash !== module.definition.shapeHash) throw new Error(`Automatic code shape changed: ${moduleId}`);
+      functions = definition ? this.prepare(definition, module.evaluate) : module.initial;
+      revision.functions.set(moduleId, functions);
+    }
+    const implementation = functions.get(symbol);
+    if (!implementation) throw new Error(`Unknown automatic code symbol: ${moduleId}/${symbol}`);
+    if (active) {
+      // Synchronous helpers already execute inside the caller's pinned revision.
+      // Only work that outlives this stack needs another lease.
+      return retainHotPatchResult(Reflect.apply(implementation, receiver, arguments_), () => ({
+        revision: revision.sequence, contract: {},
+        run: operation => this.context.run(active, operation), release: this.hold(active)
+      }));
+    }
+    const scope: ExecutionScope = { revision, active: true, holds: 0 };
     const release = this.hold(scope);
     const run = <Result>(operation: () => Result): Result => this.context.run(scope, operation);
     try {
-      const module = this.modules.get(moduleId)!;
-      let functions = revision.functions.get(moduleId);
-      if (!functions) {
-        const definition = revision.definitions.get(moduleId);
-        if (definition && definition.shapeHash !== module.definition.shapeHash) throw new Error(`Automatic code shape changed: ${moduleId}`);
-        functions = definition ? this.prepare(definition, module.evaluate) : module.initial;
-        revision.functions.set(moduleId, functions);
-      }
-      const implementation = functions.get(symbol);
-      if (!implementation) throw new Error(`Unknown automatic code symbol: ${moduleId}/${symbol}`);
-      const result = run(() => Reflect.apply(implementation, receiver, Array.from(arguments_)));
+      const result = run(() => Reflect.apply(implementation, receiver, arguments_));
       return retainHotPatchResult(result, { revision: revision.sequence, contract: {}, run, release });
     } catch (error) { release(); throw error; }
   }

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { sendGroupMessage, sendPrivateMessage, uploadGroupFile, type NapCatEndpoint, type OneBotMessage } from "./napcat.js";
+import { getLoginInfo, sendGroupMessage, sendPrivateMessage, uploadGroupFile, type NapCatEndpoint, type OneBotMessage } from "./napcat.js";
 import { normalizePipelineDefinition, resolvePipeline, type PipelineDefinition, type ResolvedPipeline } from "./pipelines.js";
 import { normalizeWeComError, sendWeComMessage, type WeComEndpoint } from "./wecom.js";
 import { sendFeishuText, type FeishuEndpoint } from "./feishu.js";
@@ -34,6 +34,7 @@ import {
 import { postFenneNoteOutput } from "./fenneNoteOutput.js";
 import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 import { renderMarkdownToPng } from "./markdownImage.js";
+import { napcatStickerMessage, QQ_STICKER_ID } from "./napcatStickers.js";
 
 export type AgentReplyRequest = {
   text?: unknown;
@@ -253,6 +254,7 @@ type ResolvedReplyRoute = ResolvedRoute & {
 };
 
 type ReplyContent = {
+  stickerId?: string;
   text: string;
   kind: MessagePayloadKind;
   message: OneBotMessage;
@@ -450,6 +452,12 @@ function requestContent(request: AgentReplyRequest): ReplyContent {
   const payload = payloadObject(request);
   const rawText = request.text ?? request.message ?? request.content ?? payload.text ?? payload.message ?? payload.content;
   const text = valueString(rawText) ? String(rawText) : "";
+  if (payload.type === "sticker") {
+    if (request.explicitTarget !== true || request.sendChannel !== "napcat" || typeof payload.stickerId !== "string" || !QQ_STICKER_ID.test(payload.stickerId)) {
+      throw new Error("A favorite sticker requires a typed NapCat send and a valid stickerId.");
+    }
+    return { text: text || "[表情]", kind: "image", stickerId: payload.stickerId, message: textSegmentsForAgentText(text) };
+  }
   const kind = valueString(request.payloadType ?? payload.type ?? payload.payloadType) as MessagePayloadKind | undefined;
   if (Object.prototype.hasOwnProperty.call(payload, "segments")) {
     if (request.explicitTarget !== true || request.sendChannel !== "napcat" || kind !== "image" || !Array.isArray(payload.segments)) {
@@ -1017,6 +1025,63 @@ function endpointFor(route: ResolvedRoute, instanceId?: string): AgentReplyNapCa
   return instances.find((item) => item.enabled !== false) ?? instances[0];
 }
 
+export type AgentReplyCurrentQqBinding = Readonly<{
+  routeId: string;
+  instanceId: string;
+  groupId: string;
+  /** Trusted in-process use only. Never include the endpoint in a public result or log. */
+  endpoint: Readonly<NapCatEndpoint>;
+  bindingRevision: string;
+}>;
+
+/** The only binding fingerprint generator for current reads and upload-owner evidence.
+ * Stable configuration, not message content, account observations or application generation.
+ * Credential rotation invalidates the binding without persisting the credential itself. */
+function qqBindingForRoute(route: ResolvedRoute, groupId: string, instanceId?: string): AgentReplyCurrentQqBinding | undefined {
+  const enabled = (route.runtime.napcatInstances ?? []).filter(item => item.enabled !== false);
+  if (enabled.length !== 1 || !/^[1-9][0-9]{0,15}$/.test(groupId)) return undefined;
+  const selected = endpointFor(route, instanceId);
+  if (!selected || selected !== enabled[0] || !selected.id || !selected.httpUrl?.trim()
+    || typeof selected.accessToken !== "string") return undefined;
+  const endpoint = Object.freeze({ httpUrl: selected.httpUrl.replace(/\/$/, ""), accessToken: selected.accessToken });
+  const routeId = route.profile?.id ?? route.runtime.id;
+  const bindingRevision = `sha256:${createHash("sha256").update(stableDeliveryJson({
+    version: 1, runtimeId: route.runtime.id, routeId, instanceId: selected.id, groupId,
+    httpUrl: endpoint.httpUrl, accessToken: endpoint.accessToken
+  }), "utf8").digest("hex")}`;
+  return Object.freeze({ routeId, instanceId: selected.id, groupId, endpoint, bindingRevision });
+}
+
+/** Read-only configuration snapshot for Lead's presence verifier; no network or log writes.
+ * Requires an exact enabled routeProfileId, groupId and the route's unique enabled instance.
+ * Optional instanceId must select that same instance. No source-history/default route fallback.
+ * Undefined means the current binding cannot be proved, not a new feature permission denial. */
+export function agentReplyCurrentQqBinding(request: AgentReplyRequest, options: AgentReplyOptions): AgentReplyCurrentQqBinding | undefined {
+  const route = resolveExplicitSendRoute(options, requestField(request, "routeProfileId"));
+  const groupId = requestField(request, "groupId");
+  return route && groupId ? qqBindingForRoute(route, groupId, requestField(request, "instanceId")) : undefined;
+}
+
+async function observeQqUploadOwner(
+  expected: AgentReplyCurrentQqBinding | undefined,
+  options: AgentReplyOptions
+): Promise<{ selfId: string; bindingRevision: string } | undefined> {
+  if (!expected) return undefined;
+  const request = { routeProfileId: expected.routeId, instanceId: expected.instanceId, groupId: expected.groupId };
+  if (agentReplyCurrentQqBinding(request, options)?.bindingRevision !== expected.bindingRevision) return undefined;
+  try {
+    const login = await getLoginInfo(expected.endpoint, { timeoutMs: 2_000 });
+    const selfId = typeof login.userId === "string" ? login.userId
+      : typeof login.userId === "number" && Number.isSafeInteger(login.userId) ? String(login.userId) : "";
+    if (!/^[1-9][0-9]{0,15}$/.test(selfId)
+      || agentReplyCurrentQqBinding(request, options)?.bindingRevision !== expected.bindingRevision) return undefined;
+    return { selfId, bindingRevision: expected.bindingRevision };
+  } catch {
+    // Evidence unavailable is not evidence of absence or a new send-policy gate.
+    return undefined;
+  }
+}
+
 function routePipeline(route: ResolvedRoute): ResolvedPipeline {
   return resolvePipeline(
     route.profile?.pipelinePreset ?? route.runtime.pipelinePreset,
@@ -1113,7 +1178,7 @@ export function agentReplyDeliveryTrace(request: AgentReplyRequest): { deliveryI
 }
 
 /** Business projection owned by Outbox: audit metadata is not a send result. */
-export function projectAgentReplyHistoryResult(data: Readonly<Record<string, unknown>>): AgentReplyResult {
+export function projectAgentReplyHistoryResult(data: Readonly<Record<string, unknown>>, allowDraft = false): AgentReplyResult {
   if (typeof data.ok !== "boolean" || !["sent", "draft", "blocked", "failed"].includes(String(data.status))) {
     throw new Error("Original Outbox result is invalid.");
   }
@@ -1132,7 +1197,17 @@ export function projectAgentReplyHistoryResult(data: Readonly<Record<string, unk
     if (typeof data[key] !== "string") throw new Error("Original Outbox result is invalid.");
     Object.assign(result, { [key]: data[key] });
   }
-  if (data.draft !== undefined) throw new Error("Draft history cannot prove original terminal delivery.");
+  if (data.draft !== undefined) {
+    if (!allowDraft) throw new Error("Draft history cannot prove original terminal delivery.");
+    const draft = data.draft as Record<string, unknown>;
+    if (!draft || typeof draft !== "object" || typeof draft.text !== "string") throw new Error("Original Outbox draft is invalid.");
+    result.draft = { text: draft.text };
+    for (const key of ["targetType", "groupId", "userId"] as const) {
+      if (draft[key] === undefined) continue;
+      if (typeof draft[key] !== "string") throw new Error("Original Outbox draft is invalid.");
+      result.draft[key] = draft[key];
+    }
+  }
   return result;
 }
 
@@ -1205,7 +1280,8 @@ export async function inspectAgentReplyDelivery(
         requestSeen = true;
         continue;
       }
-      completed = data as unknown as AgentReplyResult;
+      try { completed = projectAgentReplyHistoryResult(data, true); }
+      catch { return { state: "uncertain", reason: "Original Outbox result is invalid." }; }
     }
   }
   if (completed) return { state: "completed", result: completed };
@@ -2237,13 +2313,24 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
   }
 
   try {
+    if (content.stickerId) content.message = await napcatStickerMessage(endpoint, content.stickerId, content.message);
     if (target.targetType === "group" && target.groupId) {
       if (content.kind === "file" && (content.managedFileId || (content.file && !isRemoteFileReference(content.file)))) {
         const groupId = target.groupId;
         let uploadedResult: AgentReplyResult | undefined;
         const sendFile = async ({ path: filePath, fileName }: { path: string; fileName: string }): Promise<AgentReplyResult> => {
           const fileSize = fs.statSync(filePath).size;
-          const uploaded = await uploadGroupFile({ groupId, filePath, fileName }, endpoint);
+          // Pin the actual upload endpoint; mutable configuration must not silently change it.
+          const uploadEndpoint = { httpUrl: endpoint.httpUrl, accessToken: endpoint.accessToken };
+          const uploadInstanceId = endpoint.id;
+          const binding = qqBindingForRoute(route, groupId, uploadInstanceId);
+          const before = await observeQqUploadOwner(binding, options);
+          const uploaded = await uploadGroupFile({ groupId, filePath, fileName }, uploadEndpoint);
+          const after = before ? await observeQqUploadOwner(binding, options) : undefined;
+          const ownerEvidence = before && after && before.selfId === after.selfId
+            && before.bindingRevision === after.bindingRevision
+            ? { selfId: before.selfId, bindingRevision: before.bindingRevision }
+            : { qqOwnerEvidence: "unknown" };
           const result: AgentReplyResult = {
             ok: true,
             status: "sent",
@@ -2251,13 +2338,14 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
             messageId,
             targetType: "group",
             groupId,
-            instanceId: endpoint.id,
+            instanceId: uploadInstanceId,
             sentFileId: valueString(uploaded.fileId),
             sentFileName: content.managedFileId ? fileName : uploaded.fileName || fileName
           };
           uploadedResult = result;
           appendOutboxLog(options, route, "info", "group_file_uploaded", fileName, withConversation(withDeliveryTrace({
             ...result,
+            ...ownerEvidence,
             attachments: [{ kind: "file", name: fileName, size: fileSize }]
           })));
 

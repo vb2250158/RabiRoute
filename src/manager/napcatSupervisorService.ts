@@ -2,7 +2,20 @@ export type NapcatSupervisorServiceOptions<Result> = {
   run: (signal: AbortSignal) => Promise<Result>;
   onResult?: (result: Result) => void;
   onError?: (error: unknown) => void;
+  /** Long-lived owners may retry failed runs; one-shot callers keep the existing default. */
+  restartDelayMs?: number;
+  waitBeforeRestart?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
 };
+
+function waitBeforeRestart(milliseconds: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise(resolve => {
+    const finish = () => { clearTimeout(timer); signal.removeEventListener("abort", finish); resolve(); };
+    const timer = setTimeout(finish, milliseconds);
+    timer.unref?.();
+    signal.addEventListener("abort", finish, { once: true });
+  });
+}
 
 export class NapcatSupervisorService<Result = unknown> {
   private active = false;
@@ -19,15 +32,26 @@ export class NapcatSupervisorService<Result = unknown> {
     const controller = new AbortController();
     this.controller = controller;
     const flight = Promise.resolve()
-      .then(() => this.options.run(controller.signal))
-      .then(result => {
-        if (this.active && this.generation === generation) this.options.onResult?.(result);
-      })
-      .catch(error => {
-        if (this.active && this.generation === generation) this.options.onError?.(error);
+      .then(async () => {
+        while (this.active && this.generation === generation && !controller.signal.aborted) {
+          try {
+            const result = await this.options.run(controller.signal);
+            if (this.active && this.generation === generation) this.options.onResult?.(result);
+            return;
+          } catch (error) {
+            if (!this.active || this.generation !== generation || controller.signal.aborted) return;
+            this.options.onError?.(error);
+            if (this.options.restartDelayMs === undefined) return;
+            const delay = Math.max(1_000, this.options.restartDelayMs);
+            await (this.options.waitBeforeRestart ?? waitBeforeRestart)(delay, controller.signal);
+          }
+        }
       })
       .finally(() => {
-        if (this.generation === generation && this.flight === flight) this.flight = undefined;
+        if (this.generation === generation && this.flight === flight) {
+          this.active = false;
+          this.flight = undefined;
+        }
         if (this.generation === generation && this.controller === controller) this.controller = undefined;
       });
     this.flight = flight;

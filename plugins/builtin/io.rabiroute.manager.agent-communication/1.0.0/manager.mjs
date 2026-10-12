@@ -54,6 +54,8 @@ export const activate = definePlugin({
                 { routeId: "agent-help", kind: "exact", path: "/api/agent/help", methods: ["GET"] },
                 { routeId: "qq-diagnostics", kind: "exact", path: "/api/agent/qq/diagnostics", methods: ["GET"] },
                 { routeId: "qq-group-files", kind: "exact", path: "/api/agent/qq/group-files", methods: ["GET"] },
+                { routeId: "qq-stickers", kind: "exact", path: "/api/agent/qq/stickers", methods: ["GET"] },
+                { routeId: "qq-sticker-preview", kind: "prefix", pathPrefix: "/api/agent/qq/stickers/", methods: ["GET"] },
                 { routeId: "qq-history", kind: "exact", path: "/api/agent/qq/history", methods: ["GET"] },
                 { routeId: "qq-messages", kind: "prefix", pathPrefix: "/api/agent/qq/messages/", methods: ["GET"] },
                 { routeId: "send-capabilities", kind: "exact", path: "/api/agent/send/capabilities", methods: ["GET"] },

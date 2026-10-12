@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +11,29 @@ import {
   findAgentSendTraces,
   readAgentSendReceipt
 } from "./agentSendIdempotency.js";
+
+test("receipt readback distinguishes expired execution without mutating or sending", t => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "send-readback-expired-"));
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
+  const dir = path.join(rootDir, "data", "agent-send-idempotency");
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, createHash("sha256").update("expired-send").digest("hex") + ".json");
+  const receipt = { version: 1, deliveryId: "expired-send", requestDigest: "a".repeat(64), state: "sending",
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), executionId: "example-execution",
+    ownerHost: "example-other-host", ownerPid: 1, leaseExpiresAt: new Date(0).toISOString() };
+  const bytes = JSON.stringify(receipt);
+  fs.writeFileSync(file, bytes);
+  const response = agentSendReceiptResponse(rootDir, receipt.deliveryId);
+  assert.equal(response.statusCode, 409);
+  assert.equal(response.body.idempotency.state, "uncertain");
+  assert.equal(fs.readFileSync(file, "utf8"), bytes);
+  const activeBytes = JSON.stringify({ ...receipt, leaseExpiresAt: new Date(Date.now() + 60_000).toISOString() });
+  fs.writeFileSync(file, activeBytes);
+  const activeResponse = agentSendReceiptResponse(rootDir, receipt.deliveryId);
+  assert.equal(activeResponse.statusCode, 202);
+  assert.equal(activeResponse.body.idempotency.state, "in_progress");
+  assert.equal(fs.readFileSync(file, "utf8"), activeBytes);
+});
 
 test("agent send idempotency stores one result for one explicit send request", async (t) => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-send-idempotency-"));

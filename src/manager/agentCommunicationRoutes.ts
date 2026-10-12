@@ -15,6 +15,7 @@ import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
 import { handleAgentQqDiagnostics, type AgentQqDiagnosticsContext } from "./agentQqDiagnostics.js";
 import { handleAgentGroupFiles, type AgentGroupFilesContext } from "./agentGroupFiles.js";
 import { handleQqMessageRoutes, type QqMessageRoutesContext } from "./qqMessageRoutes.js";
+import { handleQqStickerRoutes } from "./qqStickerRoutes.js";
 import type { ManagerPluginRouteHandler } from "./managerPluginRouteRegistry.js";
 
 export type AgentCommunicationHttpResponse = {
@@ -145,7 +146,7 @@ function handleReceiptMaintenance(
     const body = await context.readJsonBody<unknown>(request);
     const isObject = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
     const originalRequest = isObject(body) ? body.originalRequest : undefined;
-    const allowedFields = ["deliveryId", "sender", "routeId", "channel", "params", "payload", "tracking", "styleValidation"];
+    const allowedFields = ["deliveryId", "sender", "routeId", "channel", "params", "payload", "tracking", "styleValidation", "messageLengthConfirmation"];
     if (requestUrl.search || deliveryId.length > 200 || !/^[A-Za-z0-9._:-]+$/.test(deliveryId)
       || !isObject(body) || Object.keys(body).length !== 1 || !isObject(originalRequest)
       || Object.keys(originalRequest).some(key => !allowedFields.includes(key))
@@ -334,6 +335,7 @@ export function handleAgentCommunicationApi(
   context: AgentCommunicationRoutesContext,
   trackOperation: TrackOperation = operation => operation
 ): boolean {
+  if (context.qqMessages && handleQqStickerRoutes(request, requestUrl, response, context.qqMessages, trackOperation)) return true;
   if (context.qqMessages && handleQqMessageRoutes(request, requestUrl, response, context.qqMessages, trackOperation)) return true;
   if (request.method === "GET" && requestUrl.pathname === "/api/agent/qq/diagnostics") {
     trackHandledOperation(handleAgentQqDiagnostics(request, requestUrl, response, context.qqDiagnostics).then(() => undefined), trackOperation);

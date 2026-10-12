@@ -123,3 +123,27 @@ test("a late disk snapshot cannot overwrite a committed mutation", async t => {
   assert.equal(service.ensure("Example", root).search({ query: "new" }).total, 1);
   assert.equal(service.ensure("Example", root).search({ query: "alpha" }).total, 0);
 });
+
+test("cold indexing finishes despite concurrent commits and replays the latest value for each identity", async t => {
+  const { root } = fixture(t);
+  let finish!: (delta: KnowledgeStorageDelta) => void;
+  const service = new KnowledgeSearchService({ watch: false, debounceMs: 5000,
+    readDelta: () => new Promise(resolve => { finish = resolve; }) });
+  t.after(() => service.close());
+  const warming = service.reload("Example", root);
+  assert.equal(service.status(root).ready, false);
+  publishKnowledgeChange(root, { kind: "recent", item: { ...item(), keywords: ["intermediate"] } });
+  publishKnowledgeChange(root, { kind: "recent", item: { ...item(), keywords: ["latest"] } });
+  publishKnowledgeChange(root, { kind: "recent", item: { ...item("two"), keywords: ["other"] } });
+  finish(readKnowledgeStorageDelta(root, {}));
+  await warming;
+  const index = service.ensure("Example", root);
+  assert.equal(index.ready, true);
+  const status = service.status(root);
+  assert.ok("filesRead" in status);
+  assert.equal(status.filesRead, 1);
+  assert.equal(index.search({ query: "latest" }).total, 1);
+  assert.equal(index.search({ query: "other" }).total, 1);
+  assert.equal(index.search({ query: "intermediate" }).total, 0);
+  assert.equal(index.search({ query: "alpha" }).total, 0);
+});

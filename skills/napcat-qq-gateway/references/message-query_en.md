@@ -15,6 +15,14 @@ Use this reference for requests such as “check the group,” “read the group
 
 ## Controlled bypass
 
+### Returned excerpts and query cost
+
+For `message-endpoint-history`, `limit` defaults to 50 and is capped at 200. `maxChars` defaults to and is capped at 200,000; its budget includes text, segments and record overhead, and the first record may exceed it. `count` is the number returned, while `coverage` labels the query scope. Fewer than `limit` entries do not prove completeness. There is no `cursor/offset/nextCursor`; do not simulate pagination by subtracting one second from the earliest timestamp or use this excerpt for monthly statistics. `includeArchives=1` includes only archives saved by Rabi, without guaranteeing all QQ history.
+
+Cold queries read candidate archives; a small `limit` or keywords do not reduce scanning. Start with the conversation, Unix-second `from/to`, and `limit=10`, then expand as needed. Avoid concurrent full-history scans. After 503 or timeout, narrow the scope or verify an official source under the rules below; do not retry the same expensive query indefinitely.
+
+Host, `/meta` and knowledge-index requests normally use a 5-second client budget. Cold archive reads may use a bounded client budget of up to 35 seconds; worker execution has a 30-second budget, excluding queue time, and early disconnects cancel reading. Configure this in the client, not a query parameter. For 400, correct parameters using `errorCode/repair` rather than treating it as a connection failure; do not repeatedly extend deadlines and retry.
+
 For original messages and attachments, first use the current Manager's managed QQ endpoints (see the [Agent API contract](../../../docs/rabi-agent-interfaces_en.md#qq-messages-history-pages-and-attachment-downloads)):
 
 ```http

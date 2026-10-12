@@ -28,7 +28,7 @@ Rabi Agent 是一个没有界面的局域网工作进程，不是完整 RabiRout
 
 1. 在总控 WebGUI 的 **远端 Agent** 页面复制接入提示词，粘贴到目标电脑的私密 Codex/DSH 任务中。需要 Node.js 22.13+ 和已启动的目标宿主。
 2. 提示词使用默认 30 分钟有效的一次性票据下载已签名程序，并由 `--bootstrap` 兑换独立 `nodeCredential`。凭据存入当前用户私有配置；Manager 只保存密钥 hash 与授权，登录启动项不含凭据。票据不是共享 WebGUI Token，成功兑换后不可重用。
-3. 确认自身 `/api/lan-agent/self` 的 `nodeId` 与 `connected`。新接入的 **是否启用Agent** 默认勾选，启用后按本机 Agent 的方式使用，无需另开 API 或 skills 授权。需要消息投递时，在路由的消息适配器选择 **远端Agent(<IP地址>)** 中的准确 Agent 并保存。
+3. 连接器自动核对原节点身份；`/api/lan-agent/self` 仅供诊断，`connected=false` 不等于凭据失效，不要求 Agent 手动核验或重绑。新接入的 **是否启用Agent** 默认勾选，启用后按本机 Agent 的方式使用，无需另开 API 或 skills 授权。需要消息投递时，在路由的消息适配器选择 **远端Agent(<IP地址>)** 中的准确 Agent 并保存。
 
 远端启用状态由 Manager 持有；开关修改后立即 PUT 生效，离线也可停用，不必保存执行参数。保存任务、工作目录和模型不会重新启用 Agent，已有绑定的旧关闭状态在重连后保持不变；旧版从未授权与主动停用无法区分时，也需管理员确认后开启。读取失败会显示错误，不假定已启用。连接器显式本地停用仍拒绝执行。本轮已通过源码构建，尚未部署或完成双机验收。
 
@@ -40,7 +40,7 @@ node rabi-agent.mjs --bootstrap
 
 仅为安装子进程提供 `RABI_MANAGER_URL`、`RABI_AGENT_BOOTSTRAP_TICKET`、`RABI_NODE_ID`、`RABI_AGENT_DEFAULT_CWD`、`RABI_AGENT_ALLOWED_CWDS` 和 `RABI_AGENT_RELEASE_PUBLIC_KEY_SHA256`。Codex 使用 `RABI_AGENT_TYPE=codex-desktop`、`RABI_AGENT_CODEX_THREAD_ID`；DSH 使用 `RABI_AGENT_TYPE=dsh`、`RABI_AGENT_DSH_URL`、`RABI_AGENT_DSH_SESSION_ID`。不要把凭据放入命令参数、日志或仓库；票据只用于私密安装。
 
-更新按已签名 `manifestPayload` JSON 的 SHA-256 内容摘要判断，同 semver 内容变化也可更新；使用摘要命名的不可变目录，复用前验证发布身份及逐文件 hash。候选 READY 前不改共享入口，READY 后安装指针型启动器/Hook shim，再原子切换 `current-release`；失败保留旧版。shim 每次按当前指针加载 helper，不再引用旧共享 helper 副本。旧版仅比 semver，首次须复制新接入提示、执行新 bootstrap，保留已有 `nodeCredential`；旧 DSH 已缓存 helper 时还须重新加载插件或宿主，不能把覆盖磁盘当作热更新。
+连接器默认根据 Manager 已签名内容摘要自动更新，显式 `autoUpdate=false` 关闭；同版本内容变化也可更新。唯一稳定启动器监管单一 worker；更新候选按 prepared → 排空 → 旧连接关闭 → 激活 → 指针提交 → 释放执行的顺序交接，失败保留旧版，不取消或重发业务。当前用户登录自启、异常保活、旧安装迁移与实机验收边界见[权威接入合同](../../docs/lan-rabi-agent-bootstrap.md)。已有有效凭据不重复兑换、不重绑；覆盖磁盘不等于宿主热更新。
 
 ## 从现有任务使用 Manager
 
@@ -54,9 +54,11 @@ node rabi-agent.mjs --api GET "/api/lan-agent/resources/read?id=docs%2Frabi-agen
 
 通用语法：`--api METHOD /path --agent ID [--body-stdin] [--if-match ETAG] [--idempotency-key KEY]`。选择私有配置中的准确 Agent；CLI 自动读取 `nodeCredential`，不接受旧共享凭据。写入先读现行合同，JSON 通过标准输入传入，按要求提供强 ETag 与稳定幂等键。CLI 前后核对 Manager `/meta`；超时、503、`uncertain` 或写后切代先权威读回，不自动重放，412 重新读取并确认原意。
 
+通用 HTTP 调用支持 `--raw-stdin`（原文）、`--body-file FILE`（二进制流）、重复 `--header 'Name: value'`（合法业务头）、`--output FILE`（二进制／文本下载）、`--stream --output FILE`（有期限流消费）、`--timeout-ms MS` 和 `--no-replay`。正文格式互斥；连接凭据、内部来源证明、Host 和代际头由传输拥有，不能由调用方覆盖。输出采用同目录临时文件与不覆盖提交，切代或失败不提交。流消费不自动重放；无限直播 stdout 和 WebSocket 并非该 HTTP CLI 的传输能力，不能将不支持解释为未授权。模块可显式使用回调消费流。下载技能继续使用原严格 ZIP 校验入口。
+
 传输层将近期记忆详情 GET 视为会更新阅读时间的操作：失败或代际变化时不自动重试，并报告 `uncertain`。模块调用方也可通过 `replaySafe: false` 禁止其他有副作用查询的重试；该选项不能让 POST/PATCH 自动重放。`/meta` 的直接对象与 `data` 包装响应均按同一身份核对。本次变更为源码与隔离测试验证，尚未部署。
 
-当前操作目录包含受控业务入口及别名，不是全部 Manager API，也不代表全部远端可用。管理员设置、任意 `file` 和宿主控制被拒绝；业务权限、Action Gate、来源身份和原有 loopback-only 限制仍生效。资源只允许公开文档、技能及其同包直接引用的受控文本，不开放任意文件系统。按需读取 Manager 当前发布的最新技能与合同，不复制计划、记忆或消息处理状态为第二份业务真源。
+鉴权成功且未被用户显式禁用的远端 Agent 默认可使用全部公开 RabiPC 接口。操作目录用于发现，不是功能许可白名单；公共管理设置不因远端来源被额外拒绝。连接器自动处理凭据、当前代身份和代际请求头，Agent 无需手动核对身份或重新绑定。共同的参数、对象、Action Gate、文件根、版本和幂等合同仍适用；Host 私有控制协议不是公开 Manager 接口。资源只允许公开文档、技能及其同包直接引用的受控文本，不开放任意文件系统。按需读取 Manager 当前发布的最新技能与合同，不复制计划、记忆或消息处理状态为第二份业务真源。
 
 管理端启停沿用兼容的 `authorization` 接口和 `enabledAgentIds` 状态投影，不是另一个 API 权限开关。并发版本、幂等与异常回读合同见 [接入文档的 API](../../docs/lan-rabi-agent-bootstrap.md#api)。
 
@@ -91,7 +93,7 @@ node rabi-agent.mjs --api POST /api/agent/send --agent <agentId> --body-stdin
 
 上传使用 `PUT /api/agent/uploads/<UUID>` 和原始二进制正文；`Idempotency-Key` 同 UUID，文件名为 URI 编码的 basename，内容附 SHA-256。`GET` 同路径返回 `{code:0,data:{id,fileName,size,sha256,expiresAt}}`，`expiresAt` 为 ISO 时间，不暴露 Manager `path`。默认单文件 2 GiB（2048 MiB，硬上限）、总量 4 GiB、最多 100 个、TTL 24 小时；HTTP 上传跨 owner 总并发上限为 4。超时、503、切代或结果不确定时先核对当前 Manager，再 GET 原 ID；保留原键和文件，不自动重试或换 ID。
 
-大文件上传使用有背压的流式传输和增量 SHA-256，期限 30 分钟。Manager 的「RabiLink → 配置」可保存 `agentUploads.maxFileMiB`（整数 `1..2048`，默认 `2048`），写入 `data/Config.json`，重启 Manager 后生效；该设置也受原本机管理员 `PATCH /api/rabi/identity` 权限保护，远端 Agent 不能提高限额。客户端硬上限为 2 GiB，服务器配置更小时会拒绝超限文件。
+大文件上传使用有背压的流式传输和增量 SHA-256，期限 30 分钟。Manager 的「RabiLink → 配置」可保存 `agentUploads.maxFileMiB`（整数 `1..2048`，默认 `2048`），写入 `data/Config.json`，重启 Manager 后生效；`PATCH /api/rabi/identity` 复用已鉴权连接，远端 Agent 同样可按强 ETag、幂等及参数合同修改；未设置额外功能白名单。客户端硬上限为 2 GiB，服务器配置更小时会拒绝超限文件。
 
 734 MiB（769654784 字节）文件已通过真实客户端 → loopback Manager → 文件存储 → 模拟 NapCat 的 size/SHA-256 集成测试，使用小块生成与读取并禁止大于 8 MiB 的 Buffer 分配/拼接。用 `RABI_TEST_LARGE_UPLOAD=1` 显式运行大文件用例；默认跳过且测试结束清理临时文件。真实 QQ 平台的大小/群权限限制尚未验收。已有旧连接器必须先按上文新版 bootstrap 迁移，缓存旧 Hook 的宿主重载后再试；服务端改限额不等于远端代码已升级。
 
@@ -99,13 +101,13 @@ node rabi-agent.mjs --api POST /api/agent/send --agent <agentId> --body-stdin
 
 文件归属 `nodeId + agentId`，同 Agent 多 session 可共享，但仍须可信、已批准的 source。`fileId` 仅限 NapCat 群文件，与 `path`/`url`/`fileName` 互斥；不能用于图片、语音或其它渠道。显示名取上传元数据；`payload.text` 可选，`replyToMessageId` 须为空字符串或具体来源消息 ID。Manager 每请求通过内部可信 resolver 校验授权、归属、完整性和 TTL，并以 inflight lease 保护在途文件；不扩大 `allowedFileRoots`，原本地 path 流程照旧。`onlyPrimary` 仍核精确 Route 的远端绑定与获批会话。
 
-必须取得 Manager 和渠道发送回执；caption 失败但群文件已上传时保留 `status=sent`，只补文本，不重发文件。异机 NapCat 仍需要能够读取 Manager 文件路径的共享目录，不代表支持任意跨机 NapCat。完整请求头、安全与回读合同见 [Agent 接口](../../docs/rabi-agent-interfaces.md#远端-agent-上传后发送群文件实验合同)。上文正式回复 `none` 限制不变。
+必须取得 Manager 和渠道发送回执；群文件上传与 caption／整次终态分别确认。caption 缺失不能把整次请求标成成功，不能自动补文字、重发文件或换 deliveryId；先用原请求只读核验，再按用户具体授权处理。异机 NapCat 仍需要能够读取 Manager 文件路径的共享目录，不代表支持任意跨机 NapCat。完整请求头、安全与回读合同见 [Agent 接口](../../docs/rabi-agent-interfaces.md#远端-agent-上传后发送群文件实验合同)。上文正式回复 `none` 限制不变。
 
 ## 旧安装与运行边界
 
 - 旧配置缺少 `nodeCredential` 时必须以新票据重新接入，不能迁移 `lanLinkToken` 为节点凭据；保留原实例、Agent、任务与允许的工作目录。已有独立凭据的重连不重复兑换。
 - 新源码在 HTTP/WS 监听前检测旧 `lan-agent-tasks.json`：没有完成标记时，即使注册表为空也轮换 WebGUI Token，成功后写标记，失败中止启动。旧远程浏览器链接失效后须在本机取得新链接。检测范围外曾暴露的密钥也须确认撤销或轮换；未轮换的共享密钥仍可能绕过节点授权。整体部署与 Host 健康不等于旧节点迁移验收，仍须逐节点核对重新接入和旧密钥失效，不能宣称所有现有安装已自动安全迁移。
-- 接入时固定发布公钥 SHA-256 指纹，更新时先核对指纹，再验证 Ed25519 签名和每个文件的 SHA-256 与大小。收到更新请求后自行下载、校验和切换；新版本 30 秒内未连接成功时保留旧版本。
-- 不包含 Manager、Gateway、WebGUI、配对码、UDP 扫描或设备密码。不启动备用 Runtime；Codex owner 或 DSH 绑定不可用时失败，不互相回退。
+- 接入时固定发布公钥 SHA-256 指纹；内容摘要自动更新核对该指纹、Ed25519 与逐文件 hash。IPC 准备、排空、交接、指针提交及失败恢复使用[统一接入合同](../../docs/lan-rabi-agent-bootstrap.md)。
+- 不包含 Manager、Gateway、WebGUI、配对码或设备密码；使用标准 DNS-SD 动态定位原 Manager，不扫描端口。不启动备用 Runtime；Codex owner 或 DSH 绑定不可用时失败，不互相回退。
 - 0.2.0 将电脑作为实例，原单任务配置映射为稳定的 `default` Agent。每个实例可增加多个 Agent；执行配置保存在该电脑，Manager 统一管理。安装发布目录的固定 npm 依赖后，扫描、任务操作与 Hook 安装使用共用管理模块。
 - 节点在线、任务已入队或本机夹具通过都不等于真实回复完成。跨机连续投递、登录启动、断网与升级恢复，以及高级计划/记忆工作流仍需实机验收。

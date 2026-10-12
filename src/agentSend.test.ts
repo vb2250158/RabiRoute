@@ -560,6 +560,7 @@ test("managed group file lease covers upload and caption; readback retains fileI
   await withJsonServer((body, request) => {
     assert.equal(leased, true);
     actions.push(request.url!);
+    if (request.url === "/get_login_info") return { status: "ok", retcode: 0, data: { user_id: 10001, nickname: "Test" } };
     if (request.url === "/upload_group_file") {
       assert.equal(body.file, filePath);
       assert.equal(body.name, "public.txt");
@@ -582,7 +583,7 @@ test("managed group file lease covers upload and caption; readback retains fileI
     assert.equal(result.status, "sent");
     assert.match(result.reason!, /follow-up text failed/);
     assert.equal(result.sentFileName, "public.txt");
-    assert.deepEqual(actions, ["/upload_group_file", "/send_group_msg"]);
+    assert.deepEqual(actions, ["/get_login_info", "/upload_group_file", "/get_login_info", "/send_group_msg"]);
     assert.equal(leased, false);
     const log = fs.readFileSync(path.join(opts.routeRoot, "route-main", "outbox-adapter.log.jsonl"), "utf8");
     assert.ok(log.includes(managedFileId));
@@ -606,6 +607,7 @@ test("managed uploads without platform receipt remain uncertain and lease-releas
   fs.writeFileSync(filePath, "file");
   let uploads = 0;
   await withJsonServer((_body, request) => {
+    if (request.url === "/get_login_info") return { status: "ok", retcode: 0, data: { user_id: 10001, nickname: "Test" } };
     assert.equal(request.url, "/upload_group_file");
     uploads++;
     return { status: "ok", retcode: 0, data: {} };

@@ -14,6 +14,23 @@ type ConnectedClient = {
   waitFor: (type: string) => Promise<Record<string, unknown>>;
 };
 
+test("authenticated connect advertises current release content without creating a task", async () => {
+  const statePath = temporaryStatePath();
+  const registry = new LanAgentRegistry({ statePath, currentRelease: () => ({ version: "0.1.0", releaseDigest: "a".repeat(64) }) });
+  const server = http.createServer();
+  registry.attach(server, { enabled: () => true, getToken: () => "fixture" });
+  const port = await listen(server);
+  let client: ConnectedClient | undefined;
+  try {
+    client = await connectNode(port, "fixture", "alpha");
+    assert.deepEqual((await client.waitFor("connected")).release, { version: "0.1.0", releaseDigest: "a".repeat(64) });
+    assert.equal(registry.listTasks().length, 0);
+  } finally {
+    client?.socket.close(); registry.close(); await closeServer(server);
+    fs.rmSync(path.dirname(statePath), { recursive: true, force: true });
+  }
+});
+
 test("node aliases persist offline and survive connector reconnects without changing Agent identities", async () => {
   const statePath = temporaryStatePath();
   const registry = new LanAgentRegistry({ statePath });

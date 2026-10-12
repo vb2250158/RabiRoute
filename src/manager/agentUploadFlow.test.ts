@@ -97,6 +97,10 @@ async function fixture(t: test.TestContext, captionFails = false, hashSink = fal
       try {
         const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
         const action = request.url!;
+        if (action === "/get_login_info") {
+          json(response, 200, { status: "ok", retcode: 0, data: { user_id: "9000" } });
+          return;
+        }
         if (action === "/upload_group_file" && hashSink) {
           const digest = createHash("sha256");
           let size = 0;

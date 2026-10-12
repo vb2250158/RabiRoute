@@ -40,13 +40,13 @@ export type AgentApiAuthorization =
   | { allowed: true; operation: AgentApiOperation }
   | { allowed: false; reason: "invalid_method" | "invalid_path" | "query_credentials" | "query_not_allowed" | "operation_not_allowed" };
 
-type Definition = readonly [AgentApiMethod, string, string, string?, string?];
+type Definition = readonly [AgentApiMethod, string, string, string?, string?, (readonly string[])?];
 const contractResourceId = "docs/rabi-agent-interfaces.md";
 const handlerBoundary = "鉴权后的连接可使用已提供的接口；请求仍需符合来源身份、文件路径、幂等键及版本合同。";
 
 // This catalog describes reviewed contracts; connection authentication is enforced separately.
 function operations(group: string, prefix: string, definitions: readonly Definition[], limitations: readonly string[] = []): AgentApiOperation[] {
-  return definitions.map(([method, suffix, description, query = "", repeatable = ""]) => {
+  return definitions.map(([method, suffix, description, query = "", repeatable = "", operationLimitations = []]) => {
     const pathTemplate = `${prefix}${suffix}`;
     const id = `${group}:${method}:${pathTemplate}`;
     const queryParameters = Object.freeze(query.split(" ").filter(Boolean));
@@ -115,7 +115,7 @@ function operations(group: string, prefix: string, definitions: readonly Definit
       id, method, pathTemplate, description, contractResourceId,
       queryParameters,
       repeatableQueryParameters,
-      limitations: Object.freeze([handlerBoundary, ...limitations]),
+      limitations: Object.freeze([handlerBoundary, ...limitations, ...operationLimitations]),
       help: undefined as unknown as AgentApiHelp
     };
     operation.help = Object.freeze({
@@ -205,7 +205,13 @@ const catalog: readonly AgentApiOperation[] = Object.freeze([
     ["GET", "/knowledge/search", "按关键词或全文检索知识", "query mode kind archived limit cursor"],
     ["GET", "/knowledge/cache/status", "读取知识索引状态"],
     ["POST", "/knowledge/cache/reload", "刷新指定知识索引"],
-    ["GET", "/message-endpoint-history", "检索消息端历史", "query match adapter channel kind sender target conversationKey from to includeArchives limit maxChars"],
+    ["GET", "/message-endpoint-history", "检索已记录消息的最近片段（无分页）", "query match adapter channel kind sender target conversationKey from to includeArchives limit maxChars", "", [
+      "只查该人格已保存的消息；includeArchives=1 纳入归档，不保证平台全部历史。",
+      "limit 默认 50、最多 200；maxChars 默认及最多 200000，按文本、分段和记录开销计预算，首条可超过预算。count 仅本次返回数，coverage 是查询范围标签；少于 limit 也不能证明完整。",
+      "无 cursor/offset、nextCursor 或完整结束标记；不把本次结果当作整月统计样本或全量历史，不按最早时间减一秒模拟翻页（同秒多条会漏）。",
+      "归档冷查询需读取候选文件，减小 limit 或增加关键词不降低扫描量。先限定目标会话与 Unix 秒 from/to，limit 建议 10；成功后按需要扩展，不并发全历史扫描。",
+      "503/超时应区分索引未就绪、读池繁忙与读取超时；缩小时间窗口或使用已核验覆盖范围的正式来源，不对相同重查询无限重试。"
+    ]],
     ["GET", "/role-panel/messages", "读取人格消息时间线", "limit"],
     ["GET", "/persona-document", "读取固定 persona.md；不开放 file 参数"],
     ["GET", "/persona-reference", "只读获取人格正文与消息配置；数据仍归所属 PC", "file"],
@@ -226,6 +232,8 @@ const catalog: readonly AgentApiOperation[] = Object.freeze([
     ["GET", "/api/agent/help", "按 operationId、方法或路径查询当前接口帮助", "operationId path method"],
     ["GET", "/api/agent/qq/diagnostics", "查询唯一已启用 QQ 实例的脱敏只读诊断", "routeId"],
     ["GET", "/api/agent/qq/group-files", "读取精确群的有界 QQ 文件元数据", "routeId groupId folderId"],
+    ["GET", "/api/agent/qq/stickers", "读取所选 QQ 账号的收藏表情 ID 和描述", "routeId instanceId count", "routeId"],
+    ["GET", "/api/agent/qq/stickers/:stickerId/preview", "预览所选 QQ 账号的收藏表情", "routeId instanceId", "routeId"],
     ["GET", "/api/agent/qq/history", "鉴权连接读取选定 QQ 会话历史分页", "routeId kind target cursor limit"],
     ["GET", "/api/agent/qq/messages/:messageId", "鉴权连接读取原消息及附件下载入口", "routeId kind target"],
     ["GET", "/api/agent/qq/messages/:messageId/attachments/:attachmentIndex", "鉴权连接下载原消息附件二进制；最多 64 MiB", "routeId kind target"],

@@ -1,5 +1,7 @@
 import { createHash, createPublicKey, verify } from "node:crypto";
 import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
+import net from "node:net";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,7 +16,7 @@ import { normalizeAllowedWorkspaces, resolveRealDirectory, resolveTaskWorkspace 
 
 const packageJson = JSON.parse(fs.readFileSync(new URL("./package.json", import.meta.url), "utf8"));
 const AGENT_VERSION = String(packageJson.version || "0.0.0");
-const READY_FILE = process.env.RABI_AGENT_READY_FILE?.trim() || "";
+const UPDATE_CANDIDATE = process.env.RABI_AGENT_UPDATE_CANDIDATE === "1";
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 const HEARTBEAT_MS = 15_000;
@@ -169,6 +171,7 @@ async function bootstrapConfig(configPath, fetcher = fetch) {
     agentType,
     dsh,
     managerUrl,
+    autoUpdate: previous?.autoUpdate !== false,
     nodeId: previous?.nodeId || String(process.env.RABI_NODE_ID || "").trim() || randomNodeId(),
     releasePublicKeySha256,
     managerGuid: String(previous?.managerGuid || "").trim() || undefined,
@@ -221,38 +224,318 @@ function writeCurrentRelease(configPath, entrypoint, digest = readInstalledDiges
   writePrivateJson(currentReleasePath(configPath), { entrypoint: path.resolve(entrypoint), ...(digest ? { digest } : {}), updatedAt: new Date().toISOString() });
 }
 
+function initializeCurrentRelease(configPath, entrypoint) {
+  const filename = currentReleasePath(configPath);
+  if (!fs.existsSync(filename)) { writeCurrentRelease(configPath, entrypoint); return; }
+  // Bootstrap from an obsolete entry must never roll back an installed release.
+  // An existing broken pointer needs explicit repair, not silent reinstallation.
+  const current = readJson(filename, null);
+  try {
+    if (typeof current?.entrypoint === "string" && path.isAbsolute(current.entrypoint) && fs.statSync(current.entrypoint).isFile()) return;
+  } catch { /* Fail closed without replacing the existing pointer. */ }
+  throw new Error("Current release pointer is invalid; repair it explicitly before bootstrap.");
+}
+
 function launcherPath(configPath) {
   return path.join(path.dirname(configPath), "rabi-agent-launcher.mjs");
 }
 
-function writeLauncher(configPath) {
+// Serialized into the stable launcher: no imports from a replaceable release.
+async function stableLauncher(defaultConfigPath, policy) {
+  const args = process.argv.slice(2);
+  const index = args.indexOf("--config");
+  const requestedConfig = index >= 0 && args[index + 1] ? path.resolve(args[index + 1]) : defaultConfigPath;
+  const configPath = fs.existsSync(requestedConfig) ? fs.realpathSync(requestedConfig) : requestedConfig;
+  const forwarded = args.filter((_, i) => i !== index && (index < 0 || i !== index + 1));
+  const currentPath = path.join(path.dirname(configPath), "current-release.json");
+  const configHash = createHash("sha256").update(process.platform === "win32" ? configPath.toLowerCase() : configPath).digest("hex");
+  const diagnosticPath = path.join(path.dirname(configPath), `launcher-control-${configHash}.json`);
+  const currentEntry = () => {
+    const pointer = JSON.parse(fs.readFileSync(currentPath, "utf8"));
+    if (!pointer.entrypoint || !fs.statSync(pointer.entrypoint).isFile()) throw new Error("Current release is missing.");
+    return path.resolve(pointer.entrypoint);
+  };
+  if (forwarded.includes("--api") || forwarded.includes("--upload")) {
+    const child = spawn(process.execPath, [currentEntry(), ...forwarded, "--config", configPath], { stdio: "inherit", windowsHide: true });
+    child.once("error", () => { process.exitCode = 1; });
+    child.once("exit", code => { process.exitCode = code ?? 1; });
+    return;
+  }
+  // The listening handle is the only lease. Retired launcher-owner.json,
+  // .recovery and launcher-control.sock are neither consulted nor removed.
+  // Unix pathname sockets cannot be safely recovered with probe-then-unlink;
+  // use exactly one deterministic loopback port, never scan or steal a busy one.
+  const controlTarget = process.platform === "win32" ? `\\\\.\\pipe\\rabi-agent-${configHash}`
+    : { host: "127.0.0.1", port: 16384 + (Number.parseInt(configHash.slice(0, 8), 16) % 16384), exclusive: true };
+  const { randomBytes, createHmac } = await import("node:crypto");
+  const proof = (token, operation, nonce) => createHmac("sha256", token).update(`${configHash}:${operation}:${nonce}`).digest("hex");
+  if (forwarded.includes("--stop")) {
+    let diagnostic;
+    try { diagnostic = JSON.parse(fs.readFileSync(diagnosticPath, "utf8")); } catch { /* Absence is not a lease. */ }
+    await new Promise((resolve, reject) => {
+      const socket = net.createConnection(controlTarget);
+      const nonce = randomBytes(32).toString("hex");
+      let buffer = ""; let authenticated = false; let complete = false;
+      socket.setTimeout(12000, () => socket.destroy(new Error("Launcher stop timed out; result uncertain.")));
+      socket.once("connect", () => {
+        if (diagnostic?.configHash !== configHash || !/^[a-f0-9]{64}$/.test(diagnostic?.token || "")) {
+          socket.destroy(new Error("Launcher stop identity is unavailable; no stop sent.")); return;
+        }
+        socket.write(`hello ${nonce}\n`);
+      });
+      socket.on("data", bytes => {
+        buffer += bytes.toString();
+        if (buffer.length > 512) { socket.destroy(new Error("Invalid launcher control response.")); return; }
+        let end;
+        while ((end = buffer.indexOf("\n")) >= 0) {
+          const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
+          if (!authenticated && line === `owner ${proof(diagnostic.token, "owner", nonce)}`) {
+            authenticated = true; socket.write(`stop ${proof(diagnostic.token, "stop", nonce)}\n`);
+          } else if (authenticated && line === "stopped") { complete = true; socket.end(); }
+          else { socket.destroy(new Error("Launcher control identity mismatch; no unauthenticated stop sent.")); return; }
+        }
+      });
+      socket.once("error", error => {
+        if (!authenticated && ["ENOENT", "ECONNREFUSED"].includes(error.code)) { complete = true; resolve(); }
+        else reject(error);
+      });
+      socket.once("close", () => complete ? resolve() : reject(new Error("Launcher stop was not acknowledged; result uncertain.")));
+    });
+    return;
+  }
+  const token = randomBytes(32).toString("hex");
+  const children = new Set(); const sockets = new Set(); const stopWaiters = new Set();
+  let worker; let candidate; let stopping = false; let released = false; let retryTimer; let stopDeadline; let failures = 0; let workerStartedAt;
+  const send = (child, message) => { if (child?.connected) child.send(message, () => undefined); };
+  const control = net.createServer(socket => {
+    sockets.add(socket);
+    socket.setTimeout(10000, () => socket.destroy());
+    let buffer = ""; let nonce;
+    socket.on("data", bytes => {
+      buffer += bytes.toString();
+      if (buffer.length > 512) { socket.destroy(); return; }
+      let end;
+      while ((end = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
+        if (!nonce && /^hello [a-f0-9]{64}$/.test(line)) {
+          nonce = line.slice(6); socket.write(`owner ${proof(token, "owner", nonce)}\n`);
+        } else if (nonce && line === `stop ${proof(token, "stop", nonce)}`) {
+          if (released) socket.end("stopped\n");
+          else { stopWaiters.add(socket); stop(); }
+          return;
+        } else { socket.destroy(); return; }
+      }
+    });
+    socket.once("close", () => { sockets.delete(socket); stopWaiters.delete(socket); });
+    socket.on("error", () => undefined);
+  });
+  const finishStop = () => {
+    if (released || children.size) return;
+    released = true; clearTimeout(stopDeadline);
+    // Keep the lease until all owned workers/candidates have actually closed.
+    control.close();
+    for (const socket of sockets) {
+      if (stopWaiters.has(socket)) socket.end("stopped\n");
+      // Already connected clients may still be authenticating. Let their short
+      // protocol finish rather than resetting a concurrent repeated stop.
+    }
+    // Keep the diagnostic bytes: stale diagnostics never obstruct acquisition,
+    // and a late exit must not unlink a subsequent owner's authentication data.
+  };
+  const stop = () => {
+    if (stopping) return;
+    stopping = true; clearTimeout(retryTimer);
+    for (const child of children) child.kill("SIGTERM");
+    stopDeadline = setTimeout(() => { for (const child of children) child.kill("SIGKILL"); }, 5000);
+    stopDeadline.unref();
+    if (!children.size) finishStop();
+  };
+  process.once("SIGINT", stop); process.once("SIGTERM", stop);
+  const recover = () => {
+    if (stopping) return;
+    if (Date.now() - workerStartedAt >= policy.stableMs) failures = 0;
+    if (failures >= policy.maxRestarts) { process.stderr.write("Rabi Agent launcher restart budget exhausted.\n"); process.exitCode = 1; stop(); return; }
+    const wait = Math.min(policy.maxDelayMs, policy.baseDelayMs * 2 ** failures++);
+    process.stderr.write(`Rabi Agent launcher recovering after abnormal exit in ${wait} ms.\n`);
+    retryTimer = setTimeout(startWorker, wait);
+  };
+  const startChild = (entrypoint, isCandidate = false) => {
+    const child = spawn(process.execPath, [entrypoint, ...(isCandidate ? ["--run"] : forwarded.length ? forwarded : ["--run"]), "--config", configPath], {
+      cwd: path.dirname(entrypoint), windowsHide: true, stdio: ["ignore", "inherit", "inherit", "ipc"],
+      env: { ...process.env, RABI_AGENT_SUPERVISED: "1", RABI_AGENT_UPDATE_CANDIDATE: isCandidate ? "1" : "0" }
+    });
+    children.add(child);
+    child.on("message", message => {
+      if (child === candidate?.child) { send(candidate.owner, { type: "launcherCandidateEvent", requestId: candidate.requestId, event: message }); return; }
+      if (child !== worker || stopping) return;
+      if (message?.type === "launcherSpawnCandidate" && !candidate) {
+        candidate = { owner: child, requestId: message.requestId, child: null };
+        candidate.child = startChild(path.resolve(message.entrypoint), true);
+      } else if (message?.requestId === candidate?.requestId && candidate.owner === child) {
+        if (message.type === "launcherCandidateCommand") send(candidate.child, { type: message.command });
+        if (message.type === "launcherTerminateCandidate") candidate.child.kill("SIGKILL");
+        if (message.type === "launcherReleaseCandidate") {
+          // The existing committed candidate becomes the supervised worker. Do
+          // not spawn from a changed pointer when the retired worker exits 0.
+          worker = candidate.child; workerStartedAt = Date.now(); candidate = null;
+          send(worker, { type: "launcherCommitted" });
+        }
+      }
+    });
+    child.once("error", error => { process.stderr.write(`Rabi Agent child spawn failed: ${error.code || "unknown"}.\n`); });
+    child.once("close", (code, signal) => {
+      children.delete(child);
+      if (child === candidate?.child) {
+        send(candidate.owner, { type: "launcherCandidateExit", requestId: candidate.requestId, code, signal }); candidate = null;
+      }
+      if (stopping) { if (!children.size) finishStop(); return; }
+      if (child !== worker) return;
+      worker = null;
+      if (candidate) {
+        const pending = candidate.child;
+        candidate = null;
+        pending.once("close", () => { if (code === 0 && !signal) stop(); else recover(); });
+        pending.kill("SIGKILL");
+        return; // Confirm the uncommitted child exited before any recovery.
+      }
+      if (code === 0 && !signal) { stop(); return; }
+      recover();
+    });
+    return child;
+  };
+  function startWorker() {
+    if (stopping) return;
+    workerStartedAt = Date.now();
+    try { worker = startChild(currentEntry()); }
+    catch { process.stderr.write("Rabi Agent launcher could not read current release.\n"); recover(); }
+  }
+  try {
+    await new Promise((resolve, reject) => {
+      const failed = error => { control.removeListener("listening", ready); reject(error); };
+      const ready = () => { control.removeListener("error", failed); resolve(); };
+      control.once("error", failed); control.once("listening", ready); control.listen(controlTarget);
+    });
+  } catch (error) {
+    process.removeListener("SIGINT", stop); process.removeListener("SIGTERM", stop);
+    if (error.code === "EADDRINUSE") throw new Error("Rabi Agent launcher ownership is busy; no worker started.");
+    throw error;
+  }
+  control.on("error", () => { process.exitCode = 1; stop(); });
+  if (stopping) { finishStop(); return; }
+  // This is authentication/diagnostic data, never an acquisition predicate.
+  // Publish only after listen; failure releases the kernel lease without spawning.
+  try {
+    const temporary = `${diagnosticPath}.${process.pid}.tmp`;
+    fs.writeFileSync(temporary, `${JSON.stringify({ pid: process.pid, configHash, token })}\n`, { mode: 0o600 });
+    fs.renameSync(temporary, diagnosticPath);
+    fs.chmodSync(diagnosticPath, 0o600);
+  } catch (error) { stop(); throw error; }
+  startWorker();
+}
+
+function writeLauncher(configPath, policy = { baseDelayMs: 1000, maxDelayMs: 30000, maxRestarts: 5, stableMs: 60000 }) {
+  const writeObservedText = (filename, content) => {
+    if (fs.existsSync(filename)) fs.readFileSync(filename);
+    const temporary = `${filename}.${process.pid}.tmp`;
+    fs.writeFileSync(temporary, content, { encoding: "utf8", mode: 0o600 });
+    fs.renameSync(temporary, filename);
+  };
   const hookShim = `import fs from "node:fs";\nimport path from "node:path";\nimport { pathToFileURL } from "node:url";\nexport async function requestInstanceHook(input, configPath, fetcher = fetch) {\n const current = JSON.parse(fs.readFileSync(path.join(path.dirname(path.resolve(configPath)), "current-release.json"), "utf8"));\n const module = await import(pathToFileURL(path.join(path.dirname(current.entrypoint), "lib", "instance-hook.mjs")).href);\n return module.requestInstanceHook(input, configPath, fetcher);\n}\n`;
-  fs.writeFileSync(path.join(path.dirname(configPath), "hook-client.mjs"), hookShim, { encoding: "utf8", mode: 0o600 });
+  writeObservedText(path.join(path.dirname(configPath), "hook-client.mjs"), hookShim);
   const launcher = launcherPath(configPath);
-  const code = `import fs from "node:fs";\nimport path from "node:path";\nimport { spawn } from "node:child_process";\nconst args = process.argv.slice(2);\nconst index = args.indexOf("--config");\nconst configPath = index >= 0 && args[index + 1] ? path.resolve(args[index + 1]) : ${JSON.stringify(path.resolve(configPath))};\nconst currentPath = path.join(path.dirname(configPath), "current-release.json");\nconst current = JSON.parse(fs.readFileSync(currentPath, "utf8"));\nconst entrypoint = path.resolve(String(current.entrypoint || ""));\nif (!entrypoint || !fs.existsSync(entrypoint)) throw new Error("Rabi Agent current release is missing.");\nconst forwarded = args.filter((_, i) => i !== index && (index < 0 || i !== index + 1));\nconst child = spawn(process.execPath, [entrypoint, ...(forwarded.length ? forwarded : ["--run"]), "--config", configPath], { cwd: path.dirname(entrypoint), stdio: "inherit", windowsHide: true });\nchild.once("exit", code => { process.exitCode = typeof code === "number" ? code : 1; });\n`;
-  fs.writeFileSync(launcher, code, { encoding: "utf8", mode: 0o600 });
+  const code = `import fs from "node:fs";\nimport path from "node:path";\nimport net from "node:net";\nimport { createHash } from "node:crypto";\nimport { spawn } from "node:child_process";\n(${stableLauncher.toString()})(${JSON.stringify(path.resolve(configPath))}, ${JSON.stringify(policy)}).catch(error => { process.stderr.write(error.message + "\\n"); process.exitCode = 1; });\n`;
+  writeObservedText(launcher, code);
   return launcher;
 }
 
-function configureCurrentUserStartup(_entrypoint, configPath) {
+function startupCommand(platform, executable, script, config) {
+  const args = [executable, script, "--config", config];
+  if (platform === "win32") {
+    const quote = value => {
+      if (/["\r\n\0]/.test(value)) throw new Error("Invalid Windows startup argument.");
+      return `"${value.replace(/%/g, "%%")}"`;
+    };
+    return `@echo off\r\nsetlocal DisableDelayedExpansion\r\n${args.map(quote).join(" ")}\r\n`;
+  }
+  if (platform === "darwin") {
+    const xml = value => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+    return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>com.rabiroute.agent</string><key>ProgramArguments</key><array>${args.map(value => `<string>${xml(value)}</string>`).join("")}</array><key>RunAtLoad</key><true/><key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict><key>ThrottleInterval</key><integer>30</integer></dict></plist>\n`;
+  }
+  // Exec quoting is not shell quoting. Escape reserved characters, then the
+  // desktop-entry string layer; literal percent signs are not field codes.
+  const quote = value => `"${value.replace(/([\\"`$])/g, "\\$1").replace(/\\/g, "\\\\").replace(/%/g, "%%").replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/\t/g, "\\t")}"`;
+  return `[Desktop Entry]\nType=Application\nName=Rabi Agent\nExec=${args.map(quote).join(" ")}\nX-GNOME-Autostart-enabled=true\n`;
+}
+
+function startupFiles(platform, executable, script, config, { home, env = {}, uid } = {}) {
+  const files = [];
+  const add = (filename, content) => { files.push({ path: filename, content }); return filename; };
+  if (platform === "win32") {
+    startupCommand(platform, executable, script, config); // Validate Windows argv before rendering VBS.
+    const startup = path.join(env.APPDATA || path.join(home, "AppData", "Roaming"), "Microsoft", "Windows", "Start Menu", "Programs", "Startup");
+    // Run expands environment variables once. Restore literal % via a dedicated
+    // process variable; launch Node directly, without a second cmd expansion.
+    const vbsLiteral = value => `"${value.replace(/"/g, '""')}"`;
+    const command = [executable, script, "--config", config].map(value => `"${value.replace(/%/g, "%RABI_LITERAL_PERCENT%")}"`).join(" ");
+    add(path.join(startup, "RabiAgent.vbs"), `Option Explicit\r\nDim shell\r\nSet shell = CreateObject("WScript.Shell")\r\nshell.Environment("PROCESS")("RABI_LITERAL_PERCENT") = Chr(37)\r\nshell.Run ${vbsLiteral(command)}, 0, False\r\n`);
+    files[files.length - 1].encoding = "utf16le"; // WSH reads Unicode only with a UTF-16 BOM.
+    return { files, obsolete: [path.join(startup, "RabiAgent.cmd")], mode: "windows-login-hidden", activation: [] };
+  }
+  if (platform === "darwin") {
+    if (!Number.isSafeInteger(uid) || uid < 0) throw new Error("A current user uid is required for launchd.");
+    const plist = add(path.join(home, "Library", "LaunchAgents", "com.rabiroute.agent.plist"), startupCommand(platform, executable, script, config));
+    return { files, obsolete: [], mode: "user-launchd", activation: [["launchctl", ["print", `gui/${uid}/com.rabiroute.agent`]], ["launchctl", ["bootstrap", `gui/${uid}`, plist]]] };
+  }
+  const directory = env.XDG_CONFIG_HOME || path.join(home, ".config");
+  const quote = value => {
+    if (/[\r\n\0]/.test(value)) throw new Error("Invalid systemd startup argument.");
+    return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/%/g, "%%").replace(/\$/g, "$$")}"`;
+  };
+  add(path.join(directory, "systemd", "user", "rabi-agent.service"), `[Unit]\nDescription=Rabi Agent current-user connector\nStartLimitIntervalSec=300\nStartLimitBurst=5\n[Service]\nType=simple\nExecStart=${[executable, script, "--config", config].map(quote).join(" ")}\nRestart=on-failure\nRestartSec=30\nKillMode=control-group\nTimeoutStopSec=10\n[Install]\nWantedBy=default.target\n`);
+  return { files, obsolete: [], mode: "user-systemd", activation: [["systemctl", ["--user", "show-environment"]], ["systemctl", ["--user", "daemon-reload"]], ["systemctl", ["--user", "enable", "--now", "rabi-agent.service"]]],
+    fallback: { path: path.join(directory, "autostart", "rabi-agent.desktop"), content: startupCommand("linux", executable, script, config) } };
+}
+
+function runStartupCommand(executable, args) {
+  return new Promise(resolve => {
+    const child = spawn(executable, args, { stdio: "ignore", windowsHide: true });
+    const timer = setTimeout(() => { child.kill(); resolve({ ok: false, diagnostic: "command timed out" }); }, 10000);
+    child.once("error", error => { clearTimeout(timer); resolve({ ok: false, diagnostic: error.code }); });
+    child.once("exit", code => { clearTimeout(timer); resolve({ ok: code === 0, diagnostic: `exit ${code}` }); });
+  });
+}
+
+async function configureCurrentUserStartup(_entrypoint, configPath, options = {}) {
+  const platform = options.platform || process.platform;
   const script = path.resolve(writeLauncher(configPath));
-  const config = path.resolve(configPath);
-  if (process.platform === "win32") {
-    const startup = path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "Microsoft", "Windows", "Start Menu", "Programs", "Startup");
-    fs.mkdirSync(startup, { recursive: true });
-    fs.writeFileSync(path.join(startup, "RabiAgent.cmd"), `@echo off\r\n"${process.execPath}" "${script}" --config "${config}"\r\n`, { encoding: "utf8" });
-    return;
+  const plan = startupFiles(platform, options.executable || process.execPath, script, path.resolve(configPath), {
+    home: options.home || os.homedir(), env: options.env || process.env, uid: options.uid ?? process.getuid?.()
+  });
+  const write = file => {
+    if (fs.existsSync(file.path)) fs.readFileSync(file.path); // Observe before replacement.
+    fs.mkdirSync(path.dirname(file.path), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(file.path, file.encoding === "utf16le" ? `\uFEFF${file.content}` : file.content, { encoding: file.encoding || "utf8", mode: 0o600 });
+  };
+  plan.files.forEach(write);
+  for (const obsolete of plan.obsolete) if (fs.existsSync(obsolete)) { fs.readFileSync(obsolete); fs.unlinkSync(obsolete); }
+  if (!options.activate) return { mode: plan.mode, activated: false, diagnostic: "Startup configured; current-user service activation not requested." };
+  const run = options.runCommand || runStartupCommand;
+  if (platform === "darwin") {
+    const loaded = await run(...plan.activation[0]);
+    const result = loaded.ok ? loaded : await run(...plan.activation[1]);
+    return { mode: plan.mode, activated: result.ok, diagnostic: result.ok ? undefined : `User launchd not loaded: ${result.diagnostic}` };
   }
-  if (process.platform === "darwin") {
-    const directory = path.join(os.homedir(), "Library", "LaunchAgents");
-    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-    const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>com.rabiroute.agent</string><key>ProgramArguments</key><array><string>${process.execPath}</string><string>${script}</string><string>--config</string><string>${config}</string></array><key>RunAtLoad</key><true/></dict></plist>\n`;
-    fs.writeFileSync(path.join(directory, "com.rabiroute.agent.plist"), xml, { encoding: "utf8", mode: 0o600 });
-    return;
+  if (platform === "linux") {
+    for (const command of plan.activation) {
+      const result = await run(...command);
+      if (!result.ok) {
+        write(plan.fallback);
+        return { mode: "desktop-login-fallback", activated: false, diagnostic: `User systemd unavailable or activation failed (${result.diagnostic}); desktop-login fallback uses stable launcher only, without systemd service supervision. No linger or prelogin authorization requested.` };
+      }
+    }
+    if (fs.existsSync(plan.fallback.path)) { fs.readFileSync(plan.fallback.path); fs.unlinkSync(plan.fallback.path); }
   }
-  const directory = path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "autostart");
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(path.join(directory, "rabi-agent.desktop"), `[Desktop Entry]\nType=Application\nName=Rabi Agent\nExec=${process.execPath} ${script} --config ${config}\nX-GNOME-Autostart-enabled=true\n`, { encoding: "utf8", mode: 0o600 });
+  return { mode: plan.mode, activated: true };
 }
 function readConfig(configPath) {
   const config = readJson(configPath, null);
@@ -277,6 +560,7 @@ function readConfig(configPath) {
     nodeCredential,
     nodeId,
     releasePublicKeySha256,
+    autoUpdate: config.autoUpdate !== false,
     managerGuid: String(config.managerGuid || "").trim() || undefined,
     applicationGenerationId: String(config.applicationGenerationId || "").trim() || undefined,
     managerInstanceId: String(config.managerInstanceId || "").trim() || undefined,
@@ -373,6 +657,71 @@ async function installRelease(config, release, configPath = CONFIG_PATH) {
   }
 }
 
+function spawnUpdateCandidate(entrypoint, configPath) {
+  const supervised = process.env.RABI_AGENT_SUPERVISED === "1" && process.connected;
+  const requestId = `${process.pid}-${Date.now()}`;
+  const child = supervised ? new EventEmitter() : spawn(process.execPath, [entrypoint, "--run", "--config", configPath], {
+    cwd: path.dirname(entrypoint), env: { ...process.env, RABI_AGENT_UPDATE_CANDIDATE: "1" },
+    detached: false, stdio: ["ignore", "ignore", "ignore", "ipc"], windowsHide: true
+  });
+  let relay;
+  if (supervised) {
+    child.connected = true; child.exitCode = null; child.signalCode = null; child.pid = 1;
+    child.send = (message, callback) => process.send({ type: "launcherCandidateCommand", requestId, command: message.type }, callback);
+    child.kill = () => process.send({ type: "launcherTerminateCandidate", requestId });
+    relay = message => {
+      if (message?.requestId !== requestId) return;
+      if (message.type === "launcherCandidateEvent") child.emit("message", message.event);
+      if (message.type === "launcherCandidateExit") { child.exitCode = message.code; child.signalCode = message.signal; child.emit("exit"); }
+    };
+    process.on("message", relay);
+    process.send({ type: "launcherSpawnCandidate", requestId, entrypoint });
+  }
+  const messages = new Map();
+  let failure;
+  let exited = false;
+  child.on("message", message => { if (message?.type) messages.set(message.type, message); });
+  child.on("error", error => { failure = error; });
+  child.on("exit", () => { exited = true; });
+  return {
+    async wait(type) {
+      const deadline = Date.now() + 30_000;
+      while (!failure && !exited && Date.now() < deadline) {
+        if (messages.has(type)) return messages.get(type);
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      throw new Error("Rabi Agent candidate did not connect or acknowledge within 30 seconds; the current version remains active.");
+    },
+    send(type) {
+      return new Promise((resolve, reject) => child.send({ type }, error => error ? reject(error) : resolve()));
+    },
+    async terminate() {
+      if (exited || child.exitCode !== null || child.signalCode !== null || !child.pid) {
+        if (relay) process.removeListener("message", relay);
+        return;
+      }
+      // This is our uncommitted child, not an external Agent/Host owner.
+      // SIGTERM handlers may retain IPC, so force its exit before rollback.
+      child.kill("SIGKILL");
+      const deadline = Date.now() + 5000;
+      while (!exited && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
+      if (!exited) throw new Error("Candidate exit could not be confirmed; old connection remains paused to avoid duplicate node ownership.");
+      if (relay) process.removeListener("message", relay);
+    },
+    async release() {
+      if (supervised) {
+        if (relay) {
+          process.removeListener("message", relay); relay = null;
+          await new Promise((resolve, reject) => process.send({ type: "launcherReleaseCandidate", requestId }, error => error ? reject(error) : resolve()));
+        }
+        return;
+      }
+      if (child.connected) child.disconnect();
+      child.unref(); // The committed worker no longer keeps the retired parent alive.
+    }
+  };
+}
+
 class RabiAgentRuntime {
   constructor(config, configPath) {
     this.config = config;
@@ -385,6 +734,10 @@ class RabiAgentRuntime {
     this.retryTimer = null;
     this.retryMs = RECONNECT_BASE_MS;
     this.stopped = false;
+    this.connectionPaused = false;
+    this.draining = false;
+    this.updatePromise = null;
+    this.candidatePending = UPDATE_CANDIDATE;
     this.taskQueue = Promise.resolve();
     this.taskByThread = new Map();
     this.desktop = new CodexDesktopIpcClient({ onBroadcast: event => this.handleDesktopBroadcast(event) });
@@ -395,6 +748,7 @@ class RabiAgentRuntime {
   }
 
   stop() {
+    if (this.stopped) return;
     this.stopped = true;
     clearTimeout(this.retryTimer);
     clearInterval(this.heartbeatTimer);
@@ -403,12 +757,12 @@ class RabiAgentRuntime {
   }
 
   async connect() {
-    if (this.stopped || this.connecting || this.socket?.readyState === WebSocket.OPEN || this.socket?.readyState === WebSocket.CONNECTING) return;
+    if (this.stopped || this.connectionPaused || this.connecting || this.socket?.readyState === WebSocket.OPEN || this.socket?.readyState === WebSocket.CONNECTING) return;
     this.connecting = true;
     let socket;
     try {
       await verifyNodeIdentity(this.config, fetch, fs.existsSync(this.configPath) ? this.configPath : undefined);
-      if (this.stopped) return;
+      if (this.stopped || this.connectionPaused) return;
       socket = new WebSocket(managerWebSocketUrl(this.config.managerUrl));
     } catch (error) {
       // EndpointSession already performs bounded stable-GUID rediscovery and
@@ -429,14 +783,14 @@ class RabiAgentRuntime {
   }
 
   scheduleReconnect() {
-    if (this.stopped || this.retryTimer) return;
+    if (this.stopped || this.connectionPaused || this.retryTimer) return;
     const delay = this.retryMs;
     this.retryMs = Math.min(RECONNECT_MAX_MS, this.retryMs * 2);
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
       this.connect();
     }, delay);
-    this.retryTimer.unref?.();
+    // The reconnect timer owns offline liveness; only explicit stop may release it.
   }
 
   send(payload) {
@@ -469,10 +823,21 @@ class RabiAgentRuntime {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = setInterval(() => this.send({ type: "heartbeat" }), HEARTBEAT_MS);
       this.heartbeatTimer.unref?.();
-      if (READY_FILE) {
-        try { fs.writeFileSync(READY_FILE, `${this.config.nodeId}\n`, { mode: 0o600 }); } catch { /* parent treats a missing file as an unsuccessful handoff. */ }
-        this.send({ type: "updateResult", status: "updated" });
+      if (this.candidatePending) process.send?.({ type: "candidateConnected", nodeId: this.config.nodeId });
+      else if (this.config.autoUpdate !== false && typeof message.release?.releaseDigest === "string"
+        && /^[a-f0-9]{64}$/.test(message.release.releaseDigest)
+        && readInstalledDigest(fileURLToPath(import.meta.url)) !== message.release.releaseDigest) {
+        void this.update(message.release.version).catch(error => {
+          this.send({ type: "updateResult", status: "failed", error: boundedText(error instanceof Error ? error.message : String(error)) });
+        });
       }
+      return;
+    }
+    // Keep the owner connection alive for queued work/results while draining,
+    // but do not accept new execution or mutate bindings during handoff.
+    if ((this.draining || this.candidatePending) && ["assignTask", "manageAgent"].includes(message.type)) {
+      if (message.type === "manageAgent") this.send({ type: "managementResult", requestId: message.requestId, error: "Rabi Agent update handoff is in progress; operation was not accepted." });
+      else this.send({ type: "taskResult", taskId: message.task?.taskId, status: "failed", error: "Rabi Agent update handoff is in progress; task was not accepted." });
       return;
     }
     if (message.type === "assignTask" && message.task) {
@@ -554,7 +919,7 @@ class RabiAgentRuntime {
       });
       return;
     }
-    if (message.type === "updateAvailable") {
+    if (message.type === "updateAvailable" && this.config.autoUpdate !== false && !this.candidatePending) {
       void this.update(String(message.version || "")).catch(error => this.send({ type: "updateResult", status: "failed", error: boundedText(error instanceof Error ? error.message : String(error), 1024) }));
     }
   }
@@ -632,8 +997,47 @@ class RabiAgentRuntime {
     }
   }
 
-  async update(requestedVersion) {
-    if (!this.connected) throw new Error("Rabi Agent cannot update while it is disconnected from Manager.");
+  update(requestedVersion) {
+    if (this.updatePromise) return this.updatePromise;
+    this.updatePromise = this.performUpdate(requestedVersion).finally(() => { this.updatePromise = null; });
+    return this.updatePromise;
+  }
+
+  async drainTasks() {
+    const deadline = Date.now() + 30_000;
+    while (true) {
+      if (this.stopped) throw new Error("Rabi Agent update was stopped.");
+      const queue = this.taskQueue;
+      let settled = false;
+      queue.catch(() => undefined).then(() => { settled = true; });
+      while (!settled || this.taskByThread.size) {
+        if (this.stopped || Date.now() >= deadline) throw new Error("Running Agent work did not drain within 30 seconds; the current version remains active.");
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      if (queue === this.taskQueue) return;
+    }
+  }
+
+  async pauseConnection() {
+    this.connectionPaused = true;
+    clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+    clearInterval(this.heartbeatTimer);
+    const socket = this.socket;
+    if (socket && socket.readyState !== WebSocket.CLOSED) {
+      await new Promise((resolve, reject) => {
+        const close = () => { clearTimeout(timer); resolve(); };
+        const timer = setTimeout(() => { socket.removeEventListener("close", close); reject(new Error("Old node connection did not close; candidate was not activated.")); }, 5000);
+        socket.addEventListener("close", close, { once: true });
+        socket.close(1000, "Rabi Agent update handoff");
+      });
+    }
+    this.socket = null;
+    this.connected = false;
+  }
+
+  async performUpdate(requestedVersion) {
+    if (!this.connected || this.stopped || this.candidatePending) throw new Error("Rabi Agent cannot update while it is disconnected from Manager or awaiting commit.");
     this.send({ type: "updateResult", status: "updating" });
     const release = await fetchReleaseManifest(this.config);
     if (requestedVersion && release.version !== requestedVersion) throw new Error(`Manager requested Rabi Agent ${requestedVersion}, but published ${release.version}.`);
@@ -650,30 +1054,54 @@ class RabiAgentRuntime {
       installer.once("error", error => { clearTimeout(timer); reject(error); });
       installer.once("exit", code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error("Instance dependency installation failed.")); });
     });
-    const readyFile = path.join(os.tmpdir(), `rabi-agent-ready-${process.pid}-${Date.now()}`);
-    const child = spawn(process.execPath, [entrypoint, "--run", "--config", this.configPath], {
-      cwd: path.dirname(entrypoint),
-      env: { ...process.env, RABI_AGENT_READY_FILE: readyFile },
-      detached: false,
-      stdio: "ignore",
-      windowsHide: true
-    });
-    const deadline = Date.now() + 30_000;
-    while (Date.now() < deadline) {
-      if (fs.existsSync(readyFile)) {
-        try { fs.unlinkSync(readyFile); } catch { /* no follow-up action required */ }
-        writeLauncher(this.configPath);
-        writeCurrentRelease(this.configPath, entrypoint, releaseDigest(release));
-        this.send({ type: "updateResult", status: "updated" });
-        this.stop();
-        return;
+    await this.handoffRelease(entrypoint, releaseDigest(release));
+  }
+
+  async handoffRelease(entrypoint, digest) {
+    const sharedPaths = [launcherPath(this.configPath), path.join(path.dirname(this.configPath), "hook-client.mjs"), currentReleasePath(this.configPath)];
+    const previous = sharedPaths.map(filename => ({ filename, bytes: fs.existsSync(filename) ? fs.readFileSync(filename) : null }));
+    const candidate = spawnUpdateCandidate(entrypoint, this.configPath);
+    let committed = false;
+    let sharedChanged = false;
+    try {
+      const prepared = await candidate.wait("candidatePrepared");
+      if (prepared.nodeId !== this.config.nodeId) throw new Error("Candidate node identity mismatch.");
+      this.draining = true;
+      await this.drainTasks();
+      await this.pauseConnection();
+      if (this.stopped) throw new Error("Rabi Agent update was stopped.");
+      await candidate.send("activateCandidate");
+      const ready = await candidate.wait("candidateConnected");
+      if (ready.nodeId !== this.config.nodeId || this.stopped) throw new Error("Candidate readiness no longer matches the active node.");
+      sharedChanged = true;
+      writeLauncher(this.configPath);
+      writeCurrentRelease(this.configPath, entrypoint, digest);
+      await candidate.send("commitCandidate");
+      await candidate.wait("candidateCommitted");
+      // Disconnect is the final release fence: the candidate cannot execute or
+      // report updated until the pointer has committed and this fence opens.
+      await candidate.release();
+      committed = true;
+      this.stop();
+      if (process.env.RABI_AGENT_SUPERVISED === "1" && process.connected) process.disconnect();
+    } catch (error) {
+      // Never reconnect the old owner while an unconfirmed candidate may live.
+      await candidate.terminate();
+      for (const { filename, bytes } of sharedChanged ? previous : []) {
+        if (bytes === null) fs.rmSync(filename, { force: true });
+        else {
+          const temporary = `${filename}.${process.pid}.rollback`;
+          fs.writeFileSync(temporary, bytes, { mode: 0o600 });
+          fs.renameSync(temporary, filename);
+        }
       }
-      if (child.exitCode != null) break;
-      await new Promise(resolve => setTimeout(resolve, 250));
+      this.draining = false;
+      this.connectionPaused = false;
+      if (!this.stopped && !this.connected) this.scheduleReconnect();
+      throw error;
+    } finally {
+      if (committed) await candidate.release();
     }
-    try { child.kill(); } catch { /* the new process already failed or exited */ }
-    try { fs.unlinkSync(readyFile); } catch { /* no ready file was created */ }
-    throw new Error(`Rabi Agent ${release.version} did not connect within 30 seconds; the current version remains active.`);
   }
 }
 
@@ -686,10 +1114,7 @@ async function main() {
   if (ARGS.includes("--api") || ARGS.includes("--upload")) {
     const receipt = await runManagerCommand(ARGS, CONFIG_PATH, { readInput: async () => {
       const chunks = [];
-      let size = 0;
       for await (const chunk of process.stdin) {
-        size += Buffer.byteLength(chunk);
-        if (size > 1024 * 1024) throw new Error("Manager request body exceeds 1 MiB.");
         chunks.push(Buffer.from(chunk));
       }
       return Buffer.concat(chunks).toString("utf8");
@@ -700,13 +1125,85 @@ async function main() {
   }
   if (ARGS.includes("--bootstrap")) {
     await bootstrapConfig(CONFIG_PATH);
-    writeCurrentRelease(CONFIG_PATH, fileURLToPath(import.meta.url));
-    configureCurrentUserStartup(fileURLToPath(import.meta.url), CONFIG_PATH);
+    initializeCurrentRelease(CONFIG_PATH, fileURLToPath(import.meta.url));
+    const startup = await configureCurrentUserStartup(fileURLToPath(import.meta.url), CONFIG_PATH, { activate: true });
+    if (startup.diagnostic) process.stderr.write(`Rabi Agent startup: ${startup.diagnostic}\n`);
+    // Bootstrap installs login startup, then enters the same stable owner now.
+    const child = spawn(process.execPath, [launcherPath(CONFIG_PATH), "--run", "--config", CONFIG_PATH], { stdio: "inherit", windowsHide: true });
+    child.once("error", error => { process.stderr.write(`Launcher failed: ${error.code}\n`); process.exitCode = 1; });
+    child.once("exit", code => { process.exitCode = code ?? 1; });
+    const stop = () => child.kill("SIGTERM");
+    process.once("SIGINT", stop); process.once("SIGTERM", stop);
+    return;
   }
-  const runtime = new RabiAgentRuntime(readConfig(CONFIG_PATH), CONFIG_PATH);
-  if (!READY_FILE) writeLauncher(CONFIG_PATH);
-  runtime.start();
-  const stop = () => runtime.stop();
+  const loadedConfig = readConfig(CONFIG_PATH);
+  if (!UPDATE_CANDIDATE && process.env.RABI_AGENT_SUPERVISED !== "1") {
+    // Direct --run shares the stable owner too. Never reset an update pointer
+    // simply because an obsolete release entrypoint was launched manually.
+    initializeCurrentRelease(CONFIG_PATH, fileURLToPath(import.meta.url));
+    writeLauncher(CONFIG_PATH);
+    await stableLauncher(CONFIG_PATH, { baseDelayMs: 1000, maxDelayMs: 30000, maxRestarts: 5, stableMs: 60000 });
+    return;
+  }
+  const runtime = new RabiAgentRuntime(loadedConfig, CONFIG_PATH);
+  if (UPDATE_CANDIDATE) {
+    if (!process.send || !process.connected) throw new Error("Update candidate requires the parent IPC handoff.");
+    let commitAccepted = false;
+    const abortCandidate = () => {
+      clearTimeout(deadline);
+      process.stderr.write("Rabi Agent candidate commit verification failed; exiting for owner recovery.\n");
+      // After launcher promotion the old owner cannot roll back this worker.
+      // Release IPC and exit abnormally so the stable owner can recover without
+      // changing identities/bindings or replaying any previously accepted work.
+      process.exitCode = 1;
+      try { runtime.stop(); }
+      finally {
+        if (process.connected) process.disconnect();
+        // Let Windows IPC/WebSocket close callbacks finish before process exit.
+        // A stalled close still cannot retain the promoted worker indefinitely.
+        setTimeout(() => process.exit(1), 5000).unref();
+      }
+    };
+    const deadline = setTimeout(abortCandidate, 90_000);
+    const finishCommit = () => {
+      if (!runtime.candidatePending) return;
+      const current = readJson(currentReleasePath(CONFIG_PATH), null);
+      const entrypoint = fileURLToPath(import.meta.url);
+      if (!commitAccepted || runtime.stopped || !runtime.connected || runtime.socket?.readyState !== WebSocket.OPEN
+        || typeof current?.entrypoint !== "string" || path.resolve(current.entrypoint) !== entrypoint || current.digest !== readInstalledDigest(entrypoint)) {
+        abortCandidate(); return;
+      }
+      clearTimeout(deadline);
+      runtime.candidatePending = false;
+      runtime.send({ type: "updateResult", status: "updated" });
+    };
+    process.on("message", message => {
+      if (message?.type === "launcherCommitted" && process.env.RABI_AGENT_SUPERVISED === "1") finishCommit();
+      if (message?.type === "activateCandidate") {
+        // Queued management and task receipts may have changed after PREPARED.
+        // Reload only at the exclusive activation boundary, never copy old state.
+        try {
+          runtime.config = readConfig(CONFIG_PATH);
+          runtime.stateStore = createAgentState(CONFIG_PATH);
+          runtime.start();
+        } catch { abortCandidate(); }
+      }
+      if (message?.type === "commitCandidate" && runtime.connected && !runtime.stopped) {
+        commitAccepted = true;
+        process.send({ type: "candidateCommitted", nodeId: runtime.config.nodeId });
+      }
+    });
+    process.once("disconnect", () => {
+      if (process.env.RABI_AGENT_SUPERVISED === "1") { clearTimeout(deadline); runtime.stop(); }
+      else finishCommit();
+    });
+    process.send({ type: "candidatePrepared", nodeId: runtime.config.nodeId });
+  } else {
+    writeLauncher(CONFIG_PATH);
+    runtime.start();
+  }
+  const stop = () => { runtime.stop(); if (process.connected) process.disconnect(); };
+  if (process.env.RABI_AGENT_SUPERVISED === "1") process.once("disconnect", () => runtime.stop());
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
 }
@@ -718,4 +1215,4 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   });
 }
 
-export const __test = { releaseDigest, readInstalledDigest, installRelease, safeRelativePath, versionAtLeast, managerWebSocketUrl, verifyReleaseManifest, manifestPayload, publicKeySha256, bootstrapConfig, readConfig, authorizedFetch, verifyNodeIdentity, writeLauncher, writeCurrentRelease, RabiAgentRuntime };
+export const __test = { releaseDigest, readInstalledDigest, installRelease, safeRelativePath, versionAtLeast, managerWebSocketUrl, verifyReleaseManifest, manifestPayload, publicKeySha256, bootstrapConfig, readConfig, authorizedFetch, verifyNodeIdentity, writeLauncher, writeCurrentRelease, initializeCurrentRelease, startupCommand, startupFiles, configureCurrentUserStartup, spawnUpdateCandidate, RabiAgentRuntime };

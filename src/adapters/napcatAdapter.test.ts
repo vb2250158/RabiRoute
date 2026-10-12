@@ -90,6 +90,9 @@ test("NapCat Fiber waits for every listener and closes clients and ports", async
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
   const firstPort = await freePort();
   const secondPort = await freePort();
+  fs.writeFileSync(path.join(dataDir, "gateway-status.json"), JSON.stringify({ pid: 1,
+    napcat: { connected: true, activeConnections: 2 },
+    napcatInstances: { first: { connected: true, activeConnections: 1 }, second: { connected: true, activeConnections: 1 } } }));
   const adapter = createNapCatAdapter({
     instances: () => [instance("first", firstPort), instance("second", secondPort)],
     dataDir: () => dataDir,
@@ -97,8 +100,12 @@ test("NapCat Fiber waits for every listener and closes clients and ports", async
   });
 
   const dispose = await adapter.start();
+  t.after(() => dispose?.());
   assert.equal(typeof dispose, "function");
   const running = readStatus(dataDir);
+  assert.equal(running.pid, process.pid);
+  assert.ok(Number.isFinite(Date.parse(running.startedAt)));
+  assert.ok(Number.isFinite(Date.parse(running.updatedAt)));
   assert.equal(running.messageAdapters.napcat.status, "running");
   assert.equal(running.messageAdapters.napcat.message.includes("2 个实例"), true);
 
@@ -145,9 +152,9 @@ test("NapCat Fiber can mount, unmount, and mount the same port again", async (t)
 test("NapCat activation failure rolls back listeners created earlier", async (t) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-napcat-failure-"));
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
-  const firstPort = await freePort();
   const blocker = net.createServer();
   const blockedPort = await listen(blocker);
+  const firstPort = await freePort(); // Allocate while the conflicting listener owns its port.
   t.after(() => close(blocker));
   const adapter = createNapCatAdapter({
     instances: () => [instance("first", firstPort), instance("blocked", blockedPort)],

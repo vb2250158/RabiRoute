@@ -22,8 +22,33 @@ type ReadyDescriptor = Readonly<{
 }>;
 
 async function runSlowHistoryWorker(): Promise<void> {
-  const { startManager } = await import("./controlPlaneRoutes.js");
-  await startManager();
+  // Prefer the production build so this HTTP test does not measure tsx compiling
+  // the entire Manager graph. Source-only runs retain the existing path.
+  const built = new URL("../../dist/manager/controlPlaneRoutes.js", import.meta.url);
+  const { startManager } = await import(fs.existsSync(fileURLToPath(built)) ? built.href : "./controlPlaneRoutes.js");
+  const lifecycleModule = new URL("../../dist/manager/planStorageStartupLifecycle.js", import.meta.url);
+  const { PlanStorageStartupLifecycle } = await import(fs.existsSync(fileURLToPath(lifecycleModule))
+    ? lifecycleModule.href : "./planStorageStartupLifecycle.js");
+  // This scan test does not exercise background plan migration. Reuse the
+  // lifecycle seam while retaining the actual route catalog and HTTP scanner.
+  const planStorageStartupLifecycle = new PlanStorageStartupLifecycle({
+    rolesRoot: String(process.env.ROLES_DIR || ""), readOnly: false,
+    attemptFactory: () => ({ result: new Promise<never>(() => {}), cancel: async () => {} })
+  });
+  const transactionModule = new URL("../../dist/manager/routeCatalogTransaction.js", import.meta.url);
+  const { executeRouteCatalogTransaction } = await import(fs.existsSync(fileURLToPath(transactionModule))
+    ? transactionModule.href : "./routeCatalogTransaction.js");
+  await startManager({
+    planStorageStartupLifecycle,
+    routeCatalogStartupAttemptFactory: (operation: import("./routeCatalogTransaction.js").RouteCatalogTransactionOperation, identity: import("./routeCatalogStartupLifecycle.js").RouteCatalogAttemptIdentity) => ({
+      result: Promise.resolve(executeRouteCatalogTransaction({
+        ...identity, operation, rootDir: String(process.env.RABIROUTE_STATE_ROOT),
+        routeRoot: String(process.env.ROUTE_DIR), rolesRoot: String(process.env.ROLES_DIR),
+        managerPort: 0, readOnly: false
+      })),
+      cancel: async () => {}
+    })
+  });
   const exists = fs.existsSync;
   fs.existsSync = ((target: fs.PathLike): boolean => {
     if (String(target).endsWith("private-messages.jsonl")) {
@@ -38,7 +63,7 @@ async function runSlowHistoryWorker(): Promise<void> {
 async function waitUntil(
   predicate: () => boolean,
   message: () => string,
-  timeoutMs = 30_000
+  timeoutMs = 60_000
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
@@ -68,9 +93,29 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
     process.exitCode = 1;
   });
 } else {
-  test("message-adapter scan does not read message history on the Manager HTTP thread", { timeout: 45_000 }, async t => {
+  test("message-adapter scan does not read message history on the Manager HTTP thread", { timeout: 120_000 }, async t => {
     const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-manager-message-scan-"));
     const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+    const fixturePackageRoot = path.join(fixtureRoot, "package");
+    for (const directory of ["dist/plugins/packages", "dist/automatic-code", "ribiwebgui/dist", "assets", "docs"]) {
+      fs.mkdirSync(path.join(fixturePackageRoot, directory), { recursive: true });
+    }
+    fs.writeFileSync(path.join(fixturePackageRoot, "ribiwebgui/dist/index.html"), "<!doctype html><title>Manager fixture</title>");
+    fs.writeFileSync(path.join(fixturePackageRoot, "docs/guide.md"), "# Manager fixture\n");
+    fs.writeFileSync(path.join(fixturePackageRoot, "dist/automatic-code/catalog.json"), JSON.stringify({ modules: [], webInputDigest: "0".repeat(64) }));
+    const speechFixtureRoot = path.join(fixturePackageRoot, "plugin-adapters/rabi-speech");
+    fs.mkdirSync(speechFixtureRoot, { recursive: true });
+    fs.copyFileSync(path.join(packageRoot, "plugin-adapters/rabi-speech/model-catalog.json"), path.join(speechFixtureRoot, "model-catalog.json"));
+    const companionFixtureRoot = path.join(fixturePackageRoot, "packages/rabi-companion");
+    fs.mkdirSync(companionFixtureRoot, { recursive: true });
+    for (const file of ["presets.json", "scene-rules.json"]) {
+      fs.copyFileSync(path.join(packageRoot, "packages/rabi-companion", file), path.join(companionFixtureRoot, file));
+    }
+    for (const name of ["core", "gateway-runtime", "message-adapter-control"]) {
+      const pluginId = `io.rabiroute.manager.${name}`;
+      fs.cpSync(path.join(packageRoot, "dist/plugins/packages", pluginId),
+        path.join(fixturePackageRoot, "dist/plugins/packages", pluginId), { recursive: true });
+    }
     const stateRoot = path.join(fixtureRoot, "state");
     const rolesRoot = path.join(fixtureRoot, "roles");
     const routeRoot = path.join(fixtureRoot, "route");
@@ -121,8 +166,11 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
         RABIROUTE_HOSTED: "1",
         RABIROUTE_MANAGER_AUTOSTART: "0",
         RABIROUTE_MANAGER_READ_ONLY: "0",
-        RABIROUTE_PACKAGE_ROOT: packageRoot,
-        RABIROUTE_PLUGIN_PACKAGE_ROOTS: path.join(packageRoot, "plugins", "builtin"),
+        RABIROUTE_PACKAGE_ROOT: fixturePackageRoot,
+        RABIROUTE_HOT_PATCH_WATCH: "0",
+        RABIROUTE_HOT_PATCH_SOURCE_ROOT: "",
+        RABIROUTE_HOT_PATCH_FULL_REPO: "0",
+        RABIROUTE_PLUGIN_PACKAGE_ROOTS: path.join(fixturePackageRoot, "dist/plugins/packages"),
         RABIROUTE_PLUGIN_PROFILE: profilePath,
         RABIROUTE_STATE_ROOT: stateRoot,
         ROLES_DIR: rolesRoot,
@@ -156,13 +204,15 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
     await waitUntil(() => stdout.includes(START_MANAGER_RETURNED_MARKER),
       () => `Manager startup incomplete. stderr=${stderr}; stdout=${stdout}`);
     let catalogReady = false;
-    const catalogDeadline = Date.now() + 15_000;
+    let catalogHealth: unknown;
+    const catalogDeadline = Date.now() + 30_000;
     while (!catalogReady && Date.now() < catalogDeadline) {
       const body = await (await fetch(`${ready.baseUrl}/health`)).json() as any;
+      catalogHealth = body.backgroundLifecycle?.routeCatalog;
       catalogReady = body.backgroundLifecycle?.routeCatalog?.state === "ready";
       if (!catalogReady) await new Promise(resolve => setTimeout(resolve, 50));
     }
-    assert.ok(catalogReady, "fixture route catalog did not become ready");
+    assert.ok(catalogReady, `fixture route catalog did not become ready: ${JSON.stringify(catalogHealth)}; stderr=${stderr}; stdout=${stdout}`);
     const scanPromise = fetch(`${ready.baseUrl}/api/scan/message-adapters`);
     await new Promise(resolve => setTimeout(resolve, 50));
     const startedAt = performance.now();
@@ -178,6 +228,6 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
       headers: { "x-rabiroute-host-token": controlToken }
     });
     assert.equal(shutdown.status, 202, await shutdown.text());
-    assert.equal(await waitForExit(worker, 12_000), 0, `Manager shutdown failed. stderr=${stderr}; stdout=${stdout}`);
+    assert.equal(await waitForExit(worker, 30_000), 0, `Manager shutdown failed. stderr=${stderr}; stdout=${stdout}`);
   });
 }

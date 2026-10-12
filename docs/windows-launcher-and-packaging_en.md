@@ -205,9 +205,11 @@ This is a development entry, not the packaged Windows lifecycle. Manager prints 
 
 ## Dynamic LAN discovery
 
-Manager publishes the standard DNS-SD service `_rabiroute._tcp.local.` only when the user enables WebGUI LAN access and Manager actually listens on the LAN. The SRV record carries the operating-system-assigned port for the current generation. TXT contains only the protocol version, the `/.well-known/rabiroute-manager` path, `applicationGenerationId`, and `managerInstanceId`; it never publishes the WebGUI credential, Host control token, or private paths.
+Manager publishes the standard DNS-SD service `_rabiroute._tcp.local.` only when the user enables WebGUI LAN access and Manager actually listens on the LAN. The SRV record carries the operating-system-assigned port for the current generation. TXT contains the protocol version, the `/.well-known/rabiroute-manager` path, stable `guid`, `applicationGenerationId`, and `managerInstanceId`; it never publishes the WebGUI credential, Host control token, or private paths.
 
 The Android SDK's parameterless `scanLan()` consumes that service, reads the well-known identity document from the resolved host and port, and returns the complete dynamic Manager URL. Missing protocol data, identity mismatch, resolution failure, and timeout are explicit failures or empty discovery results; there is no fallback scan of `8790..8799`. Discovery locates and fences identity only. Other Manager APIs remain protected by the WebGUI LAN authorization policy.
+
+Manager selects multicast egress separately for every non-loopback IPv4 interface. `/meta.lanDiscovery.interfaces` reports each interface's name, address, publication state and errors; partial success retains other failures. `published` is local transmission evidence, not proof of client receipt. Updated remote connectors treat verified addresses with the same guid/generation/instance as one Manager, while different live generations or instances remain ambiguous. The connector automatically checks discovery, well-known, self and meta; Agents do not manually recheck identity or obtain another grant. Verify discovery on the target network rather than substituting loopback success.
 
 ## Build
 

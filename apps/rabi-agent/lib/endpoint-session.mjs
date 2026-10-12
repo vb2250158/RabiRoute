@@ -1,23 +1,53 @@
 import fs from "node:fs";
-import { randomUUID } from "node:crypto";
+import net from "node:net";
+import { createHash, randomUUID } from "node:crypto";
 import { discoverManager, createDiscoveryCooldown, verifyPublicEndpoint } from "./manager-discovery.mjs";
 
 const endpointKeys = ["managerUrl", "managerGuid", "applicationGenerationId", "managerInstanceId"];
 export function businessReady(meta) { return meta?.health?.requiredReady === true && ["healthy", "degraded"].includes(meta.health.state) && meta.health.live === true; }
 export function sameIdentity(a, b) { return (!a?.rabiGuid || !b?.rabiGuid || a.rabiGuid === b.rabiGuid) && a?.applicationGenerationId === b?.applicationGenerationId && a?.managerInstanceId === b?.managerInstanceId; }
 
+class EndpointConfigurationError extends Error {}
+
+async function acquireEndpointWriter(configPath) {
+  // Resolve symlink/directory aliases before hashing and writing. Atomic rename must
+  // replace the actual config, not turn a config symlink into an independent copy.
+  const canonical = fs.realpathSync.native(configPath);
+  const hash = createHash("sha256").update(process.platform === "win32" ? canonical.toLowerCase() : canonical).digest("hex");
+  // No pathname socket: probe-then-unlink recovery can race another successful
+  // bind and remove its live socket. Both choices below are kernel-only owners;
+  // process death releases them without any stale file/recovery lock to remove.
+  // Unix loopback hash collisions fail conservatively as busy, never steal ownership.
+  const address = process.platform === "win32"
+    ? { path: `\\\\.\\pipe\\rabi-agent-endpoint-${hash}` }
+    : { host: "127.0.0.1", port: 49152 + (Number.parseInt(hash.slice(0, 8), 16) % 16384), exclusive: true };
+  const owner = net.createServer(socket => socket.destroy());
+  await new Promise((resolve, reject) => {
+    const failed = error => {
+      owner.removeListener("listening", listening);
+      reject(error.code === "EADDRINUSE"
+        ? new EndpointConfigurationError("Endpoint configuration is busy; retry the read explicitly.") : error);
+    };
+    const listening = () => { owner.removeListener("error", failed); resolve(); };
+    owner.once("error", failed); owner.once("listening", listening);
+    owner.listen(address);
+  });
+  return { canonical, release: () => new Promise((resolve, reject) => owner.close(error => error ? reject(error) : resolve())) };
+}
+
 /** Endpoint hints are not business state. Merge only a verified endpoint into the actual config. */
-function persistEndpoint(configPath, original, next) {
+async function persistEndpoint(configPath, original, next) {
   if (!configPath) return;
-  const lockPath = `${configPath}.endpoint-lock`; let lock;
-  try { lock = fs.openSync(lockPath, "wx", 0o600); } catch { throw new Error("Endpoint configuration is busy; retry the read explicitly."); }
-  const temporary = `${configPath}.${randomUUID()}.tmp`;
+  // Old .endpoint-lock files are inert diagnostics. Never infer their owner died
+  // or delete them: mixed-version processes must be stopped before upgrading.
+  const owner = await acquireEndpointWriter(configPath);
+  const temporary = `${owner.canonical}.${randomUUID()}.tmp`;
   try {
-    const current = JSON.parse(fs.readFileSync(configPath, "utf8"));
-    if (current.nodeId !== original.nodeId || current.nodeCredential !== original.nodeCredential || endpointKeys.some(key => current[key] !== original[key])) throw new Error("Endpoint configuration changed concurrently; reload it before continuing.");
+    const current = JSON.parse(fs.readFileSync(owner.canonical, "utf8"));
+    if (current.nodeId !== original.nodeId || current.nodeCredential !== original.nodeCredential || endpointKeys.some(key => current[key] !== original[key])) throw new EndpointConfigurationError("Endpoint configuration changed concurrently; reload it before continuing.");
     const merged = { ...current }; for (const key of endpointKeys) merged[key] = next[key];
-    fs.writeFileSync(temporary, `${JSON.stringify(merged, null, 2)}\n`, { mode: 0o600 }); fs.renameSync(temporary, configPath);
-  } finally { try { fs.rmSync(temporary, { force: true }); } finally { fs.closeSync(lock); fs.unlinkSync(lockPath); } }
+    fs.writeFileSync(temporary, `${JSON.stringify(merged, null, 2)}\n`, { mode: 0o600 }); fs.renameSync(temporary, owner.canonical);
+  } finally { try { fs.rmSync(temporary, { force: true }); } finally { await owner.release(); } }
 }
 
 /** Existing trusted-LAN contract: public GUID avoids mistakes, not malicious peer impersonation. */
@@ -51,13 +81,19 @@ export function createEndpointSession({ config, configPath, fetchImpl = fetch, d
     // Recheck credentialed identity after metadata; never persist an intervening generation.
     const after = await verifyPublicEndpoint(candidate.managerUrl, { fetchImpl, guid: candidate.guid, generation: candidate.generation, instance: candidate.instance, signal });
     const next = { ...current, managerUrl: candidate.managerUrl, managerGuid: candidate.guid, applicationGenerationId: candidate.generation, managerInstanceId: candidate.instance };
-    if (endpointKeys.some(key => next[key] !== current[key])) persistEndpoint(configPath, current, next);
+    if (endpointKeys.some(key => next[key] !== current[key])) await persistEndpoint(configPath, current, next);
     current = next;
     return { ...after, meta, config: { ...current } };
   }
   async function resolve({ diagnostic = false, forceDiscovery = false } = {}) {
     let endpoint;
-    if (!forceDiscovery) { try { endpoint = await verify(current.managerUrl); } catch { /* One bounded discovery may recover a stale address. */ } }
+    if (!forceDiscovery) {
+      try { endpoint = await verify(current.managerUrl); }
+      catch (error) {
+        if (error instanceof EndpointConfigurationError) throw error;
+        /* One bounded discovery may recover a stale address. */
+      }
+    }
     if (!endpoint) {
       // Legacy enrolled configurations may have no persisted GUID. Preserve their
       // explicit trusted origin as the only fallback; never broaden this into
@@ -87,7 +123,8 @@ export function createEndpointSession({ config, configPath, fetchImpl = fetch, d
       const publicIdentity = await verifyPublicEndpoint(origin, { fetchImpl, guid: current.managerGuid, signal: AbortSignal.timeout(timeoutMs) });
       const response = await fetchImpl(`${publicIdentity.managerUrl}/meta`, { headers: { authorization: `Bearer ${current.nodeCredential}`, accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(timeoutMs) });
       if (!response.ok) throw new Error("Manager metadata verification failed.");
-      const meta = await response.json();
+      const rawMeta = await response.json();
+      const meta = rawMeta?.data && typeof rawMeta.data === "object" ? rawMeta.data : rawMeta;
       if (meta.rabiGuid !== publicIdentity.guid || meta.applicationGenerationId !== publicIdentity.generation || meta.managerInstanceId !== publicIdentity.instance) throw new Error("Manager metadata identity mismatch.");
       return meta;
     }

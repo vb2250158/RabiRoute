@@ -4,7 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { handleAgentReply, inspectAgentReplyDelivery, napcatGroupReplyMessage, napcatSegmentsFromAgentText, type AgentReplyOptions } from "./outbox.js";
+import { handleAgentReply, inspectAgentReplyDelivery, projectAgentReplyHistoryResult, napcatGroupReplyMessage, napcatSegmentsFromAgentText, type AgentReplyOptions } from "./outbox.js";
 import { publishRabiLinkRelayMessage } from "./adapters/rabilinkRelayWorker.js";
 import { resetWeComClientFactory, setWeComClientFactory, type WeComClientLike } from "./wecom.js";
 import { recentMessageContextItems } from "./messageContextStore.js";
@@ -789,6 +789,9 @@ test("QQ group local files use upload_group_file and only read configured roots"
     if (request.url?.endsWith("/upload_group_file")) {
       return { status: "ok", retcode: 0, data: { file_id: "file-1", file_name: "build.apk" } };
     }
+    if (request.url?.endsWith("/get_login_info")) {
+      return { status: "ok", retcode: 0, data: { user_id: 9000 } };
+    }
     return { status: "ok", retcode: 0, data: { message_id: "caption-1" } };
   }, async (url) => {
     const result = await handleAgentReply({
@@ -826,11 +829,13 @@ test("QQ group local files use upload_group_file and only read configured roots"
     assert.equal(result.sentMessageId, "caption-1");
   });
 
-  assert.equal(calls.length, 2);
-  assert.ok(calls[0].url?.endsWith("/upload_group_file"));
-  assert.deepEqual(calls[0].body, { group_id: 20002, file: apkPath, name: "build.apk" });
-  assert.ok(calls[1].url?.endsWith("/send_group_msg"));
-  assert.equal(calls[1].body.message, "[CQ:reply,id=source-22]【测试包】已上传。");
+  assert.equal(calls.length, 4);
+  assert.ok(calls[0].url?.endsWith("/get_login_info"));
+  assert.ok(calls[1].url?.endsWith("/upload_group_file"));
+  assert.deepEqual(calls[1].body, { group_id: 20002, file: apkPath, name: "build.apk" });
+  assert.ok(calls[2].url?.endsWith("/get_login_info"));
+  assert.ok(calls[3].url?.endsWith("/send_group_msg"));
+  assert.equal(calls[3].body.message, "[CQ:reply,id=source-22]【测试包】已上传。");
 });
 
 test("QQ group local file upload is blocked outside allowedFileRoots", async () => {
@@ -863,6 +868,14 @@ test("QQ group local file upload is blocked outside allowedFileRoots", async () 
   assert.equal(result.ok, false);
   assert.equal(result.status, "failed");
   assert.match(result.reason ?? "", /outside the configured allowedFileRoots/);
+});
+
+test("Outbox history projection never leaks upload owner evidence and retains explicit draft compatibility", () => {
+  const record = { ok: true, status: "sent", sentFileId: "fixture-file", selfId: "100002", bindingRevision: "fixture-revision", qqOwnerEvidence: "unknown" };
+  assert.deepEqual(projectAgentReplyHistoryResult(record, true), { ok: true, status: "sent", sentFileId: "fixture-file" });
+  const draft = { ok: false, status: "draft", draft: { text: "fixture", groupId: "100001", token: "not-a-business-field" } };
+  assert.throws(() => projectAgentReplyHistoryResult(draft));
+  assert.deepEqual(projectAgentReplyHistoryResult(draft, true), { ok: false, status: "draft", draft: { text: "fixture", groupId: "100001" } });
 });
 
 test("Outbox delivery readback distinguishes missing, completed, and payload mismatch", async () => {

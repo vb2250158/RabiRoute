@@ -76,6 +76,13 @@ $payload=@{group_id=[long]$env:QQ_GROUP_ID; message=$msg; auto_escape=$false}|Co
 Invoke-RestMethod -Uri 'http://127.0.0.1:3000/send_group_msg' -Method Post -Body ([Text.Encoding]::UTF8.GetBytes($payload)) -ContentType 'application/json; charset=utf-8'
 ```
 
+## QQ 表情
+
+- QQ 系统小表情沿用文字中的 `[CQ:face,id=<表情 ID>]`。
+- 收藏表情先读取当前 Route/实例的 `GET /api/agent/qq/stickers?routeId=<Route ID>&instanceId=<实例 ID>&count=1000`。依据描述选择；描述为空时读取返回的 `previewUrl`，不要猜图意。列表来自当前 QQ 账号，不预置角色名、图片目录或固定表情 ID。
+- 通过 Rabi 发送，`channel=napcat`、`payload={"type":"sticker","stickerId":"<当前列表 ID>"}`，可附短文字；目标、引用、sender、稳定 `deliveryId` 与普通消息一致。表情复用 `image` 输出配置、原发送授权和回执检查。详细合同见 [Agent 接口](../../docs/rabi-agent-interfaces.md#qq-表情)。
+- 用户允许日常使用时，可以在问候、感谢、轻松回应等合适语境偶尔用一张。连续多轮不要重复配图，故障、争议和正式交付先把事实说清；表情不替代答复、不触发单独的主动消息或定时刷屏。
+
 ## 网关建议
 
 - 网关配置使用 `.env`：

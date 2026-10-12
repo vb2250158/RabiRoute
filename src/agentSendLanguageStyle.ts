@@ -3,7 +3,8 @@ import {
   type AgentSendRequest,
   type AgentSendResult
 } from "./agentSend.js";
-import type { AgentReplyOptions, AgentReplyRouteProfile, AgentReplyRuntime } from "./outbox.js";
+import type { AgentReplyOptions } from "./outbox.js";
+import { resolveAgentSendRoute, type AgentSendRoute } from "./agentSendRoute.js";
 import { LanguageStyleValidator } from "./languageStyleValidation.js";
 
 export type AgentSendLanguageStyleDecision = {
@@ -11,25 +12,7 @@ export type AgentSendLanguageStyleDecision = {
   metadata?: NonNullable<AgentSendResult["languageStyleValidation"]>;
 };
 
-export type AgentSendLanguageStyleRoute = {
-  runtime: AgentReplyRuntime;
-  profile?: AgentReplyRouteProfile;
-};
-
-function resolveRoute(runtimes: AgentReplyRuntime[], routeId: string): AgentSendLanguageStyleRoute | undefined {
-  for (const runtime of runtimes) {
-    if (runtime.enabled === false) continue;
-    const profile = runtime.routeProfiles?.find(item => item.id === routeId && item.enabled !== false);
-    if (profile) return { runtime, profile };
-    if (runtime.id === routeId || runtime.configName === routeId) {
-      if ((runtime.routeProfiles?.length ?? 0) > 1) return undefined;
-      const onlyProfile = runtime.routeProfiles?.[0];
-      if (onlyProfile?.enabled === false) return undefined;
-      return { runtime, profile: onlyProfile };
-    }
-  }
-  return undefined;
-}
+export type AgentSendLanguageStyleRoute = AgentSendRoute;
 
 export async function evaluateAgentSendLanguageStyle(
   request: AgentSendRequest,
@@ -39,7 +22,7 @@ export async function evaluateAgentSendLanguageStyle(
   validator: LanguageStyleValidator
 ): Promise<AgentSendLanguageStyleDecision> {
   const prepared = prepareAgentSendRequest(request);
-  const route = resolveRoute(options.runtimes, prepared.routeId);
+  const route = resolveAgentSendRoute(options.runtimes, prepared.routeId);
   const text = typeof prepared.internal.text === "string" ? prepared.internal.text.trim() : "";
   if (route && (route.profile?.agentRoleDeviceId ?? route.runtime.agentRoleDeviceId)) {
     if (!options.remoteLanguageStyle) throw new Error("Remote persona language style requires its owning Manager.");

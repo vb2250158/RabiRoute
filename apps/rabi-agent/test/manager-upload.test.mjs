@@ -165,7 +165,9 @@ test("actual HTTP transport sends raw bytes and times out without redirect or re
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   t.after(() => { server.closeAllConnections(); server.close(); });
-  const client = createManagerClient({ ...settings, managerUrl: `http://127.0.0.1:${server.address().port}`, timeoutMs: 150, uploadTimeoutMs: 150 });
+  // The suite runs alongside process/bootstrap tests; 150 ms can expire before
+  // a request reaches this fixture. Still exercise a real bounded timeout.
+  const client = createManagerClient({ ...settings, managerUrl: `http://127.0.0.1:${server.address().port}`, timeoutMs: 1500, uploadTimeoutMs: 1500 });
   assert.equal((await client.upload(f.file, id)).ok, true);
   for (const failure of ["timeout", "redirect"]) {
     mode = failure;
@@ -255,9 +257,12 @@ test("actual HTTP upload over 25 MiB stays streamed and verifies the full digest
   assert.equal(result.payload.fileSha256, sha256);
 });
 
-test("invoke cannot opt into binary or arbitrary upload headers", async () => {
+test("public request passes legal upload metadata but cannot replace transport identity", async () => {
   const mock = transport({});
   const client = createManagerClient({ ...settings, fetchImpl: mock.fetchImpl });
-  await assert.rejects(client.invoke("PUT", `/api/agent/uploads/${id}`, { headers: { "x-rabiroute-file-name": "file" } }), /Only If-Match/);
-  assert.equal(mock.calls.length, 1);
+  await client.request("PUT", `/api/agent/uploads/${id}`, { bodyBytes: Buffer.from("fixture"), headers: { "x-rabiroute-file-name": "file", "x-rabiroute-content-sha256": "0".repeat(64) } });
+  assert.equal(mock.calls[1].options.headers["x-rabiroute-file-name"], "file");
+  const calls = mock.calls.length;
+  await assert.rejects(client.request("PUT", `/api/agent/uploads/${id}`, { headers: { "x-rabiroute-agent-id": "forged" } }), /transport-owned/);
+  assert.equal(mock.calls.length, calls);
 });

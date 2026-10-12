@@ -56,6 +56,101 @@ test("states that need a human are reported, never auto-retried", () => {
   assert.equal(owned.action, "observe");
 });
 
+test("a dead process releases a previous human wait without bypassing threshold or cooldown", () => {
+  const history = { consecutiveFailures: 0, awaitingUserAction: "请扫码", lastRelaunchAt: NOW - 600_000 };
+  const unknown = { state: NapcatState.Unreachable, healthy: false };
+  assert.equal(napcatGuardianDecision({ observation: unknown, history, now: NOW }).action, "await-user");
+  const absent = { ...unknown, processAbsent: true };
+  const decision = napcatGuardianDecision({ observation: absent, history, now: NOW });
+  assert.equal(decision.action, "observe");
+  const next = napcatGuardianNextState(history, decision, absent, NOW);
+  assert.equal(next.awaitingUserAction, undefined);
+  assert.equal(next.consecutiveFailures, 1);
+  assert.equal(napcatGuardianDecision({ observation: absent, history: { ...next, consecutiveFailures: 2 }, now: NOW }).action, "relaunch");
+  assert.equal(napcatGuardianDecision({ observation: absent, history: { ...next, consecutiveFailures: 2, lastRelaunchAt: NOW - 10_000 }, now: NOW }).action, "cooldown");
+});
+
+test("guardian waits for a live QR process but recovers it after confirmed exit", async () => {
+  const controller = new AbortController();
+  let ticks = 0;
+  let relaunches = 0;
+  const observed = [
+    { state: NapcatState.Unreachable, healthy: false },
+    { state: NapcatState.QrLoginRequired, healthy: false, needsUserAction: true },
+    { state: NapcatState.Unreachable, healthy: false, processAbsent: false },
+    { state: NapcatState.Unreachable, healthy: false, processAbsent: true }
+  ];
+  await runNapcatGuardianLoop({
+    listInstances: () => [{ gatewayId: "route", instanceId: "bot" }],
+    observe: async () => observed[Math.min(ticks, observed.length - 1)]!,
+    relaunch: async () => { relaunches++; controller.abort(); return { ok: true }; },
+    sleep: async () => { ticks++; if (ticks > 8) controller.abort(); },
+    now: () => NOW + ticks * 60_000
+  }, controller.signal);
+  assert.equal(relaunches, 1);
+  assert.equal(ticks, 5, "three confirmed dead observations are still required after the live-human wait");
+});
+
+test("saved quick-login availability is recoverable, not a human stop", () => {
+  assert.equal(napcatGuardianDecision({ observation: { state: NapcatState.QuickLoginAvailable, healthy: false },
+    history: { consecutiveFailures: 2 }, now: NOW }).action, "relaunch");
+});
+
+test("a human wait releases only on new explicit automatic recovery evidence", () => {
+  const history = { consecutiveFailures: 0, awaitingUserAction: "请扫码", lastRelaunchAt: NOW - 600_000 };
+  for (const observation of [
+    { state: NapcatState.QuickLoginAvailable, healthy: false },
+    { state: NapcatState.OnebotNotReady, healthy: false, boundAccountLoggedIn: true }
+  ]) {
+    const decision = napcatGuardianDecision({ observation, history, now: NOW });
+    assert.equal(decision.action, "observe");
+    const next = napcatGuardianNextState(history, decision, observation, NOW);
+    assert.equal(next.awaitingUserAction, undefined);
+    assert.equal(next.consecutiveFailures, 1);
+    assert.equal(napcatGuardianDecision({ observation, history: { ...next, consecutiveFailures: 2 }, now: NOW }).action, "relaunch");
+    assert.equal(napcatGuardianDecision({ observation, history: { ...next, consecutiveFailures: 2, lastRelaunchAt: NOW - 1000 }, now: NOW }).action, "cooldown");
+    assert.equal(napcatGuardianDecision({ observation: { ...observation, needsUserAction: true }, history, now: NOW }).action, "await-user");
+  }
+  for (const state of [NapcatState.Unreachable, NapcatState.OnebotNotReady, NapcatState.Offline]) {
+    const observation = { state, healthy: false };
+    const decision = napcatGuardianDecision({ observation, history, now: NOW });
+    assert.equal(decision.action, "await-user", "unreachable or unverified transport never interrupts a pending scan");
+    assert.equal(napcatGuardianNextState(history, decision, observation, NOW).awaitingUserAction, history.awaitingUserAction);
+  }
+});
+
+test("guardian resumes after a list failure and throwing logger on bounded observation ticks", async () => {
+  const controller = new AbortController();
+  let lists = 0;
+  let sleeps = 0;
+  let observations = 0;
+  let relaunches = 0;
+  await runNapcatGuardianLoop({
+    listInstances: () => { if (++lists === 1) throw new Error("temporary list failure"); return [{ gatewayId: "route", instanceId: "bot" }]; },
+    observe: async () => { observations++; return { state: NapcatState.Unreachable, healthy: false }; },
+    relaunch: async () => { relaunches++; return { ok: false, state: NapcatState.QrLoginRequired, needsUserAction: true }; },
+    log: () => { throw new Error("temporary log failure"); },
+    sleep: async (ms) => { assert.ok(ms >= 30_000); if (++sleeps === 5) controller.abort(); }
+  }, controller.signal);
+  assert.equal(lists, 5);
+  assert.equal(observations, 4);
+  assert.equal(relaunches, 1, "logger failure must not lose the relaunch's human-wait result");
+});
+
+test("guardian abort cancels its default interval after a list failure", async () => {
+  const controller = new AbortController();
+  const abort = setTimeout(() => controller.abort(), 10);
+  try {
+    const ticks = await runNapcatGuardianLoop({
+      listInstances: () => { throw new Error("temporary list failure"); },
+      observe: async () => { throw new Error("must not observe"); },
+      relaunch: async () => { throw new Error("must not relaunch"); },
+      log: () => { throw new Error("temporary log failure"); }
+    }, controller.signal);
+    assert.equal(ticks, 1);
+  } finally { clearTimeout(abort); }
+});
+
 test("a fresh relaunch is protected by a cooldown window", () => {
   const observation = { state: NapcatState.Unreachable, healthy: false };
   const decision = napcatGuardianDecision({

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Rabi 上下文接入",
+    "description": "将 DSH 会话上下文与生命周期事件接入 Rabi Manager。"
+  }
+}

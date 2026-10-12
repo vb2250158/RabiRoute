@@ -7,9 +7,9 @@ import type { PeerTunnelRuntime } from "./runtime.js";
 export function speechUsesLocalDevice(pathname: string): boolean {
   return ["/v1/microphone", "/v1/playback", "/v1/audio-streams"].some(prefix => pathname === prefix || pathname.startsWith(prefix + "/") || pathname.startsWith(prefix + "?"));
 }
-export function createPeerSpeechAdapter(runtime: () => Pick<PeerTunnelRuntime, "selected" | "fetch"> | undefined): ManagerSpeechLocalAdapter {
+export function createPeerSpeechAdapter(runtime: () => Pick<PeerTunnelRuntime, "selected" | "fetch"> | undefined, targetOverride: () => string | undefined = () => undefined): ManagerSpeechLocalAdapter {
   const binary = async (serviceUrl: string, pathname: string, init: RequestInit = {}, timeoutMs = 190_000): Promise<LocalSpeechResponse> => {
-    const tunnel = runtime(); const selected = tunnel?.selected() || "";
+    const tunnel = runtime(); const selected = targetOverride() ?? (tunnel?.selected() || "");
     if (!selected || speechUsesLocalDevice(pathname)) return requestLocalSpeech(serviceUrl, pathname, init, { timeoutMs });
     let playback = false;
     let model = "", voice = "", text = "";
@@ -32,7 +32,7 @@ export function createPeerSpeechAdapter(runtime: () => Pick<PeerTunnelRuntime, "
   };
   return {
     inspect: serviceUrl => {
-      const tunnel = runtime(); const selected = tunnel?.selected() || "";
+      const tunnel = runtime(); const selected = targetOverride() ?? (tunnel?.selected() || "");
       return inspectLocalSpeechService(serviceUrl, selected ? { fetchImpl: (url, init) => tunnel!.fetch(selected, "speech", new URL(String(url)).pathname, init) } : {});
     },
     requestBinary: binary,

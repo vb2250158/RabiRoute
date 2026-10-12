@@ -6,7 +6,8 @@ import {
   NAPCAT_GUARDIAN_LAUNCH_GRACE_MS,
   NAPCAT_GUARDIAN_RELAUNCH_COOLDOWN_MS,
   type NapcatGuardianDecision,
-  type NapcatGuardianInstanceState
+  type NapcatGuardianInstanceState,
+  type NapcatGuardianObservation
 } from "./napcatGuardianPolicy.js";
 import { NapcatState } from "../shared/napcatStateContract.js";
 
@@ -21,7 +22,7 @@ import { NapcatState } from "../shared/napcatStateContract.js";
 export type NapcatGuardianObservationPort = (input: {
   gatewayId: string;
   instanceId: string;
-}) => Promise<{ state: string; healthy: boolean; needsUserAction?: boolean; message?: string }>;
+}) => Promise<NapcatGuardianObservation & { message?: string }>;
 
 export type NapcatGuardianRelaunchPort = (input: {
   gatewayId: string;
@@ -69,11 +70,22 @@ export async function runNapcatGuardianLoop(deps: NapcatGuardianDeps, signal: Ab
   const graceMs = Math.max(0, Math.floor(deps.launchGraceMs ?? NAPCAT_GUARDIAN_LAUNCH_GRACE_MS));
   const history = new Map<string, NapcatGuardianInstanceState>();
   let ticks = 0;
+  const log = (message: string): void => {
+    // Logging is diagnostic, never the lifecycle owner. A broken sink must not
+    // lose a recovery result or terminate all future observations.
+    try { deps.log?.(message); } catch { /* retry the sink on the next diagnostic */ }
+  };
 
   while (!signal.aborted) {
     ticks += 1;
     let graceWaitMs = 0;
-    for (const { gatewayId, instanceId } of deps.listInstances()) {
+    let instances: ReturnType<NapcatGuardianDeps["listInstances"]> = [];
+    try {
+      instances = deps.listInstances();
+    } catch (error) {
+      log(`NapCat 看护：实例清单读取失败，将在下一观察周期复查：${error instanceof Error ? error.message : String(error)}`);
+    }
+    for (const { gatewayId, instanceId } of instances) {
       if (signal.aborted) break;
       const key = `${gatewayId}\u0000${instanceId}`;
       const previous = history.get(key) ?? { consecutiveFailures: 0 };
@@ -100,12 +112,12 @@ export async function runNapcatGuardianLoop(deps: NapcatGuardianDeps, signal: Ab
       let next = napcatGuardianNextState(previous, decision, observation, now());
 
       if (decision.action === "relaunch") {
-        deps.log?.(`NapCat 看护：${decision.reason}`);
+        log(`NapCat 看护：${decision.reason}`);
         try {
           const result = await deps.relaunch({ gatewayId, instanceId });
           const state = String(result.state || "");
           const message = result.message ? ` (${result.message})` : "";
-          deps.log?.(`NapCat 看护：重新拉起 ${gatewayId}/${instanceId} → ${state || "unknown"}${message}`);
+          log(`NapCat 看护：重新拉起 ${gatewayId}/${instanceId} → ${state || "unknown"}${message}`);
           next = {
             ...next,
             lastState: state || next.lastState,
@@ -122,13 +134,13 @@ export async function runNapcatGuardianLoop(deps: NapcatGuardianDeps, signal: Ab
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          deps.log?.(`NapCat 看护：重新拉起 ${gatewayId}/${instanceId} 失败：${message}`);
+          log(`NapCat 看护：重新拉起 ${gatewayId}/${instanceId} 失败：${message}`);
           next = { ...next, consecutiveFailures: decision.failures, lastMessage: message };
         }
         graceWaitMs = Math.max(graceWaitMs, graceMs);
       } else if (decision.action === "await-user") {
         if (previous.awaitingUserAction !== decision.reason) {
-          deps.log?.(`NapCat 看护：${gatewayId}/${instanceId} ${decision.reason}`);
+          log(`NapCat 看护：${gatewayId}/${instanceId} ${decision.reason}`);
         }
       }
 

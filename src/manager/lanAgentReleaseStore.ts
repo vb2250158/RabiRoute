@@ -189,6 +189,11 @@ export class LanAgentReleaseStore {
     };
   }
 
+  publication(): Readonly<{ version: string; releaseDigest: string }> {
+    const manifest = this.manifest();
+    return Object.freeze({ version: manifest.version, releaseDigest: sha256(Buffer.from(manifestPayload(manifest))) });
+  }
+
   readAsset(version: string, platform: string, assetPath: string): Buffer {
     const manifest = this.manifest();
     if (version !== manifest.version) throw new Error(`Rabi Agent release version is not available: ${version}`);

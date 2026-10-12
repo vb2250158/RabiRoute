@@ -9,6 +9,8 @@ import {
   autoLoginNapcatInstancesOnRabiStart,
   ensureNapcatInstanceReady,
   launchNapcatInstance,
+  observeNapcatGuardianInstance,
+  relaunchNapcatGuardianInstance,
   napcatStatusHasUsableConnection,
   readNapcatLoginPanel,
   resolveNapcatLaunchPlan,
@@ -1110,4 +1112,194 @@ test("Rabi startup auto login stops a same-QQ serial queue after abort", async (
   const results = await pending;
   assert.deepEqual(calls, ["same-qq-first"]);
   assert.deepEqual(results.map((result) => result.instanceId), ["same-qq-first"]);
+});
+
+test("guardian repairs logged-in QQ transport through ensure-ready and never logs in another QQ", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-guardian-repair-"));
+  const configDir = path.join(root, "config");
+  fs.mkdirSync(configDir);
+  let httpReady = false;
+  let wsConnected = false;
+  let userId = "10000";
+  const calls: string[] = [];
+  const server = http.createServer(async (request, response) => {
+    for await (const _chunk of request) { /* drain mock request */ }
+    const url = String(request.url);
+    calls.push(url);
+    response.setHeader("content-type", "application/json");
+    let body: unknown;
+    if (url === "/get_status" || url === "/get_login_info") {
+      response.statusCode = httpReady ? 200 : 503;
+      body = httpReady ? { status: "ok", retcode: 0, data: url === "/get_status"
+        ? { online: true, good: true } : { user_id: userId } } : { status: "failed", retcode: 1400 };
+    } else if (url === "/api/auth/login") {
+      body = { code: 0, data: { Credential: "mock-private-credential" } };
+    } else if (url === "/api/QQLogin/GetQQLoginInfo") {
+      body = { code: 0, data: { uin: userId, online: true } };
+    } else if (url === "/api/OB11Config/SetConfig") {
+      httpReady = true;
+      wsConnected = true;
+      body = { code: 0, data: null };
+    } else {
+      response.statusCode = 404;
+      body = { code: -1 };
+    }
+    response.end(JSON.stringify(body));
+  });
+  const port = await listen(server);
+  fs.writeFileSync(path.join(configDir, "webui.json"), JSON.stringify({ port, token: "mock-only" }));
+  const instance = { id: "bot", botUserId: "10000", gatewayPort: 8789, workingDir: root,
+    httpUrl: `http://127.0.0.1:${port}`, webuiUrl: `http://127.0.0.1:${port}/webui`, webuiToken: "mock-only" };
+  const ctx = { rootDir: root,
+    getRuntimes: () => [{ definition: { id: "route", gatewayPort: 8789, napcatInstances: [instance] },
+      process: { pid: 4242, killed: false, exitCode: null }, startedAt: "2026-01-01T00:00:00.000Z",
+      status: { pid: 4242, updatedAt: "2026-01-01T00:01:00.000Z",
+        gatewayStatusSnapshot: { state: "ready", fresh: true, refreshedAt: "2026-01-01T00:01:00.000Z" },
+        napcatInstances: { bot: { connected: wsConnected }, other: { connected: true } } } }],
+    normalizeNapCatInstances: () => [instance], appendLog: () => {}, checkHttpEndpoint: async () => true,
+    launchNapcatProcess: () => { throw new Error("must not launch a logged-in process"); },
+    stopOwnedInstanceForRestart: async () => { throw new Error("must not kill a process"); } };
+  const request = { gatewayId: "route", instanceId: "bot" };
+  try {
+    const skipped = await testNapcatHealth(ctx, { ...request, inspectProcesses: false, readWebuiLoginInfo: false });
+    assert.equal(skipped.state, NapcatState.OnebotNotReady);
+    assert.equal(skipped.needsUserAction, false);
+    const observation = await observeNapcatGuardianInstance(ctx, request);
+    assert.equal(observation.state, NapcatState.OnebotNotReady);
+    assert.equal(observation.needsUserAction, false);
+    const [result, concurrent] = await Promise.all([
+      relaunchNapcatGuardianInstance(ctx, request), relaunchNapcatGuardianInstance(ctx, request)
+    ]);
+    assert.equal(result.ok, true, JSON.stringify({ result, calls }));
+    assert.equal(concurrent.ok, true);
+    assert.equal(calls.filter(url => url === "/api/OB11Config/SetConfig").length, 1);
+    assert.equal(result.state, NapcatState.Ready);
+    assert.ok(calls.includes("/api/OB11Config/SetConfig"));
+    assert.equal(calls.some(url => /SetQuickLogin|Password|QrCode|Restart/.test(url)), false);
+    wsConnected = false;
+    const disconnected = await observeNapcatGuardianInstance(ctx, request);
+    assert.equal(disconnected.healthy, false);
+    assert.equal(disconnected.state, NapcatState.OnebotNotReady);
+    wsConnected = true;
+    assert.equal((await observeNapcatGuardianInstance(ctx, request)).healthy, true);
+    httpReady = false;
+    const configFile = path.join(configDir, "webui.json");
+    fs.writeFileSync(configFile, JSON.stringify({ port, disableWebUI: true }));
+    const unrepaired = await relaunchNapcatGuardianInstance(ctx, request);
+    assert.equal(unrepaired.state, NapcatState.OnebotNotReady);
+    assert.equal(unrepaired.needsUserAction, false, "failed transport repair is not a QR login stop");
+    httpReady = true;
+    userId = "20000";
+    const count = calls.filter(url => url === "/api/OB11Config/SetConfig").length;
+    const mismatch = await relaunchNapcatGuardianInstance(ctx, request);
+    assert.equal(mismatch.state, NapcatState.AccountMismatch);
+    assert.equal(mismatch.needsUserAction, true);
+    assert.equal(calls.filter(url => url === "/api/OB11Config/SetConfig").length, count);
+  } finally {
+    await close(server);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("transient login query failure is unknown, never evidence for a human login stop", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-guardian-login-unknown-"));
+  let mode: "failure" | "empty" | "failed-response" | "quick" | "logged-in" | "qr" | "conflict" | "mismatch" = "failure";
+  const actions: string[] = [];
+  const server = http.createServer(async (request, response) => {
+    for await (const _chunk of request) { /* drain mock request */ }
+    const url = String(request.url);
+    response.setHeader("content-type", "application/json");
+    let body: unknown = { code: 0, data: {} };
+    if (url === "/get_status" || url === "/get_login_info") {
+      response.statusCode = 503;
+      body = { status: "failed", retcode: 1400 };
+    } else if (url === "/api/auth/login") {
+      body = { code: 0, data: { Credential: "mock-only" } };
+    } else if (url === "/api/QQLogin/GetQQLoginInfo") {
+      if (mode === "failure") { request.socket.destroy(); return; }
+      if (mode === "logged-in" || mode === "mismatch") {
+        body = { code: 0, data: { uin: mode === "mismatch" ? "20000" : "10000", online: true } };
+      }
+    } else if (url === "/api/QQLogin/CheckLoginStatus") {
+      body = mode === "failed-response" ? { code: 1, data: { isLogin: false, loginError: "请扫码登录" } }
+        : { code: 0, data: { isLogin: false, loginError: mode === "qr" ? "请扫码登录" : mode === "conflict" ? "当前账号(10000)已登录" : "" } };
+    } else if (url === "/api/QQLogin/GetQuickLoginListNew") {
+      body = mode === "empty" || mode === "failed-response" ? { code: 1 } : { code: 0, data: mode === "quick" ? [{ uin: "10000", isQuickLogin: true }] : [] };
+    } else { actions.push(url); body = { code: 1 }; }
+    response.end(JSON.stringify(body));
+  });
+  const port = await listen(server);
+  const instance = { id: "bot", botUserId: "10000", gatewayPort: 8789, workingDir: root,
+    httpUrl: `http://127.0.0.1:${port}`, webuiUrl: `http://127.0.0.1:${port}/webui`, webuiToken: "mock-only" };
+  const ctx = { rootDir: root, getRuntimes: () => [{ definition: { id: "route", gatewayPort: 8789, napcatInstances: [instance] } }],
+    normalizeNapCatInstances: () => [instance], appendLog: () => {}, checkHttpEndpoint: async () => true,
+    launchNapcatProcess: () => { throw new Error("must not launch"); },
+    stopOwnedInstanceForRestart: async () => { throw new Error("must not stop"); } };
+  const request = { gatewayId: "route", instanceId: "bot" };
+  try {
+    for (const failingMode of ["failure", "empty", "failed-response"] as const) {
+      mode = failingMode;
+      const health = await testNapcatHealth(ctx, { ...request, inspectProcesses: false });
+      assert.equal(health.needsUserAction, false, "missing login evidence must not invent a manual login");
+      assert.equal(health.state, NapcatState.OnebotNotReady);
+      assert.equal(health.webui?.loginInfo, null);
+      assert.match(String(health.message), /未知|读取.*失败/);
+      const observation = await observeNapcatGuardianInstance(ctx, request);
+      assert.equal(observation.needsUserAction, false);
+      assert.notEqual((observation as { boundAccountLoggedIn?: boolean }).boundAccountLoggedIn, true);
+      const recovery = await relaunchNapcatGuardianInstance(ctx, request);
+      assert.equal(recovery.needsUserAction, false, "recovery must not latch a failed login query either");
+      assert.equal(recovery.state, NapcatState.OnebotNotReady);
+      assert.deepEqual(actions, [], "unknown login never submits login, QR, config or restart actions");
+    }
+    mode = "quick";
+    assert.equal((await observeNapcatGuardianInstance(ctx, request)).state, NapcatState.QuickLoginAvailable);
+    mode = "logged-in";
+    const loggedIn = await observeNapcatGuardianInstance(ctx, request);
+    assert.equal(loggedIn.state, NapcatState.OnebotNotReady);
+    assert.equal((loggedIn as { boundAccountLoggedIn?: boolean }).boundAccountLoggedIn, true);
+    for (const humanMode of ["qr", "conflict", "mismatch"] as const) {
+      mode = humanMode;
+      const observation = await observeNapcatGuardianInstance(ctx, request);
+      assert.equal(observation.needsUserAction, true);
+      assert.equal(observation.state, { qr: NapcatState.QrLoginRequired, conflict: NapcatState.LoginConflict, mismatch: NapcatState.AccountMismatch }[humanMode]);
+      assert.notEqual((observation as { boundAccountLoggedIn?: boolean }).boundAccountLoggedIn, true);
+    }
+  } finally { await close(server); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("guardian process absence requires a successful scoped probe, not just unreachable HTTP", async () => {
+  const instance = { id: "bot", botUserId: "10000", gatewayPort: 8789,
+    httpUrl: "http://invalid.test", webuiUrl: "http://invalid.test/webui" };
+  const ctx = { rootDir: process.cwd(), getRuntimes: () => [{ definition: { id: "route", gatewayPort: 8789, napcatInstances: [instance] } }],
+    normalizeNapCatInstances: () => [instance], appendLog: () => {}, checkHttpEndpoint: async () => false };
+  const request = { gatewayId: "route", instanceId: "bot" };
+  assert.equal((await observeNapcatGuardianInstance({ ...ctx, findNapcatInstanceProcessPids: async () => [] }, request)).processAbsent, true);
+  assert.equal((await observeNapcatGuardianInstance({ ...ctx, findNapcatInstanceProcessPids: async () => ["4242"] }, request)).processAbsent, false);
+  assert.equal((await observeNapcatGuardianInstance({ ...ctx, findNapcatInstanceProcessPids: async () => { throw new Error("probe failed"); } }, request)).processAbsent, undefined);
+});
+
+test("launch does not accept HTTP 200 empty or explicitly failed OneBot status as ready", async () => {
+  let statusBody: unknown = {};
+  const server = http.createServer((request, response) => {
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify(request.url === "/get_status" ? statusBody : { status: "ok", retcode: 0, data: { user_id: "10000" } }));
+  });
+  const port = await listen(server);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-guardian-empty-status-"));
+  const instance = { id: "bot", botUserId: "10000", gatewayPort: 8789, launchCommand: "unused.exe",
+    httpUrl: `http://127.0.0.1:${port}`, webuiUrl: `http://127.0.0.1:${port}/webui` };
+  let launches = 0;
+  const ctx = { rootDir: root, getRuntimes: () => [{ definition: { id: "route", gatewayPort: 8789, napcatInstances: [instance] } }],
+    normalizeNapCatInstances: () => [instance], appendLog: () => {}, checkHttpEndpoint: async () => true,
+    findNapcatInstanceProcessPids: async () => [], launchNapcatProcess: () => { launches++; } };
+  try {
+    for (const body of [{}, { status: "failed", retcode: 0, data: { online: true, good: true } }]) {
+      statusBody = body;
+      const result = await launchNapcatInstance(ctx, { gatewayId: "route", instanceId: "bot" });
+      assert.equal(result.ok, false);
+      assert.equal(result.state, NapcatState.OnebotNotReady);
+    }
+    assert.equal(launches, 2);
+  } finally { await close(server); fs.rmSync(root, { recursive: true, force: true }); }
 });

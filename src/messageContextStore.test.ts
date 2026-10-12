@@ -18,6 +18,45 @@ function temporaryDir(name: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), `rabiroute-${name}-`));
 }
 
+test("archive range compaction agrees with containment oracle including crossing and equal ranges", t => {
+  const dir = temporaryDir("archive-range-oracle");
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.dirname(messageContextArchiveIndexPath(dir)), { recursive: true });
+  const ranges = [[1, 10], [1, 8], [2, 12], [3, 7], [20, 30], [20, 30], [29, 40], [31, 39]];
+  const archives = ranges.map(([firstSequence, lastSequence], i) => ({ file: `${i}.jsonl`, firstSequence, lastSequence,
+    entryCount: lastSequence - firstSequence + 1, startedAt: "2026-08-01T00:00:00Z", endedAt: "2026-08-02T00:00:00Z" }));
+  const expected = archives.filter((item, i) => !archives.some((other, j) => i !== j
+    && other.firstSequence <= item.firstSequence && other.lastSequence >= item.lastSequence
+    && (other.firstSequence < item.firstSequence || other.lastSequence > item.lastSequence || other.file.localeCompare(item.file) < 0)))
+    .sort((a, b) => a.firstSequence - b.firstSequence || a.lastSequence - b.lastSequence);
+  fs.writeFileSync(messageContextArchiveIndexPath(dir), JSON.stringify({ schemaVersion: 1, nextSequence: 41, archives }));
+  assert.deepEqual(readMessageContextArchiveIndex(dir).archives, expected);
+});
+
+test("archive history reads current records once and keeps public field normalization", t => {
+  const dir = temporaryDir("history-current-read");
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.dirname(messageContextArchiveIndexPath(dir)), { recursive: true });
+  fs.writeFileSync(messageContextArchiveIndexPath(dir), JSON.stringify({ schemaVersion: 1, nextSequence: 2, archives: [] }));
+  fs.writeFileSync(messageContextCurrentPath(dir), JSON.stringify({ id: "record", sequence: 1, time: 10,
+    adapter: "speech", text: " needle ", speakerId: "local-person", speakerVerified: true, unknownPrivateField: "private",
+    voiceprintProfileId: "voiceprint", attachments: [{ name: "folder/notes.txt" }] }) + "\n");
+  const originalRead = fs.readFileSync;
+  let reads = 0;
+  t.mock.method(fs, "readFileSync", ((...args: Parameters<typeof fs.readFileSync>) => {
+    if (String(args[0]) === messageContextCurrentPath(dir)) reads++;
+    return Reflect.apply(originalRead, fs, args);
+  }) as typeof fs.readFileSync);
+  const result = recentMessageContextItems([dir], { limit: 10, includeArchives: true, query: "needle" });
+  assert.equal(reads, 1);
+  assert.equal(result[0].text, "needle");
+  assert.equal(result[0].speakerId, undefined);
+  assert.equal(result[0].speakerVerified, undefined);
+  assert.equal(result[0].voiceprintId, "voiceprint");
+  assert.equal(result[0].attachments?.[0].name, "notes.txt");
+  assert.equal((result[0] as unknown as Record<string, unknown>).unknownPrivateField, undefined);
+});
+
 test("message context archives an exact old prefix only after the 72h trigger", () => {
   const dir = temporaryDir("message-context-archive");
   const now = Date.UTC(2026, 6, 21, 12, 0, 0);

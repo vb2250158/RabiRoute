@@ -29,22 +29,28 @@ export const activate = definePlugin({
             try {
         if (runtime.managerReadOnly || !runtime.managerShouldAutostart)
             return () => { };
+        let startupAttempted = false;
         const supervisor = new runtime.NapcatSupervisorService({
+            restartDelayMs: 30_000,
             run: async (signal) => {
                 const context = runtime.activeNapcatControlContext;
                 if (!context)
                     return;
-                // One startup pass: bring up instances that auto-login on Rabi start.
-                await runtime.autoLoginNapcatInstancesOnRabiStart(context, undefined, signal);
+                // Startup login is attempted once; restarting the watcher never repeats login.
+                if (!startupAttempted) {
+                    startupAttempted = true;
+                    try { await runtime.autoLoginNapcatInstancesOnRabiStart(context, undefined, signal); }
+                    catch (error) { console.warn(`NapCat startup pass failed; continuing guardian: ${error instanceof Error ? error.message : String(error)}`); }
+                }
                 if (signal.aborted)
                     return;
                 // Then keep watching: the startup pass alone left an instance that exited
                 // mid-run down indefinitely, because nothing re-checked it afterwards.
-                await runtime.runNapcatGuardianLoop({
+                await runtime.runNapcatGuardianLoop(runtime.napcatGuardianDepsFor(context, {
                     listInstances: () => runtime.napcatGuardianInstances(context),
                     observe: request => runtime.observeNapcatGuardianInstance(context, request),
                     relaunch: request => runtime.relaunchNapcatGuardianInstance(context, request)
-                }, signal);
+                }), signal);
             },
             onError: error => console.warn(`NapCat startup auto login failed: ${error instanceof Error ? error.message : String(error)}`)
         });

@@ -31,6 +31,14 @@ for (const caption of [false, true]) test(`full original history plus current pr
   assert.deepEqual(outcome.originalResult, f.result); assert.equal(f.reads(), 1);
   assert.equal(JSON.stringify(f), before); assert.equal((outcome.evidence as { sha256Verified: boolean }).sha256Verified, false);
 });
+test("known original request without terminal proof is distinct from unavailable history", async () => {
+  const f = fixture();
+  const outcome = await createAgentSendVerificationEvidenceVerifier({ inspect: async () => ({ ...f.history, inspection: { state: "uncertain", reason: "Original terminal operation is unproven." } }) })(f.request, f.receipt);
+  assert.equal((outcome.evidence as { reason: string }).reason, "terminal_unproven");
+  assert.equal(outcome.platformVerification, "unknown");
+  assert.equal(outcome.originalTerminalProven, undefined);
+});
+
 test("legacy missing original account evidence never invokes current verifier", async () => {
   const f = fixture(); const outcome = await createAgentSendVerificationEvidenceVerifier({ inspect: f.dependencies.inspect, verifyCurrentPresence: f.dependencies.verifyCurrentPresence })(f.request, f.receipt);
   assert.equal(outcome.platformVerification, "unknown"); assert.equal(outcome.originalTerminalProven, undefined); assert.equal(f.reads(), 0);
@@ -82,4 +90,46 @@ test("conflicting saved result and malformed original request cannot pass", asyn
   const f = fixture(); const verify = createAgentSendVerificationEvidenceVerifier(f.dependencies);
   assert.equal((await verify(f.request, { ...f.receipt, result: { ...f.result, sentFileId: "other" } })).platformVerification, "unknown");
   assert.equal((await verify({ ...f.request, deliveryId: "../invalid" }, f.receipt)).platformVerification, "unknown"); assert.equal(f.reads(), 0);
+});
+
+test("safe history failures are distinguished without serializing inspection secrets", async () => {
+  for (const historyState of ["read_failed", "missing", "oversized", "changed", "damaged", "request_not_found", "terminal_missing"] as const) {
+    const f = fixture();
+    const outcome = await createAgentSendVerificationEvidenceVerifier({ ...f.dependencies, inspect: async () => ({
+      ...f.history, historyState, inspection: { state: "uncertain", reason: "private-path/body/account/token" }
+    }) })(f.request, f.receipt);
+    assert.equal((outcome.evidence as { historyState: string }).historyState, historyState);
+    assert.equal((outcome.evidence as { reason: string }).reason, historyState === "terminal_missing" ? "terminal_unproven" : "history_unavailable");
+    assert.equal(outcome.platformVerification, "unknown"); assert.equal(f.reads(), 0);
+    assert.ok(!JSON.stringify(outcome).includes("private-path"));
+    assert.equal((outcome.evidence as { retryAllowed: boolean }).retryAllowed, false);
+  }
+});
+test("original binding capability, actual missing fields and current platform capability are different", async () => {
+  const f = fixture();
+  const capabilityMissing = await createAgentSendVerificationEvidenceVerifier({ inspect: f.dependencies.inspect })(f.request, f.receipt);
+  assert.equal((capabilityMissing.evidence as { reason: string }).reason, "binding_capability_unavailable");
+  const missing = await createAgentSendVerificationEvidenceVerifier({ ...f.dependencies, getOriginalBinding: async () => undefined })(f.request, f.receipt);
+  assert.equal((missing.evidence as { reason: string }).reason, "binding_missing");
+  const ownerMissing = await createAgentSendVerificationEvidenceVerifier({ ...f.dependencies, inspect: async () => ({ ...f.history,
+    originalBinding: { state: "missing", missingFields: ["selfId", "bindingRevision", "private-secret"] as never }
+  }), getOriginalBinding: async () => { assert.fail("must not replace missing historical account"); } })(f.request, f.receipt);
+  assert.equal((ownerMissing.evidence as { reason: string }).reason, "binding_missing");
+  assert.deepEqual((ownerMissing.evidence as { missingBindingFields: string[] }).missingBindingFields, ["selfId", "bindingRevision"]);
+  const platformMissing = await createAgentSendVerificationEvidenceVerifier({ inspect: f.dependencies.inspect, getOriginalBinding: f.dependencies.getOriginalBinding })(f.request, f.receipt);
+  assert.equal((platformMissing.evidence as { reason: string }).reason, "platform_capability_unavailable");
+  assert.equal(f.reads(), 0);
+});
+test("owner binding identity remains fenced and diagnostic metadata is whitelisted", async () => {
+  const f = fixture();
+  const outcome = await createAgentSendVerificationEvidenceVerifier({ ...f.dependencies, inspect: async () => ({ ...f.history,
+    historyState: "private-path" as never, originalBinding: { state: "present", binding: { ...f.binding.binding, platformFileId: "other" } }
+  }) })(f.request, f.receipt);
+  assert.equal((outcome.evidence as { reason: string }).reason, "history_unavailable");
+  assert.equal(Object.hasOwn(outcome.evidence as object, "historyState"), false);
+  assert.equal(f.reads(), 0); assert.ok(!JSON.stringify(outcome).includes("private-path"));
+  const conflict = await createAgentSendVerificationEvidenceVerifier({ ...f.dependencies, inspect: async () => ({ ...f.history,
+    originalBinding: { state: "present", binding: { ...f.binding.binding, platformFileId: "other" } }
+  }) })(f.request, f.receipt);
+  assert.equal((conflict.evidence as { reason: string }).reason, "binding_conflict"); assert.equal(f.reads(), 0);
 });

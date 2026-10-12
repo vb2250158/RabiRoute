@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { requiresWorkerFilesystemAccess } from "../shared/pathPolicy.js";
-import { RoleKnowledgeSearchIndex, subscribeKnowledgeChanges, type KnowledgeChange } from "../roleKnowledgeSearch.js";
+import { RoleKnowledgeSearchIndex, knowledgeReference, subscribeKnowledgeChanges, type KnowledgeChange } from "../roleKnowledgeSearch.js";
 import type { KnowledgeInventory, KnowledgeStorageDelta } from "./knowledgeSearchStorage.js";
 
 type RoleState = {
@@ -9,6 +9,7 @@ type RoleState = {
   epoch: number; full: boolean; pending: boolean; flight?: Promise<void>;
   debounce?: NodeJS.Timeout; reconcile?: NodeJS.Timeout; watcher?: fs.FSWatcher;
   errors: number; filesRead: number; refreshedAt?: string;
+  committedDuringRefresh?: Map<string, KnowledgeChange>;
 };
 export type KnowledgeSearchServiceOptions = {
   readDelta: (directory: string, previous: KnowledgeInventory, signal: AbortSignal) => Promise<KnowledgeStorageDelta>;
@@ -52,6 +53,7 @@ export class KnowledgeSearchService {
     if (!state || this.closed) return;
     state.epoch += 1;
     state.index.upsert(change);
+    state.committedDuringRefresh?.set(knowledgeReference(change.kind, change.item.id), structuredClone(change));
     this.schedule(state);
   }
 
@@ -105,16 +107,23 @@ export class KnowledgeSearchService {
     const epoch = state.epoch;
     const full = state.full;
     state.full = false;
+    const committed = new Map<string, KnowledgeChange>();
+    state.committedDuringRefresh = committed;
     state.flight = this.options.readDelta(state.directory, full ? {} : state.inventory, this.controller.signal)
       .then(delta => {
         if (this.closed) return;
-        if (epoch !== state.epoch) { state.full ||= full; state.pending = true; return; }
+        // Storage checks each file before/after reading. Publish its completed
+        // batch even on a busy role, then replay newer committed records and
+        // reconcile watcher changes. Discarding the entire batch starves cold
+        // initialization whenever another plan or memory changes during a read.
+        if (epoch !== state.epoch) state.pending = true;
         state.errors = delta.errors;
         state.filesRead += delta.filesRead;
         if (delta.errors && (full || !state.index.ready)) { state.full ||= full; state.pending = true; return; }
         const next = full ? new RoleKnowledgeSearchIndex(state.index.roleId, state.index.status().version + 1) : state.index;
         for (const ref of delta.removed) next.remove(ref);
         for (const change of delta.changes) next.upsert(change);
+        for (const change of committed.values()) next.upsert(change);
         next.ready = true;
         state.index = next;
         state.inventory = delta.inventory;
@@ -129,6 +138,7 @@ export class KnowledgeSearchService {
         this.options.onError?.(state.index.roleId, error);
       })
       .finally(() => {
+        state.committedDuringRefresh = undefined;
         state.flight = undefined;
         if (state.pending && !this.closed) this.schedule(state, state.errors ? 2_000 : undefined);
       });

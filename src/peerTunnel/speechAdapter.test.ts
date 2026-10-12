@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { once } from "node:events";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createPeerSpeechAdapter, speechUsesLocalDevice } from "./speechAdapter.js";
 
 test("speech compute uses selected peer and remote WAV is queued locally without replay",async t=>{
@@ -22,4 +23,15 @@ test("failed remote compute never silently invokes local inference",async()=>{
   let requests=0;
   const adapter=createPeerSpeechAdapter(()=>({selected:()=>"b",fetch:async()=>{requests++;throw new Error("peer offline");}}));
   await assert.rejects(adapter.requestBinary("http://127.0.0.1","/v1/audio/speech",{method:"POST",body:"{}"}),/peer offline/);assert.equal(requests,1);
+});
+
+test("per-request media compute targets stay independent of global selection across async work",async t=>{
+  const scope=new AsyncLocalStorage<string>();const calls:string[]=[];
+  const server=http.createServer((req,res)=>{calls.push(`local:${req.url}`);res.end('{"models":[]}');});
+  server.listen(0,"127.0.0.1");await once(server,"listening");t.after(()=>{server.closeAllConnections();server.close();});
+  const url=`http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}`;
+  const adapter=createPeerSpeechAdapter(()=>({selected:()=>"global",fetch:async(id,_service,pathname)=>{await new Promise(resolve=>setImmediate(resolve));calls.push(`${id}:${pathname}`);return Response.json({models:[]});}}),()=>scope.getStore());
+  await Promise.all([scope.run("media-a",async()=>{await new Promise(resolve=>setImmediate(resolve));await adapter.requestJson(url,"/v1/models");}),scope.run("media-b",()=>adapter.requestJson(url,"/v1/models")),scope.run("",()=>adapter.requestJson(url,"/v1/models"))]);
+  await adapter.requestJson(url,"/v1/models");
+  assert.deepEqual(calls.sort(),["global:/v1/models","local:/v1/models","media-a:/v1/models","media-b:/v1/models"].sort());
 });

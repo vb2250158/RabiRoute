@@ -57,7 +57,7 @@ export const activate = definePlugin({
                     jsonResponse: runtime.jsonResponse,
                     repairAll: () => runOperation(runtime.repairAllNapcatInstances),
                     ensureReady: body => runOperation(() => runtime.ensureNapcatInstanceReady(controlContext, body)),
-                    health: body => runOperation(() => runtime.checkNapcatHealthWithBackfill(body)),
+                    health: body => runOperation(() => runtime.testNapcatHealth(controlContext, body)),
                     loginPanel: body => runOperation(() => runtime.readNapcatLoginPanel(controlContext, body)),
                     loginAction: body => runOperation(() => runtime.runNapcatLoginAction(controlContext, body)),
                     configureOneBot: body => runOperation(() => runtime.configureNapcatOneBot(controlContext, body)),

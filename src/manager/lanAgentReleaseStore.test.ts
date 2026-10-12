@@ -26,6 +26,13 @@ test("LAN Agent release manifest signs the published Node resources", () => {
     const store = new LanAgentReleaseStore({ rootDir: root, agentRoot, signingKeyPath: path.join(root, "data", "signing.json") });
     const manifest = store.manifest();
     assert.equal(manifest.version, "0.9.1");
+    const publication = store.publication();
+    assert.equal(publication.version, manifest.version);
+    assert.match(publication.releaseDigest, /^[a-f0-9]{64}$/);
+    assert.deepEqual(store.publication(), publication);
+    fs.writeFileSync(path.join(agentRoot, "lib", "worker.mjs"), "export const worker = false;\n");
+    assert.notEqual(store.publication().releaseDigest, publication.releaseDigest);
+    fs.writeFileSync(path.join(agentRoot, "lib", "worker.mjs"), "export const worker = true;\n");
     assert.equal(manifest.platform, "node");
     assert.equal(manifest.minNodeVersion, "22.13.0");
     assert.deepEqual(manifest.files.map(file => file.path), ["lib/worker.mjs", "package.json", "rabi-agent.mjs"]);

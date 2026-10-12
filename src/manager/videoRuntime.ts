@@ -51,7 +51,7 @@ async function validateLocalModelRoot(value: unknown, access?: VideoRequestAcces
 }
 
 /** Only the installed, fixed video component can be launched; API callers never supply commands. */
-export function createVideoRuntime(rootDir: string, identity: PluginIdentity, leases: ProcessLeaseRegistry, readOnly = false) {
+export function createVideoRuntime(rootDir: string, identity: PluginIdentity, leases: ProcessLeaseRegistry, readOnly = false, peerFetch?: (deviceId: string, pathname: string, init: RequestInit) => Promise<Response>) {
   const componentRoot = path.join(rootDir, "components", "video");
   const comfyRoot = path.join(componentRoot, "ComfyUI");
   let lease: ProcessLease | undefined;
@@ -135,7 +135,11 @@ export function createVideoRuntime(rootDir: string, identity: PluginIdentity, le
     requestAccess: createVideoRequestAccess,
     localSettingsAllowed: localModelSettingsRequestAllowed,
     validateModelRoot: validateLocalModelRoot,
-    async inspectAsset(id: string, kind: string, access?: VideoRequestAccess) {
+    peerFetch: (deviceId: string, pathname: string, init: RequestInit) => {
+      if (!peerFetch) throw new Error("模型服务电脑连接不可用。");
+      return peerFetch(deviceId, pathname, init);
+    },
+    async inspectAsset(id: string, kind: string, access?: VideoRequestAccess, compute = false) {
       const fs = checkedFs(access); access?.assert();
       const extensions: Record<string,string> = {image:"png",video:"mp4",audio:"wav"};
       if (readOnly || probesClosed || mediaProbe || installer || starting || !/^[a-f0-9-]{36}$/.test(id) || !Object.hasOwn(extensions,kind)) throw new Error("Invalid media inspection request");
@@ -143,7 +147,7 @@ export function createVideoRuntime(rootDir: string, identity: PluginIdentity, le
       const python = settings.pythonExecutable;
       if (typeof python !== "string" || !path.isAbsolute(python) || python.startsWith("\\\\") || path.basename(python).toLowerCase() !== "python.exe") throw new Error("视频 Python 运行环境无效。");
       const script = path.join(componentRoot,"inspect-media.py");
-      const file = path.join(rootDir,"data","video","assets",`${id}.${extensions[kind]}`);
+      const file = path.join(rootDir,"data","video",...(compute ? ["compute"] : []),"assets",`${id}.${extensions[kind]}`);
       let output = "";
       if (probesClosed || mediaProbe) throw new Error("Media inspection is stopping or busy");
       access?.beforeMutation();

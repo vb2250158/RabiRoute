@@ -44,6 +44,13 @@ export async function sendWorkCycleAgentReplyWithRecovery({
 }) {
   for (let postAttempt = 0; postAttempt < 2; postAttempt += 1) {
     const posted = await post(payload);
+    const confirmation = posted?.parsed;
+    if (posted?.response?.status === 409 && confirmation?.deliveryId === deliveryId
+      && ["message_length_confirmation_required", "style_confirmation_required"].includes(confirmation.status)) {
+      // A deliberate pre-send warning is not an uncertain delivery. Preserve its review details;
+      // only the Agent may choose to edit or make a second confirmed call.
+      return confirmation;
+    }
     const sent = sentResult(posted);
     if (sent) return sent;
     const failed = failedResult(posted);

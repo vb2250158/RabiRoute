@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { prepareAgentSendRequest, type AgentSendRequest, type AgentSendResult } from "../agentSend.js";
+import { agentSendIdempotencyPayload, prepareAgentSendRequest, type AgentSendRequest, type AgentSendResult } from "../agentSend.js";
 import {
   durableDeliveryReceiptPath,
   executeDurableDelivery,
   normalizeDurableDeliveryId,
   readDurableDeliveryReceipt,
+  receiptExecutionActive,
   type DurableDeliveryOptions,
   type DurableDeliveryReceipt
 } from "./durableDeliveryIdempotency.js";
@@ -386,7 +387,7 @@ export async function executeIdempotentAgentSend(
   }
   const contentKey = messageProcessingContentKey(options.rootDir, prepared, request);
   let contentDuplicate = false;
-  const { deliveryId: _deliveryId, ...payload } = request;
+  const payload = agentSendIdempotencyPayload(request);
   const outcome = await executeDurableDelivery({
     rootDir: options.rootDir,
     namespace: RECEIPT_NAMESPACE,
@@ -436,6 +437,9 @@ export function agentSendReceiptResponse(rootDir: string, deliveryId: string): I
   }
   if (receipt.state === "uncertain") {
     return nonTerminalResponse(normalized, "uncertain", receipt.error || "The send result is uncertain; do not resend automatically.", 409);
+  }
+  if (!receiptExecutionActive(receipt)) {
+    return nonTerminalResponse(normalized, "uncertain", "The original send execution is no longer active and has no terminal receipt; verify the original delivery before any retry.", 409);
   }
   return nonTerminalResponse(normalized, "in_progress", "The send is reserved or running; query again before any retry.", 202);
 }

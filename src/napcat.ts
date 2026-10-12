@@ -150,7 +150,7 @@ export type ForwardMessageResult = {
   messages: ForwardMessageNode[];
 };
 
-type CallNapCatOptions = {
+export type CallNapCatOptions = {
   timeoutMs?: number;
 };
 
@@ -184,40 +184,44 @@ export async function callNapCat<T>(action: string, payload: unknown, endpoint?:
   }
 
   const controller = options?.timeoutMs ? new AbortController() : undefined;
-  const timeout = controller
-    ? setTimeout(() => controller.abort(), options?.timeoutMs)
-    : undefined;
-  let response: Response;
-  try {
-    response = await fetch(`${target.httpUrl.replace(/\/$/, "")}/${action}`, {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const deadline = controller ? new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort();
+      reject(new Error(`NapCat ${action} timed out.`));
+    }, options?.timeoutMs);
+  }) : undefined;
+  const readResponse = async (): Promise<T> => {
+    const response = await fetch(`${target.httpUrl.replace(/\/$/, "")}/${action}`, {
       method: "POST",
       headers,
       body: JSON.stringify(payload),
       signal: controller?.signal
     });
+    // The same deadline covers headers AND body; some transports ignore abort while reading.
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`NapCat ${action} failed: HTTP ${response.status} ${text}`);
+    }
+    const parsed = text ? (JSON.parse(text) as OneBotResponse<T> | T) : ({} as T);
+    if (parsed && typeof parsed === "object" && ("retcode" in parsed || "status" in parsed)) {
+      const result = parsed as OneBotResponse<T>;
+      if ((result.retcode != null && result.retcode !== 0) || result.status === "failed") {
+        const detail = result.wording || result.message || text;
+        throw new Error(`NapCat ${action} failed: retcode=${result.retcode ?? "unknown"} status=${result.status ?? "unknown"} ${detail}`);
+      }
+    }
+    return parsed as T;
+  };
+  try {
+    return await (deadline ? Promise.race([readResponse(), deadline]) : readResponse());
   } finally {
     if (timeout) clearTimeout(timeout);
   }
-
-  const text = await response.text();
-  if (!response.ok) {
-    throw new Error(`NapCat ${action} failed: HTTP ${response.status} ${text}`);
-  }
-
-  const parsed = text ? (JSON.parse(text) as OneBotResponse<T> | T) : ({} as T);
-  if (parsed && typeof parsed === "object" && ("retcode" in parsed || "status" in parsed)) {
-    const result = parsed as OneBotResponse<T>;
-    if ((result.retcode != null && result.retcode !== 0) || result.status === "failed") {
-      const detail = result.wording || result.message || text;
-      throw new Error(`NapCat ${action} failed: retcode=${result.retcode ?? "unknown"} status=${result.status ?? "unknown"} ${detail}`);
-    }
-  }
-
-  return parsed as T;
 }
 
-export async function getLoginInfo(endpoint?: NapCatEndpoint): Promise<LoginInfo> {
-  const response = await callNapCat<OneBotResponse<{ user_id?: number | string; nickname?: string }> | { user_id?: number | string; nickname?: string }>("get_login_info", {}, endpoint);
+export async function getLoginInfo(endpoint?: NapCatEndpoint, options?: CallNapCatOptions): Promise<LoginInfo> {
+  const response = await callNapCat<OneBotResponse<{ user_id?: number | string; nickname?: string }> | { user_id?: number | string; nickname?: string }>("get_login_info", {}, endpoint, options);
   const data: { user_id?: number | string; nickname?: string } =
     "data" in response && response.data ? response.data : response as { user_id?: number | string; nickname?: string };
   return {

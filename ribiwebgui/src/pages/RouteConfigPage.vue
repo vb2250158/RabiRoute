@@ -664,6 +664,17 @@ function messageGroupingPolicy(type: MessageAdapterType) {
   return messageAdapterPolicyFor(gateway.value, type).messageGrouping;
 }
 
+function napcatTextConfirmationThreshold(): number {
+  return gateway.value ? messageAdapterPolicyFor(gateway.value, "napcat").textConfirmationThreshold : 0;
+}
+
+function setNapcatTextConfirmationThreshold(value: unknown): void {
+  const threshold = Number(value);
+  if (!gateway.value || !Number.isInteger(threshold) || threshold < 0 || threshold > 200_000) return;
+  setMessageAdapterPolicy(gateway.value, "napcat", { textConfirmationThreshold: threshold });
+  store.touch();
+}
+
 function usesAutomaticMessageGrouping(type: MessageAdapterType): boolean {
   return type !== "disabled" && messageAdapterUsesAutomaticGrouping(type);
 }
@@ -4339,6 +4350,21 @@ watch(
                         @update:model-value="value => setMessageGroupingPolicy(choice.type, { maxWaitSeconds: Number(value) })"
                       />
                     </div>
+                  </div>
+                  <div v-if="choice.type === 'napcat'" class="dependency-panel mb-3">
+                    <div class="section-title small-title">长消息确认</div>
+                    <div class="section-note">超过字数时先提醒 Agent 检查和精简，再次调用确认后才发送到 QQ。</div>
+                    <v-text-field
+                      type="number"
+                      :min="0"
+                      :max="200000"
+                      :model-value="napcatTextConfirmationThreshold()"
+                      label="确认阈值（字）"
+                      hint="0 表示关闭。字数含数字、英文、标点和正文中的空格；引用与 @ 标记不计入。"
+                      persistent-hint
+                      class="mt-2"
+                      @update:model-value="setNapcatTextConfirmationThreshold"
+                    />
                   </div>
                   <div v-if="choice.type === 'napcat'" class="catalog-param-grid napcat-manager-panel">
                     <div class="full-span napcat-setup-strip">

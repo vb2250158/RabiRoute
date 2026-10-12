@@ -205,9 +205,11 @@ npm run start:manager
 
 ## 局域网动态发现
 
-只有用户启用 WebGUI 局域网访问且 Manager 确实监听 LAN 时，Manager 才发布标准 DNS-SD 服务 `_rabiroute._tcp.local.`。SRV 记录携带本代操作系统实际分配的端口；TXT 只包含协议版本、`/.well-known/rabiroute-manager` 路径、`applicationGenerationId` 和 `managerInstanceId`，不发布 WebGUI 密钥、Host 控制令牌或私有路径。
+只有用户启用 WebGUI 局域网访问且 Manager 确实监听 LAN 时，Manager 才发布标准 DNS-SD 服务 `_rabiroute._tcp.local.`。SRV 记录携带本代操作系统实际分配的端口；TXT 包含协议版本、`/.well-known/rabiroute-manager` 路径、稳定 `guid`、`applicationGenerationId` 和 `managerInstanceId`，不发布 WebGUI 密钥、Host 控制令牌或私有路径。
 
 Android SDK 的无参 `scanLan()` 消费该 DNS-SD 服务，从解析到的主机与端口读取 well-known 身份文档，并返回完整动态 Manager URL。协议缺失、身份不匹配、解析失败或超时时显式失败/返回空结果，不回退到 `8790..8799` 猜端口。局域网发现只负责定位与身份栅栏；其他 Manager API 仍按 WebGUI LAN 安全策略鉴权。
+
+Manager 对每个非回环 IPv4 接口独立选择组播出口，`/meta.lanDiscovery.interfaces` 返回逐接口名称、地址、发布状态与错误；部分成功不隐藏其它接口失败。`published` 只证明本机发送路径，不证明客户端收到。新版远端连接器将同一 guid/generation/instance 的多个已核验网卡地址视为同一 Manager，不把多地址误判为多实例；不同在线代／实例仍拒绝歧义。发现、well-known、self 与 meta 自动核对由连接器负责，不要求 Agent 手动检查或重新授权。真实跨机发现须在目标网络验证，不用本机回环成功代替。
 
 ## 构建
 

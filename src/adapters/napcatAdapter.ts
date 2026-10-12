@@ -36,7 +36,12 @@ type GroupRoute = {
   kind: Extract<ForwardRouteKind, "direct_at" | "direct_reply" | "indirect_reply">;
 };
 
+const gatewayProcessStartedAt = new Date(Date.now() - process.uptime() * 1000).toISOString();
+
 type GatewayStatus = {
+  pid?: number;
+  startedAt?: string;
+  updatedAt?: string;
   messageAdapter?: {
     type?: "napcat";
     status?: "running" | "disabled" | "error";
@@ -95,7 +100,8 @@ function readGatewayStatus(dataDir = config.dataDir): GatewayStatus {
 function writeGatewayStatus(nextStatus: GatewayStatus, dataDir = config.dataDir): void {
   const statusPath = gatewayStatusPath(dataDir);
   fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(statusPath, JSON.stringify(nextStatus, null, 2), "utf8");
+  fs.writeFileSync(statusPath, JSON.stringify({ ...nextStatus, pid: process.pid,
+    startedAt: gatewayProcessStartedAt, updatedAt: new Date().toISOString() }, null, 2), "utf8");
 }
 
 function configuredNapcatInstanceIds(instances = config.napcatInstances): Set<string> {
@@ -829,7 +835,10 @@ export function createNapCatAdapter(
       const status = readGatewayStatus(lifecycle.dataDir());
       writeGatewayStatus({
         ...status,
-        napcatInstances: pruneNapcatInstanceStatus(status.napcatInstances, configuredInstances)
+        // Retained counters are diagnostics; no connection survives this adapter owner.
+        napcat: status.napcat ? { ...status.napcat, connected: false, activeConnections: 0 } : undefined,
+        napcatInstances: Object.fromEntries(Object.entries(pruneNapcatInstanceStatus(status.napcatInstances, configuredInstances) ?? {})
+          .map(([id, previous]) => [id, { ...previous, connected: false, activeConnections: 0 }]))
       }, lifecycle.dataDir());
 
       const dispose: MessageAdapterDispose = async () => {

@@ -4,7 +4,9 @@ English | [简体中文](video-projects.md)
 
 The video plugin's `VideoProjects` owns project state at `stateRoot/projects/<id>.json`. The browser lists and creates projects through `/api/video/projects`, and reads and saves them through `/api/video/projects/<id>`. The project query parameter in the page URL identifies the project. Storage does not depend on localStorage or IndexedDB: clients accessing the same service and project ID read the same content.
 
-The creation page supports My Projects, creation, opening, renaming and returning to the list. Cards, positions, prompts, first/last frames, reference asset IDs, generation parameters and locally generated audio are saved with the project. Audio Blobs are serialized into the project document and restored as playback URLs. Uploaded media retain server asset references; temporary playback URLs are not durable resources.
+The project stores its model-serving computer. This selects only models and compute; the current Manager still owns the project, uploaded assets, jobs, work history and final results. Switching computers preserves asset IDs and resource URLs. Older projects without this field use this computer. Remote storage contains temporary inference inputs and execution receipts only; see [model-serving computers](video-generation-plugin_en.md#choose-a-model-serving-computer).
+
+The creation page supports My Projects, creation, opening, renaming and returning to the list. Cards, positions, prompts, first/last frames, reference asset IDs, generation parameters and generated audio are saved with the project. Audio Blobs are serialized into the project document and restored as playback URLs. Uploaded media retain server asset references; temporary playback URLs are not durable resources.
 
 The authenticated LAN HTTP entry supports creating projects, adding and copying cards, and submitting generation jobs. The browser uses `crypto.getRandomValues()` through a shared UUID v4 generator for IDs and idempotency keys, without depending on the secure-context-only `crypto.randomUUID()` API. Server-side project formats and access control are unchanged.
 

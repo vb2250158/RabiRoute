@@ -23,10 +23,14 @@ type ReadyDescriptor = Readonly<{
 }>;
 
 async function runHungPlanStorageWorker(): Promise<void> {
+  const runtimeModule = (name: string) => {
+    const built = new URL(`../../dist/manager/${name}.js`, import.meta.url);
+    return import(fs.existsSync(fileURLToPath(built)) ? built.href : `./${name}.js`);
+  };
   const [{ PlanStorageStartupLifecycle }, { startManager }, { RouteCatalogStartupLifecycle }] = await Promise.all([
-    import("./planStorageStartupLifecycle.js"),
-    import("./controlPlaneRoutes.js"),
-    import("./routeCatalogStartupLifecycle.js")
+    runtimeModule("planStorageStartupLifecycle"),
+    runtimeModule("controlPlaneRoutes"),
+    runtimeModule("routeCatalogStartupLifecycle")
   ]);
   const neverCompletes = new Promise<never>(() => {});
   const lifecycle = new PlanStorageStartupLifecycle({

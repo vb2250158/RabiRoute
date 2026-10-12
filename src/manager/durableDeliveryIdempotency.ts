@@ -469,7 +469,7 @@ function sameHostOwnerGone(receipt: DurableDeliveryReceipt<unknown>): boolean {
     && !sameHostOwnerAlive(receipt);
 }
 
-function receiptExecutionActive(receipt: DurableDeliveryReceipt<unknown>): boolean {
+export function receiptExecutionActive(receipt: DurableDeliveryReceipt<unknown>): boolean {
   if (receipt.state !== "sending" || !receipt.executionId) return false;
   if (sameHostOwnerAlive(receipt)) return true;
   // A dead same-host owner releases the lease immediately.

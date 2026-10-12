@@ -36,7 +36,7 @@ export async function discoverManager({ browse, fetchImpl = fetch, expected = {}
       const { Bonjour } = await import("bonjour-service"); bonjour = new Bonjour();
       browse = () => new Promise(resolve => {
         const records = []; browser = bonjour.find({ type: "rabiroute", protocol: "tcp" });
-        const timer = setTimeout(() => resolve(records), Math.min(1000, timeoutMs / 3));
+        const timer = setTimeout(() => resolve(records), Math.floor(timeoutMs * 0.6));
         browser.on("up", record => { if (records.length < MAX_CANDIDATES) records.push(record); });
         browser.on("error", () => { clearTimeout(timer); resolve(records); });
         signal.addEventListener("abort", () => { clearTimeout(timer); resolve(records); }, { once: true });
@@ -56,11 +56,16 @@ export async function discoverManager({ browse, fetchImpl = fetch, expected = {}
     await Promise.all(Array.from({ length: Math.min(4, candidates.length) }, async () => {
       while (!signal.aborted && cursor < candidates.length) {
         const candidate = candidates[cursor++];
-        try { const verified = await verifyPublicEndpoint(candidate.managerUrl, { ...candidate, fetchImpl, signal }); found.set(`${verified.managerUrl}|${verified.generation}|${verified.instance}`, verified); } catch { /* Untrusted advertisements are hints, never authority. */ }
+        try {
+          const verified = await verifyPublicEndpoint(candidate.managerUrl, { ...candidate, fetchImpl, signal });
+          const identityKey = `${verified.guid}|${verified.generation}|${verified.instance}`;
+          const previous = found.get(identityKey);
+          if (!previous || verified.managerUrl.localeCompare(previous.managerUrl) < 0) found.set(identityKey, verified);
+        } catch { /* Untrusted advertisements are hints, never authority. */ }
       }
     }));
-    // Multiple live origins (including multiple interfaces) are ambiguous, not a preference race.
-    return !signal.aborted && found.size === 1 ? [...found.values()][0] : null;
+    // Multiple live generations are ambiguous; verified interfaces of one identity are equivalent.
+    return found.size === 1 ? [...found.values()][0] : null;
   } finally { browser?.stop(); bonjour?.destroy(); }
 }
 export function createDiscoveryCooldown(minMs = 10_000) {

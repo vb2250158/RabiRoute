@@ -35,17 +35,21 @@ export class VideoService {
   }
   async initialize() {
     if (!this.runtime.readOnly) await fs.mkdir(path.join(this.runtime.stateRoot, "jobs"), { recursive: true });
-    const files = await fs.readdir(path.join(this.runtime.stateRoot, "jobs")).catch(error => { if (error.code === "ENOENT" && this.runtime.readOnly) return []; throw error; });
+    if (!this.runtime.readOnly) await fs.mkdir(path.join(this.runtime.stateRoot, "compute", "jobs"), { recursive: true });
+    for (const directory of ["jobs", path.join("compute", "jobs")]) {
+    const files = await fs.readdir(path.join(this.runtime.stateRoot, directory)).catch(error => { if (error.code === "ENOENT") return []; throw error; });
     for (const file of files) {
       if (!/^[0-9a-f-]{36}\.json$/.test(file)) continue;
-      const job = JSON.parse(await fs.readFile(path.join(this.runtime.stateRoot, "jobs", file), "utf8"));
-      if (file !== `${job.id}.json` || !this.catalog.states[job.status]) throw new Error("视频任务记录无效，已停止加载。");
+      const job = JSON.parse(await fs.readFile(path.join(this.runtime.stateRoot, directory, file), "utf8"));
+      if (file !== `${job.id}.json` || !this.catalog.states[job.status] || Boolean(job.computeOnly) !== (directory !== "jobs")) throw new Error("视频任务记录无效，已停止加载。");
       if (!this.runtime.readOnly && !this.catalog.states[job.status].terminal) {
+        if (job.computeDeviceId && job.status === "running" && !this.catalog.states[job.computeOutcome]?.terminal) job.computeOutcome = "unknown";
         job.status = "interrupted";
         job.error = "服务重启，任务未自动重试。";
         await this.save(job);
       }
       this.jobs.set(job.id, job);
+    }
     }
   }
   async save(job, access) {
@@ -53,7 +57,7 @@ export class VideoService {
     if (this.runtime.readOnly) throw new VideoError("只读模式下不能修改视频任务。", 423);
     access?.assert();
     job.updatedAt = new Date().toISOString();
-    const target = path.join(this.runtime.stateRoot, "jobs", `${job.id}.json`);
+    const target = path.join(this.runtime.stateRoot, ...(job.computeOnly ? ["compute"] : []), "jobs", `${job.id}.json`);
     const temporary = `${target}.${randomUUID()}.tmp`;
     await fs.writeFile(temporary, JSON.stringify(job), { flag: "wx" });
     await fs.rename(temporary, target);
@@ -63,11 +67,70 @@ export class VideoService {
   view(job) {
     const { keyHash, commandHash, firstFrame, lastFrame, output, ...value } = job;
     const image = this.catalog.models.find(row=>row.id===job.model)?.mode === "image";
-    return { ...value, mediaKind: image ? "image" : "video", imageUrl: image && job.status === "succeeded" ? `/api/video/jobs/${job.id}/image` : undefined, hasFirstFrame: Boolean(firstFrame), hasLastFrame: Boolean(lastFrame), videoUrl: !image && job.status === "succeeded" ? `/api/video/jobs/${job.id}/video` : undefined };
+    const prefix = job.computeOnly ? "/api/video/compute/jobs" : "/api/video/jobs";
+    return { ...value, mediaKind: image ? "image" : "video", imageUrl: image && job.status === "succeeded" && !job.outputPurged ? `${prefix}/${job.id}/image` : undefined, hasFirstFrame: Boolean(firstFrame), hasLastFrame: Boolean(lastFrame), videoUrl: !image && job.status === "succeeded" && !job.outputPurged ? `${prefix}/${job.id}/video` : undefined };
   }
   snapshot() {
     return { online: this.online && this.runtime.alive(), availableModels: this.availableModels || [], availableWorkflows: this.availableWorkflows || [], models: this.catalog.models, states: this.catalog.states,
-      jobs: [...this.jobs.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 100).map(job => this.view(job)) };
+      jobs: [...this.jobs.values()].filter(job => !job.computeOnly).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 100).map(job => this.view(job)) };
+  }
+  async snapshotFor(deviceId, access) {
+    if (!deviceId) return this.snapshot();
+    try {
+      const remote = await this.remote.status(deviceId, access);
+      return {...remote, jobs:this.snapshot().jobs, states:this.catalog.states, models:this.catalog.models};
+    } catch (error) {
+      access?.assert();
+      return {...this.snapshot(),online:false,availableModels:[],availableWorkflows:[],computeError:error instanceof VideoError ? error.message : "模型服务电脑连接失败，请检查连接。"};
+    }
+  }
+  async startRemote(deviceId,access) {
+    return this.exclusive(async()=>{
+      try {
+        await this.remote.start(deviceId,access);
+        for (const job of this.jobs.values()) if (job.computeDeviceId === deviceId && job.computeOutcome === "unknown" && !job.computeResumedAt) {
+          job.computeResumedAt = new Date().toISOString();
+          try {await this.save(job,access);} catch (error) {delete job.computeResumedAt;throw error;}
+        }
+        return this.snapshotFor(deviceId,access);
+      } catch (error) {this.remote.blocked.add(deviceId);throw error;}
+    },access);
+  }
+  async removeCompute(id, access) {
+    return this.exclusive(async () => {
+      if (this.runtime.readOnly) throw new VideoError("只读模式下不能清理推理记录。",423);
+      const job = this.jobs.get(id);
+      if (!job?.computeOnly) throw new VideoError("推理回执不存在。",404);
+      if (!this.catalog.states[job.status].terminal) throw new VideoError("推理尚未结束。",409);
+      if (job.outputPurged) return {removed:true};
+      const fs = checkedFs(access); access?.beforeMutation();
+      if (job.output) await fs.rm(await this.outputPath(job, access), {force:true});
+      for (const assetId of job.references || []) {
+        const other = [...this.jobs.values()].some(row => row.id !== id && (row.references || []).includes(assetId));
+        if (!other) await this.computeAssets.remove(assetId, access);
+      }
+      // ComfyUI receives private copies whose names are generated by this service.
+      for (const field of ["firstFrame","lastFrame"]) if (job[field]) await fs.rm(path.join(this.runtime.stateRoot,"provider-input",`${job.id}-${field}.png`),{force:true});
+      for (const assetId of job.references || []) for (const extension of ["png","mp4","wav"]) await fs.rm(path.join(this.runtime.stateRoot,"provider-input",`${assetId}.${extension}`),{force:true});
+      const receipt = Object.fromEntries(["id","model","keyHash","commandHash","status","createdAt"].map(key=>[key,job[key]]));
+      Object.assign(receipt,{computeOnly:true,outputPurged:true});
+      await this.save(receipt,access);this.jobs.set(id,receipt);return {removed:true};
+    },access);
+  }
+  async reapCompute(access) {
+    if (this.runtime.readOnly || Date.now() - (this.lastComputeReap || 0) < 60000) return;
+    this.lastComputeReap = Date.now();
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    for (const job of [...this.jobs.values()]) if (job.computeOnly && !job.outputPurged && this.catalog.states[job.status].terminal && Date.parse(job.updatedAt) < cutoff) await this.removeCompute(job.id,access);
+    const fs = checkedFs(access);
+    const root = this.computeAssets.root;
+    const entries = await fs.readdir(root).catch(error=>{access?.assert();if(error.code==="ENOENT")return [];throw error;});
+    for (const filename of entries) {
+      const match = /^([a-f0-9-]{36})\.(json|png|mp4|wav)$/.exec(filename);
+      if (!match || [...this.jobs.values()].some(job=>job.computeOnly && job.references?.includes(match[1]))) continue;
+      const file = path.join(root,filename);
+      if ((await fs.stat(file)).mtimeMs < cutoff) {access?.beforeMutation();await fs.rm(file,{force:true});}
+    }
   }
   async request(route, init = {}, access) {
     access?.assert();
@@ -121,7 +184,7 @@ export class VideoService {
   }
   async stop(access) {
     return this.exclusive(async () => {
-      if ([...this.jobs.values()].some(job => !this.catalog.states[job.status].terminal)) throw new VideoError("仍有生成任务，请等待完成或取消排队任务。", 409);
+      if ([...this.jobs.values()].some(job => !job.computeDeviceId && !this.catalog.states[job.status].terminal)) throw new VideoError("仍有生成任务，请等待完成或取消排队任务。", 409);
       await this.runtime.stop(access); access?.assert();
       this.endpoint = "";
       this.online = false;
@@ -129,35 +192,39 @@ export class VideoService {
       return this.snapshot();
     }, access);
   }
-  async submit(input, key, access) {
+  async submit(input, key, access, options = {}) {
     access?.assert();
     if (typeof key !== "string" || !/^[A-Za-z0-9._:-]{8,128}$/.test(key)) throw new VideoError("请提供 8–128 字符的 Idempotency-Key。");
     let command;
     try { command = validateCommand(input, this.catalog); } catch (error) { throw new VideoError(error.message); }
     const hash = value => createHash("sha256").update(value).digest("hex");
-    const keyHash = hash(key), commandHash = hash(JSON.stringify(command));
+    const deviceId = options.deviceId || "";
+    const keyHash = hash(`${options.computeOnly ? "compute:" : ""}${key}`), commandHash = hash(JSON.stringify(deviceId ? {...command, computeDeviceId:deviceId} : command));
     return this.exclusive(async () => {
-      const previous = [...this.jobs.values()].find(job => job.keyHash === keyHash);
+      const previous = [...this.jobs.values()].find(job => job.keyHash === keyHash && Boolean(job.computeOnly) === Boolean(options.computeOnly));
       if (previous) {
         if (previous.commandHash !== commandHash) throw new VideoError("同一个幂等键已用于不同参数。", 409);
         return this.view(previous);
       }
-      if (this.closing || !this.online || !this.runtime.alive()) throw new VideoError("请先启动视频生成服务。", 503);
-      if ((command.firstFrame || command.lastFrame) && !this.frameAdaptationAvailable) throw new VideoError("视频运行环境缺少 ResizeAndPadImage 自动适配节点，请更新 ComfyUI 后重启视频服务。", 409);
-      if(this.availableModels && !this.availableModels.includes(command.model)) throw new VideoError("所选模式的模型尚未安装，请打开模型管理。",409);
+      const capability = deviceId ? await this.remote.status(deviceId, access) : null;
+      if (this.closing || (capability ? !capability.online : !this.online || !this.runtime.alive())) throw new VideoError("请先启动所选电脑的视频生成服务。", 503);
+      if ((command.firstFrame || command.lastFrame) && !(capability ? capability.frameAdaptationAvailable : this.frameAdaptationAvailable)) throw new VideoError("视频运行环境缺少 ResizeAndPadImage 自动适配节点，请更新 ComfyUI 后重启视频服务。", 409);
+      const availableModels = capability?.availableModels ?? this.availableModels;
+      const availableWorkflows = capability?.availableWorkflows ?? this.availableWorkflows;
+      if(availableModels && !availableModels.includes(command.model)) throw new VideoError("所选模式的模型尚未安装，请打开模型管理。",409);
       let resolved;
       const routingCommand = {...command};
 
       if(command.references) {
-        const references=await Promise.all(command.references.map(id=>this.assets.read(id, access)));
+        const references=await Promise.all(command.references.map(id=>(options.computeOnly ? this.computeAssets : this.assets).read(id, access)));
         routingCommand.referenceKinds = references.map(asset=>asset.kind);
         for(const [kind,limit] of [["image",9],["video",3],["audio",3]]) if(references.filter(a=>a.kind===kind).length>limit) throw new VideoError("参考素材数量超出模式限制。");
       }
-      try { resolved = resolveWorkflow(this.catalog.models.find(model=>model.id===command.model), routingCommand, this.availableWorkflows); }
+      try { resolved = resolveWorkflow(this.catalog.models.find(model=>model.id===command.model), routingCommand, availableWorkflows); }
       catch(error) { throw new VideoError(error.message,409); }
-      if (this.availableWorkflows && !this.availableWorkflows.some(row=>row.model===command.model && row.workflowId===resolved.workflowId && row.generateAudio===!!command.generateAudio)) throw new VideoError("工作流依赖尚未就绪。",409);
+      if (availableWorkflows && !availableWorkflows.some(row=>row.model===command.model && row.workflowId===resolved.workflowId && row.generateAudio===!!command.generateAudio)) throw new VideoError("工作流依赖尚未就绪。",409);
       if ([...this.jobs.values()].filter(job => !this.catalog.states[job.status].terminal).length >= 8) throw new VideoError("生成队列已满，最多接受 8 个待完成任务。", 429);
-      const job = { ...command, workflowId: resolved.workflowId, samplingSteps: resolved.steps, id: randomUUID(), keyHash, commandHash, status: "queued", createdAt: new Date().toISOString(), progress: 0 };
+      const job = { ...command, ...(deviceId ? {computeDeviceId:deviceId} : {}), ...(options.computeOnly ? {computeOnly:true} : {}), workflowId: resolved.workflowId, samplingSteps: resolved.steps, id: randomUUID(), keyHash, commandHash, status: "queued", createdAt: new Date().toISOString(), progress: 0 };
       await this.save(job, access);
       access?.beforeMutation();
       this.jobs.set(job.id, job);
@@ -193,6 +260,10 @@ export class VideoService {
       if (!job) return;
       try {
         const model = this.catalog.models.find(item => item.id === job.model);
+        const isImage = model.mode === "image";
+        if (job.computeDeviceId) {
+          await this.remote.run(job, this.assets, value => this.save(value), this.controller.signal);
+        } else {
         const images = [];
         for (const field of ["firstFrame", "lastFrame"]) {
           if (!job[field]) { images.push(undefined); continue; }
@@ -205,7 +276,7 @@ export class VideoService {
         }
         const references=[];
         for(const id of job.references || []) {
-          const {record,file}=await this.assets.file(id);
+          const {record,file}=await (job.computeOnly ? this.computeAssets : this.assets).file(id);
           const name=path.basename(file);
           const form=new FormData(); form.append("image",new Blob([await fs.readFile(file)]),name);
           const uploaded=await this.request("/upload/image",{method:"POST",body:form});
@@ -213,10 +284,10 @@ export class VideoService {
           references.push({...record,filename:name});
         }
         const history = await this.generate(job, buildWorkflow(model, job, ...images, references));
-        const isImage = model.mode === "image";
         const output = Object.values(history.outputs ?? {}).flatMap(node => [...(node.images ?? []), ...(node.videos ?? [])]).find(item => item.type === "output" && item.filename?.endsWith(isImage ? ".png" : ".mp4"));
         if (!output) throw new VideoError("生成服务未返回预期格式的文件。", 502);
         job.output = { filename: output.filename, subfolder: output.subfolder || "" };
+        }
         const file = await this.outputPath(job);
         const handle = await fs.open(file, "r");
         try {
@@ -228,19 +299,20 @@ export class VideoService {
         job.progress = 1;
       } catch (error) {
         job.status = this.closing ? "interrupted" : "failed";
-        job.error = error instanceof VideoError ? error.message : this.closing ? "插件停止，生成已中断。" : "生成失败，请检查视频服务日志；任务未自动重试。";
+        job.error = job.computeOutcome === "unknown" ? "远端推理结果未确认；原任务未重投，请核对原推理回执。" : error instanceof VideoError ? error.message : this.closing ? "插件停止，生成已中断。" : "生成失败，请检查视频服务日志；任务未自动重试。";
         // A lost result does not prove that GPU work stopped. Terminate our own
         // provider before accepting another job, rather than stacking unknown work.
-        this.online = false;
-        await this.runtime.stop();
-        for (const queued of this.jobs.values()) if (queued.status === "queued") {
+        if (!job.computeDeviceId) { this.online = false; await this.runtime.stop(); }
+        else this.remote.blocked.add(job.computeDeviceId);
+        for (const queued of this.jobs.values()) if (queued.status === "queued" && (queued.computeDeviceId || "") === (job.computeDeviceId || "")) {
           queued.status = "interrupted";
           queued.error = "生成服务停止，任务未自动重试。";
           await this.save(queued);
         }
       }
       await this.save(job);
-      if (!this.online) return;
+      if (job.computeDeviceId && job.status === "succeeded") await this.remote.finish(job);
+      if (!job.computeDeviceId && !this.online) return;
     }
   }
   async generate(job, workflow) {

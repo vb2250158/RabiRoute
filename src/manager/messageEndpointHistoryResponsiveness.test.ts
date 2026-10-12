@@ -128,6 +128,39 @@ function requestHistory(url: string) {
   return { request, result };
 }
 
+test("history labels bounded coverage and rejects unsupported pagination before reading", async () => {
+  let reads = 0;
+  const service = await serve({ roleDirectory: () => "synthetic", json,
+    queryHistory: async () => { reads++; return []; } });
+  try {
+    const result = await requestHistory(service.url + "?includeArchives=1&limit=9999&maxChars=999999&from=1767225600&to=1767229200").result;
+    assert.equal(result.status, 200);
+    const coverage = result.body.data.coverage;
+    assert.equal(coverage.recordScope, "saved_role_messages");
+    assert.equal(coverage.resultMode, "latest_matches");
+    assert.equal(coverage.completenessUnknown, true, "an empty excerpt must not imply complete coverage");
+    assert.equal(coverage.paginationSupported, false);
+    assert.equal(coverage.limit, 200);
+    assert.equal(coverage.maxChars, 200000);
+    assert.equal(coverage.from, 1767225600);
+    assert.equal(coverage.to, 1767229200);
+    assert.equal(coverage.limitReducesArchiveScan, false);
+    for (const query of ["cursor=example", "offset=200", "cursor="]) {
+      const invalid = await requestHistory(service.url + "?" + query).result;
+      assert.equal(invalid.status, 400);
+      assert.equal(invalid.body.errorCode, "MESSAGE_HISTORY_PAGINATION_UNSUPPORTED");
+      assert.equal(invalid.body.retryable, false);
+    }
+    for (const query of ["from=2026-01-01", "to=NaN", "from=", "from=200&to=100"]) {
+      const invalid = await requestHistory(service.url + "?includeArchives=1&" + query).result;
+      assert.equal(invalid.status, 400);
+      assert.equal(invalid.body.errorCode, "MESSAGE_HISTORY_TIME_RANGE_INVALID");
+      assert.equal(invalid.body.retryable, false);
+    }
+    assert.equal(reads, 1, "invalid pagination or time ranges must not scan storage");
+  } finally { await service.close(); }
+});
+
 test("history worker preserves every HTTP filter, archive selection, character budget and business errors", { timeout: 15000 }, async () => {
   const data = fixture(); const pool = new ManagerReadWorkerPool({ maxConcurrency: 1, timeoutMs: 8000 });
   const seen: RecentMessageContextQuery[] = [];
@@ -209,8 +242,12 @@ test("history deadline returns 503 and confirms blocked child exit before releas
   const service = await serve({ roleDirectory: () => data.root, json,
     queryHistory: (roleDir, query, options) => reader.pool.run({ type: "role_message_endpoint_history", roleDir, query }, options) });
   try {
+    // Measure the storage deadline independently of cold tsx/module startup.
+    await reader.pool.run({ type: "role_message_endpoint_history", roleDir: data.root, query: { limit: 1 } }, { timeoutMs: 10000 });
     const request = requestHistory(`${service.url}?includeArchives=1`);
-    await reader.entered;
+    await Promise.race([reader.entered, request.result.then(result => {
+      throw new Error(`History reader failed before entering storage: ${result.status ?? result.error?.message}`);
+    })]);
     const result = await request.result;
     assert.equal(result.status, 503); assert.equal(result.body.code, -1);
     await reader.exited;

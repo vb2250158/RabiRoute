@@ -2,6 +2,21 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { sendWorkCycleAgentReplyWithRecovery } from "./work-cycle-agent-send-recovery.mjs";
 
+for (const status of ["message_length_confirmation_required", "style_confirmation_required"]) {
+  test(`work-cycle returns ${status} without replaying or reading an absent receipt`, async () => {
+    let posts = 0;
+    const deliveryId = "work-cycle-review";
+    const warning = { ok: false, deliveryId, status, messageLengthValidation: { characterCount: 86, threshold: 50, confirmationToken: "example-review" } };
+    const result = await sendWorkCycleAgentReplyWithRecovery({
+      deliveryId, payload: { deliveryId, payload: { type: "text", text: "review me" } },
+      post: async () => { posts++; return { response: { status: 409 }, parsed: warning }; },
+      readReceipt: async () => { throw Error("no receipt exists before content review"); }
+    });
+    assert.deepEqual(result, warning);
+    assert.equal(posts, 1);
+  });
+}
+
 test("work-cycle retries one identical payload after receipt readback confirms missing", async () => {
   const payload = { deliveryId: "work-cycle-referenced-test", payload: { type: "text", text: "same payload" } };
   const posts = [];

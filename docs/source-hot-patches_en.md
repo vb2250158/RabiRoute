@@ -26,6 +26,8 @@ Watching uses a bounded compiler Worker. Catalog edits update resource and relat
 
 ## Current implementation
 
+Nested synchronous automatic-code calls reuse the caller's pinned revision instead of allocating a context and lease for every field conversion or filter. Nested calls returning a Promise or generator retain an additional lease, preserving their original revision after the caller returns and releasing it on completion, failure, or explicit iterator closure. History-search performance validation must include this production-build instrumentation.
+
 Automatic updates use one bounded queue to discover, isolate-build, validate, and jointly commit trusted source, Web, asset, and documentation changes without asking for publication each time. Input changes, compiler errors, compatibility failures, and persistence failures discard the candidate and keep the old service; code and Web are never published as a half-updated pair. New files belonging to an existing plugin contract are discovered automatically; new initialization, exports, dependency layouts, or state owners return a specific `requires_switch` reason instead of being silently skipped or requiring a restart for ordinary edits.
 
 ### Add a module without changing the core

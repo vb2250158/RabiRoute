@@ -98,15 +98,15 @@ setx NAPCAT_QUICK_PASSWORD "<qq-password>"
 
 每个 Route 所绑定的 NapCat 都有“启动 Rabi 时自动登录”开关，默认开启。开启后，Manager 监听成功即提交后台任务：先复用已在线的正确账号，否则启动绑定的 NapCat Shell、选择已有 quick login，并修复 OneBot HTTP / WebSocket 配置。不同 Route 并发处理；绑定同一 QQ 的任务按账号串行。Manager 启动和 WebGUI 访问不等待这些步骤。
 
-关闭开关只跳过该实例的启动时自动登录；“启动并管理登录”、健康检查、手动启动和重启仍可使用。需要扫码、验证码或新设备确认时，后台任务记录实际状态，用户之后直接在对应 Route 卡片完成验证。
+关闭开关会跳过该实例的启动自动登录及运行期自动恢复；“启动并管理登录”、健康检查、手动启动和重启仍可使用。需要扫码、验证码或新设备确认时，后台任务记录实际状态，用户之后直接在对应 Route 卡片完成验证。
 
 ## 进程守护
 
-RabiRoute manager 会守护自己启动的路由子进程，并在 `data/route/*/adapterConfig.json` 或 `data/roles/*/personaConfig.json` 改动后自动重载受影响路由。NapCat 的启动时自动登录只运行一次；运行期间退出、掉线或登录失效后，仍由健康状态提示和用户操作处理。
+RabiRoute manager 会守护自己启动的路由子进程，并在 `data/route/*/adapterConfig.json` 或 `data/roles/*/personaConfig.json` 改动后自动重载受影响路由。启用且未关闭自动登录的 NapCat 实例由运行期守护每 30 秒观察：连续 3 次异常后尝试绑定账号的快捷登录／OneBot 修复，尝试之间至少 5 分钟，启动宽限 90 秒。HTTP、对应实例 WebSocket 和 Gateway 进程分别核对；HTTP 正常不代表收消息链路已恢复。自动恢复不换 QQ、不启动重复实例、不强杀未知进程。二维码、安全验证、账号冲突或不匹配仍等待用户；瞬态登录探针失败不是人工验证证据。等待仅在进程明确不存在、绑定账号明确可快捷登录或拥有者确认该账号已登录但传输未就绪时释放，不因普通不可达摆动而打断正在扫码的用户。守护外围异常在同一 owner 内可取消退避后恢复，startup 登录不重复执行；停止或插件卸载取消待重启。
 
 由 Windows Host 启动 Rabi，再由路由中“启动 Rabi 时自动登录”启动绑定的 NapCat。不要再为同一实例配置任务计划或服务反复拉起，否则解绑后的外部守护程序仍可能启动它。
 
-如果 NapCat 自动退出、QQ 被挤下线或 quick login 失败，先在对应 Route 点击“启动并管理登录”。自动恢复失败时，再展开详情查看 NapCat 日志、WebSocket 状态、HTTP `get_login_info` 和最近错误。
+自动恢复会记录观察状态、恢复尝试及结果。未恢复或需要扫码时，在对应 Route 点击“启动并管理登录”，并查看 NapCat 日志、WebSocket 状态、HTTP `get_login_info` 和最近错误。不能将 HTTP 可达或修复请求被接受当作全链路恢复。此修复已通过隔离测试；真实掉线、长期冷却及客户端收消息验收仍需在部署后分别完成。
 
 ## RabiRoute 侧健康检查
 

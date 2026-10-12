@@ -95,6 +95,23 @@ GET /api/agent/qq/messages/<messageId>/attachments/0?routeId=<routeId>&kind=grou
 当前 `GET <managerBaseUrl>/api/gateways` 提供 Route 诊断，其 `messageFiles` 包含近期消息摘要。NapCat 摘要合并群聊和私聊后仅返回最近 8 条，须按目标 Route、群/私聊、消息 ID 和时间筛选；它不是完整历史检索接口。`GET /api/roles/{roleId}/chat-history` 读取的是 Agent 最终回复，不能替代 QQ 群聊历史。
 ### 查询消息端历史消息
 
+**覆盖与成本限制（Agent 调用前必读）**
+
+- 查询范围是该人格已保存的消息。`includeArchives` 默认关闭；`includeArchives=1` 纳入已保存归档，不保证聊天平台的全部历史。
+- 返回最近的匹配片段，每条消息按既有顺序排列。`limit` 默认 50、最多 200；`maxChars` 默认及最多 200,000，预算含文本、分段和记录开销，首条消息可超出预算。`count` 仅是本次返回数量，`coverage` 仅标注角色、归档开关及筛选范围，不是总条数或完整性证明。少于 `limit` 也可能受字符预算影响。
+- 本接口没有 `cursor`、`offset`、`nextCursor` 或完整结束标记。不要用这批结果计算整月消息分布，也不要用“最早时间减一秒”模拟分页：同秒多条消息会遗漏。全量统计先核验来源及时间覆盖；受管 QQ 历史分页也不保证平台全部历史。
+- 响应的 `coverage` 明示 `recordScope=saved_role_messages`、`resultMode=latest_matches`、`completenessUnknown=true`、`paginationSupported=false`、有效 `limit/maxChars/from/to` 和 `limitReducesArchiveScan=false`。传 `cursor` 或 `offset` 返回 400 `MESSAGE_HISTORY_PAGINATION_UNSUPPORTED`，读取前拒绝，防止重复取得同一片段。
+- 已传的 `from/to` 必须是有限 Unix 秒数，双边范围须 `from <= to`；空值、日期文本、`NaN` 或倒置范围返回 400 `MESSAGE_HISTORY_TIME_RANGE_INVALID`，读取前拒绝，避免无效时间条件被静默忽略后扫描全部归档。未传时间范围仍可查询。
+- 冷查询仍需读取候选归档；小 `limit` 和关键词不会缩小文件扫描量。先限定 `target` 或 `conversationKey` 及 Unix 秒 `from/to`，一般从 `limit=10` 开始，再按需要扩展。避免并发扫描全部历史；503 或超时后缩小范围或按既有规则使用已核验的正式来源，不无限重试同一重查询。
+- 历史归档冷读可设置最多 35 秒客户端预算，覆盖读池 30 秒执行预算及少量通信时间；排队另计，不能保证在客户端期限内完成。提前断开会取消读取，不以短超时反复启动同一冷扫描；35 秒是客户端设置，不是 query 参数。Host、`/meta` 和就绪后的知识索引查询通常仍用 5 秒预算。
+- `GET /api/agent/help?path=/api/roles/%3AroleId/message-endpoint-history` 返回相同限制。Help 的 `path` 使用目录中的 `pathTemplate`，保留 `:roleId`，不能替换成实际角色 ID。
+
+读进程只按任务加载依赖：消息检索和知识索引更新不先初始化无关诊断、投递或媒体模块。消息读进程缓存未变化的归档，按文件身份、大小和修改时间校验；当前消息每次重读。缓存最多 128 个文件、估算预算 384 MiB，闲置 120 秒后在下次访问时淘汰；超预算文件直接读取，不写缓存。文件编辑、替换、删除或进程重建后重新读取。查询返回值独立复制，避免调用方修改缓存。
+
+知识索引发布已经完成的文件读取批次，并按记录身份重放读取期间的新提交；文件监听发现的变动继续增量核对。持续的计划或记忆更新不再导致整批读取被丢弃、首次索引一直无法就绪。索引读取失败仍保留已发布结果与错误状态，不伪装成完整空索引。
+
+历史检索只解析一次消息字段，复用本轮已读取的当前消息；归档快照按序号范围排序后去除被包含的副本。去重仍先于关键词筛选，时间范围、字符预算及返回顺序保持不变。正式构建中的同步内部调用复用当前请求的代码版本租约，异步工作和迭代器继续独立保留租约；性能验收必须使用正式构建的读进程，不能用未包装的源码耗时代替。
+
 处理端需要恢复 QQ 群聊、QQ 私聊或其它消息端上下文时，使用只读接口：
 
 ```http
@@ -103,9 +120,7 @@ GET /api/roles/{roleId}/message-endpoint-history
 
 常用参数：`query`（支持空格、英文逗号、中文逗号、顿号分隔的多个关键词）、`match=any|all`（默认 `any`）、`adapter`、`kind=group|private`、`sender`、`target`、`conversationKey`、`from`、`to`、`includeArchives=1`、`limit`。用户说“最近一小时”等时间范围时，必须转换为 Unix 秒 `from`（必要时传 `to`）；用户要求“所有消息”时省略 `query`，不要臆造关键词。`limit` 只是返回上限，不代表完整覆盖；无时间范围的归档查询会扫描完整归档，应避免用于大历史。返回 `entries`、`count` 和 `coverage`；消息记录保留消息端、群/私聊会话键、发送者、目标、消息 ID、回复 ID 和附件摘要。`kind=group` 只查群聊入站消息，`kind=private` 只查私聊入站消息；`reply_sent` 等出站回复不应当当作用户原始反馈。
 
-查询由有界交互读进程执行，不占用目录整理任务队列；客户端断开会取消排队任务或终止仍在读取的进程。另支持 `channel` 和 `maxChars`；`limit` 默认 50、最多 200，`maxChars` 默认及最多 200,000。成功结构和筛选语义不变；读池繁忙、超时或无法确认子进程终止返回 HTTP 503，业务参数错误仍返回 400，不把失败伪装成零条记录。此隔离不承诺任意大小历史都能在超时前查完，也不代表其它同步入口或线上健康已验收。
-
-查询由有界交互读进程执行，不占用目录整理任务队列；客户端断开会取消排队任务或终止仍在读取的进程。另支持 `channel` 和 `maxChars`；`limit` 默认 50、最多 200，`maxChars` 默认及最多 200,000。成功结构和筛选语义不变；读池繁忙、超时或无法确认子进程终止返回 HTTP 503，业务参数错误仍返回 400，不把失败伪装成零条记录。此隔离不承诺任意大小历史都能在超时前查完，也不代表其它同步入口或线上健康已验收。
+查询由有界交互读进程执行，不占用目录整理任务队列；客户端断开会取消排队任务或终止仍在读取的进程。另支持 `channel` 和 `maxChars`；`limit` 默认 50、最多 200，`maxChars` 默认及最多 200,000。既有 `entries/count` 和筛选语义保持兼容，`coverage` 增加上述限制标记；读池繁忙、超时或无法确认子进程终止返回 HTTP 503，业务参数错误仍返回 400，不把失败伪装成零条记录。此隔离不承诺任意大小历史都能在超时前查完，也不代表其它同步入口或线上健康已验收。
 
 新会话的上下文恢复顺序：先从用户原话提取对象和关键词；再查本接口恢复消息端历史；涉及计划、记忆或原任务归属时另查 `knowledge/search`；最后回到当前文件、配置、代码或运行证据。查询覆盖范围必须随结果一起判断，空结果不等于系统从未出现过该消息。
 
@@ -373,6 +388,7 @@ POST /api/agent/send
 - `params`：该渠道的目标参数；
 - `payload`：`text`、`image`、`voice`、`file`；NapCat 另支持把 `markdown` 渲染成图片；
 - `styleValidation`：枚举值 `1 | 0`，默认 `1`。`1` 使用人格绑定的目标语言风格 Skill 校验文本；`0` 跳过本次校验；
+- `messageLengthConfirmation`：NapCat 超限响应返回的单次确认凭据；第一次请求省略，复核后以完整原请求和同一 `deliveryId` 再次提交。
 - `tracking.requirementId`：可选，用于关联消息处理看板，不能决定发送目标；回复已登记的消息处理需求时必须填写；
 - `tracking.sendContextReviewToken`：消息处理需求在发送前完成最新群聊上下文核对后取得的短期凭证，只对同一需求、发送者会话、目标和正文有效。
 
@@ -410,6 +426,12 @@ QQ 群文本示例：
 }
 ```
 
+### QQ 表情
+
+QQ 系统小表情可在文字中使用 `[CQ:face,id=<QQ 表情 ID>]`。收藏表情先调用 `GET /api/agent/qq/stickers?routeId=<Route ID>&instanceId=<实例 ID>&count=1000`；`instanceId` 在该 Route 只有一个启用账号时可省略，`count` 范围为 1–1000。返回当前账号的 `items { id, description, previewUrl }`，不含原始媒体地址或凭据。`previewUrl` 是同一 Manager 的只读图片接口。旧 NapCat 没有描述接口时，描述为空，选择前查看预览；数量上限和 `completenessUnknown` 不证明收藏列表完整。
+
+发送沿用 `POST /api/agent/send`、原来源和稳定 `deliveryId`，使用 `"payload":{"type":"sticker","stickerId":"<列表中的 id>","text":"可选说明"}`，`channel=napcat`，`params` 与普通群聊/私聊一致。发送时重新从所选账号的收藏列表解析 ID，保留表情图片子类型；表情被移除时返回失败，不跨账号寻找替代品。表情属于现有 `image` 输出能力，沿用 Route 显式设置、引用、文字长度、文风、幂等与回执检查。不能同时提供 `path`、`url` 或 `segments`。QQ 内添加或删除收藏后，下一次查询直接读取当前内容；代码没有预置人格、固定图册或日常随机发送计划。
+
 NapCat 图文混排使用 `payload.type=image` 和有序的 `payload.segments`，一次发送一条群聊或私聊消息：
 
 ```json
@@ -439,6 +461,18 @@ NapCat 图文混排使用 `payload.type=image` 和有序的 `payload.segments`�
 Rabi 使用本机 Chromium、Chrome 或 Edge 的无脚本浏览器进程渲染 Markdown，自动检测常见安装位置；也可通过 `RABIROUTE_MARKDOWN_BROWSER_PATH` 指定浏览器可执行文件的绝对路径。标题、列表、表格、引用和代码块会出现在 PNG 中。原始 HTML 转义，链接不可点击，Markdown 图片语法只显示说明占位，不加载本地或远程资源。单段 Markdown 上限 32 KiB、图片高度 4096 像素、PNG 4 MiB；同一消息的 Markdown 图片合计上限 8 MiB。浏览器不可用或渲染失败时，整条消息不进入 NapCat 发送。
 
 人格可在 `personaConfig.json.languageStyle.styleSkillUrl` 绑定自己的语言风格 Skill。不同人格可以绑定不同 URL。URL 可指向 Skill 目录、`SKILL.md` 或 `references/style-data.json`；Manager 从其中读取程序化 JSON 规则。
+
+### NapCat 长消息确认
+
+在消息路线的 **NapCat → 长消息确认** 中设置 `messageAdapterPolicies.napcat.textConfirmationThreshold`。接受 `0–200000` 的整数；默认 `0` 关闭，用户显式设置后才启用。超过阈值的 `/api/agent/send` 先返回 HTTP `409`、`status=message_length_confirmation_required` 和 `messageLengthValidation`，尚未创建 Outbox 发送或幂等回执，提示不会发到 QQ。
+
+字数按 Unicode 码点计算，包含数字、英文、标点和正文内空格，去除首尾空白与 CQ 控制标记。文字、图片/文件说明、Markdown 及有序图文段中的全部文字均参与计数；自动生成的引用和 @ 标记不计入。
+
+Agent 应先检查和精简。原请求还没有发送回执时，可保留 `deliveryId` 修改正文并重新检查，不携带旧确认凭据。确需保留原文时，用同一 `deliveryId` 和完整原请求再次调用，只增加 `messageLengthConfirmation=messageLengthValidation.confirmationToken`。凭据有效期十分钟，绑定发送身份、目标、原文、附件与当前阈值；改内容、目标、编号或阈值，凭据过期或 Manager 重启后都需重新检查。成功回执按原编号读取，超时或不确定时先核对原回执，不换编号重发。
+
+长度确认与文风校验独立。超限响应也会带当前文风结果；文风失败仍需改写或按下节合同显式确认，`styleValidation=0` 不跳过长度确认。该参数是单次内容复核，不改变连接权限、Route 输出设置或人格风格绑定。
+
+### 外发文风校验
 
 `styleValidation=1` 且校验不通过时，Manager 返回 `409` 和 `status=style_confirmation_required`，附带规则编号、段落、原因和命中证据，消息尚未进入 Outbox。Agent 确认原文符合本次需求后，使用同一 `deliveryId` 重发，并把 `styleValidation` 改为 `0`。这次跳过不修改人格绑定，后续发送恢复默认校验。
 
@@ -697,6 +731,14 @@ NapCat 群回复另按 `routeId + groupId + replyToMessageId` 做短时保护。
 ```http
 GET /api/agent/send/receipts/:deliveryId
 ```
+
+原 ID 的 `in_progress` 表示持久回执尚无终态且执行租约仍活跃，不是字节进度。原执行已结束或租约过期但没有终态时，只读查询返回 `uncertain`，不改写持久回执。文件上传成功但附带文字未确认时，不能把整个请求标成成功。禁止换 ID 自动重发。
+
+回执维护使用 `POST /api/agent/send/receipts/:deliveryId/verify`（只读核验）或 `POST /api/agent/send/receipts/:deliveryId/settle`（凭完整原发送证据受控结算）。JSON 正文必须且只能包含 `{ "originalRequest": <原始 POST /api/agent/send 请求> }`；保留全部原字段及原 deliveryId，摘要不一致返回冲突。这两个接口均不发送文件或补发文字。`platformVerification=unknown` 不证明未送达；缺少完整原证据时不能结算。`503 AGENT_SEND_MAINTENANCE_UNAVAILABLE` 表示运行版本未装配维护能力，不是 QQ 拒绝发送或功能许可不足。
+
+核验诊断用 `evidence.historyState` 区分 `missing`、`read_failed`、`oversized`、`changed`、`damaged`、`request_not_found`、`terminal_missing` 和 `completed`。可信历史已找到原请求但没有整次终态时是 `reason=terminal_unproven`，不是读取失败。`binding_missing` 与 `missingBindingFields` 表示原上传 owner 记录确实缺字段；`binding_capability_unavailable`／`platform_capability_unavailable` 表示处理器未装配相应能力，不能解释成远端 Agent 身份错误。原账号及绑定 revision 仅从原 ID 和摘要匹配的 owner 上传记录读取；旧记录缺失时不能拿当前账号补造。新上传记录在发送当时前后核对身份及配置后保存证据；文件存在仍不证明内容 SHA 或配套文字。`state=verified` 只表示核验动作完成。
+
+上传和外发分开确认：`PUT /api/agent/uploads/:uploadId` 上传原始字节；同路径 `GET` 只回读已提交文件元数据，不提供百分比、速率或 ETA。完成上传后以 `payload.fileId` 和 `payload.fileSha256` 调用 `POST /api/agent/send`，再以上述原 deliveryId 查询外发回执。
 
 如果只有消息端回执 ID，可以按渠道反查最多 100 条匹配记录：
 

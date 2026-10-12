@@ -14,6 +14,20 @@ function sample(template: string): string {
   });
 }
 
+test("history discovery exposes response coverage and scan cost without inventing pagination", () => {
+  const operation = listAgentApiOperations().find(item => item.pathTemplate === "/api/roles/:roleId/message-endpoint-history")!;
+  assert.equal(operation.help.limitations, operation.limitations);
+  const help = operation.help.limitations.join("\n");
+  assert.match(help, /最多 200/);
+  assert.match(help, /count 仅本次返回数/);
+  assert.match(help, /少于 limit 也不能证明完整/);
+  assert.match(help, /减小 limit 或增加关键词不降低扫描量/);
+  assert.match(help, /from\/to/);
+  assert.match(help, /同秒多条会漏/);
+  assert.equal(authorize("GET", "/api/roles/example/message-endpoint-history?from=1767225600&to=1767229200&limit=10").allowed, true);
+  assert.equal(authorize("GET", "/api/roles/example/message-endpoint-history?cursor=example").allowed, false);
+});
+
 test("vacuum diagnostics and trajectory are discoverable read operations without arbitrary RPC",()=>{
   const root="/api/agent/xiaomi-home/vacuum-cloud";
   for(const suffix of ["/plugin-information?deviceId=123&sdkVersion=10112","/plugin-package?deviceId=123","/trajectory?deviceId=123&poseId=1","/position?deviceId=123&region=cn"]){

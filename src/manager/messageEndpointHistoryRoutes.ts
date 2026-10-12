@@ -18,6 +18,21 @@ export function handleMessageEndpointHistoryApi(request: http.IncomingMessage, u
   const match = url.pathname.match(/^\/api\/roles\/([^/]+)\/message-endpoint-history$/);
   if (!match) return false;
   if (request.method !== "GET") { context.json(response, 405, { code: -1, message: "GET is required" }); return true; }
+  if (url.searchParams.has("cursor") || url.searchParams.has("offset")) {
+    context.json(response, 400, { code: -1, errorCode: "MESSAGE_HISTORY_PAGINATION_UNSUPPORTED",
+      message: "This endpoint returns a bounded excerpt and does not support cursor or offset pagination.",
+      repair: "Use conversation and Unix-second from/to filters for excerpts; verify a complete source before full-history statistics.", retryable: false });
+    return true;
+  }
+  const from = url.searchParams.get("from");
+  const to = url.searchParams.get("to");
+  if ([from, to].some(value => value !== null && (!value.trim() || !Number.isFinite(Number(value))))
+    || (from !== null && to !== null && Number(from) > Number(to))) {
+    context.json(response, 400, { code: -1, errorCode: "MESSAGE_HISTORY_TIME_RANGE_INVALID",
+      message: "from/to must be finite Unix seconds, with from <= to when both are supplied.",
+      repair: "Convert the requested time window to Unix seconds; omit unused bounds instead of supplying empty or formatted dates.", retryable: false });
+    return true;
+  }
   try {
     const roleId = decodeURIComponent(match[1]);
     const roleDir = context.roleDirectory(roleId);
@@ -35,7 +50,11 @@ export function handleMessageEndpointHistoryApi(request: http.IncomingMessage, u
       read: signal => context.queryHistory(roleDir, query, { signal }),
       json: context.json,
       respond: data => context.json(response, 200, { code: 0, data: { entries: data, count: data.length, coverage: {
-        roleId, includeArchives: query.includeArchives, adapter: query.adapter || null, channel: query.channel || null
+        roleId, includeArchives: query.includeArchives, adapter: query.adapter || null, channel: query.channel || null,
+        recordScope: "saved_role_messages", resultMode: "latest_matches", completenessUnknown: true, paginationSupported: false,
+        limit: query.limit, maxChars: query.maxChars,
+        from: Number.isFinite(query.from) ? query.from : null, to: Number.isFinite(query.to) ? query.to : null,
+        limitReducesArchiveScan: false
       } } })
     });
   } catch (error) {

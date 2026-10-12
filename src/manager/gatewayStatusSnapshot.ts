@@ -33,6 +33,8 @@ export class GatewayStatusSnapshotService {
     load(statusPath: string, signal: AbortSignal): Promise<Record<string, unknown>>;
     now?: () => number;
     refreshIntervalMs?: number;
+    /** Allows sparse supervisor reads plus bounded refresh latency; not a WS heartbeat deadline. */
+    maxAgeMs?: number;
   }) {}
 
   read(gatewayId: string, statusPath: string): Record<string, unknown> {
@@ -55,12 +57,17 @@ export class GatewayStatusSnapshotService {
     if (!this.stopped && !entry.controller && now - entry.lastAttempt >= (this.options.refreshIntervalMs ?? 5_000)) {
       this.refresh(gatewayId, entry, now);
     }
+    const refreshedAt = Date.parse(entry.refreshedAt || "");
+    const ageMs = now - refreshedAt;
+    const fresh = !this.stopped && Boolean(entry.value) && entry.error === undefined
+      && Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= (this.options.maxAgeMs ?? 60_000);
     return {
       ...structuredClone(entry.value ?? { napcat: { connected: false } }),
       statusPath,
       gatewayStatusSnapshot: {
         state: this.stopped ? "stopped" : entry.controller ? entry.value ? "refreshing" : "warming" : entry.error ? "stale" : entry.value ? "ready" : "warming",
         refreshedAt: entry.refreshedAt,
+        fresh,
         error: entry.error
       }
     };

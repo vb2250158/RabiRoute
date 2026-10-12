@@ -21,6 +21,7 @@ test("HTTP enrollment, explicit admin grant, resources and offline revocation sh
   const server = http.createServer((request, response) => {
     const handled = handleLanAgentApi(request, new URL(request.url!, "http://fixture.invalid"), response, {
       authority, registry, resources: new AgentResourceCatalog({ rootDir: root, publicDocs: [] }), enabled: () => true,
+      managerIdentity: () => ({ guid: "fixture-stable-guid", applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-instance", health: { live: true, requiredReady: true, state: "healthy" } }),
       releases: {} as LanAgentReleaseStore,
       isManagementRequestAuthorized: req => req.headers["x-rabiroute-webgui-token"] === "fixture-admin",
       isReleaseRequestAuthorized: () => false,
@@ -72,7 +73,14 @@ test("HTTP enrollment, explicit admin grant, resources and offline revocation sh
     assert.equal((await fetch(`${base}/api/lan-agent/resources/read?id=..%2Fauthority.json`, { headers })).status, 400);
     authority.setAgentEnabled("node-fixture", "worker", false);
     assert.equal((await fetch(`${base}/api/lan-agent/resources`, { headers })).status, 403);
-    assert.equal((await fetch(`${base}/api/lan-agent/self`, { headers: { authorization: `Bearer ${token}` } })).status, 200);
+    const selfResponse = await fetch(`${base}/api/lan-agent/self`, { headers: { authorization: `Bearer ${token}` } });
+    assert.equal(selfResponse.status, 200);
+    const self = (await selfResponse.json()).data;
+    assert.equal(self.guid, "fixture-stable-guid");
+    assert.equal(self.applicationGenerationId, "fixture-generation");
+    assert.equal(self.managerInstanceId, "fixture-instance");
+    assert.equal(self.nodeId, "node-fixture");
+    assert.equal(self.connected, false);
   } finally {
     registry.close();
     server.closeAllConnections();

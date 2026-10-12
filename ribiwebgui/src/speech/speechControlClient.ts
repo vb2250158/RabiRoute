@@ -87,8 +87,8 @@ async function responseError(response: Response): Promise<Error> {
   }
 }
 
-async function managerData<T>(pathname: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(pathname, {
+async function readManagerData<T>(pathname: string, init: RequestInit, fetchImpl: typeof fetch): Promise<T> {
+  const response = await fetchImpl(pathname, {
     ...init,
     headers: {
       accept: "application/json",
@@ -110,7 +110,9 @@ async function managerData<T>(pathname: string, init: RequestInit = {}): Promise
   return body.data;
 }
 
-export const speechControlClient = {
+export function createSpeechControlClient(fetchImpl: typeof fetch = (...args) => fetch(...args)) {
+  const managerData = <T>(pathname: string, init: RequestInit = {}) => readManagerData<T>(pathname, init, fetchImpl);
+  return {
   status: (): Promise<SpeechRuntimeStatus> => managerData("/api/speech/status"),
   startRuntime: (): Promise<SpeechRuntimeControlResult> => managerData(
     "/api/speech/runtime/start",
@@ -260,7 +262,7 @@ export const speechControlClient = {
     }
   ),
   async synthesize(command: SpeechSynthesisCommand): Promise<SpeechSynthesisResult> {
-    const response = await fetch("/api/speech/tts", {
+    const response = await fetchImpl("/api/speech/tts", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(command)
@@ -287,7 +289,7 @@ export const speechControlClient = {
     if (routeId) form.append("route_id", routeId);
     form.append("response_format", "verbose_json");
     form.append("timestamp_granularities", "word");
-    const response = await fetch("/api/speech/asr", { method: "POST", body: form });
+    const response = await fetchImpl("/api/speech/asr", { method: "POST", body: form });
     if (!response.ok) throw await responseError(response);
     const value = await response.json() as Record<string, unknown>;
     return {
@@ -304,3 +306,6 @@ export const speechControlClient = {
     };
   }
 };
+}
+
+export const speechControlClient = createSpeechControlClient();

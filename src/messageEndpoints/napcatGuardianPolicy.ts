@@ -27,6 +27,7 @@ const NAPCAT_RELAUNCHABLE_STATES = new Set<string>([
   NapcatState.StartFailed,
   NapcatState.StartTimeout,
   NapcatState.OnebotNotReady,
+  NapcatState.QuickLoginAvailable,
   NapcatState.ProcessOrPortAlreadyPresent
 ]);
 
@@ -37,7 +38,17 @@ export type NapcatGuardianObservation = {
   healthy: boolean;
   /** The check needs a human (QR login, conflict, mismatched account). */
   needsUserAction?: boolean;
+  /** True only after a successful instance-scoped process check confirms absence. */
+  processAbsent?: boolean;
+  /** Owner verified a live login for the exact bound account, not a configured/stale ID. */
+  boundAccountLoggedIn?: boolean;
 };
+
+function hasAutomaticRecoveryEvidence(observation: NapcatGuardianObservation): boolean {
+  return observation.processAbsent === true
+    || observation.state === NapcatState.QuickLoginAvailable
+    || (observation.state === NapcatState.OnebotNotReady && observation.boundAccountLoggedIn === true);
+}
 
 export type NapcatGuardianInstanceState = {
   consecutiveFailures: number;
@@ -82,9 +93,9 @@ export function napcatGuardianDecision(input: Readonly<{
       reason: `需要人工处理（${observation.state}），看护不再自动重试。`
     };
   }
-  // A previous relaunch already concluded that a human must finish the login. Restarting
-  // the process again cannot resolve that and would keep interrupting the operator.
-  if (history.awaitingUserAction) {
+  // A previous human stop survives failed/unknown probes. Only positive recovery
+  // evidence from the owner can release it; endpoint reachability alone cannot.
+  if (history.awaitingUserAction && !hasAutomaticRecoveryEvidence(observation)) {
     return { action: "await-user", reason: history.awaitingUserAction };
   }
   if (!NAPCAT_RELAUNCHABLE_STATES.has(observation.state)) {
@@ -125,7 +136,8 @@ export function napcatGuardianNextState(
 ): NapcatGuardianInstanceState {
   const base: NapcatGuardianInstanceState = {
     ...history,
-    lastState: observation.state
+    lastState: observation.state,
+    awaitingUserAction: hasAutomaticRecoveryEvidence(observation) ? undefined : history.awaitingUserAction
   };
   switch (decision.action) {
     case "healthy":

@@ -152,6 +152,8 @@ export type MessageAdapterPolicy = {
   /** Exact QQ group IDs allowed for Agent metadata reads; independent of output and file-upload policy. */
   readableGroupFileIds?: string[];
   messageGrouping?: MessageGroupingPolicy;
+  /** Visible text characters requiring a second Agent send call; 0 disables the check. */
+  textConfirmationThreshold?: number;
 };
 
 export type MessageAdapterPolicies = Partial<Record<MessageEndpointType, MessageAdapterPolicy>>;
@@ -999,13 +1001,18 @@ export function normalizeMessageAdapterPolicy(
   options: { legacyInputDisabled?: boolean } = {}
 ): Required<MessageAdapterPolicy> {
   const raw = value && typeof value === "object" ? value as MessageAdapterPolicy : {};
+  const textConfirmationThreshold = adapterType === "napcat" ? raw.textConfirmationThreshold ?? 0 : 0;
+  if (!Number.isInteger(textConfirmationThreshold) || textConfirmationThreshold < 0 || textConfirmationThreshold > 200_000) {
+    throw new Error("textConfirmationThreshold must be an integer from 0 to 200000.");
+  }
   return {
     inputEnabled: raw.inputEnabled ?? !options.legacyInputDisabled,
     outputEnabled: raw.outputEnabled ?? true,
     supportedOutputs: normalizePayloadKinds(raw.supportedOutputs, adapterType),
     allowedFileRoots: normalizePathList(raw.allowedFileRoots),
     readableGroupFileIds: adapterType === "napcat" ? normalizeReadableGroupFileIds(raw.readableGroupFileIds) : [],
-    messageGrouping: normalizeMessageGroupingPolicy(raw.messageGrouping, adapterType)
+    messageGrouping: normalizeMessageGroupingPolicy(raw.messageGrouping, adapterType),
+    textConfirmationThreshold
   };
 }
 

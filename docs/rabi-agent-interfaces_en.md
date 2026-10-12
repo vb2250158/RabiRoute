@@ -95,6 +95,23 @@ Query Rabi first for group chats, private messages, and recent feedback. Install
 Currently, `GET <managerBaseUrl>/api/gateways` provides Route diagnostics with recent message summaries in `messageFiles`. The NapCat summary merges group and private messages and returns only the latest 8 entries. Filter by the target Route, group/private conversation, message ID, and time; this is not a complete history search API. `GET /api/roles/{roleId}/chat-history` contains Agent final replies, not QQ group history.
 ### Querying message-endpoint history
 
+**Coverage and cost limits (read before Agent calls)**
+
+- This endpoint searches messages saved by the selected persona. Archives are excluded by default; `includeArchives=1` includes saved archives, without guaranteeing the platform's complete history.
+- Results are the latest matching excerpt in the existing record order. `limit` defaults to 50 and is capped at 200. `maxChars` defaults to and is capped at 200,000; its budget includes text, segments and record overhead, and the first record may exceed it. `count` is the number returned in this response. `coverage` labels the role, archive flag and filters; neither provides a total or proof of completeness. The character budget may also produce fewer than `limit` entries.
+- There is no `cursor`, `offset`, `nextCursor` or complete-history end marker. Do not compute monthly distributions from this excerpt or simulate pagination by subtracting one second from its earliest timestamp: messages sharing that second would be lost. Verify the source and time coverage before full-history statistics; managed QQ history pagination also does not guarantee all platform history.
+- Response `coverage` explicitly includes `recordScope=saved_role_messages`, `resultMode=latest_matches`, `completenessUnknown=true`, `paginationSupported=false`, effective `limit/maxChars/from/to` and `limitReducesArchiveScan=false`. Supplying `cursor` or `offset` returns 400 `MESSAGE_HISTORY_PAGINATION_UNSUPPORTED` before storage access, preventing repeated retrieval of the same excerpt.
+- Supplied `from/to` must be finite Unix-second numbers, with `from <= to` when both are present. Empty values, formatted dates, `NaN` and reversed ranges return 400 `MESSAGE_HISTORY_TIME_RANGE_INVALID` before storage access, preventing invalid bounds from being silently ignored and scanning every archive. Omitted bounds remain supported.
+- A cold query still reads candidate archives; a small `limit` or keywords do not reduce file scanning. Start with `target` or `conversationKey`, Unix-second `from/to`, and usually `limit=10`, then expand as needed. Avoid concurrent full-history scans. After 503 or timeout, narrow the scope or use a verified official source under the existing fallback rules; do not retry the same expensive query indefinitely.
+- Cold archive reads may use a bounded client budget of up to 35 seconds, covering the worker's 30-second execution budget and some communication time. Queueing is additional, so completion within the client deadline is not guaranteed. Early disconnects cancel reading; do not repeatedly restart a cold scan with an insufficient timeout. Configure 35 seconds in the client, not as a query parameter. Host, `/meta` and ready knowledge-index requests normally retain a 5-second budget.
+- `GET /api/agent/help?path=/api/roles/%3AroleId/message-endpoint-history` exposes these limits. The Help `path` filter takes the catalog's `pathTemplate`, retaining `:roleId` rather than substituting a real role ID.
+
+Reader processes load dependencies per task: message search and knowledge-index updates do not first initialize unrelated diagnostics, delivery or media modules. Message readers cache unchanged archives and validate file identity, size and modification times; current messages are reread on every query. The cache retains at most 128 files with a 384 MiB estimated budget and evicts entries idle for 120 seconds on the next access. Oversized files are read without caching. Edits, replacements, deletions and process replacement require fresh reads. Returned records are copied so callers cannot modify the cache.
+
+Knowledge indexing publishes completed file-read batches and replays newer committed records by identity; filesystem notifications schedule incremental reconciliation. Continuous plan or memory updates no longer discard every batch and prevent initial readiness. Read failures retain the published result and error state rather than pretending to produce a complete empty index.
+
+History searches normalize message fields once, reuse the current messages already read by the request, and remove contained archive snapshots after sorting their sequence ranges. Deduplication still precedes keyword filtering; time windows, character budgets, and result ordering remain unchanged. Synchronous internal calls in production builds reuse the request's code-revision lease, while asynchronous work and iterators retain independent leases. Performance acceptance must use the production reader process rather than uninstrumented source timings.
+
 Processing agents recovering QQ group, QQ private-chat, or other message-endpoint context use the read-only API:
 
 ```http
@@ -103,9 +120,7 @@ GET /api/roles/{roleId}/message-endpoint-history
 
 Common parameters include `query` (multiple terms separated by whitespace, ASCII comma, Chinese comma, or enumeration comma), `match=any|all` (default `any`), `adapter`, `kind=group|private`, `sender`, `target`, `conversationKey`, `from`, `to`, `includeArchives=1`, and `limit`. When the user says “the last hour” or another relative time range, convert it to Unix-second `from` (and `to` when needed); when the user asks for “all messages”, omit `query` rather than inventing keywords. `limit` is only a response cap, not proof of complete coverage; an archive query without a time range scans the full archive and should be avoided for large histories. The response contains `entries`, `count`, and `coverage`; records retain endpoint, group/private conversation key, sender, target, message ID, reply ID, and attachment summaries. `kind=group` limits results to inbound group messages and `kind=private` to inbound private messages; do not treat `reply_sent` outbound replies as original user feedback.
 
-Queries run in a bounded interactive reader process, separate from catalog maintenance work. Client disconnects cancel queued work or terminate a process still performing the read. `channel` and `maxChars` are also supported: `limit` defaults to 50 and is capped at 200; `maxChars` defaults to and is capped at 200,000. Success shapes and filters are unchanged. A busy reader pool, timeout, or unconfirmed child termination returns HTTP 503; business-input errors remain 400. Failures never become a false zero-record result. Isolation does not guarantee that arbitrary history sizes finish before the deadline, nor establish that other synchronous paths or live health have been verified.
-
-Queries run in a bounded interactive reader process, separate from catalog maintenance work. Client disconnects cancel queued work or terminate a process still performing the read. `channel` and `maxChars` are also supported: `limit` defaults to 50 and is capped at 200; `maxChars` defaults to and is capped at 200,000. Success shapes and filters are unchanged. A busy reader pool, timeout, or unconfirmed child termination returns HTTP 503; business-input errors remain 400. Failures never become a false zero-record result. Isolation does not guarantee that arbitrary history sizes finish before the deadline, nor establish that other synchronous paths or live health have been verified.
+Queries run in a bounded interactive reader process, separate from catalog maintenance work. Client disconnects cancel queued work or terminate a process still performing the read. `channel` and `maxChars` are also supported: `limit` defaults to 50 and is capped at 200; `maxChars` defaults to and is capped at 200,000. Existing entries/count fields and filters remain compatible; coverage adds the limits above. A busy reader pool, timeout, or unconfirmed child termination returns HTTP 503; business-input errors remain 400. Failures never become a false zero-record result. Isolation does not guarantee that arbitrary history sizes finish before the deadline, nor establish that other synchronous paths or live health have been verified.
 
 For a new session, extract the object and keywords from the user message first, then query this API for endpoint history. Query `knowledge/search` separately for plans, memory, or original-task ownership, and finally verify current files, configuration, code, or runtime evidence. Always inspect coverage with the result; an empty result does not prove that the message never existed.
 
@@ -369,6 +384,12 @@ POST /api/agent/send
 }
 ```
 
+### QQ stickers
+
+Built-in QQ faces remain available in text as `[CQ:face,id=<QQ face ID>]`. Query account favorites with `GET /api/agent/qq/stickers?routeId=<Route ID>&instanceId=<instance ID>&count=1000`. The instance may be omitted when exactly one account is enabled; count is 1–1000. Each item contains `id`, `description`, and a same-Manager `previewUrl`. Native media URLs and credentials are not exposed. Older NapCat versions return empty descriptions; inspect the preview before choosing. The bound and `completenessUnknown` do not establish a complete collection.
+
+Use the existing `POST /api/agent/send`, original source, and stable `deliveryId` with `channel=napcat`, ordinary group/private parameters, and `"payload":{"type":"sticker","stickerId":"<ID from the list>","text":"optional caption"}`. The sender resolves the ID against that account's current favorites and preserves the sticker image subtype. Removed favorites fail without switching accounts. This uses the existing `image` output policy, quoting, text-length and style checks, idempotency, and receipt verification. Do not combine it with `path`, `url`, or `segments`. Adding or removing QQ favorites is reflected in the next read; no persona, fixed album, or random sending schedule is built into the implementation.
+
 For ordered text and multiple images in one NapCat group or private message, use `payload.type=image` with `payload.segments`:
 
 ```json
@@ -398,6 +419,18 @@ To render one Markdown document as an image, send `"payload":{"type":"markdown",
 Rabi renders Markdown with a local script-disabled Chromium, Chrome, or Edge process. Common installation locations are detected automatically; `RABIROUTE_MARKDOWN_BROWSER_PATH` may specify an absolute browser executable path. Headings, lists, tables, quotes, and code blocks appear in the PNG. Raw HTML is escaped, links are inert, and Markdown image syntax produces an alt-text placeholder without loading local or remote resources. Each Markdown segment is limited to 32 KiB of source, 4096 image pixels in height, and a 4 MiB PNG; Markdown images in one message are limited to 8 MiB combined. If the browser is unavailable or rendering fails, nothing is sent to NapCat.
 
 `styleValidation` is the enum `1 | 0` and defaults to `1`. A persona may bind its own style Skill through `personaConfig.json.languageStyle.styleSkillUrl`; different personas may use different URLs. The URL may point to a Skill directory, `SKILL.md`, or `references/style-data.json`.
+
+### NapCat long-message confirmation
+
+Set `messageAdapterPolicies.napcat.textConfirmationThreshold` under **NapCat → Long-message confirmation** on the message Route. It accepts an integer from `0` to `200000`; `0` is the default and disables this check until the user explicitly configures it. An over-threshold `/api/agent/send` returns HTTP `409`, `status=message_length_confirmation_required`, and `messageLengthValidation` before creating any Outbox send or idempotency receipt. The warning goes to the calling Agent, not QQ.
+
+Count Unicode code points, including numbers, letters, punctuation and interior spaces, after removing surrounding whitespace and CQ control tags. Text, image/file captions, Markdown, and all text in ordered media segments participate. Automatically generated quote and mention controls do not count.
+
+Review and shorten first. While no send receipt exists, retain the `deliveryId`, change the text and check again without the old confirmation. If the original wording is necessary, submit the full original request with the same `deliveryId` a second time, adding only `messageLengthConfirmation=messageLengthValidation.confirmationToken`. The token lasts ten minutes and binds the sender, destination, text, attachment and current threshold. Changes to any of those, a different delivery ID, expiry or a Manager restart require another check. Read successful delivery by its original ID; reconcile timeout or uncertainty before any retry.
+
+Length confirmation and style validation are independent. An over-length response also includes the current style result. A failed style check still requires rewriting or the explicit review below; `styleValidation=0` cannot skip length confirmation. This is a single-message review parameter, not a change to connection permissions, Route output policy or persona style binding.
+
+### Outbound style validation
 
 With `styleValidation=1`, a failed check returns `409` with `status=style_confirmation_required`, rule IDs, paragraphs, reasons, and evidence. No Outbox send has started. After confirming that the wording is intentional for this message, the Agent may retry the same `deliveryId` with `styleValidation=0`. This bypass applies only to that request and does not remove the persona binding.
 
@@ -616,6 +649,14 @@ After a POST timeout or an empty receipt, query the original ID first. An absent
 ```http
 GET /api/agent/send/receipts/:deliveryId
 ```
+
+`in_progress` means the durable receipt has no terminal result and its execution lease remains active; it is not byte-level progress. When the original execution has ended or its lease expired without a terminal result, read-only queries return `uncertain` without rewriting the durable receipt. A successful file upload with an unconfirmed caption does not prove completion of the entire request. Never automatically resend with a new ID.
+
+Receipt maintenance uses `POST /api/agent/send/receipts/:deliveryId/verify` (read-only observation) or `POST /api/agent/send/receipts/:deliveryId/settle` (controlled settlement using complete original evidence). The JSON body must contain exactly `{ "originalRequest": <original POST /api/agent/send request> }`. Preserve every original field and deliveryId; a digest mismatch is a conflict. Neither endpoint sends files or captions. `platformVerification=unknown` does not prove non-delivery; incomplete original evidence cannot settle a receipt. `503 AGENT_SEND_MAINTENANCE_UNAVAILABLE` means the running release has not wired maintenance capabilities, not a QQ rejection or missing feature permission.
+
+Verification diagnostics use `evidence.historyState` to distinguish `missing`, `read_failed`, `oversized`, `changed`, `damaged`, `request_not_found`, `terminal_missing`, and `completed`. A readable original request without the complete terminal operation is `reason=terminal_unproven`, not a read failure. `binding_missing` and `missingBindingFields` describe absent fields in the original upload owner's record; `binding_capability_unavailable` and `platform_capability_unavailable` describe unwired capabilities, not a remote Agent identity error. Original account and binding revision come only from owner upload records matching the original ID and digest; current accounts cannot backfill legacy evidence. New upload records capture identity and configuration evidence checked before and after the upload. File presence still proves neither content SHA nor the caption. `state=verified` means the observation completed, not delivery success.
+
+Confirm upload and external delivery separately: `PUT /api/agent/uploads/:uploadId` accepts raw bytes; `GET` on the same path returns committed file metadata only, with no percentage, speed, or ETA. After upload, call `POST /api/agent/send` with `payload.fileId` and `payload.fileSha256`, then query the original deliveryId receipt above.
 
 When only the endpoint receipt ID is available, query up to 100 matching records by channel:
 

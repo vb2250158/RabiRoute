@@ -51,7 +51,9 @@ function metadataIdentity(raw) {
   return raw?.data && typeof raw.data === "object" ? raw.data : raw;
 }
 
-const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+// Only the dedicated skill-download metadata reader is bounded here; public
+// responses use the caller's optional maxResponseBytes or streaming consumer.
+const MAX_METADATA_BYTES = 4 * 1024 * 1024;
 export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
 const UPLOAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -117,6 +119,59 @@ function relativeTarget(origin, value) {
   return url;
 }
 
+// Deny transport-owned headers, not business capabilities. New public headers
+// pass without a client release; authentication, hop proofs and framing do not.
+const TRANSPORT_HEADERS = new Set([
+  "authorization", "proxy-authorization", "proxy-authenticate", "www-authenticate", "cookie", "set-cookie",
+  "host", "connection", "keep-alive", "te", "trailer", "transfer-encoding", "upgrade", "content-length", "expect",
+  "forwarded", "via", "x-real-ip", "x-rabiroute-agent-id", "x-rabiroute-node-id", "x-rabiroute-host-token", "x-rabiroute-webgui-token", "x-rabiroute-peer-proxy", "x-rabiroute-relay-proxy",
+  "x-rabilink-token", "x-rabilink-resource-key", "x-rabilink-resource-owner", "x-rabiroute-expected-generation", "x-rabiroute-expected-application-generation-id", "x-rabiroute-expected-manager-instance-id"
+]);
+function transportHeader(name) {
+  return TRANSPORT_HEADERS.has(name) || /^(?:proxy-|sec-|x-forwarded-|x-rabilink-(?:internal-|tunnel-)|x-rabiroute-internal-)/.test(name);
+}
+function callerHeaders(headers) {
+  if (!headers || typeof headers !== "object" || Array.isArray(headers)) throw new Error("Manager headers must be an object.");
+  const result = Object.create(null);
+  for (const [key, value] of Object.entries(headers)) {
+    const name = key.toLowerCase();
+    if (!/^[!#$%&'*+.^_`|~0-9a-z-]+$/.test(name) || transportHeader(name)) throw new Error("Caller cannot override a transport-owned or invalid header.");
+    if (typeof value !== "string" || /[^\t\x20-\x7e\x80-\xff]/.test(value)) throw new Error("Manager header values must be valid HTTP strings.");
+    if (Object.hasOwn(result, name)) throw new Error("Duplicate Manager header.");
+    result[name] = value;
+  }
+  return result;
+}
+function requestOptions(method, options) {
+  const headers = callerHeaders(options.headers ?? {});
+  const bodies = ["body", "bodyText", "bodyBytes", "bodyStream"].filter(key => options[key] !== undefined);
+  if (bodies.length > 1) throw new Error("Choose exactly one Manager request body format.");
+  if (bodies.length && ["GET", "HEAD"].includes(method)) throw new Error("Read requests cannot carry a body.");
+  if (options.bodyText !== undefined && typeof options.bodyText !== "string") throw new Error("bodyText must be a string.");
+  if (options.bodyBytes !== undefined && !(options.bodyBytes instanceof Uint8Array) && !(options.bodyBytes instanceof ArrayBuffer)) throw new Error("bodyBytes must be bytes.");
+  if (options.bodyStream !== undefined && !options.bodyStream?.[Symbol.asyncIterator] && !options.bodyStream?.getReader) throw new Error("bodyStream must be an async iterable or ReadableStream.");
+  const responseMode = options.responseMode ?? "text";
+  if (!["text", "bytes", "stream"].includes(responseMode)) throw new Error("Unknown Manager response mode.");
+  if (options.maxResponseBytes !== undefined && (!Number.isSafeInteger(options.maxResponseBytes) || options.maxResponseBytes <= 0)) throw new Error("maxResponseBytes must be a positive byte budget.");
+  if (responseMode === "stream" && typeof options.onChunk !== "function") throw new Error("Stream response requires an explicit onChunk consumer.");
+  if (options.onResponse !== undefined && typeof options.onResponse !== "function") throw new Error("onResponse must be a function.");
+  if (options.timeoutMs !== undefined && (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0 || options.timeoutMs > 0xffffffff)) throw new Error("timeoutMs must be a positive supported millisecond deadline.");
+  return { ...options, headers, responseMode };
+}
+// Also race injected consumers/readers: cancellation must not wait for a stalled
+// body or callback. The original rejection remains observed by Promise.race.
+async function withSignal(operation, signal) {
+  signal.throwIfAborted();
+  let listener;
+  try {
+    return await Promise.race([operation(), new Promise((_, reject) => {
+      listener = () => reject(new Error("Manager request cancelled or timed out."));
+      signal.addEventListener("abort", listener, { once: true });
+      if (signal.aborted) listener();
+    })]);
+  } finally { signal.removeEventListener("abort", listener); }
+}
+
 async function boundedResponse(response) {
   const reader = response.body?.getReader();
   if (!reader) return "";
@@ -127,7 +182,7 @@ async function boundedResponse(response) {
       const result = await reader.read();
       if (result.done) break;
       bytes += result.value.byteLength;
-      if (bytes > MAX_RESPONSE_BYTES) {
+      if (bytes > MAX_METADATA_BYTES) {
         await reader.cancel();
         throw new Error("Manager response exceeds the client limit.");
       }
@@ -149,9 +204,10 @@ export function createManagerClient({ managerUrl, credential, agentId, config, c
   if (localHost) {
     if (!endpointSession || credential || agentId || config || discover) throw new Error("Local Host transport requires an explicit Host endpoint session without remote credentials.");
   } else if (!credential || !agentId) throw new Error("A node credential and Agent identity are required.");
-  async function request(method, target, { body, headers = {} } = {}, upload, requestOrigin = origin) {
+  async function request(method, target, options = {}, upload, requestOrigin = origin, verifiedIdentity) {
+    const { body, bodyText, bodyBytes, bodyStream, headers = {}, responseMode = "text", onChunk, onResponse } = options;
     method = String(method).toUpperCase();
-    if (!["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"].includes(method)) throw new Error("Unsupported Manager method.");
+    if (!["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"].includes(method)) throw new Error("Unsupported Manager method.");
     const url = relativeTarget(requestOrigin, target);
     if (localHost && (url.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname))) throw new Error("Local Host transport requires HTTP loopback.");
     const outgoing = localHost ? { accept: "application/json" } : {
@@ -159,16 +215,15 @@ export function createManagerClient({ managerUrl, credential, agentId, config, c
       "x-rabiroute-agent-id": agentId,
       accept: "application/json"
     };
-    for (const [key, value] of Object.entries(headers)) {
-      const normalized = key.toLowerCase();
-      if (!["if-match", "idempotency-key"].includes(normalized) || typeof value !== "string" || /[\r\n]/.test(value)) {
-        throw new Error("Only If-Match and Idempotency-Key may be supplied by the caller.");
-      }
-      outgoing[normalized] = value;
+    Object.assign(outgoing, callerHeaders(headers));
+    if (verifiedIdentity) {
+      outgoing["x-rabiroute-expected-application-generation-id"] = verifiedIdentity.applicationGenerationId;
+      outgoing["x-rabiroute-expected-manager-instance-id"] = verifiedIdentity.managerInstanceId;
     }
-    if (body !== undefined) {
+    const payload = body !== undefined ? (typeof body === "string" ? body : JSON.stringify(body)) : bodyText ?? bodyBytes ?? bodyStream;
+    if (payload !== undefined) {
       if (method === "GET" || method === "HEAD") throw new Error("Read requests cannot carry a body.");
-      outgoing["content-type"] = "application/json";
+      outgoing["content-type"] ??= body !== undefined ? "application/json" : bodyText !== undefined ? "text/plain;charset=UTF-8" : "application/octet-stream";
     }
     if (upload) {
       outgoing["content-type"] = "application/octet-stream";
@@ -178,34 +233,61 @@ export function createManagerClient({ managerUrl, credential, agentId, config, c
       outgoing["content-length"] = String(upload.size);
     }
     let response;
+    let reader;
+    let bytesReceived = 0;
+    const chunks = [];
+    const deadline = upload?.signal ?? AbortSignal.timeout(options.timeoutMs ?? timeoutMs);
+    const signal = AbortSignal.any([deadline, ...(upload?.signal ? [upload.signal] : []), ...(options.signal ? [options.signal] : [])]);
+    const responseHeaders = () => Object.fromEntries([...response.headers].filter(([name]) => !transportHeader(name) || ["content-length", "transfer-encoding", "connection", "keep-alive", "trailer"].includes(name)));
     try {
-      response = await fetchImpl(url, {
-        method, headers: outgoing, redirect: "error", signal: upload?.signal ?? AbortSignal.timeout(timeoutMs),
-        ...(upload ? { body: upload.stream, duplex: "half" } : body === undefined ? {} : { body: typeof body === "string" ? body : JSON.stringify(body) })
-      });
-      if (response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() === "application/zip") {
-        await response.body?.cancel();
-        throw new Error("Binary ZIP responses require the explicit download operation.");
+      response = await withSignal(() => fetchImpl(url, {
+        method, headers: outgoing, redirect: "error", signal,
+        ...(upload ? { body: upload.stream, duplex: "half" } : payload === undefined ? {} : { body: payload, ...(bodyStream ? { duplex: "half" } : {}) })
+      }), signal);
+      const type = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
+      const textual = !type || type.startsWith("text/") || /(?:^application\/(?:json|xml|javascript|x-www-form-urlencoded)$|\+(?:json|xml)$)/.test(type);
+      if (responseMode === "text" && (!textual || type === "text/event-stream")) {
+        return { statusCode: response.status, ok: false, body: "Binary or event-stream response requires explicit bytes or stream consumption.", headers: responseHeaders(), transportError: "RESPONSE_MODE_REQUIRED", noReplay: true, uncertain: !["GET", "HEAD", "OPTIONS"].includes(method) };
       }
-      const text = await boundedResponse(response);
+      if (onResponse) await withSignal(() => onResponse({ statusCode: response.status, ok: response.ok, headers: responseHeaders() }), signal);
+      reader = response.body?.getReader();
+      while (reader) {
+        const chunk = await withSignal(() => reader.read(), signal);
+        if (chunk.done) break;
+        bytesReceived += chunk.value.byteLength;
+        if (options.maxResponseBytes !== undefined && bytesReceived > options.maxResponseBytes) throw new Error("Manager response exceeds the caller byte budget.");
+        const bytes = Buffer.from(chunk.value);
+        if (responseMode === "stream") await withSignal(() => onChunk(bytes), signal);
+        else chunks.push(bytes);
+      }
+      const bytes = responseMode === "stream" ? undefined : Buffer.concat(chunks);
+      const text = responseMode === "text" ? bytes.toString("utf8") : undefined;
       let data;
       try { data = JSON.parse(text); } catch { data = undefined; }
       return {
-        statusCode: response.status, ok: response.ok, body: text,
-        headers: Object.fromEntries(["etag", "idempotency-key", "x-request-id"].flatMap(key => response.headers.has(key) ? [[key, response.headers.get(key)]] : [])),
-        uncertain: !["GET", "HEAD"].includes(method) && (response.status >= 500 || data?.uncertain === true)
+        statusCode: response.status, ok: response.ok, ...(text !== undefined ? { body: text } : bytes ? { bodyBytes: bytes } : {}),
+        headers: responseHeaders(), bytesReceived, responseMode, noReplay: responseMode === "stream" || bodyStream !== undefined,
+        uncertain: !["GET", "HEAD", "OPTIONS"].includes(method) && (response.status >= 500 || data?.uncertain === true)
       };
     } catch {
-      // Do not echo transport errors that may contain request headers. Never replay writes.
-      return { statusCode: response?.status ?? 0, ok: false, body: "Manager transport failed; inspect authoritative state before retrying a mutation.", headers: {}, uncertain: !["GET", "HEAD"].includes(method) };
+      // Do not echo transport/consumer errors that may contain private headers.
+      return { statusCode: response?.status ?? 0, ok: false, body: "Manager transport or consumer failed; inspect authoritative state before retrying a mutation.", headers: response ? responseHeaders() : {}, bytesReceived,
+        transportError: signal.aborted ? "CANCELLED" : "TRANSPORT", noReplay: responseMode === "stream" || bodyStream !== undefined,
+        uncertain: !["GET", "HEAD", "OPTIONS"].includes(method) };
+    } finally {
+      if (reader) { try { reader.cancel().catch(() => {}); reader.releaseLock(); } catch { /* Preserve original receipt. */ } }
+      else { try { response?.body?.cancel().catch(() => {}); } catch { /* Preserve original receipt. */ } }
     }
   }
   async function verifiedRequest(method, target, options = {}, upload) {
-    const diagnostic = target === "/meta" && String(method).toUpperCase() === "GET";
+    method = String(method).toUpperCase();
+    if (!["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"].includes(method)) throw new Error("Unsupported Manager method.");
+    options = requestOptions(method, options);
+    const diagnostic = target === "/meta" && method === "GET";
     // Some GET operations touch persisted state (for example recent-memory views).
     // Callers may disable replay, but cannot enable replay for a mutation method.
     const touchesRecentMemory = /^\/(?:api\/)?roles\/[^/]+\/memory\/recent\/[^/]+$/.test(new URL(target, origin).pathname);
-    const read = ["GET", "HEAD"].includes(String(method).toUpperCase()) && options.replaySafe !== false && !touchesRecentMemory;
+    const read = ["GET", "HEAD", "OPTIONS"].includes(method) && options.replaySafe !== false && !touchesRecentMemory && options.responseMode !== "stream" && options.bodyStream === undefined && options.onResponse === undefined;
     relativeTarget(origin, target);
     let endpoint;
     if (session) endpoint = await session.ensure({ diagnostic });
@@ -221,21 +303,66 @@ export function createManagerClient({ managerUrl, credential, agentId, config, c
       const requestOrigin = managerOrigin(endpoint.managerUrl);
       const identity = endpoint.meta || {};
       // Authenticated exact /meta remains an Agent authorization check; public preflight is credential-free.
-      const result = await request(method, target, options, upload, requestOrigin);
+      const result = await request(method, target, options, upload, requestOrigin, identity);
       let current;
       try { const response = await request("GET", "/meta", {}, undefined, requestOrigin); current = response.ok ? metadataIdentity(JSON.parse(response.body)) : undefined; } catch { current = undefined; }
       const identityChanged = !current || !sameIdentity(current, identity);
-      if (read && session && attempt === 0 && (identityChanged || result.statusCode === 0 || result.statusCode >= 500)) {
+      if (read && !result.noReplay && !options.signal?.aborted && session && attempt === 0 && (identityChanged || result.statusCode === 0 || result.statusCode >= 500 || result.transportError)) {
         try { endpoint = await session.ensure({ diagnostic, forceDiscovery: true }); continue; } catch { /* Return the original failed read; never replay a mutation. */ }
       }
-      return { ...result, uncertain: result.uncertain || (!read && (identityChanged || result.statusCode === 0 || result.statusCode >= 500)), identityChanged,
+      return { ...result, uncertain: Boolean(result.uncertain || (!read && (identityChanged || result.statusCode === 0 || result.statusCode >= 500 || result.transportError))), identityChanged,
         identity: { applicationGenerationId: identity.applicationGenerationId, managerInstanceId: identity.managerInstanceId } };
     }
   }
-  async function invoke(method, target, options = {}) {
+  /** Same-origin public HTTP transport. Streams are consumed with backpressure,
+   * never reconnected. A caller's signal/deadline owns their lifetime. Buffered
+   * reads may replay once unless replaySafe:false; mutations never replay.
+   * outputPath saves bytes atomically without overwrite or printing binary. */
+  async function publicRequest(method, target, options = {}) {
     if (isSkillDownloadTarget(target)) throw new Error("Skill download requires the explicit download operation and local output path.");
-    return verifiedRequest(method, target, options);
+    if (options.outputPath === undefined) return verifiedRequest(method, target, options);
+    if (typeof options.outputPath !== "string" || !options.outputPath.trim() || options.outputPath.includes("\0")) throw new Error("Output requires an explicit local path.");
+    if (options.onChunk !== undefined) throw new Error("Output and onChunk consumers are mutually exclusive.");
+    // Validate before opening any file or making a network call.
+    requestOptions(String(method).toUpperCase(), { ...options, responseMode: "stream", onChunk: () => {} });
+    const finalPath = path.resolve(options.outputPath);
+    const temporaryPath = path.join(path.dirname(finalPath), `.rabi-response-${randomUUID()}.partial`);
+    let handle;
+    let created = false;
+    let committed = false;
+    let result;
+    try {
+      try { await lstat(finalPath); throw new Error("Output already exists; no overwrite was attempted."); } catch (error) { if (error.code !== "ENOENT") throw error; }
+      handle = await open(temporaryPath, "wx", 0o600);
+      created = true;
+      const hash = createHash("sha256");
+      result = await verifiedRequest(method, target, { ...options, responseMode: "stream", replaySafe: false, onChunk: async bytes => {
+        let offset = 0;
+        while (offset < bytes.length) {
+          const { bytesWritten } = await handle.write(bytes, offset, bytes.length - offset);
+          if (!bytesWritten) throw new Error("Output write failed.");
+          offset += bytesWritten;
+        }
+        hash.update(bytes);
+      } });
+      if (!result.ok || result.identityChanged || result.uncertain) return { ...result, ok: false, outputCommitted: false };
+      options.signal?.throwIfAborted();
+      await handle.sync();
+      await handle.close();
+      handle = undefined;
+      await fsPromises.link(temporaryPath, finalPath);
+      committed = true;
+      return { ...result, path: finalPath, sha256: hash.digest("hex"), outputCommitted: true };
+    } catch {
+      return { ...(result ?? { statusCode: 0, headers: {} }), ok: false, noReplay: true, outputCommitted: committed, transportError: "OUTPUT_FAILED",
+        uncertain: result?.uncertain ?? false, body: "Local output was not confirmed; no overwrite or automatic replay was attempted." };
+    } finally {
+      try { if (handle) await handle.close(); } catch { /* Preserve request result. */ }
+      try { if (created) await fsPromises.unlink(temporaryPath); } catch { throw new Error("Local response cleanup failed; inspect partial files. Do not replay automatically."); }
+    }
   }
+  // Existing JSON/text callers share the same transport, not a second policy.
+  const invoke = publicRequest;
   async function upload(filePath, uploadId) {
     if (typeof uploadId !== "string" || !UPLOAD_ID.test(uploadId)) throw new Error("Upload requires an explicit stable --upload-id UUID; never generate a new ID after a timeout.");
     if (typeof filePath !== "string" || !filePath) throw new Error("Upload requires a file path.");
@@ -304,7 +431,7 @@ export function createManagerClient({ managerUrl, credential, agentId, config, c
         response.body?.cancel().catch(() => {});
         throw new Error("Metadata unavailable.");
       }
-      const value = JSON.parse(await bounded(() => boundedResponse(response)));
+      const value = metadataIdentity(JSON.parse(await bounded(() => boundedResponse(response))));
       if (typeof value.applicationGenerationId !== "string" || !value.applicationGenerationId.trim() || typeof value.managerInstanceId !== "string" || !value.managerInstanceId.trim()) throw new Error("Metadata identity missing.");
       if (requireReady && (value.health?.live !== true || value.health?.requiredReady !== true || !["healthy", "degraded"].includes(value.health?.state))) throw failure("MANAGER_NOT_READY");
       return { applicationGenerationId: value.applicationGenerationId, managerInstanceId: value.managerInstanceId };
@@ -389,5 +516,5 @@ export function createManagerClient({ managerUrl, credential, agentId, config, c
       if (cleanupFailed) throw failure("CLEANUP_FAILED");
     }
   }
-  return { invoke, upload, download };
+  return { request: publicRequest, invoke, upload, download };
 }

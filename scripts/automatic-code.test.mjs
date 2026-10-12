@@ -8,6 +8,56 @@ import { compileAutomaticCode } from "./lib/automatic-code-compiler.mjs";
 import { automaticCodeRuntime as runtime } from "../src/plugin-kernel/automaticCodeRuntime.ts";
 import { AutomaticCodeRuntime } from "../src/plugin-kernel/automaticCodeRuntime.ts";
 
+test("nested synchronous helpers reuse one lease and keep the caller revision across a patch", () => {
+  const isolated = new AutomaticCodeRuntime();
+  let bridge;
+  const baseline = compileAutomaticCode('export function inner(){return 1;} export function outer(){return invokeInner();}', 'nested-sync').definition;
+  const invokeInner = () => {
+    assert.equal(isolated.snapshot().retained.reduce((sum, item) => sum + item.leases, 0), 1);
+    const commit = isolated.prepareBatch([compileAutomaticCode('export function inner(){return 2;} export function outer(){return invokeInner();}', 'nested-sync').definition], 0);
+    commit();
+    for (let i = 0; i < 1000; i++) assert.equal(bridge.invoke('inner', undefined, []), 1);
+    return 1;
+  };
+  bridge = isolated.register(baseline, source => eval(source));
+  assert.equal(bridge.invoke('outer', undefined, []), 1);
+  assert.equal(bridge.invoke('inner', undefined, []), 2);
+  assert.ok(isolated.snapshot().retained.every(item => item.leases === 0));
+});
+
+test("nested async work remains pinned after its synchronous caller returns", async () => {
+  const isolated = new AutomaticCodeRuntime();
+  let bridge, child;
+  const invokeInner = () => bridge.invoke('inner', undefined, []);
+  const startChild = wait => { child = bridge.invoke('asyncChild', undefined, [wait]); };
+  const source = 'export function inner(){return 1;} export async function asyncChild(wait){await wait;return invokeInner();} export function start(wait){startChild(wait);}';
+  bridge = isolated.register(compileAutomaticCode(source, 'nested-async').definition, source => eval(source));
+  let resume;
+  bridge.invoke('start', undefined, [new Promise(resolve => { resume = resolve; })]);
+  isolated.prepareBatch([compileAutomaticCode(source.replace('return 1;', 'return 2;'), 'nested-async').definition], 0)();
+  resume();
+  assert.equal(await child, 1);
+  assert.equal(bridge.invoke('inner', undefined, []), 2);
+  assert.ok(isolated.snapshot().retained.every(item => item.leases === 0));
+});
+
+test("nested generators keep their revision until consumed or explicitly closed", () => {
+  const isolated = new AutomaticCodeRuntime();
+  let bridge, saved;
+  const iterator = function* () { yield bridge.invoke('inner', undefined, []); yield bridge.invoke('inner', undefined, []); };
+  const invokeCreate = () => bridge.invoke('create', undefined, []);
+  const save = value => { saved = value; };
+  const source = 'export function inner(){return 1;} export function create(){return iterator();} export function start(){save(invokeCreate());}';
+  bridge = isolated.register(compileAutomaticCode(source, 'nested-generator').definition, source => eval(source));
+  bridge.invoke('start', undefined, []);
+  isolated.prepareBatch([compileAutomaticCode(source.replace('return 1;', 'return 2;'), 'nested-generator').definition], 0)();
+  assert.deepEqual(saved.next(), { done: false, value: 1 });
+  assert.ok(isolated.snapshot().retained.some(item => item.leases > 0));
+  saved.return();
+  assert.ok(isolated.snapshot().retained.every(item => item.leases === 0));
+  assert.equal(bridge.invoke('inner', undefined, []), 2);
+});
+
 async function fixture(source) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-automatic-code-"));
   const file = path.join(root, "module.mjs");

@@ -390,16 +390,20 @@ test("manager read workers coalesce simultaneous voice-summary scans", async () 
 
 test("manager read workers keep recent-memory detail scans pure and off the main event loop", async () => {
   const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-manager-memory-worker-"));
-  for (let index = 0; index < 600; index += 1) {
-    createRecentMemory(roleDir, {
-      id: `memory-${String(index).padStart(4, "0")}`,
-      title: `性能记忆 ${index}`,
-      focus: `验证近期记忆 ${index} 的读取性能`,
-      content: "x".repeat(3_500),
-      createdAt: "2026-08-01T00:00:00.000Z",
-      updatedAt: "2026-08-01T00:00:00.000Z",
-      keywords: ["性能"]
-    });
+  // This test measures reads, not 600 write-validation transactions.
+  const template = createRecentMemory(roleDir, {
+    id: "memory-0000", title: "性能记忆 0", focus: "验证近期记忆 0 的读取性能",
+    content: "x".repeat(3_500), keywords: ["性能"]
+  });
+  for (let index = 1; index < 600; index += 1) {
+    const { content, ...metadata } = {
+      ...template, id: `memory-${String(index).padStart(4, "0")}`,
+      title: `性能记忆 ${index}`, focus: `验证近期记忆 ${index} 的读取性能`
+    };
+    const frontmatter = Object.entries(metadata).filter(([, value]) => value !== undefined)
+      .map(([key, value]) => `${key}: ${JSON.stringify(value)}`).join("\n");
+    fs.writeFileSync(path.join(roleDir, "memory", "recent", `${metadata.id}.md`),
+      `---\n${frontmatter}\n---\n\n${content.trim()}\n`);
   }
 
   const pool = new ManagerReadWorkerPool({ maxConcurrency: 1, maxQueue: 1, timeoutMs: 30_000 });

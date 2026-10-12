@@ -748,8 +748,21 @@ test("legacy message adapter target restrictions are ignored", () => {
     "inputEnabled",
     "messageGrouping",
     "outputEnabled",
-    "supportedOutputs"
+    "supportedOutputs",
+    "textConfirmationThreshold"
   ].sort());
+});
+
+test("NapCat text confirmation defaults off and roundtrips an explicitly configured threshold", () => {
+  assert.equal(messageAdapterPolicyFor(gateway({ messageAdapters: ["napcat"] }), "napcat").textConfirmationThreshold, 0);
+  const configured = normalizeGatewayDefinition(gateway({ messageAdapters: ["napcat"],
+    messageAdapterPolicies: { napcat: { textConfirmationThreshold: 50 } } }));
+  assert.equal(messageAdapterPolicyFor(configured, "napcat").textConfirmationThreshold, 50);
+  assert.equal(messageAdapterPolicyFor(normalizeGatewayDefinition(configured), "napcat").textConfirmationThreshold, 50);
+  for (const value of [-1, 1.5, "50", NaN, Infinity, 200001]) {
+    assert.throws(() => normalizeGatewayDefinition(gateway({ messageAdapters: ["napcat"],
+      messageAdapterPolicies: { napcat: { textConfirmationThreshold: value as number } } })), /textConfirmationThreshold/);
+  }
 });
 
 test("group-file metadata ACL is explicit, exact and defaults to deny", () => {

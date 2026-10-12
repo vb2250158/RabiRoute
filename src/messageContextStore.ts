@@ -5,6 +5,7 @@ import { readRabiLinkConversationTimeline } from "./rabilinkConversationLedger.j
 import type { SpeechTranscriptSegment } from "./shared/speechControlContract.js";
 import { normalizeSpeechTranscriptSegment } from "./shared/speechTranscript.js";
 import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
+import type { MessageContextArchiveReadCache } from "./messageContextArchiveReadCache.js";
 
 export const MESSAGE_CONTEXT_FILE = "message-context.jsonl";
 export const MESSAGE_CONTEXT_DIR = "conversation";
@@ -241,19 +242,15 @@ function positiveInteger(value: unknown): number | undefined {
 function parseJsonl(filePath: string): Record<string, unknown>[] {
   if (!fs.existsSync(filePath)) return [];
   try {
-    return fs.readFileSync(filePath, "utf8")
-      .split(/\r?\n/)
-      .filter(Boolean)
-      .flatMap((line) => {
-        try {
-          const parsed = JSON.parse(line) as unknown;
-          return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-            ? [parsed as Record<string, unknown>]
-            : [];
-        } catch {
-          return [];
-        }
-      });
+    const records: Record<string, unknown>[] = [];
+    for (const line of fs.readFileSync(filePath, "utf8").split(/\r?\n/)) {
+      if (!line) continue;
+      try {
+        const parsed = JSON.parse(line) as unknown;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) records.push(parsed as Record<string, unknown>);
+      } catch { /* A damaged line does not hide the remaining history. */ }
+    }
+    return records;
   } catch {
     return [];
   }
@@ -508,7 +505,10 @@ function storedRecord(item: Record<string, unknown>): MessageContextRecord | und
   const instanceId = optionalText(item.instanceId);
   const kind = optionalText(item.kind);
   const channel = inferredChannel(adapter, kind, item);
+  // normalizeRecord owns field validation and the public field whitelist.
+  // Avoid normalizing every optional field (including speech segments) twice.
   return normalizeRecord({
+    ...item as MessageContextRecord,
     id: optionalText(item.id),
     sequence: positiveInteger(item.sequence),
     recordedAt: optionalText(item.recordedAt),
@@ -538,45 +538,7 @@ function storedRecord(item: Record<string, unknown>): MessageContextRecord | und
       triggerId: item.triggerId,
       target: item.target
     }),
-    kind,
-    status: optionalText(item.status),
-    sender: optionalText(item.sender),
-    target: optionalText(item.target),
-    text: messageText(item.text),
-    messageId: optionalId(item.messageId),
-    replyToMessageId: optionalId(item.replyToMessageId),
-    sessionId: optionalText(item.sessionId),
-    routeProfileId: optionalText(item.routeProfileId),
-    source: optionalText(item.source),
-    channelType: optionalText(item.channelType),
-    sourceDeviceId: optionalText(item.sourceDeviceId),
-    sourceDeviceName: optionalText(item.sourceDeviceName),
-    sourceDeviceKind: optionalText(item.sourceDeviceKind),
-    sourceStreamId: optionalText(item.sourceStreamId),
-    sourceArea: optionalText(item.sourceArea),
-    sourceHostId: optionalText(item.sourceHostId),
-    sourceHostName: optionalText(item.sourceHostName),
-    provider: optionalText(item.provider),
-    model: optionalText(item.model),
-    language: optionalText(item.language),
-    sampleRate: optionalNumber(item.sampleRate),
-    audioFormat: optionalText(item.audioFormat),
-    channels: optionalNumber(item.channels),
-    ingestedAt: optionalText(item.ingestedAt),
-    startedAt: optionalText(item.startedAt),
-    endedAt: optionalText(item.endedAt),
-    durationSeconds: optionalNumber(item.durationSeconds),
-    peak: optionalNumber(item.peak),
-    rms: optionalNumber(item.rms),
-    speakerId: optionalText(item.speakerId),
-    speakerName: optionalText(item.speakerName),
-    speakerKind: optionalText(item.speakerKind),
-    speakerConfidence: optionalNumber(item.speakerConfidence),
-    speakerDecision: optionalText(item.speakerDecision),
-    voiceprintId: optionalText(item.voiceprintId ?? item.voiceprintProfileId),
-    speakerVerified: optionalBoolean(item.speakerVerified),
-    segments: safeSpeechSegments(item.segments),
-    attachments: safeAttachments(item.attachments)
+    voiceprintId: optionalText(item.voiceprintId ?? item.voiceprintProfileId)
   }, positiveInteger(item.sequence));
 }
 
@@ -619,15 +581,21 @@ function archiveRangeContains(container: ArchiveSequenceRange, item: ArchiveSequ
 }
 
 function compactContainedArchives<T extends ArchiveSequenceRange>(items: T[]): T[] {
-  return items.filter((item, index) => !items.some((candidate, candidateIndex) => (
-    candidateIndex !== index
-    && archiveRangeContains(candidate, item)
-    && (
-      candidate.firstSequence < item.firstSequence
-      || candidate.lastSequence > item.lastSequence
-      || candidate.file.localeCompare(item.file) < 0
-    )
-  )));
+  const ordered = [...items].sort((left, right) => left.firstSequence - right.firstSequence
+    || right.lastSequence - left.lastSequence || left.file.localeCompare(right.file));
+  const retained = new Set<T>();
+  let container: T | undefined;
+  for (const item of ordered) {
+    if (container && archiveRangeContains(container, item)) {
+      // Equal ranges with the same filename are equivalent, not containing copies.
+      if (container.firstSequence === item.firstSequence && container.lastSequence === item.lastSequence
+        && container.file === item.file) retained.add(item);
+      continue;
+    }
+    retained.add(item);
+    container = item;
+  }
+  return items.filter(item => retained.has(item));
 }
 
 function discoveredArchives(dataDir: string, knownArchives: readonly MessageContextArchiveItem[] = []): MessageContextArchiveItem[] {
@@ -666,6 +634,10 @@ function compareRecords(left: MessageContextRecord, right: MessageContextRecord)
 }
 
 export function readMessageContextArchiveIndex(dataDir: string): MessageContextArchiveIndex {
+  return readArchiveIndex(dataDir);
+}
+
+function readArchiveIndex(dataDir: string, current?: readonly MessageContextRecord[]): MessageContextArchiveIndex {
   let raw: Partial<MessageContextArchiveIndex> = {};
   try {
     raw = JSON.parse(fs.readFileSync(messageContextArchiveIndexPath(dataDir), "utf8")) as Partial<MessageContextArchiveIndex>;
@@ -681,8 +653,10 @@ export function readMessageContextArchiveIndex(dataDir: string): MessageContextA
   const byFile = new Map(indexed.map((item) => [path.basename(item.file), { ...item, file: path.basename(item.file) }]));
   for (const item of discoveredArchives(dataDir, [...byFile.values()])) byFile.set(item.file, item);
   const archives = sortArchives([...byFile.values()]);
-  const currentLastSequence = Math.max(0, ...recordsFromFile(messageContextCurrentPath(dataDir))
-    .map((item) => positiveInteger(item.sequence) || 0));
+  let currentLastSequence = 0;
+  for (const item of current ?? recordsFromFile(messageContextCurrentPath(dataDir))) {
+    currentLastSequence = Math.max(currentLastSequence, positiveInteger(item.sequence) || 0);
+  }
   const discoveredNext = Math.max(currentLastSequence, ...archives.map((item) => item.lastSequence), 0) + 1;
   return {
     schemaVersion: 1,
@@ -1055,10 +1029,13 @@ function archiveOverlapsQuery(item: MessageContextArchiveItem, query: RecentMess
   return true;
 }
 
-function archiveRecords(dataDir: string, query: RecentMessageContextQuery): MessageContextRecord[] {
-  return readMessageContextArchiveIndex(dataDir).archives
+function archiveRecords(dataDir: string, query: RecentMessageContextQuery, current: readonly MessageContextRecord[], cache?: MessageContextArchiveReadCache): MessageContextRecord[] {
+  return readArchiveIndex(dataDir, current).archives
     .filter(item => archiveOverlapsQuery(item, query))
-    .flatMap((item) => recordsFromFile(path.join(messageContextArchiveDir(dataDir), path.basename(item.file))));
+    .flatMap((item) => {
+      const file = path.join(messageContextArchiveDir(dataDir), path.basename(item.file));
+      return cache ? cache.read(file, recordsFromFile) : recordsFromFile(file);
+    });
 }
 
 function normalizeQuery(limitOrQuery: number | RecentMessageContextQuery, options: RecentMessageContextOptions): RecentMessageContextQuery {
@@ -1090,7 +1067,7 @@ function charCost(item: MessageContextRecord): number {
   return item.text.length + (item.segments?.reduce((total, segment) => total + segment.text.length + 40, 0) ?? 0) + 160;
 }
 
-export function recentMessageContextItems(dataDirs: string[], limitOrQuery: number | RecentMessageContextQuery, options: RecentMessageContextOptions = {}): MessageContextRecord[] {
+export function recentMessageContextItems(dataDirs: string[], limitOrQuery: number | RecentMessageContextQuery, options: RecentMessageContextOptions = {}, archiveReadCache?: MessageContextArchiveReadCache): MessageContextRecord[] {
   const query = normalizeQuery(limitOrQuery, options);
   const limit = Math.max(0, Math.floor(query.limit));
   if (limit === 0) return [];
@@ -1106,7 +1083,7 @@ export function recentMessageContextItems(dataDirs: string[], limitOrQuery: numb
     const current = recordsFromFile(messageContextCurrentPath(dataDir));
     const compatibleCurrent = indexExists || current.length ? current : legacyItems(dataDir);
     const records = query.includeArchives
-      ? [...archiveRecords(dataDir, query), ...compatibleCurrent]
+      ? [...archiveRecords(dataDir, query, current, archiveReadCache), ...compatibleCurrent]
       : compatibleCurrent;
     for (const record of records) addDedupeRecord(byId, record);
   }
@@ -1123,7 +1100,8 @@ export function recentMessageContextItems(dataDirs: string[], limitOrQuery: numb
     selected.push(item);
     chars += cost;
   }
-  return selected.reverse();
+  const result = selected.reverse();
+  return archiveReadCache ? structuredClone(result) : result;
 }
 
 function formatTime(value: number): string {

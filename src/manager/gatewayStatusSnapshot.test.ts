@@ -78,6 +78,55 @@ test("supervisor reads coalesce pending status refreshes and keep the last succe
   } finally { service.stop(); }
 });
 
+test("snapshot freshness is bounded independently of UI data retention and recovers after refresh", async () => {
+  let now = 1_000;
+  let fail = false;
+  let finish!: (value: Record<string, unknown>) => void;
+  const service = new GatewayStatusSnapshotService({ now: () => now, refreshIntervalMs: 1_000, maxAgeMs: 1_500,
+    load: async () => {
+      if (fail) throw new Error("storage unavailable");
+      return new Promise(resolve => { finish = resolve; });
+    }
+  });
+  const snapshot = () => service.read("route", "fixture").gatewayStatusSnapshot as {
+    state: string; refreshedAt?: string; fresh: boolean; error?: string
+  };
+  try {
+    assert.equal(snapshot().fresh, false);
+    await settled();
+    finish({ pid: 1234, napcat: { connected: true } });
+    await settled();
+    assert.equal(snapshot().fresh, true);
+    now += 1_000;
+    assert.equal(snapshot().state, "refreshing");
+    assert.equal(snapshot().fresh, true, "a bounded pending refresh can reuse successful evidence");
+    await settled();
+    now += 501;
+    assert.equal(snapshot().fresh, false, "an overdue pending read must not keep evidence fresh forever");
+    assert.equal((service.read("route", "fixture").napcat as { connected: boolean }).connected, true);
+    finish({ pid: 1234, napcat: { connected: true } });
+    await settled();
+    assert.equal(snapshot().fresh, true);
+    fail = true;
+    now += 1_000;
+    snapshot();
+    await settled();
+    assert.equal(snapshot().state, "stale");
+    assert.equal(snapshot().fresh, false);
+    assert.equal(snapshot().error, "storage unavailable");
+    fail = false;
+    now += 1_000;
+    assert.equal(snapshot().fresh, false, "retrying after error does not rehabilitate old evidence");
+    await settled();
+    finish({ pid: 1234, napcat: { connected: true } });
+    await settled();
+    assert.equal(snapshot().fresh, true);
+    assert.equal(snapshot().error, undefined);
+    service.stop();
+    assert.equal(snapshot().fresh, false);
+  } finally { service.stop(); }
+});
+
 test("route path changes and generation teardown fence late storage results", async () => {
   const pending = new Map<string, (value: Record<string, unknown>) => void>();
   const signals = new Map<string, AbortSignal>();
