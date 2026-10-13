@@ -50,6 +50,32 @@ test("explicit disable survives restart, catalog changes, removal and reappearan
   assert.equal(restarted.getApprovedAgentBinding("node-a", agent.agentId), null);
 });
 
+test("first registration imports a legacy local disable once and the Manager switch then owns it", t => {
+  const { authority, credential, statePath } = fixture(t);
+  const legacyAgent = { ...agent, enabled: false };
+  authority.registerAgentCatalog(credential.token, [legacyAgent]);
+  assert.equal(authority.isAgentEnabled("node-a", agent.agentId), false);
+  assert.deepEqual(authority.getSnapshot().nodes[0].enabledAgentIds, []);
+  authority.mutateAgentAuthorization({ nodeId: "node-a", agentId: agent.agentId, enabled: true, binding: agent,
+    expectedRevision: authority.getSnapshot().revision, idempotencyKey: "enable-imported-agent" });
+  const restarted = new LanAgentAuthority({ statePath });
+  for (const catalog of [[legacyAgent], [], [legacyAgent]]) restarted.registerAgentCatalog(credential.token, catalog);
+  assert.equal(restarted.isAgentEnabled("node-a", agent.agentId), true);
+  restarted.setAgentEnabled("node-a", agent.agentId, false);
+  restarted.registerAgentCatalog(credential.token, [{ ...legacyAgent, enabled: true }]);
+  assert.equal(restarted.isAgentEnabled("node-a", agent.agentId), false);
+});
+
+test("legacy local false never overrides an existing Manager decision or registered binding", t => {
+  for (const mode of ["explicit-enable", "registered"]) {
+    const { authority, credential } = fixture(t);
+    if (mode === "explicit-enable") authority.setAgentEnabled("node-a", agent.agentId, true);
+    else authority.registerAgentCatalog(credential.token, [agent]);
+    authority.registerAgentCatalog(credential.token, [{ ...agent, enabled: false }]);
+    assert.equal(authority.isAgentEnabled("node-a", agent.agentId), true);
+  }
+});
+
 test("explicit disable before first registration is durable and cannot be erased by catalog", t => {
   const { authority, credential } = fixture(t);
   authority.setAgentEnabled("node-a", agent.agentId, false);

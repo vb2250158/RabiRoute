@@ -76,6 +76,41 @@ class FakeReadWorker extends EventEmitter implements ManagerReadWorkerChild {
   }
 }
 
+test("knowledge initialization survives an unconfirmed catalog termination and respects its own lifecycle", async () => {
+  const blocked = new FakeReadWorker(56_003, () => {});
+  const reader = new FakeReadWorker(56_004, (request, worker) => worker.respond(request, { indexed: true }),
+    (_signal, worker) => worker.close(0, "SIGTERM"));
+  const search = new ManagerReadWorkerPool({ maxConcurrency: 1, workerFactory: () => reader, setWorkerPriority: () => {} });
+  const catalog = new ManagerReadWorkerPool({ knowledgeSearchPool: search, maxConcurrency: 1,
+    timeoutMs: 100, terminationTimeoutMs: 10, forceTerminationTimeoutMs: 10,
+    workerFactory: () => blocked, setWorkerPriority: () => {} });
+  const task = { type: "knowledge_search_delta" as const, roleDir: process.cwd(), previous: {} };
+  try {
+    await assert.rejects(catalog.run({ type: "role_directories", rolesRoot: process.cwd() }),
+      (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "termination_unconfirmed");
+    assert.equal(catalog.status().terminationBlocked, true);
+    let released = 0;
+    assert.deepEqual(await catalog.run(task, { onWorkerReleased: () => released++ }), { indexed: true });
+    assert.equal(released, 1);
+    const controller = new AbortController(); controller.abort();
+    await assert.rejects(catalog.run(task, { signal: controller.signal }),
+      (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "aborted");
+    blocked.close(0, "SIGKILL");
+    await catalog.stop();
+    await assert.rejects(catalog.run(task), (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "aborted");
+  } finally { blocked.close(0, "SIGKILL"); await Promise.all([catalog.stop(), search.stop()]); }
+});
+
+test("knowledge initialization cannot inherit a longer catalog execution budget", async () => {
+  const reader = new FakeReadWorker(56_005, () => {}, (_signal, worker) => worker.close(0, "SIGTERM"));
+  const search = new ManagerReadWorkerPool({ timeoutMs: 100, workerFactory: () => reader, setWorkerPriority: () => {} });
+  const catalog = new ManagerReadWorkerPool({ knowledgeSearchPool: search });
+  try {
+    await assert.rejects(catalog.run({ type: "knowledge_search_delta", roleDir: process.cwd(), previous: {} }, { timeoutMs: 300_000 }),
+      (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "timeout" && /100 ms/.test(error.message));
+  } finally { await Promise.all([catalog.stop(), search.stop()]); }
+});
+
 test("a cold reader waits for ready and duplicate ready cannot replay the request", async () => {
   let sends = 0;
   let request: FakeReadRequest | undefined;

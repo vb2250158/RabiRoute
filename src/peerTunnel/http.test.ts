@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { EventEmitter, once } from "node:events";
+import { EventEmitter } from "node:events";
 import http from "node:http";
 import { PassThrough } from "node:stream";
 import test from "node:test";
@@ -8,6 +8,7 @@ import { proxyTunnel, serveTunnel, tunnelFetch, tunnelHeaders } from "./http.js"
 import { TunnelSession, type TunnelStream } from "./session.js";
 import { proxySpeechEventStream } from "../manager/speechEventProxy.js";
 import { issueInternalManagerHopHeaders, validateInternalManagerHop } from "../shared/internalManagerHop.js";
+import { listenManagerEndpoint } from "../managerEndpointPolicy.js";
 
 // Exercise the actual session framing and Duplex flow without identity files or live peers.
 function sessions(t: test.TestContext) {
@@ -26,9 +27,9 @@ function sessions(t: test.TestContext) {
 }
 async function server(t: test.TestContext, handler: http.RequestListener) {
   const value = http.createServer(handler);
-  value.listen(0, "127.0.0.1"); await once(value, "listening");
+  const endpoint = await listenManagerEndpoint({ server: value, host: "127.0.0.1", policy: { mode: "auto" } });
   t.after(() => { value.closeAllConnections(); value.close(); });
-  return "http://127.0.0.1:" + (value.address() as import("node:net").AddressInfo).port;
+  return endpoint.baseUrl;
 }
 test("generic Manager and owned resource tunnels sign each actual HTTP path after stripping forged headers", { timeout: 3000 }, async t => {
   const { caller, receiver } = sessions(t);

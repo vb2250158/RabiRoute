@@ -1238,7 +1238,9 @@ async function readNapcatWebuiLoginInfo(
       )
     : quickAccounts.find((item) => item?.uin && item.isUserLogin === true)
       || quickAccounts.find((item) => item?.uin && item.isQuickLogin === true);
-  if (quickResp.ok && quickBody.code === 0 && loggedInQuick?.uin) {
+  // A saved identity cannot override a current, successfully read security/QR stop.
+  const qrRequired = /二维码.*过期|扫码|重新登录|登录态.*失效/i.test(loginError);
+  if (quickResp.ok && quickBody.code === 0 && loggedInQuick?.uin && !qrRequired && !loginError) {
     return {
       userId: loggedInQuick.uin,
       nickname: loggedInQuick.nickName,
@@ -1247,7 +1249,7 @@ async function readNapcatWebuiLoginInfo(
       status: NapcatState.QuickLoginAvailable
     };
   }
-  if (/二维码.*过期|扫码|重新登录|登录态.*失效/i.test(loginError)) {
+  if (qrRequired) {
     return {
       online: false,
       source: "webui",
@@ -1255,7 +1257,7 @@ async function readNapcatWebuiLoginInfo(
       message: loginError
     };
   }
-  if (expectedUserId && statusResp.ok && statusBody.code === 0 && statusBody.data?.isLogin === false
+  if (!loginError && expectedUserId && statusResp.ok && statusBody.code === 0 && statusBody.data?.isLogin === false
     && quickResp.ok && quickBody.code === 0 && Array.isArray(quickBody.data)) {
     return {
       online: false,

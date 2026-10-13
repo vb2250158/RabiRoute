@@ -6,6 +6,19 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.34 - 2026-10-13
+
+- Retry Manager endpoint discovery within a bounded startup/transition deadline, accept usable degraded states, and reliably capture Windows GUI Host output. Connection tools validate legitimate aliases by instance identity and preserve specific failure diagnostics. Dynamic endpoint allocation avoids browser-blocked ports so Fetch can use the selected address.
+- Unify configuration API access for local Agents, RabiLink and remote Agents; trusted local DSH connection writes no longer require a browser Origin.
+- Allow QQ group-file metadata queries when no read restriction is configured. Preserve explicit lists and empty-list restrictions without generating an empty allowlist during configuration saves.
+- Make Manager the sole owner of remote Agent enablement. Remove legacy connector-local gates from the CLI, Hooks and task execution; saving execution parameters does not change enablement.
+- Reuse current authenticated local, RabiLink and enabled remote Agent connections for connector release manifests and downloads without requiring a separate node credential. Preserve bootstrap and node-update channels while enforcing disablement and revocation.
+
+- Chat sends check the conversation read cursor first and return recent or incremental messages for confirmation when it is missing or stale. Add per-conversation ordering and unified chat search while reusing existing receipts. Missing authoritative files in an initialized ledger fail explicitly; first sends to empty conversations remain supported.
+- Message appends and atomic writes run in the background. Query caches distinguish body-length and title options, preserve message sequence numbers, and read the selected conversation.
+- Source patches discover new modules from the current catalog, drain active calls before state migration, and validate dependencies. Repaired sources can retry after compilation failure; build and publication guides use the current compatibility matrix.
+- The desktop pet context menu shows its current size and provides a 10%–200% slider with automatic persistence.
+
 ## 0.3.33 - 2026-10-12
 
 - The media workspace can select a connected model-service computer. Projects, assets, jobs, and results remain local; only inference uses the peer, and uncertain outcomes retain the original receipt without automatic replay.
@@ -205,7 +218,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - Use the Windows system registry executable for machine identity and retry one cold-start timeout within a bounded budget. Standalone `/meta` and `/health` publish their per-process identity; read-only acceptance checks live/required readiness and permits unrelated degradation.
 - Source publication, installed-runtime checks and physical-device acceptance remain separate. This change does not create a GitHub Release or send chat-platform messages.
 
-## Unreleased - Linux Host (2026-10-07)
+## 0.3.34 - 2026-10-13 - Linux Host (2026-10-07)
 
 - Add a Linux source-start script and minimal Host: build, run the existing WebGUI in background/foreground mode, and query status, open, restart, or quit through a live loopback control connection. Preserve structured READY, dynamic addresses, and `/meta` runtime identity validation.
 - Use util-linux `flock` kernel FD leases for Linux single-instance ownership and a per-run token in a `0600` control descriptor. Add bounded recovery, signal-based process-group teardown, and shutdown requests on parent IPC loss. Full descendant containment still requires optional, manually configured systemd `KillMode=control-group`; no service is installed automatically.
@@ -537,7 +550,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - Add package-local plugin modules, a separate Web entry, desktop profile registration and bilingual API/deployment documentation. Existing manual installations remain supported; directory changes do not move files.
 - Validation: all 10 video job/model tests, full build and configuration checks pass. Actual H3 text and first/last-frame generation previously passed locally; one-click runtime installation has not been accepted on a fresh machine without Python. Inherited 0.2.3 speech-directory delivery limits remain documented under Unreleased and are not claimed fixed here.
 
-## Unreleased
+## 0.3.34 - 2026-10-13
 
 - Rabi mobile 0.3.22 opens on recording Home with three capture modes, four-page navigation and a fixed capture button. Adds offline WAV recording, capture exclusion, video session manifests and consecutive segment replay. Historical audio queue recovery now runs off the UI thread, and capture status updates after saving. Automatic glasses streaming still lacks installation acceptance. See [usage and compatibility](docs/rabilink-mobile-recording-ui_en.md).
 

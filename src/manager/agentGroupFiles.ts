@@ -29,7 +29,12 @@ function safeOrigin(raw: string): string | undefined {
   } catch { return undefined; }
 }
 
-/** Public bounded metadata read; Agent admission and the independent group ACL are separate gates. */
+function groupFilesAllowed(definition: GatewayDefinition, groupId: string): boolean {
+  const configured = definition.messageAdapterPolicies?.napcat?.readableGroupFileIds;
+  return configured === undefined || normalizeReadableGroupFileIds(configured).includes(groupId);
+}
+
+/** Public bounded metadata read; only an explicitly configured group list restricts an admitted caller. */
 export async function handleAgentGroupFiles(
   request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse, context: AgentGroupFilesContext
 ): Promise<boolean> {
@@ -66,8 +71,7 @@ export async function handleAgentGroupFiles(
   const definition = context.route(routeId);
   if (!definition || definition.id !== routeId || definition.enabled !== true || !authorized()) return deny(403, "QQ_GROUP_FILES_NOT_AUTHORIZED");
   if (!definitionUsesNapcat(definition)) return deny(409, "QQ_GROUP_FILES_NAPCAT_DISABLED");
-  const allowlist = normalizeReadableGroupFileIds(definition.messageAdapterPolicies?.napcat?.readableGroupFileIds);
-  if (!allowlist.includes(groupId)) return deny(403, "QQ_GROUP_FILES_GROUP_NOT_ALLOWED");
+  if (!groupFilesAllowed(definition, groupId)) return deny(403, "QQ_GROUP_FILES_GROUP_NOT_ALLOWED");
   // Inspect the raw list: normalizeNapCatInstances deliberately discards surplus legacy entries.
   const raw = definition.napcatInstances;
   if (!Array.isArray(raw) || raw.length !== 1 || raw[0]?.enabled === false) return deny(409, "QQ_GROUP_FILES_INSTANCE_AMBIGUOUS");
@@ -78,7 +82,7 @@ export async function handleAgentGroupFiles(
   const configuredInstance = { ...raw[0] };
   if (!origin) return deny(409, "QQ_GROUP_FILES_ENDPOINT_UNSAFE");
   if (!authorized()
-    || !normalizeReadableGroupFileIds(definition.messageAdapterPolicies?.napcat?.readableGroupFileIds).includes(groupId)) return deny(403, "QQ_GROUP_FILES_NOT_AUTHORIZED");
+    || !groupFilesAllowed(definition, groupId)) return deny(403, "QQ_GROUP_FILES_NOT_AUTHORIZED");
   try {
     const page: GroupFilesPage = await (context.readFiles ?? readNapCatGroupFiles)(
       { httpUrl: origin, accessToken: instance.accessToken ?? "" }, groupId, folderId
@@ -89,7 +93,7 @@ export async function handleAgentGroupFiles(
       || !Array.isArray(configured) || configured.length !== 1 || configured[0]?.enabled === false
       || configured[0]?.id !== configuredInstance.id || configured[0]?.httpUrl !== configuredInstance.httpUrl
       || configured[0]?.accessToken !== configuredInstance.accessToken
-      || !normalizeReadableGroupFileIds(current.messageAdapterPolicies?.napcat?.readableGroupFileIds).includes(groupId)) {
+      || !groupFilesAllowed(current, groupId)) {
       return deny(403, "QQ_GROUP_FILES_NOT_AUTHORIZED");
     }
     context.jsonResponse(response, 200, { code: 0, data: { routeId, groupId, folderId: folderId ?? null, instanceId: instance.id, ...page } });

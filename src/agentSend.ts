@@ -42,9 +42,12 @@ export type AgentSendRequest = {
   tracking?: unknown;
   styleValidation?: unknown;
   messageLengthConfirmation?: unknown;
+  conversationContext?: unknown;
 };
 
 export type AgentSendResult = AgentReplyResult & {
+  conversationContext?: import("./agentSendConversationContext.js").AgentSendConversationContext;
+  conversationContextError?: string;
   deliveryId?: string;
   sender?: AgentSendSender;
   channel?: AgentSendChannel;
@@ -72,7 +75,7 @@ export type AgentSendDeliveryInspection =
 
 /** Confirmation is a transient review proof, not part of the durable message identity. */
 export function agentSendIdempotencyPayload(request: AgentSendRequest): Omit<AgentSendRequest, "deliveryId" | "messageLengthConfirmation"> {
-  const { deliveryId: _deliveryId, messageLengthConfirmation: _confirmation, ...payload } = request;
+  const { deliveryId: _deliveryId, messageLengthConfirmation: _confirmation, conversationContext: _context, ...payload } = request;
   return payload;
 }
 
@@ -86,6 +89,7 @@ type NormalizedAgentSend = {
   target: Record<string, unknown>;
   styleValidation: StyleValidationMode;
   messageLengthConfirmation?: string;
+  conversationContext?: { lastReadMessageIndex?: string; confirmationToken?: string };
   internal: AgentReplyRequest;
 };
 
@@ -122,7 +126,7 @@ export const AGENT_SEND_REQUEST_CONTRACT = freezeChannelHelp({
   version: 1,
   kind: "partial-field-allowlist",
   allowedFields: {
-    request: ["deliveryId", "sender", "routeId", "channel", "params", "payload", "tracking", "styleValidation", "messageLengthConfirmation"],
+    request: ["deliveryId", "sender", "routeId", "channel", "params", "payload", "tracking", "styleValidation", "messageLengthConfirmation", "conversationContext"],
     sender: ["agentType", "sessionId"],
     payload: ["type", "text", "path", "url", "fileName", "fileId", "fileSha256", "planAttachment", "segments", "stickerId"]
   },
@@ -359,6 +363,15 @@ function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
   if (messageLengthConfirmation != null && (typeof messageLengthConfirmation !== "string" || !/^\d{13}\.[a-f0-9]{64}$/.test(messageLengthConfirmation))) {
     throw new Error("messageLengthConfirmation must be the token returned by the length check.");
   }
+  const context = request.conversationContext == null ? undefined : objectValue(request.conversationContext, "conversationContext");
+  if (context) {
+    assertOnlyFields(context, ["lastReadMessageIndex", "confirmationToken"], "conversationContext");
+    for (const field of ["lastReadMessageIndex", "confirmationToken"]) {
+      if (context[field] != null && (typeof context[field] !== "string" || !context[field] || String(context[field]).length > 512)) {
+        throw new Error(`conversationContext.${field} must be a non-empty index/token returned by Rabi.`);
+      }
+    }
+  }
   assertOnlyFields(tracking, ["requirementId", "sendContextReviewToken"], "tracking");
   const requirementId = textValue(tracking.requirementId, "tracking.requirementId", false);
   const replyContext: Record<string, unknown> = requirementId
@@ -482,7 +495,8 @@ function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
     throw new Error(`Send channel has no normalizer: ${unhandledChannel}`);
   }
 
-  return { deliveryId, sender, routeId, channel, allowAdditionalReply, replyImageDescriptions, target, styleValidation, messageLengthConfirmation: messageLengthConfirmation ?? undefined, internal };
+  return { deliveryId, sender, routeId, channel, allowAdditionalReply, replyImageDescriptions, target, styleValidation, messageLengthConfirmation: messageLengthConfirmation ?? undefined,
+    conversationContext: context as NormalizedAgentSend["conversationContext"], internal };
 }
 
 export function prepareAgentSendRequest(request: AgentSendRequest): NormalizedAgentSend {

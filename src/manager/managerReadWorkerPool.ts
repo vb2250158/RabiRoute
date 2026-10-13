@@ -30,6 +30,8 @@ import type {
 } from "./managerReadWorker.js";
 
 export type ManagerReadWorkerPoolOptions = {
+  /** A separately owned lane prevents catalog failure from blocking search initialization. */
+  knowledgeSearchPool?: ManagerReadWorkerPool;
   maxConcurrency?: number;
   maxQueue?: number;
   timeoutMs?: number;
@@ -199,6 +201,7 @@ export class ManagerReadWorkerPool {
   private readonly forceTerminationTimeoutMs: number;
   private readonly workerFactory: () => ManagerReadWorkerChild;
   private readonly setWorkerPriority: (pid: number) => void;
+  private readonly knowledgeSearchPool?: ManagerReadWorkerPool;
   private readonly queue: PendingRead[] = [];
   private readonly voiceSummaryInFlight = new Map<string, SharedRead<PersonaVoiceTranscriptQueryResult>>();
   private readonly performanceInFlight = new Map<string, SharedRead<string>>();
@@ -216,6 +219,7 @@ export class ManagerReadWorkerPool {
   private stopPromise?: Promise<void>;
 
   constructor(options: ManagerReadWorkerPoolOptions = {}) {
+    this.knowledgeSearchPool = options.knowledgeSearchPool;
     this.maxConcurrency = Math.max(1, Math.floor(options.maxConcurrency ?? 2));
     this.maxQueue = Math.max(0, Math.floor(options.maxQueue ?? 8));
     this.timeoutMs = Math.max(100, Math.floor(options.timeoutMs ?? 30_000));
@@ -289,6 +293,10 @@ export class ManagerReadWorkerPool {
   run<T>(task: ManagerReadWorkerTask, options: { signal?: AbortSignal; timeoutMs?: number; onWorkerReleased?: () => void } = {}): Promise<T> {
     if (!this.accepting) {
       return Promise.reject(new ManagerReadWorkerError("Manager read worker pool is stopped.", "aborted"));
+    }
+    if (task.type === "knowledge_search_delta" && this.knowledgeSearchPool) {
+      const pool = this.knowledgeSearchPool;
+      return pool.run<T>(task, { ...options, timeoutMs: Math.min(options.timeoutMs ?? pool.timeoutMs, pool.timeoutMs) });
     }
     if (this.terminationBlockedWorkers.size > 0) {
       options.onWorkerReleased?.(); // This request never acquired a worker.
@@ -946,7 +954,14 @@ export const managerKnowledgePageWorkerPool = new ManagerReadWorkerPool({
   maxQueue: 32,
   timeoutMs: 30_000
 });
+/** Search initialization is user-visible; it cannot inherit idle-priority catalog stalls. */
+export const managerKnowledgeIndexWorkerPool = new ManagerReadWorkerPool({
+  maxConcurrency: 1,
+  maxQueue: 16,
+  timeoutMs: 30_000
+});
 export const managerCatalogWorkerPool = new ManagerReadWorkerPool({
+  knowledgeSearchPool: managerKnowledgeIndexWorkerPool,
   maxConcurrency: 1,
   maxQueue: 16,
   timeoutMs: 5 * 60_000,
@@ -961,6 +976,7 @@ export const managerPerformanceWorkerPool = new ManagerReadWorkerPool({
 const builtinManagerReadWorkerPools = [
   managerReadWorkerPool,
   managerKnowledgePageWorkerPool,
+  managerKnowledgeIndexWorkerPool,
   managerCatalogWorkerPool,
   managerPerformanceWorkerPool
 ] as const;

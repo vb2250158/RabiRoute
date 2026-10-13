@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import http from "node:http";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { listenManagerEndpoint } from "../managerEndpointPolicy.js";
 import { LanAgentNodeNameConflictError, type LanAgentRegistry } from "./lanAgentRegistry.js";
@@ -7,6 +10,8 @@ import type { LanAgentReleaseStore } from "./lanAgentReleaseStore.js";
 import { handleLanAgentApi } from "./lanAgentRoutes.js";
 import { webguiRequestToken, webguiTokenMatches } from "./webguiLanAccess.js";
 import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
+import { LanAgentAuthority } from "./lanAgentAuthority.js";
+import { assertTrustedLanAgentPrincipal, evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
 
 const PLACEHOLDER_REQUEST_VALUE = "test-only-placeholder-lan-management";
 
@@ -142,4 +147,101 @@ test("node renaming requires management auth and a current name, with independen
     const catalog = await fetch(`${app.baseUrl}/api/lan-agent/instances`, { headers });
     assert.equal((await catalog.json() as { instances: Array<{ name: string }> }).instances[0]?.name, "Worker PC");
   } finally { await app.close(); }
+});
+
+const releaseTargets = ["/api/lan-agent/releases/manifest", "/api/lan-agent/releases/0.2.0/node/rabi-agent.mjs"];
+
+function releaseFixture(authority?: LanAgentAuthority) {
+  let reads = 0;
+  let releaseAuthorized = false;
+  const context = {
+    readJsonBody, jsonResponse, authority, enabled: () => true,
+    isManagementRequestAuthorized: () => false,
+    isReleaseRequestAuthorized: () => releaseAuthorized,
+    registry: {} as LanAgentRegistry,
+    releases: {
+      manifest: () => { reads++; return { version: "0.2.0" }; },
+      readAsset: (version: string, platform: string, assetPath: string) => {
+        reads++;
+        assert.deepEqual([version, platform, assetPath], ["0.2.0", "node", "rabi-agent.mjs"]);
+        return Buffer.from("export const release = 'fixture';");
+      }
+    } as unknown as LanAgentReleaseStore
+  };
+  return {
+    reads: () => reads,
+    allowRelease: () => { releaseAuthorized = true; },
+    request: (target: string, headers: http.IncomingHttpHeaders = {}) => ({
+      method: "GET", url: target, headers, socket: { remoteAddress: "127.0.0.1" }
+    } as http.IncomingMessage),
+    handle: (request: http.IncomingMessage) => {
+      let status = 0;
+      let body = "";
+      const response = {
+        set statusCode(value: number) { status = value; },
+        setHeader() {},
+        writeHead(value: number) { status = value; },
+        end(value: Buffer | string) { body = String(value); }
+      } as unknown as http.ServerResponse;
+      assert.equal(handleLanAgentApi(request, new URL(request.url!, "http://manager.invalid"), response, context), true);
+      return { status, body };
+    }
+  };
+}
+
+test("release manifest and assets reuse authenticated local and RabiLink connections", () => {
+  for (const kind of ["local", "rabilink"]) {
+    const fixture = releaseFixture();
+    let active = true;
+    for (const target of releaseTargets) {
+      const request = fixture.request(target);
+      markAuthenticatedConnectionRequest(request, () => { if (!active) throw new Error(`${kind} connection revoked`); });
+      const result = fixture.handle(request);
+      assert.equal(result.status, 200);
+      assert.match(result.body, target.endsWith("manifest") ? /"version":"0.2.0"/ : /export const release/);
+      active = false;
+      const before = fixture.reads();
+      assert.throws(() => fixture.handle(request), /connection revoked/);
+      assert.equal(fixture.reads(), before);
+      active = true;
+    }
+  }
+});
+
+test("release endpoints reject bare or forged requests and preserve bootstrap/node authorization", () => {
+  const fixture = releaseFixture();
+  for (const target of releaseTargets) {
+    assert.equal(fixture.handle(fixture.request(target)).status, 401);
+    assert.equal(fixture.handle(fixture.request(target, { "x-rabiroute-authenticated": "true" })).status, 401);
+  }
+  assert.equal(fixture.reads(), 0);
+  fixture.allowRelease();
+  for (const target of releaseTargets) assert.equal(fixture.handle(fixture.request(target)).status, 200);
+  assert.equal(fixture.reads(), 2);
+});
+
+test("release endpoints admit enabled Agents but reject disabled and revoked leases before reading", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-release-access-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const authority = new LanAgentAuthority({ statePath: path.join(root, "authority.json") });
+  const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "node-fixture");
+  authority.registerAgentCatalog(credential.token, [{ agentId: "worker", provider: "custom-provider" }]);
+  const fixture = releaseFixture(authority);
+  const admit = (target: string) => {
+    const request = fixture.request(target, { authorization: `Bearer ${credential.token}`, "x-rabiroute-agent-id": "worker" });
+    assert.equal(evaluateLanAgentRequest(request, authority, true).kind, "agent");
+    markAuthenticatedConnectionRequest(request, () => { assertTrustedLanAgentPrincipal(request); });
+    return request;
+  };
+  for (const target of releaseTargets) assert.equal(fixture.handle(admit(target)).status, 200);
+  const disabled = releaseTargets.map(admit);
+  authority.setAgentEnabled("node-fixture", "worker", false);
+  fixture.allowRelease(); // The node download channel must not override an explicitly disabled Agent identity.
+  for (const request of disabled) assert.equal(fixture.handle(request).status, 403);
+  authority.setAgentEnabled("node-fixture", "worker", true);
+  for (const request of disabled) assert.equal(fixture.handle(request).status, 403);
+  const revoked = releaseTargets.map(admit);
+  authority.revokeNode("node-fixture");
+  for (const request of revoked) assert.equal(fixture.handle(request).status, 403);
+  assert.equal(fixture.reads(), 2);
 });

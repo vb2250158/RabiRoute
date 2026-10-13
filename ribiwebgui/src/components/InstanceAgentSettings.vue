@@ -110,7 +110,8 @@ async function operate(operation: string, params: Record<string, unknown>): Prom
 }
 async function save() {
   // The Manager-owned switch uses the authorization endpoint; saving remote parameters must not change it.
-  const params = props.instance.local ? draft.value : { ...draft.value, enabled: true };
+  const { enabled: _enabled, ...remoteParams } = draft.value;
+  const params = props.instance.local ? draft.value : remoteParams;
   if (await operate("configure", params)) { notice.value = "已保存到实例"; emit("saved"); }
 }
 async function scan() {

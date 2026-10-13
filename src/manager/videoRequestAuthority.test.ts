@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { once } from "node:events";
 import test, { type TestContext } from "node:test";
+import { listenManagerEndpoint } from "../managerEndpointPolicy.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { RabiGlobalConfigStore } from "./globalConfig.js";
 import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
@@ -36,10 +36,9 @@ async function fixture(t: TestContext, handler: (request: http.IncomingMessage, 
     if (admission.kind !== "agent") { jsonResponse(response,403,{error:"denied"}); return; }
     handler(request,response);
   });
-  server.listen(0,"127.0.0.1"); await once(server,"listening");
-  const address = server.address(); assert.ok(address && typeof address !== "string");
+  const endpoint = await listenManagerEndpoint({server,host:"127.0.0.1",policy:{mode:"auto"}});
   t.after(async () => { server.closeAllConnections(); await new Promise<void>(resolve=>server.close(()=>resolve())); await fs.rm(root,{recursive:true,force:true}); });
-  return {root, url:`http://127.0.0.1:${address.port}`, headers:{authorization:`Bearer ${credential.token}`,"x-rabiroute-agent-id":"worker"}, revoke(mode:Mode) {
+  return {root, url:endpoint.baseUrl, headers:{authorization:`Bearer ${credential.token}`,"x-rabiroute-agent-id":"worker"}, revoke(mode:Mode) {
     if(mode === "global-aba") { config.patch({webguiLan:{enabled:false}});config.patch({webguiLan:{enabled:true}}); }
     else if(mode === "node-aba") { authority.revokeNode("fixture-node");const replacement=authority.enroll(authority.issueBootstrapTicket().ticket,"fixture-node");authority.registerAgentCatalog(replacement.token,[binding]); }
     else { authority.setAgentEnabled("fixture-node","worker",false);if(mode === "agent-aba")authority.setAgentEnabled("fixture-node","worker",true); }

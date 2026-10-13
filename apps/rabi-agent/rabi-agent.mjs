@@ -330,7 +330,7 @@ async function stableLauncher(defaultConfigPath, policy) {
     socket.on("error", () => undefined);
   });
   const finishStop = () => {
-    if (released || children.size) return;
+    if (released || children.size || !control.listening) return;
     released = true; clearTimeout(stopDeadline);
     // Keep the lease until all owned workers/candidates have actually closed.
     control.close();
@@ -865,7 +865,7 @@ class RabiAgentRuntime {
             const { manageInstanceAgent, EndpointTransportReceipts, sameAgentEndpoint } = await import("./runtime/management.mjs");
             const agent = instanceAgents(this.config).find(agent => agent.agentId === message.params?.agentId);
             const initializeNew = !agent && message.params?.agentId === "new-agent" && ["resolve", "create"].includes(message.params?.action) && !message.params?.prompt;
-            if (message.operation === "threads" && (!agent || agent.enabled === false) && !initializeNew) throw new Error("The instance Agent is missing or disabled.");
+            if (message.operation === "threads" && (!agent || (!this.config.nodeCredential && agent.enabled === false)) && !initializeNew) throw new Error("The instance Agent is missing or disabled.");
             if (message.operation === "threads" && agent && this.config.nodeCredential) {
               if (!this.connected) throw new Error("Manager connection is unavailable; queued operation was refused.");
               const authority = await createManagerClient({ config: this.config, configPath: this.configPath, agentId: agent.agentId }).invoke("GET", "/meta");
@@ -884,7 +884,7 @@ class RabiAgentRuntime {
                 const current = instanceAgents(this.config).find(item => item.agentId === params.agentId);
                 const endpoint = delivery?.target;
                 const currentProvider = current?.provider === "codex-desktop" ? "codex" : current?.provider;
-                if (!current || current.enabled === false || endpoint?.kind !== "instance" || endpoint.nodeId !== this.config.nodeId
+                if (!current || endpoint?.kind !== "instance" || endpoint.nodeId !== this.config.nodeId
                   || endpoint.agentId !== current.agentId || endpoint.provider !== currentProvider
                   || !(endpoint.sessionId === current.sessionId || current.managedSessionIds?.includes(endpoint.sessionId))) throw new Error("Prepared endpoint no longer matches the exact enabled instance owner.");
                 const authority = await createManagerClient({ config: this.config, configPath: this.configPath, agentId: current.agentId })

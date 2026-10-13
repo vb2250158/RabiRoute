@@ -744,7 +744,7 @@ test("legacy message adapter target restrictions are ignored", () => {
 
   assert.deepEqual(Object.keys(messageAdapterPolicyFor(normalized, "napcat")).sort(), [
     "allowedFileRoots",
-    "readableGroupFileIds",
+    "conversationReview",
     "inputEnabled",
     "messageGrouping",
     "outputEnabled",
@@ -765,10 +765,24 @@ test("NapCat text confirmation defaults off and roundtrips an explicitly configu
   }
 });
 
-test("group-file metadata ACL is explicit, exact and defaults to deny", () => {
+test("group-file restriction remains omitted by default across normalization and serialization", () => {
   const base = gateway({ messageAdapters: ["napcat"], targetGroupId: "123456",
     messageAdapterPolicies: { napcat: { outputEnabled: true, allowedFileRoots: ["/somewhere"] } } });
-  assert.deepEqual(messageAdapterPolicyFor(normalizeGatewayDefinition(base), "napcat").readableGroupFileIds, []);
+  const normalized = normalizeGatewayDefinition(base);
+  const restored = normalizeGatewayDefinition(JSON.parse(JSON.stringify(normalized)));
+  for (const value of [normalized, restored]) {
+    const policy = messageAdapterPolicyFor(value, "napcat");
+    assert.equal(policy.readableGroupFileIds, undefined);
+    assert.equal(Object.hasOwn(policy, "readableGroupFileIds"), false);
+    assert.equal(Object.hasOwn(value.messageAdapterPolicies!.napcat!, "readableGroupFileIds"), false);
+  }
+});
+
+test("explicit group-file restrictions preserve empty deny-all and exact group IDs", () => {
+  const base = gateway({ messageAdapters: ["napcat"] });
+  const disabled = normalizeGatewayDefinition({ ...base, messageAdapterPolicies: { napcat: { readableGroupFileIds: [] } } });
+  assert.deepEqual(messageAdapterPolicyFor(disabled, "napcat").readableGroupFileIds, []);
+  assert.deepEqual(messageAdapterPolicyFor(normalizeGatewayDefinition(JSON.parse(JSON.stringify(disabled))), "napcat").readableGroupFileIds, []);
   assert.deepEqual(messageAdapterPolicyFor(normalizeGatewayDefinition({ ...base, messageAdapterPolicies: {
     napcat: { readableGroupFileIds: ["123456", "123456", " 123456", "0123456", 123456 as any, "777777"] }
   } }), "napcat").readableGroupFileIds, ["123456", "777777"]);

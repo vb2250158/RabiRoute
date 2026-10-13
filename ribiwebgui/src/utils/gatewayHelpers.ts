@@ -201,7 +201,7 @@ export function setGatewayAdapters(gateway: GatewayDefinition, adapters: Message
   automationRulesForGateway(gateway);
 }
 
-export function messageAdapterPolicyFor(gateway: GatewayDefinition, type: MessageAdapterType): Required<MessageAdapterPolicy> {
+export function messageAdapterPolicyFor(gateway: GatewayDefinition, type: MessageAdapterType): ReturnType<typeof sharedMessageAdapterPolicyFor> {
   return sharedMessageAdapterPolicyFor(gateway, type);
 }
 

@@ -30,6 +30,8 @@ Nested synchronous automatic-code calls reuse the caller's pinned revision inste
 
 Automatic updates use one bounded queue to discover, isolate-build, validate, and jointly commit trusted source, Web, asset, and documentation changes without asking for publication each time. Input changes, compiler errors, compatibility failures, and persistence failures discard the candidate and keep the old service; code and Web are never published as a half-updated pair. New files belonging to an existing plugin contract are discovered automatically; new initialization, exports, dependency layouts, or state owners return a specific `requires_switch` reason instead of being silently skipped or requiring a restart for ordinary edits.
 
+Automatic-code instrumentation preserves the module's original ESM bindings, including constants, classes, aliases and locally shadowed names. Cross-module calls between registered functions use the request's pinned revision. Import-layout changes still fail compatibility checks; dynamic export resolution is not an implemented runtime capability.
+
 ### Add a module without changing the core
 
 Create the source and resources under the source root and append a declaration to the `modules` array in `source-patches/modules.json`:

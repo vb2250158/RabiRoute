@@ -887,3 +887,9 @@ Manager 复用 Route catalog worker 的 upsert、日志、回滚和持久化回�
 `homeDeviceUsage.ts` 只持有浏览器中的设备卡片使用偏好：设备 ID、打开次数和最近打开时间，最多500条。renderer 在目录刷新成功后读取排序快照，点击仅更新偏好，下次刷新再重排；不改变 Manager 目录、设备能力或权限。
 
 `vacuumCs2Relay.ts` 是同一视频 supervisor 内的会话级 UDP 传输：只接受认证云响应解出的 CS2 设备标识和公共中继地址，执行有界发现、注册、端口分配和设备加入。随机 loopback 桥接将原始加密 MISS 数据交给固定版本 go2rtc；云登录凭据、设备标识和中继令牌不交给 WebGUI 或写入日志。Manager IPC 断开、取消和到期关闭套接字及原生进程。此扩展不拥有设备控制，Home Assistant 仍是查询和动作提供方；没有现成 HA 流时不把视频管理开关当成摄像头实体。
+
+## 聊天发送一致性
+
+`agentSendConversationContext.ts` 复用 Outbox 的人格账本拥有者和 `messageContextStore.ts` 的序号窗口读取；`conversationMessageCursor.ts` 为 AgentPacket 与发送提供同一索引合同。确认凭证和已核对缓存分别按 Agent/会话隔离，`agentSendConversationQueue.ts` 只串行同一会话。校验在新幂等 reservation 前执行，等待来源/文风检查后再次读取；回执重试保留原处理。历史搜索按序号跳过无关归档，并只保留有界首尾窗口。参见 [发送合同](rabi-agent-interfaces.md#聊天发送前索引核对)。
+
+归档与消息窗口读取通过受限的交互读取 Worker 池异步执行，不在 Manager HTTP 主线程扫描全部归档。

@@ -98,11 +98,30 @@ test("headless instance configures two Agents and dispatches only to the stable 
     assert.equal(managed.body.result.data.thread.id, "session-33333333-3333-4333-8333-333333333333");
     assert.deepEqual(registry.getInstanceAgent("remote-fixture", second.agentId)?.managedSessionIds, ["session-33333333-3333-4333-8333-333333333333"]);
     assert.deepEqual(JSON.parse(fs.readFileSync(configPath, "utf8")).agents.find((agent: any) => agent.agentId === second.agentId).managedSessionIds, ["session-33333333-3333-4333-8333-333333333333"]);
-    await request(`/${second.agentId}/configure`, { enabled: false });
+    const legacyDisable = await request(`/${second.agentId}/configure`, { enabled: false });
+    assert.equal(legacyDisable.response.status, 400);
+    assert.match(legacyDisable.body.message, /Manager authorization endpoint/);
+    assert.equal(authority.isAgentEnabled(nodeId, second.agentId), true);
+    const catalog = await fetch(`${managerUrl}/api/lan-agent/instances`, { headers: { authorization: "Bearer test-instance" } });
+    assert.equal(catalog.status, 200);
+    const etag = catalog.headers.get("etag");
+    assert.match(etag!, /^"[a-f0-9]{64}"$/);
+    const beforeDisable = await catalog.json() as { instances: Array<{ instanceId: string; agents: Array<{ agentId: string }> }> };
+    assert.equal(beforeDisable.instances.find(instance => instance.instanceId === nodeId)?.agents.length, 2);
+    const disabledGrant = await fetch(`${managerUrl}/api/lan-agent/instances/${nodeId}/agents/${second.agentId}/authorization`, {
+      method: "PUT", headers: { authorization: "Bearer test-instance", "content-type": "application/json",
+        "if-match": etag!, "idempotency-key": "disable-selected-owner" }, body: JSON.stringify({ enabled: false })
+    });
+    assert.equal(disabledGrant.status, 200);
+    assert.equal((await disabledGrant.json() as { code: number }).code, 0);
+    const reread = await fetch(`${managerUrl}/api/lan-agent/instances`, { headers: { authorization: "Bearer test-instance" } });
+    assert.equal(reread.status, 200);
+    const state = await reread.json() as { authorization: { nodes: Array<{ nodeId: string; enabledAgentIds: string[] }> } };
+    assert.equal(state.authorization.nodes.find(node => node.nodeId === nodeId)?.enabledAgentIds.includes(second.agentId), false);
     const disabled = await request(`/${second.agentId}/tasks`, { message: "must not deliver", provider: "dsh" });
     assert.equal(disabled.response.status, 400);
     assert.deepEqual(sessions, ["session-22222222-2222-4222-8222-222222222222"]);
-    assert.equal(JSON.parse(fs.readFileSync(configPath, "utf8")).agents.find((agent: any) => agent.agentId === second.agentId).enabled, false);
+    assert.equal(Object.hasOwn(JSON.parse(fs.readFileSync(configPath, "utf8")).agents.find((agent: any) => agent.agentId === second.agentId), "enabled"), false);
   } finally {
     if (worker.exitCode === null && worker.signalCode === null) worker.kill();
     await workerStopped;

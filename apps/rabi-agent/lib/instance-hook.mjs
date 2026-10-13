@@ -11,8 +11,6 @@ export async function requestInstanceHook(input, configPath, fetcher = fetch, { 
   const matches = agents.filter(agent => agent.sessionId === sessionId || agent.managedSessionIds?.includes(sessionId));
   if (matches.length !== 1) return undefined;
   const agent = matches[0];
-  // A local explicit stop cannot grant access or override Manager authorization.
-  if (agent.enabled === false) return undefined;
   if (!config.nodeCredential) throw new Error("Legacy shared credentials are not accepted; re-enroll this connector with a node credential.");
   const client = createManagerClient({ config, configPath, agentId: agent.agentId, fetchImpl: fetcher, discover, timeoutMs: 8000 });
   const receipt = await client.invoke("POST", `/api/lan-agent/instances/${encodeURIComponent(config.nodeId)}/agents/${encodeURIComponent(agent.agentId)}/context`, { body: input });

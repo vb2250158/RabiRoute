@@ -42,7 +42,7 @@ export async function discoverSourcePatchModules(root: string, definitions: read
       if (entry.isDirectory()) { await walk(filename); continue; }
       if (!entry.isFile() || !entry.name.endsWith(".ts") || known.has(path.resolve(filename))) continue;
       const source = await fs.readFile(filename, 'utf8');
-      if (!source.includes('export function ') && !source.includes('export class ') && !source.includes('export const ') && !source.includes('export {')) continue;
+      if (!/\bexport\s+(?:(?:async|abstract)\s+)?(?:function|class|const|let|var)\b|\bexport\s*\{/.test(source)) continue;
       const relative = path.relative(root, filename).replaceAll(path.sep, "/");
       const id = `auto.${relative.slice(0, -3).replaceAll("/", ".").replace(/[^a-z0-9._-]/gi, "-")}`;
       discovered.push({ id, source: relative, contract: { discovery: "filesystem", schemaVersion: 1 } });

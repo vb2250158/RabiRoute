@@ -28,7 +28,6 @@ import {
   messageContextCurrentPath,
   recentMessageContextItems,
   formatMessageContextItem,
-  recentMessageContextText
 } from "../messageContextStore.js";
 import { resolvePersonaVoiceIdentities, type PersonaVoiceIdentity } from "../personaVoiceIdentities.js";
 import { canonicalLogicalPlanId } from "../planStorageIdentity.js";
@@ -43,6 +42,7 @@ import type { ForwardTemplateValues } from "./types.js";
 import type { RouteDecision } from "./routeDecision.js";
 import type { RemotePersonaSnapshot } from "./remotePersonaClient.js";
 import { messageContextScopeForForward } from "./messageContextScope.js";
+import { conversationIndexForRecord } from "../conversationMessageCursor.js";
 import {
   isGroupRecord,
   isHeartbeatRecord,
@@ -552,6 +552,7 @@ function recentMessageContextForDecision(decision: RouteDecision, roleContext: A
   conversationKey?: string;
   limit: number;
   text: string;
+  lastReadMessageIndex?: string;
 } {
   if (decision.routeKind === "plan_feedback") {
     return { limit: 0, text: "" };
@@ -579,17 +580,21 @@ function recentMessageContextForDecision(decision: RouteDecision, roleContext: A
     const normalized = String(messageId).trim();
     if (normalized) excludedMessageIds.add(normalized);
   }
+  const dataDir = personaDataDirFor(roleContext);
+  const displayed = recentMessageContextItems([dataDir], { limit, adapter: scope.endpoint,
+    conversationKey: scope.record.conversationKey, excludedMessageIds: [...excludedMessageIds] });
+  const currentIds = new Set([String(decision.record.messageId ?? ""), ...excludedMessageIds].filter(Boolean));
+  const current = currentIds.size ? recentMessageContextItems([dataDir], { limit: 200, adapter: scope.endpoint,
+    conversationKey: scope.record.conversationKey }).filter(item => currentIds.has(String(item.messageId ?? ""))) : [];
+  const lastRead = [...displayed, ...current].sort((a, b) => (b.sequence ?? 0) - (a.sequence ?? 0))[0];
+  const lastReadMessageIndex = lastRead ? conversationIndexForRecord(dataDir, lastRead) : undefined;
   return {
     endpoint: scope.endpoint,
     transport: scope.record.transport,
     conversationKey: scope.record.conversationKey,
     limit,
-    text: recentMessageContextText([personaDataDirFor(roleContext)], {
-      limit,
-      adapter: scope.endpoint,
-      conversationKey: scope.record.conversationKey,
-      excludedMessageIds: [...excludedMessageIds]
-    })
+    lastReadMessageIndex,
+    text: displayed.length ? displayed.map(formatMessageContextItem).join("\n") : "- 暂无"
   };
 }
 
@@ -998,6 +1003,7 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     logicalAdapter: recentContext.endpoint,
     transport: recentContext.transport,
     conversationKey: recentContext.conversationKey,
+    lastReadMessageIndex: recentContext.lastReadMessageIndex,
     personaMessagingCapability: config.personaMessagingCapability || undefined,
     agentRoleDeviceId: route.agentRoleDeviceId,
     adapterType: isPlanFeedback ? "planFeedback" : isRolePanel ? "rolePanel" : "adapterType" in record ? record.adapterType : undefined,
@@ -1060,6 +1066,7 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     recentMessageEndpoint: recentContext.endpoint,
     recentConversationKey: recentContext.conversationKey,
     recentMessages: recentContext.text,
+    lastReadMessageIndex: recentContext.lastReadMessageIndex,
     routeProfileId: route.id,
     routeProfileName: route.name,
     runtimeRouteId: process.env.GATEWAY_ID,
@@ -1297,6 +1304,10 @@ function buildAgentMessage(
     recentMessageLimit > 0 ? section("最近消息", [
       `最近 ${recentMessageLimit} 条双向消息：`,
       String(values.recentMessages || "- 暂无")
+    ]) : "",
+    values.lastReadMessageIndex ? section("聊天已读索引", [
+      `conversationContext.lastReadMessageIndex=${values.lastReadMessageIndex}`,
+      "这是本轮已展示消息的会话索引，发送时原样传递；索引缺失或落后时，先核对返回消息和省略范围，再带确认凭证再次调用。不同 Agent 的缓存互不共享。"
     ]) : "",
     attachmentLines(record).length > 0 ? section("消息附件", attachmentLines(record)) : "",
     focusedConversationContext.length > 0 ? section("当前讨论片段", focusedConversationContext) : "",

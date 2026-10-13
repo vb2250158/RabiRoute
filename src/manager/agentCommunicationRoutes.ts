@@ -29,6 +29,7 @@ export type AgentCommunicationRoutesContext = {
   receiptResponse: (deliveryId: string) => AgentCommunicationHttpResponse;
   findSendTraces: (query: AgentSendTraceQuery) => unknown[];
   send: (request: AgentSendRequest, options?: { remoteSource?: TrustedLanAgentSource; requestAuthority?: () => void }) => Promise<AgentCommunicationHttpResponse>;
+  readChatHistory?: (url: URL) => Promise<unknown>;
   // Host owns authorization, original-request binding and trusted evidence callbacks.
   maintenance?: {
     verify: (deliveryId: string, originalRequest: AgentSendRequest, options: { remoteSource?: TrustedLanAgentSource; requestAuthority?: () => void }) => Promise<AgentCommunicationHttpResponse>;
@@ -65,6 +66,22 @@ function handleAgentRequests(
   context: AgentCommunicationRoutesContext,
   trackOperation: TrackOperation
 ): boolean {
+  if (request.method === "GET" && requestUrl.pathname === "/api/agent/chat-history") {
+    if (!context.readChatHistory) {
+      context.jsonResponse(response, 503, { code: -1, message: "Chat history reader is unavailable." }); return true;
+    }
+    trackHandledOperation((async () => {
+      try {
+        assertTrustedLanAgentPrincipal(request);
+        const data = await context.readChatHistory!(requestUrl);
+        assertTrustedLanAgentPrincipal(request);
+        context.jsonResponse(response, 200, { code: 0, data });
+      } catch (error) {
+        context.jsonResponse(response, 400, { code: -1, message: errorMessage(error) });
+      }
+    })(), trackOperation);
+    return true;
+  }
   if (request.method === "GET" && requestUrl.pathname === "/api/agent/requests") {
     const status = requestUrl.searchParams.get("status")?.trim();
     const requests = context.agentRequests.list().filter(item => !status || item.status === status);

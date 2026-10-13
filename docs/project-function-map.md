@@ -285,3 +285,5 @@ Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，
 Xiaomi Home 插件通过 `vacuumCloud.ts` 唯一持有独立受保护米家云会话，显式扫码和按需文件读取由 `/api/agent/xiaomi-home/vacuum-cloud/*` 提供；页面只展示结果，没有后台业务轮询或设备动作；页面自动刷新仅在明确开启且可见时按需读图。`vacuumMapDecoder.ts` 在组件内解码 version-2 文件，页面可显示地图、选择坐标并通过 `vacuumPath.ts` 预览同一快照的避障路径；位置快照时效未验证，坐标导航和机器人音频未接通，见[云地图合同](vacuum-cloud-map.md)。
 
 米家设备列表：按设备登记归组卡片、单项能力与参数预演／执行测试共用家庭接口；扫地机地图页嵌入同源云地图展示与可暂停快照刷新。导航按钮仍不可用，缺口为原生坐标正文合同。见[设备操作说明](user-guide/home-devices.md)。
+
+聊天发送索引核对：所有聊天消息端共用 Agent/会话独立缓存、增量首尾回传和再次调用确认；消息端设置默认首次 50 条、增量 100 条。入口 `/api/agent/send`、`/api/agent/chat-history`；实现 `src/agentSendConversationContext.ts`。详见 [接口合同](rabi-agent-interfaces.md#聊天发送前索引核对)。

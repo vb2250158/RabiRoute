@@ -588,8 +588,8 @@ class DesktopPetWindow(QWidget):
 
     def _target_size(self, pack: DesktopPetPack) -> QSize:
         return QSize(
-            max(64, min(1024, int(pack.canvas_width * self._scale))),
-            max(64, min(1024, int(pack.canvas_height * self._scale))),
+            max(1, min(1024, int(pack.canvas_width * self._scale))),
+            max(1, min(1024, int(pack.canvas_height * self._scale))),
         )
 
     def _prepared_key(

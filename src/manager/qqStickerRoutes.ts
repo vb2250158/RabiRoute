@@ -54,7 +54,7 @@ export function handleQqStickerRoutes(request: http.IncomingMessage, url: URL, r
       if (list) {
         const query = new URLSearchParams({ routeId, instanceId: instance.id });
         context.json(response, 200, { code: 0, data: { routeId, instanceId: instance.id,
-          items: items.map(({ id, description }) => ({ id, description, previewUrl: `/api/agent/qq/stickers/${id}/preview?${query}` })),
+          items: items.map(({ id, description }) => ({ id, name: description, description, previewUrl: `/api/agent/qq/stickers/${id}/preview?${query}` })),
           completenessUnknown: true, potentiallyTruncated: items.length >= count } });
         return;
       }

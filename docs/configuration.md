@@ -156,8 +156,8 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 - `messageAdapterPolicies`：每个消息端的管道级权限。`inputEnabled` 控制是否接收，`outputEnabled` 控制是否允许出站。QQ、微信、飞书、企业微信、角色面板和 RabiLink 文字聊天默认使用消息组，不提供关闭开关；可用 `messageGrouping` 的三个秒数调整普通停顿、疑似半句话停顿和最长等待，默认 `6 / 12 / 20` 秒。ASR / 语音转写、heartbeat、命令、审批、健康告警和结构化事件照常直接投递，不进入这段等待。只有 Codex Agent 同时开启消息处理模式时，聊天消息才交给消息处理 Agent；否则保持原有逐条路由。
 - `supportedOutputs`：这个消息端允许发送的消息类型。NapCat/OneBot 当前支持 `text`、`image`、`voice`、`file`；旧的纯文本 `text/message/content` 请求仍兼容。QQ 群本地文件使用 `upload_group_file`，不是把大文件伪装成普通文本或普通消息段。
 - `allowedFileRoots`：本地文件出站白名单目录，仅在 `payloadType=file` 且使用本地路径时生效。文件必须真实存在、是普通文件，并且解析真实路径后仍位于其中一个目录内；未配置时本地群文件上传会被阻止。公开示例只能使用占位路径，运行期按角色实际构建产物目录配置。
-- `messageAdapterPolicies.napcat.textConfirmationThreshold`：单条 QQ 正文超过多少字时提示 Agent 再次确认，默认 `0` 关闭；可在 NapCat 的“长消息确认”中设置。数字、英文、标点与正文内空格计入，引用与 @ 控制标记不计入。超限检查在 Outbox 前返回，Agent 应先精简；确需保留原文时带原编号和接口返回的确认凭据再次调用。详见[长消息确认接口](rabi-agent-interfaces.md#napcat-长消息确认)。
-- `messageAdapterPolicies.napcat.readableGroupFileIds`：Agent 查看 QQ 群文件**元数据**的独立精确群号字符串白名单，默认空数组（拒绝全部），例如 ` ["123456"] ` 仅是虚构示例；不从 `targetGroupId`、输出权限或 `allowedFileRoots` 推导。当前源码已接入 Manager，但尚未完成部署与运行验收，不应据此声称接口在已运行版本可用；调用仍须可信 LAN Agent、精确 Route、当前已批准的主 Agent 会话和唯一启用的 NapCat 实例。只读取当前目录的文件/文件夹元数据，不下载文件、不递归或修改 QQ。NapCat 公开接口未提供可核实的分页游标或完整性标记，因此结果始终声明 `completenessUnknown` 与 `potentiallyTruncated`，不能据此断言群文件查全。
+- `messageAdapterPolicies.napcat.textConfirmationThreshold`：单条 QQ 正文超过多少字时提示 Agent 再次确认，默认 `0` 关闭；可在 NapCat 的“长消息确认”中设置。数字、英文、标点与正文内空格计入，引用与 @ 控制标记不计入。超限检查在 Outbox 前返回，提示先精简；一条说不清就按完整意思分条，每条独立检查和发送。确需保留单条原文时带原编号和接口返回的确认凭据再次调用。详见[长消息确认接口](rabi-agent-interfaces.md#napcat-长消息确认)。
+- `messageAdapterPolicies.napcat.readableGroupFileIds`：可选的 QQ 群文件元数据读取限制。未设置时，本机与已启用且鉴权的远端 Agent 默认可查询；显式数组仅允许所列精确群号，`[]` 拒绝全部。保存配置不自动填入空数组；移除该字段恢复默认。调用仍须精确 Route 和唯一启用的 NapCat 实例，账号能访问哪些群由 QQ 决定。只读取当前目录元数据，不下载、递归或修改 QQ。响应中的 `completenessUnknown` 与 `potentiallyTruncated` 表示无法证明群文件已查全。
 - `gatewayPort`：NapCat WebSocket Client 连接的端口。
 - `napcatHttpUrl`：RabiRoute 调用的 OneBot HTTP 服务地址。一个 Route 只绑定一个 NapCat；多个 QQ 应分别建立 Route。多个 Route 仍可明确共用同一个 NapCat 和 HTTP 地址；自动端口分配只处理 RabiRoute 自己监听的端口，不会把已经配置的 NapCat 地址改到一个未启动的端口。
 - `webhookPort`：Webhook 监听端口。未配置时回退到 `gatewayPort`。
@@ -453,3 +453,16 @@ NapCat.*/resources/app/napcat/plugins/napcat-plugin-rabiroute
 其他入口修改了不同字段时自动合并；同一字段发生冲突时保留草稿并显示字段位置。“重新加载当前路线”会在确认后丢弃该路线草稿，其他路线的修改保留。保存成功与运行生效分开报告。多人共用同一人格时，人格配置仍共享一个正式值。
 
 控制台可同时编辑多条路线；顶部保存逐条提交已修改路线，每条仍使用独立事务，遇到冲突时保留剩余草稿。
+
+
+## 聊天发送前索引核对
+
+每个聊天消息端设置两项返回数量，在 WebGUI“消息适配器 → 对应消息端 → 发送前聊天核对”编辑：
+
+```json
+{ "conversationReview": { "initialMessageCount": 50, "maxIncrementalMessages": 100 } }
+```
+
+写入 `messageAdapterPolicies.<消息端>`。首次消息数范围 1–500，增量上限范围 2–500；超过增量上限时返回最早和最新各半，并提示省略范围。索引缺失时可复用同一 Agent/会话的已核对缓存；不同 Agent 不共享。确认凭证与长消息、文风检查分别处理。
+
+完整调用、并发和搜索合同见 [Agent 接口](rabi-agent-interfaces.md#聊天发送前索引核对)。

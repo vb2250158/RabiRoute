@@ -35,7 +35,9 @@ function readFileLockRecord(lockPath: string): FileLockRecord | null {
 }
 
 function sameHostProcessAlive(record: FileLockRecord | null): boolean {
-  if (!record?.host || record.host.toLowerCase() !== os.hostname().toLowerCase()
+  // Legacy local lock records carried pid but no host. Treat their live owner
+  // conservatively; elapsed wall time alone never authorizes taking its lock.
+  if (!record || (record.host && record.host.toLowerCase() !== os.hostname().toLowerCase())
     || !Number.isInteger(record.pid) || Number(record.pid) <= 0) return false;
   try {
     process.kill(Number(record.pid), 0);
@@ -81,11 +83,10 @@ function isWindowsExclusiveCreateContention(error: unknown, lockPath: string): b
     && path.resolve(failure.path) === path.resolve(lockPath);
 }
 
-export function withFileLockSync<T>(
+export function acquireFileLockSync(
   lockPath: string,
-  action: () => T,
   options: FileLockOptions = {}
-): T {
+): () => void {
   const timeoutMs = Math.max(100, Math.floor(options.timeoutMs ?? 5_000));
   const staleMs = Math.max(timeoutMs, Math.floor(options.staleMs ?? 30_000));
   fs.mkdirSync(path.dirname(lockPath), { recursive: true });
@@ -110,11 +111,18 @@ export function withFileLockSync<T>(
       Atomics.wait(lockWaitBuffer, 0, 0, 10);
     }
   }
-  try {
-    return action();
-  } finally {
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
     releaseOwnedFileLock(lockPath, owner);
-  }
+  };
+}
+
+export function withFileLockSync<T>(lockPath: string, action: () => T, options: FileLockOptions = {}): T {
+  const release = acquireFileLockSync(lockPath, options);
+  try { return action(); }
+  finally { release(); }
 }
 
 function transientRenameError(error: unknown): boolean {

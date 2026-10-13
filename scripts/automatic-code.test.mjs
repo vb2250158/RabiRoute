@@ -83,6 +83,36 @@ test("automatic module keeps state, callback identity, imports and single defaul
   assert.equal(entry.module.read(), 2);
 });
 
+test("relative ESM imports retain constants, classes, aliases and cross-module revisions", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-automatic-imports-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const runtimeImport = new URL("../src/plugin-kernel/automaticCodeRuntime.ts", import.meta.url).href;
+  const helperId = path.join(root, "helper.mjs").replaceAll("\\", "/");
+  const moduleId = path.join(root, "module.mjs").replaceAll("\\", "/");
+  const helperSource = 'export const base=3;export class Box{value=5;}export function calculate(value){return value+1;}';
+  const source = 'import {calculate as aliased,base,Box} from "./helper.mjs";export function read(){return {result:aliased(base),box:new Box().value,base};}export function shadow(aliased){return aliased;}';
+  const helper = compileAutomaticCode(helperSource, helperId, runtimeImport);
+  const compiled = compileAutomaticCode(source, moduleId, runtimeImport);
+  await fs.writeFile(helperId, helper.output);
+  await fs.writeFile(moduleId, compiled.output);
+  const entry = await import(pathToFileURL(moduleId).href);
+  const retained = entry.read;
+  assert.deepEqual(retained(), { result: 4, box: 5, base: 3 });
+  assert.equal(entry.shadow(7), 7);
+  const boundary = runtime.acquireBoundary();
+  try {
+    runtime.prepareBatch([
+      compileAutomaticCode(helperSource.replace("value+1", "value+2"), helperId).definition,
+      compileAutomaticCode(source.replace("aliased(base)", "aliased(base)+10"), moduleId).definition
+    ], runtime.snapshot().revision)();
+    assert.deepEqual(boundary.run(() => retained()), { result: 4, box: 5, base: 3 });
+    assert.deepEqual(retained(), { result: 15, box: 5, base: 3 });
+    assert.equal(entry.read, retained);
+    assert.equal(entry.shadow(8), 8);
+  } finally { boundary.release(); }
+  assert.ok(runtime.snapshot().retained.every(revision => revision.leases === 0));
+});
+
 test("ordinary class methods preserve existing instances and bound methods", async () => {
   const source = 'export class Counter { value=3; add(step){this.value+=step;return this.value;} }';
   const entry = await fixture(source);

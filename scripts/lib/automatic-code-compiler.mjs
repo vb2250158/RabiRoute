@@ -42,6 +42,8 @@ export function compileAutomaticCode(source, moduleId, runtimeImport) {
     }
     const modifiers = declaration.modifiers?.filter(modifier => modifier.kind === ts.SyntaxKind.AsyncKeyword);
     const implementation = ts.factory.createFunctionExpression(modifiers, undefined, undefined, undefined, declaration.parameters, undefined, declaration.body);
+    // The module-owned evaluator preserves ESM bindings, including constants,
+    // classes, aliased functions and locally shadowed names.
     implementations[id] = print(implementation);
     selected.set(declaration, id);
   };

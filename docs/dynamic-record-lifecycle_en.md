@@ -53,6 +53,10 @@ An ordered ledger must:
 5. Preserve content, stable IDs, order, and total record count.
 6. Support cross-shard recovery through the archive index.
 
+Persona message append reuses the shared file lock. Records carry an owner token, host and PID; a live local owner is never displaced merely because mtime exceeds 30 seconds, and release removes only its own token. Legacy local PID-only records are treated conservatively as live owners. The 5-second wait remains bounded. A timeout does not prove an expired lock and never authorizes deleting a live lock, increasing the wait as a repair, or resending a message.
+
+`conversation/archive/index.json` retains rebuildable duplicate-key bitmap hints for immutable shards, with file size/mtime and a hint checksum. Missing or damaged hints are rebuilt from historical evidence outside the append lock; the index is rechecked after acquiring the lock. Rotation generates hints in the same pass. Definitely absent keys skip archive-body parsing; possible matches still verify the original record, so a bitmap false positive cannot suppress a new message. Full records, stable IDs, order and the 24/72-hour windows remain unchanged. Hints are not another message truth source and grant no archive-deletion authority. Migrating old indexes still requires one historical read; rebuilding outside the lock does not imply zero I/O or completed production performance acceptance.
+
 ## Consolidation contract
 
 Memory organization must:

@@ -136,7 +136,7 @@ test("saving remote parameters never changes the Manager-owned enabled state", a
     const { state, calls } = harness([access(), json({ code: 0, result: { saved: true } })], { enabled });
     await state.save();
     const body = JSON.parse(String(calls[1].init?.body));
-    assert.equal(body.enabled, true);
+    assert.equal(Object.hasOwn(body, "enabled"), false);
     assert.equal(body.workspace, "fixture-workspace");
     assert.equal(state.authorized.value, enabled);
     assert.doesNotMatch(calls[1].url, /authorization/);

@@ -179,6 +179,8 @@ import { createAgentSendVerificationEvidenceVerifier } from "./agentSendVerifica
 import { verifyAgentSendDelivery, settleAgentSendDelivery } from "./agentSendReconciliation.js";
 import { evaluateAgentSendLanguageStyle } from "../agentSendLanguageStyle.js";
 import { AgentSendMessageLengthGuard } from "../agentSendMessageLength.js";
+import { AgentSendConversationContextGuard } from "../agentSendConversationContext.js";
+import { AgentSendConversationQueue } from "../agentSendConversationQueue.js";
 import { agentSendRequestTemplateForSource } from "../agentSendTemplate.js";
 import {
   MessageProcessingBoardStore,
@@ -1710,6 +1712,9 @@ const codexHookContextService = new CodexHookContextService({
 });
 const languageStyleValidator = new LanguageStyleValidator();
 const messageLengthGuard = new AgentSendMessageLengthGuard();
+const conversationContextGuard = new AgentSendConversationContextGuard((dataDir, filter, query) =>
+  managerReadWorkerPool.run({ type: "conversation_window", dataDir, filter, query }));
+const conversationSendQueue = new AgentSendConversationQueue();
 const fenneNotePlaybackUrl = process.env.FENNOTE_PLAYBACK_URL?.trim() ?? "";
 const fenneNoteReplyUrl = process.env.FENNOTE_REPLY_URL?.trim() ?? "";
 const fenneNotePlaybackToken = process.env.FENNOTE_PLAYBACK_TOKEN ?? "";
@@ -5430,10 +5435,67 @@ async function maintainAgentSendReceipt(
   return reconcile(deliveryId, request, { rootDir, verify, requestAuthority: options.requestAuthority });
 }
 
+async function readAgentChatHistory(requestUrl: URL) {
+        const bounds = ["afterSequence", "beforeSequence"].map(field => requestUrl.searchParams.get(field));
+        if (bounds.some(value => value !== null && (!value.trim() || !Number.isSafeInteger(Number(value)) || Number(value) < 0))
+          || (bounds[0] !== null && bounds[1] !== null && Number(bounds[0]) > Number(bounds[1]))) {
+          throw new Error("Sequence bounds must be non-negative safe integers in ascending order.");
+        }
+        const send: AgentSendRequest = { deliveryId: "chat-history-read", sender: { agentType: "history_reader", sessionId: "read-only" },
+          routeId: requestUrl.searchParams.get("routeId"), channel: requestUrl.searchParams.get("channel"),
+          params: JSON.parse(requestUrl.searchParams.get("params") || "{}"), payload: { type: "text", text: "history-read" } };
+        const readOptions = { rootDir, routeRoot, rolesRoot, runtimes: [...runtimes.values()].map(runtime => ({ ...runtime.definition,
+          napcatInstances: (runtime.definition.napcatInstances ?? sharedNormalizeNapCatInstances(runtime.definition))
+            .map(instance => ({ ...instance, accessToken: instance.accessToken ?? "" })) })) };
+        const history = await conversationContextGuard.searchHistory(send, readOptions, {
+          afterSequence: bounds[0] === null ? undefined : Number(bounds[0]), beforeSequence: bounds[1] === null ? undefined : Number(bounds[1]),
+          query: requestUrl.searchParams.get("query") || undefined, limit: Math.min(200, Math.max(1, Number(requestUrl.searchParams.get("limit")) || 50)) });
+        return { ...history, entries: history.entries.map(record => ({ ...record,
+          text: record.text.replace(/\[CQ:(image|video|record|file)[^\]]*\]/gi, "[$1]") })) };
+}
+
 async function performAgentSend(
   request: AgentSendRequest,
-  options: { remoteSource?: TrustedLanAgentSource; withManagedGroupFile?: import("../outbox.js").AgentReplyOptions["withManagedGroupFile"] } = {}
+  options: { remoteSource?: TrustedLanAgentSource; requestAuthority?: () => void; withManagedGroupFile?: import("../outbox.js").AgentReplyOptions["withManagedGroupFile"] } = {}
 ): Promise<AgentCommunicationHttpResponse> {
+  const snapshot = { rootDir, routeRoot, rolesRoot,
+    runtimes: [...runtimes.values()].map(runtime => ({ ...runtime.definition,
+      napcatInstances: (runtime.definition.napcatInstances ?? sharedNormalizeNapCatInstances(runtime.definition))
+        .map(instance => ({ ...instance, accessToken: instance.accessToken ?? "" })) })) };
+  return conversationSendQueue.run(conversationContextGuard.serializationKey(request, snapshot), () => performConversationAgentSend(request, options));
+}
+
+async function performConversationAgentSend(
+  request: AgentSendRequest,
+  options: { remoteSource?: TrustedLanAgentSource; requestAuthority?: () => void; withManagedGroupFile?: import("../outbox.js").AgentReplyOptions["withManagedGroupFile"] } = {}
+): Promise<AgentCommunicationHttpResponse> {
+  // Conversation review precedes optional content review and all new send reservations.
+  // Durable receipts bypass it: retries inspect/reconcile the original delivery rather than resend.
+  const initialPrepared = prepareAgentSendRequest(request);
+  const conversationOptions = { rootDir, routeRoot, rolesRoot,
+    runtimes: [...runtimes.values()].map(runtime => ({ ...runtime.definition,
+      napcatInstances: (runtime.definition.napcatInstances ?? sharedNormalizeNapCatInstances(runtime.definition))
+        .map(instance => ({ ...instance, accessToken: instance.accessToken ?? "" })) })) };
+  let reviewedIndex: string | undefined;
+  let reviewedConversationContext: AgentSendResult["conversationContext"];
+  const conversationRejection = async () => {
+    options.requestAuthority?.();
+    const decision = await conversationContextGuard.evaluate(request, conversationOptions);
+    options.requestAuthority?.();
+    if (!decision.blocked) {
+      reviewedConversationContext = decision.context;
+      reviewedIndex = decision.context?.latestMessageIndex; return undefined;
+    }
+    return { statusCode: 409, body: { ok: false, status: "conversation_context_confirmation_required",
+      errorCode: "AGENT_SEND_CONVERSATION_CONTEXT_CONFIRMATION_REQUIRED",
+      reason: decision.context!.instruction, deliveryId: initialPrepared.deliveryId,
+      sender: initialPrepared.sender, channel: initialPrepared.channel, routeId: initialPrepared.routeId,
+      target: initialPrepared.target, conversationContext: decision.context } };
+  };
+  if (!readAgentSendReceipt(rootDir, initialPrepared.deliveryId)) {
+    const rejection = await conversationRejection();
+    if (rejection) return rejection;
+  }
   const gate = await resolveReviewedAgentSendGate(request, {
     readReceipt: deliveryId => readAgentSendReceipt(rootDir, deliveryId),
     authorize: snapshot => { prepareAgentSendRequest(snapshot); },
@@ -5520,9 +5582,10 @@ async function performAgentSend(
         body: {
           ok: false, status: "message_length_confirmation_required",
           errorCode: "AGENT_SEND_MESSAGE_LENGTH_CONFIRMATION_REQUIRED",
-          reason: `消息正文共 ${messageLengthValidation!.characterCount} 字，超过 ${messageLengthValidation!.threshold} 字。先精简到当前问题需要的内容；确需保留原文时，以同一 deliveryId 和完整原请求再次调用，附带 messageLengthConfirmation。`,
+          reason: `消息正文共 ${messageLengthValidation!.characterCount} 字，超过 ${messageLengthValidation!.threshold} 字。先精简；一条说不清时，按完整意思拆成少量消息，一句接一句说，每条分别检查并使用独立稳定 deliveryId。确需保留单条原文时，以同一 deliveryId 和完整原请求再次调用，附带 messageLengthConfirmation。`,
           deliveryId: prepared.deliveryId, sender: prepared.sender, channel: prepared.channel,
           routeId: prepared.routeId, target: prepared.target, messageLengthValidation,
+          ...(reviewedConversationContext ? { conversationContext: reviewedConversationContext } : {}),
           ...(languageStyleValidation ? { languageStyleValidation } : {})
         }
       };
@@ -5540,13 +5603,20 @@ async function performAgentSend(
           routeId: prepared.routeId,
           target: prepared.target,
           languageStyleValidation,
+          ...(reviewedConversationContext ? { conversationContext: reviewedConversationContext } : {}),
           ...(messageLengthValidation ? { messageLengthValidation } : {})
         }
       };
     }
   }
 
+  if (!existingReceipt) {
+    // The style/source validators above may await external work; read the ledger again afterwards.
+    const rejection = await conversationRejection();
+    if (rejection) return rejection;
+  }
   const deliver = async () => {
+    options.requestAuthority?.();
     assertReviewedAgentSendMayDeliver(gate);
     return {
       ...await handleAgentSend(request, replyOptions, reviewedReplySource),
@@ -5556,6 +5626,7 @@ async function performAgentSend(
   };
   const result = await executeIdempotentAgentSend(request, {
     rootDir,
+    requestAuthority: options.requestAuthority,
     deliver,
     recover: gate.replayOnly ? undefined : async () => {
       const inspection = await inspectAgentSendDelivery(request, replyOptions);
@@ -5571,6 +5642,23 @@ async function performAgentSend(
     });
   }
   recordMessageProcessingSend(request, result.body);
+  // Even cached/recovered receipts report the current read index without sending a duplicate.
+  let latest: AgentSendResult["conversationContext"];
+  try {
+    latest = (await conversationContextGuard.evaluate({ ...request, conversationContext: reviewedIndex ? { lastReadMessageIndex: reviewedIndex } : undefined }, replyOptions, Date.now(), true)).context;
+  } catch (error) {
+    // A post-send history error must not hide an already committed delivery receipt.
+    result.body.conversationContextError = error instanceof Error ? error.message : String(error);
+  }
+  if (latest) result.body.conversationContext = { ...latest, confirmationRequired: false,
+    confirmationToken: undefined, expiresAt: undefined,
+    instruction: latest.messages.length ? "本次发送结果以回执为准；以下是发送期间新增的消息，下次发送前仍需核对。" : undefined };
+  if (latest && reviewedIndex) {
+    const onlyOwnReply = latest.messages.every(item => item.direction === "outbound"
+      && item.messageId !== undefined && String(item.messageId) === String(result.body.sentMessageId));
+    // Do not silently mark messages arriving during network delivery as read.
+    conversationContextGuard.rememberReturnedIndex(request, replyOptions, onlyOwnReply ? latest.latestMessageIndex : reviewedIndex);
+  }
   return result;
 }
 
@@ -10134,6 +10222,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       }),
       codexHookContextService,
       createAgentCommunicationRoutes,
+      readAgentChatHistory,
       createAgentUploadRoutes,
       agentUploadStore,
       assertUploadAuthorized,
@@ -10161,10 +10250,11 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         route: (routeId: string) => runtimes.get(routeId)?.definition,
         json: jsonResponse
       },
-      performAgentSend: (request: AgentSendRequest, options: { remoteSource?: TrustedLanAgentSource } = {}) => {
+      performAgentSend: (request: AgentSendRequest, options: { remoteSource?: TrustedLanAgentSource; requestAuthority?: () => void } = {}) => {
         const source = options.remoteSource;
         return performAgentSend(request, {
           remoteSource: source,
+          requestAuthority: options.requestAuthority,
           ...(source ? { withManagedGroupFile: (fileId: string, expectedSha256: string, send: (file: { path: string; fileName: string }) => Promise<import("../outbox.js").AgentReplyResult>) => {
             assertUploadAuthorized(source);
             return agentUploadStore.withFile({ nodeId: source.nodeId, agentId: source.agentId }, fileId, async file => {
@@ -10453,9 +10543,8 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     audit: (event, fields) => managerOperationalLog.record("info", event, { result: JSON.stringify(fields) })
   });
   managerRuntimeOwner.register("manager_web_patches", () => managerWebPatches.stop());
-  const fullRepositoryHotPatch = process.env.RABIROUTE_HOT_PATCH_FULL_REPO === "1";
   const automaticCodeService = new AutomaticCodeService({
-    packageRoot, sourceRoot: fullRepositoryHotPatch ? process.env.RABIROUTE_HOT_PATCH_SOURCE_ROOT : undefined,
+    packageRoot, sourceRoot: process.env.RABIROUTE_HOT_PATCH_SOURCE_ROOT,
     stateRoot: path.join(rootDir, "data/.runtime/automatic-code"),
     watch: process.env.RABIROUTE_HOT_PATCH_WATCH !== "0", publication: managerWebPatches,
     onError: error => managerOperationalLog.record("error", "automatic_update_failed", { result: String(error) })

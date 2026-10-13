@@ -149,14 +149,19 @@ export type MessageAdapterPolicy = {
   outputEnabled?: boolean;
   supportedOutputs?: MessagePayloadKind[];
   allowedFileRoots?: string[];
-  /** Exact QQ group IDs allowed for Agent metadata reads; independent of output and file-upload policy. */
+  /** Omitted permits all groups; an explicit list restricts metadata reads, and [] disables them. */
   readableGroupFileIds?: string[];
   messageGrouping?: MessageGroupingPolicy;
   /** Visible text characters requiring a second Agent send call; 0 disables the check. */
   textConfirmationThreshold?: number;
+  /** Conversation freshness response budgets; applies to every chat endpoint. */
+  conversationReview?: { initialMessageCount?: number; maxIncrementalMessages?: number };
 };
 
 export type MessageAdapterPolicies = Partial<Record<MessageEndpointType, MessageAdapterPolicy>>;
+
+export type NormalizedMessageAdapterPolicy = Required<Omit<MessageAdapterPolicy, "readableGroupFileIds">>
+  & Pick<MessageAdapterPolicy, "readableGroupFileIds">;
 
 export type MessageProcessingAgentPolicy = {
   enabled?: boolean;
@@ -999,8 +1004,15 @@ export function normalizeMessageAdapterPolicy(
   value: unknown,
   adapterType: MessageEndpointType,
   options: { legacyInputDisabled?: boolean } = {}
-): Required<MessageAdapterPolicy> {
+): NormalizedMessageAdapterPolicy {
   const raw = value && typeof value === "object" ? value as MessageAdapterPolicy : {};
+  const review = raw.conversationReview ?? {};
+  const initialMessageCount = review.initialMessageCount ?? 50;
+  const maxIncrementalMessages = review.maxIncrementalMessages ?? 100;
+  if (!Number.isInteger(initialMessageCount) || initialMessageCount < 1 || initialMessageCount > 500
+    || !Number.isInteger(maxIncrementalMessages) || maxIncrementalMessages < 2 || maxIncrementalMessages > 500) {
+    throw new Error("conversationReview requires initialMessageCount 1–500 and maxIncrementalMessages 2–500.");
+  }
   const textConfirmationThreshold = adapterType === "napcat" ? raw.textConfirmationThreshold ?? 0 : 0;
   if (!Number.isInteger(textConfirmationThreshold) || textConfirmationThreshold < 0 || textConfirmationThreshold > 200_000) {
     throw new Error("textConfirmationThreshold must be an integer from 0 to 200000.");
@@ -1010,9 +1022,11 @@ export function normalizeMessageAdapterPolicy(
     outputEnabled: raw.outputEnabled ?? true,
     supportedOutputs: normalizePayloadKinds(raw.supportedOutputs, adapterType),
     allowedFileRoots: normalizePathList(raw.allowedFileRoots),
-    readableGroupFileIds: adapterType === "napcat" ? normalizeReadableGroupFileIds(raw.readableGroupFileIds) : [],
+    ...(adapterType === "napcat" && raw.readableGroupFileIds !== undefined
+      ? { readableGroupFileIds: normalizeReadableGroupFileIds(raw.readableGroupFileIds) } : {}),
     messageGrouping: normalizeMessageGroupingPolicy(raw.messageGrouping, adapterType),
-    textConfirmationThreshold
+    textConfirmationThreshold,
+    conversationReview: { initialMessageCount, maxIncrementalMessages }
   };
 }
 
@@ -1030,7 +1044,7 @@ export function normalizeMessageAdapterPolicies(
   return result;
 }
 
-export function messageAdapterPolicyFor(gateway: GatewayDefinition, type: MessageAdapterType): Required<MessageAdapterPolicy> {
+export function messageAdapterPolicyFor(gateway: GatewayDefinition, type: MessageAdapterType): NormalizedMessageAdapterPolicy {
   if (type === "disabled") {
     return normalizeMessageAdapterPolicy(undefined, "napcat", { legacyInputDisabled: true });
   }

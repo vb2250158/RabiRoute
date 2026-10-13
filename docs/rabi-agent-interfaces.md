@@ -8,6 +8,10 @@
 
 完成连接鉴权后即可使用已提供的接口，不再增加逐功能或逐人格授权。发送仍须遵守来源身份、目标、消息格式和幂等回执合同。详见[连接与接口使用](connection-access.md)。
 
+本机 Agent、已鉴权 RabiLink 和已启用远端 Agent 共用配置接口权限。`POST/DELETE /api/agent-adapters/dsh/connection` 接受可信本机 Agent 不带浏览器 `Origin` 的请求；浏览器跨站请求、伪造连接标记和已撤销连接仍被拒绝。配置版本、参数和写后回读要求保持有效。
+
+连接器发布清单 `GET /api/lan-agent/releases/manifest` 和文件 `GET /api/lan-agent/releases/<version>/node/<assetPath>` 同样接受当前已鉴权的本机、RabiLink 和已启用远端 Agent 连接，无需另取节点凭据。首次安装票据及既有节点凭据的下载通道继续有效；未认证请求、已停用 Agent 和已撤销连接不能借该通道绕过原身份检查。
+
 家庭设备、音箱播报和媒体控制使用[家庭设备 Agent 接口](home-device-agent-api.md)：先发现资源与参数，再提交带状态版本、生命周期围栏和幂等键的动作，通过原键只读查询回执。服务受理不表示声音已播放。
 
 人格的电脑/手机时间轴查询、来源选择与采集控制见[人格全天记录接口](persona-all-day-recording.md#本机接口)。读取事件不代表已经开启采集，空列表不证明全天没有活动。
@@ -34,6 +38,8 @@
 5. 响应后再次有界 GET `/meta`，只复核两项身份是否与写前一致，不把无关健康变化当作切代；身份缺失、请求失败或身份变化均视为结果不确定，重新发现当前地址，保留原请求和键做权威读回，不自动重放。身份一致不消除原写请求超时、5xx 等已经存在的不确定性。通过资源读回核对实际结果。
 
 精确 `GET /meta` 是诊断入口：取得有效响应并核对当前身份后即可返回健康详情，不要求 `live`、`requiredReady` 或业务就绪；地址约束、鉴权、超时、禁止重定向和身份校验仍保留。此豁免不能推广到其它 GET，一些读取会更新 `viewedAt`。本节降级访问与写后身份分离合同须由新版客户端实现；仍要求整体 `healthy` 的旧版插件需要升级，本文更新不代表运行中的插件已完成安装或验收。
+
+命令行发现脚本在 Host 启动或切换时，会在有限总时限内重新读取状态；端点暂未发布表示服务过渡，不表示 Agent 缺少权限。取得完整端点后不再把 Host 的汇总状态当作第二层许可，普通请求仍按上述 `/meta` 合同判断可用性。超时应保留最后的启动、连接或身份不一致原因。Windows `healthy` 与 `degraded` 均可提供端点，读取 GUI Host 输出须等待进程并捕获标准输出。连接同一实例的合法地址别名以 generation 和实例身份核验，不以 URL 字符串相等代替身份校验；切换后重新发现，不复用旧端口或自动重放写入。
 
 跨人格投递另读“查询其它人格并投递消息”，保留 deliveryId、来源能力、目标 Route 和跳数合同；远端任务另读“远端 Agent 设备接口”。按需加载说明不会放宽这些要求。
 
@@ -65,7 +71,7 @@ Help 查询参数为 `operationId`、`path`、`method`，每项最多一次且�
 
 ### QQ 群文件元数据（源码合同；运行态未验证）
 
-`GET /api/agent/qq/group-files?routeId=<精确RouteID>&groupId=<精确群号>[&folderId=<文件夹ID>]` 使用与 QQ 诊断相同的可信 Agent／本机管理身份边界，不要求 Route primary 或额外可信来源元数据。两端均须满足 `messageAdapterPolicies.napcat.readableGroupFileIds` 对该群号独立配置的读取授权（默认空）；启用 Agent、loopback、消息发送权限、目标群和允许发送的文件根目录都不能替代该对象读取 ACL。只选精确 Route 下唯一启用的 NapCat 实例，不跨 Route、账号或群回退；拒绝多余/重复参数和请求体。读取前后均复核授权，不泄露凭据、原始上游错误、其它群的元数据；不下载或发送文件。
+`GET /api/agent/qq/group-files?routeId=<精确RouteID>&groupId=<精确群号>[&folderId=<文件夹ID>]` 使用与 QQ 诊断相同的可信 Agent／本机管理身份边界，不要求 Route primary 或额外可信来源元数据。未设置 `messageAdapterPolicies.napcat.readableGroupFileIds` 时，本地与已启用远端 Agent 默认可查询该账号能访问的群文件元数据；显式配置数组时仅允许所列群号，`[]` 表示拒绝全部。读取和保存配置均保留“未设置”与空数组的区别，不从目标群或发送文件根目录推导限制。只选精确 Route 下唯一启用的 NapCat 实例，不跨 Route、账号或群回退；拒绝多余/重复参数和请求体。读取前后均复核原连接及当前限制，不泄露凭据、原始上游错误、其它群的元数据；不下载或发送文件。
 
 根目录调用只读 `get_group_root_files`，指定 `folderId` 调用只读 `get_group_files_by_folder`，固定 `file_count: 50`、3 秒超时、最多 256 KiB 响应和 50 项投影，返回有界的文件/文件夹元数据。`completenessUnknown: true` 与 `potentiallyTruncated: true` 始终表示无法证明穷尽；非法条目可能丢弃，`projectionTruncated` 仅标记投影裁剪。找到精确文件可作为存在证据，空结果或未找到**不能证明缺失**，不得以此自动补发。补发缺失文件还需要平台支持并经验证的完整分页/搜索覆盖，或覆盖对应期间的可信自发事件与原 Outbox 终态经平台对照形成的逐文件闭环；缺少这些证据时停止缺失判定并回传未知，不能扩大范围或绕过权限。此为源码接线与测试合同，不代表当前安装版本、DSH 工具能力或 QQ 在线状态已验收。
 
@@ -105,6 +111,8 @@ GET /api/agent/qq/messages/<messageId>/attachments/0?routeId=<routeId>&kind=grou
 - 冷查询仍需读取候选归档；小 `limit` 和关键词不会缩小文件扫描量。先限定 `target` 或 `conversationKey` 及 Unix 秒 `from/to`，一般从 `limit=10` 开始，再按需要扩展。避免并发扫描全部历史；503 或超时后缩小范围或按既有规则使用已核验的正式来源，不无限重试同一重查询。
 - 历史归档冷读可设置最多 35 秒客户端预算，覆盖读池 30 秒执行预算及少量通信时间；排队另计，不能保证在客户端期限内完成。提前断开会取消读取，不以短超时反复启动同一冷扫描；35 秒是客户端设置，不是 query 参数。Host、`/meta` 和就绪后的知识索引查询通常仍用 5 秒预算。
 - `GET /api/agent/help?path=/api/roles/%3AroleId/message-endpoint-history` 返回相同限制。Help 的 `path` 使用目录中的 `pathTemplate`，保留 `:roleId`，不能替换成实际角色 ID。
+
+知识索引更新使用独立的普通优先级读池，最多 1 个进程、16 个排队任务，执行预算最高 30 秒；仍受全局最多 6 个读任务约束。它不继承后台目录读池的闲置优先级或未确认终止状态；单个目录刷新故障不会封锁知识索引初始化。
 
 读进程只按任务加载依赖：消息检索和知识索引更新不先初始化无关诊断、投递或媒体模块。消息读进程缓存未变化的归档，按文件身份、大小和修改时间校验；当前消息每次重读。缓存最多 128 个文件、估算预算 384 MiB，闲置 120 秒后在下次访问时淘汰；超预算文件直接读取，不写缓存。文件编辑、替换、删除或进程重建后重新读取。查询返回值独立复制，避免调用方修改缓存。
 
@@ -428,7 +436,7 @@ QQ 群文本示例：
 
 ### QQ 表情
 
-QQ 系统小表情可在文字中使用 `[CQ:face,id=<QQ 表情 ID>]`。收藏表情先调用 `GET /api/agent/qq/stickers?routeId=<Route ID>&instanceId=<实例 ID>&count=1000`；`instanceId` 在该 Route 只有一个启用账号时可省略，`count` 范围为 1–1000。返回当前账号的 `items { id, description, previewUrl }`，不含原始媒体地址或凭据。`previewUrl` 是同一 Manager 的只读图片接口。旧 NapCat 没有描述接口时，描述为空，选择前查看预览；数量上限和 `completenessUnknown` 不证明收藏列表完整。
+QQ 系统小表情可在文字中使用 `[CQ:face,id=<QQ 表情 ID>]`。收藏表情先调用 `GET /api/agent/qq/stickers?routeId=<Route ID>&instanceId=<实例 ID>&count=1000`；`instanceId` 在该 Route 只有一个启用账号时可省略，`count` 范围为 1–1000。返回当前账号的 `items { id, name, description, previewUrl }`，`name` 来自 QQ 原生收藏描述，不含原始媒体地址或凭据。`previewUrl` 是同一 Manager 的只读图片接口。旧 NapCat 可安装[名字兼容插件](../plugins/napcat-stickers/README.md)；没有该插件或收藏本身未命名时，名字为空，选择前查看预览。数量上限和 `completenessUnknown` 不证明收藏列表完整。
 
 发送沿用 `POST /api/agent/send`、原来源和稳定 `deliveryId`，使用 `"payload":{"type":"sticker","stickerId":"<列表中的 id>","text":"可选说明"}`，`channel=napcat`，`params` 与普通群聊/私聊一致。发送时重新从所选账号的收藏列表解析 ID，保留表情图片子类型；表情被移除时返回失败，不跨账号寻找替代品。表情属于现有 `image` 输出能力，沿用 Route 显式设置、引用、文字长度、文风、幂等与回执检查。不能同时提供 `path`、`url` 或 `segments`。QQ 内添加或删除收藏后，下一次查询直接读取当前内容；代码没有预置人格、固定图册或日常随机发送计划。
 
@@ -468,7 +476,9 @@ Rabi 使用本机 Chromium、Chrome 或 Edge 的无脚本浏览器进程渲染 M
 
 字数按 Unicode 码点计算，包含数字、英文、标点和正文内空格，去除首尾空白与 CQ 控制标记。文字、图片/文件说明、Markdown 及有序图文段中的全部文字均参与计数；自动生成的引用和 @ 标记不计入。
 
-Agent 应先检查和精简。原请求还没有发送回执时，可保留 `deliveryId` 修改正文并重新检查，不携带旧确认凭据。确需保留原文时，用同一 `deliveryId` 和完整原请求再次调用，只增加 `messageLengthConfirmation=messageLengthValidation.confirmationToken`。凭据有效期十分钟，绑定发送身份、目标、原文、附件与当前阈值；改内容、目标、编号或阈值，凭据过期或 Manager 重启后都需重新检查。成功回执按原编号读取，超时或不确定时先核对原回执，不换编号重发。
+Agent 应先检查和精简。一条说不清时，按完整意思拆成少量消息，像聊天一样一句接一句说；每条分别接受长度和文风检查，不按字数硬切或重复背景。尚无回执的原 `deliveryId` 可用于第一条，后续各条使用独立稳定编号并保留来源、目标和话题上下文；需要向同一源消息继续补充时，按既有合同显式传 `params.allowAdditionalReply=true`。重试沿用各条原编号，已发送或结果不确定的内容先核对回执，不重新拆分发送。
+
+原请求还没有发送回执时，可保留 `deliveryId` 修改正文并重新检查，不携带旧确认凭据。确需保留单条原文时，用同一 `deliveryId` 和完整原请求再次调用，只增加 `messageLengthConfirmation=messageLengthValidation.confirmationToken`。凭据有效期十分钟，绑定发送身份、目标、原文、附件与当前阈值；改内容、目标、编号或阈值，凭据过期或 Manager 重启后都需重新检查。成功回执按原编号读取，超时或不确定时先核对原回执，不换编号重发。
 
 长度确认与文风校验独立。超限响应也会带当前文风结果；文风失败仍需改写或按下节合同显式确认，`styleValidation=0` 不跳过长度确认。该参数是单次内容复核，不改变连接权限、Route 输出设置或人格风格绑定。
 
@@ -1223,7 +1233,33 @@ Desktop 偶尔会在消息已经写入目标任务后才返回启动或追加轮
 
 原目标任务正式回复一个 `pending_delivery` 请求时，线程桥先核对双方完整任务 ID、工作目录和原目标 rollout 的精确投递标记；按需流式读取该任务记录，不再因标记超出最后 4 MiB 而漏判。证据齐全才恢复为 `awaiting_response` 并继续原回复。缺少标记或身份不符时返回 `error.code=agent_reply_state_conflict`，并包含 `requestId`、`currentState`、`expectedState`、`reason`、`commitState` 和 `nextAction`。原因区分发送任务不符、接收任务不符、工作目录不符、原始接收证据缺失或不可读；`commitState=not_started` 仅表示这次回复没有发送，不能据此重发原任务。迟到的原投递提交不会把已回复请求重新打开。
 
-核对已送达但未入账的回复，调用 `POST /api/agent/threads`，正文为 `{"action":"reconcile_delivery","threadId":"<接收回复的原来源任务 ID>","deliveryId":"<原回复投递 ID>"}`。此动作不投递正文，也不接受调用方提供的结果：按需流式读取指定 Desktop 任务的原始用户消息，核对原 reservation、双方任务/工作目录、投递 ID 和后续请求合同，再经请求存储提交。读取限定于开始时的文件长度及 30 秒期限；超时或不可读保留未确认状态，不重发。成功返回 `receipt_recovered`；重复核对返回 `already_recorded`。原请求变为 `responded`，同次要求继续返回的新请求只恢复为 `awaiting_response`，不视为业务已完成。普通工具输出、助手引用或单独 ID 不构成恢复证据。
+#### 核对原投递回执：`reconcile_delivery`
+
+当前 Manager 的公共线程桥使用统一端点恢复协议。调用 `POST /api/agent/threads`，保留原 `deliveryId`，并提供**当前调用会话的真实来源身份**。下面是本机 Codex 原端点发起核对的完整示例；先将示例会话 ID、名称及工作目录替换为实际值，将 `deliveryId` 替换为待核对的原投递 ID，不是请求 `requestId`：
+
+```json
+{
+  "action": "reconcile_delivery",
+  "deliveryId": "019f0000-0000-7000-8000-000000000003",
+  "sourceThreadId": "019f0000-0000-7000-8000-000000000001",
+  "sourceAgentType": "agent",
+  "messageSource": {
+    "type": "agent",
+    "agentAdapter": "codex",
+    "sessionId": "019f0000-0000-7000-8000-000000000001",
+    "sessionName": "原投递端点会话",
+    "workspace": "C:\\Path\\To\\Your\\Project"
+  }
+}
+```
+
+- `sourceThreadId` 是**当前执行核对的完整会话 ID**，必须与 `messageSource.sessionId` 相同；`sourceAgentType` 沿用该端点原投递时的 Agent 类型。来源可以是原投递的发送端或接收端，但不是任意维护会话。正式回复方向与原请求相反：回复的接收端是原请求的来源，不能据此把回复目标填写成当前调用来源。
+- `messageSource.agentAdapter` 描述真实来源处理端，DSH 填 `dsh` 而不是 `codex`；名称和工作目录由真实 owner 核对，不授予权限。远端调用复用原已鉴权连接及端点绑定，不通过正文声明新授权。
+- 本分支先按 `deliveryId` 查持久投递记录，再核对当前来源。**不调用 `resolveTarget`**：目标、端点代际、正文 hash 和执行选项 hash 来自原记录；顶层 `threadId`、`agentAdapter`、`agentTargetId`、`instanceBinding` 不用于改选恢复目标，不能当作新请求的目标参数。无需 `prompt`、`result`、`nextAction`、`inReplyToRequestId` 或 `responsePolicy`，也不接受它们替换已留存的回复结果。
+- 已确认及重复核对均返回 HTTP `200`，响应 JSON 顶层为 `code=0`、`action="send"`、`ok=true`、`status="delivered"`、`delivery.status="accepted"`；顶层 `threadId` 是原投递目标，没有额外的 `data` 信封。尚无有效回执返回 HTTP `202`、`code=-1`、`status="delivery_unconfirmed"`、`delivery.status="unconfirmed"`、`delivery.retryable=false`。这些字段证明投递或回执状态，不证明业务工作完成。恢复正式回复后原请求才为 `responded`；若原投递同时要求后续回复，后续请求仅为 `awaiting_response`，应分别 GET 原请求核对。
+- 此动作只核对原 owner 留存回执／实际接收证据，不执行正文投递；原证据缺失、来源不匹配、绑定撤销、正文或代际不符时失败关闭，不重放、不重建、不换 `deliveryId`。普通工具输出、助手引用或孤立 ID 不能作为接收证据。
+
+**旧 reservation 兼容边界**：未装配 `endpointDelivery` 的旧本机 handler／历史恢复辅助入口仍按接收任务 `threadId` 读取回复 rollout，成功为 `receipt_recovered`、重复为 `already_recorded`；读取限定于开始时的文件长度与 30 秒期限。该状态不是当前公共统一端点分支的返回值，旧三字段例子不再作为公共调用示例。旧回复正文解析仅服务没有 `pendingResponseEvidence` 的既有预留；具有结构化证据的新记录不得失败后降级解析。含端点身份的记录经旧恢复辅助函数返回 `endpoint_receipt_required`，不能借旧分支绕过端点校验；当前公共分支也不因找不到端点投递记录而自动转旧恢复。旧预留只能按对应原版本的正式恢复入口核验证据或走正常取消，不直接改存储、不重发正文；全部受影响旧预留闭合并通过兼容回归后方可删除旧解析，见[历史兼容与退出条件](message-delivery-templates.md#历史兼容与退出条件)。
 
 收件日志能力按回复实际进入的原来源任务（`original.source`）核对。发送回复的处理端没有收件日志时，仅允许使用已持久化的结构化 SHA-256 证据恢复；正文必须精确匹配，双方 Adapter、任务 ID、工作目录、原请求及后续请求方向均须一致。缺少结构化证据的旧回复继续失败关闭，返回 `adapter_has_no_receipt_log`。
 
@@ -1810,3 +1846,22 @@ Agent 使用 `POST /api/desktop-pet/roles/:roleId/motion`，并用
 `GET /api/desktop-pet/roles/:roleId/motion/:requestId` 查询实际执行结果。
 接口只控制桌宠，不改变应用窗口焦点或位置，不修改闲逛配置。
 完整参数、幂等与运行限制见[桌宠移动接口](desktop-pet-agent-motion.md)。
+
+## 聊天发送前索引核对
+
+所有聊天渠道（QQ、企业微信、微信、飞书、RabiLink、语音、FenneNote 消息、人格聊天面板）共用 `/api/agent/send` 的 `conversationContext`：
+
+```json
+{ "conversationContext": { "lastReadMessageIndex": "c1.<会话范围>.<账本序号>", "confirmationToken": "<需要确认时，使用本次返回的凭证>" } }
+```
+
+- 已读索引与目标会话当前索引相同，正常进入发送；不再有其它发送检查阻塞才会投递。索引是 Rabi 双向聊天账本序号，包含别人和 Agent 的消息，不是 QQ 等平台的消息 ID。AgentPacket 的已读索引只覆盖本轮已展示的消息。
+- 请求未带索引时，优先读取同一 `sender.agentType + sender.sessionId + 人格/账号/会话` 的已核对缓存；缓存没有记录时返回最近 50 条并要求确认。缓存仅为当前 Manager 生命周期内的派生状态，24 小时不用即过期，重启后重新核对。不会把发出提示或发送期间新到的消息自动标为已读。
+- 索引落后时返回其后的新增消息；默认最多 100 条。超过时返回索引后的最早 50 条和最新 50 条，说明省略数量及 `omittedRange`。配置为奇数时，前段多一条。错误会话索引或超前索引按重新初始化处理。
+- 返回 HTTP 409、`conversation_context_confirmation_required`、`conversationContext.messages`、`latestMessageIndex`、`confirmationToken`、`expiresAt` 和搜索范围；此时未创建新的发送回执或 Outbox 项。Agent 应阅读消息，重新判断正文是否适合，必要时搜索省略内容；再次调用传最新索引和确认凭证，保留原 deliveryId。修改正文需要重新确认。凭证十分钟有效，并绑定 Agent、deliveryId、渠道、目标和正文；确认后又有新消息仍会再次阻止发送。
+- 同一会话的发送按顺序核对并执行，不同会话可并行；不同 Agent 的缓存和确认凭证独立。同群另一个 Agent 的回复也会令旧索引过期。已有发送回执的重试按原幂等合同处理，不重发；回执返回当前索引或明确的 `conversationContextError`，不会因发送后的读取失败隐藏已提交回执。发送期间新增消息会随结果返回，并留待下一次发送核对。
+- 每个消息端的 `messageAdapterPolicies.<消息端>.conversationReview` 可设置 `initialMessageCount`（1–500，默认 50）及 `maxIncrementalMessages`（2–500，默认 100）；WebGUI 在消息端设置的“发送前聊天核对”编辑同一配置。单条超长正文最多返回 6000 字并标记 `textTruncated`，全文可查询。
+- 省略内容使用返回的 `search.path`（`GET /api/agent/chat-history`）：传 `routeId`、`channel`、JSON 编码的 `params`、`afterSequence`（不含）、`beforeSequence`（含）、`query` 和 `limit`（最多 200）。它按发送目标读取同一正式账本，不要求人格绑定；返回数量仍不代表全部历史。已有 `message-endpoint-history` 同样支持这两个序号范围过滤，不能用平台消息 ID 代替序号。
+- 已初始化账本缺失 `conversation/current.jsonl` 或归档索引，或读取遇到损坏索引、损坏记录、缺失分卷时，历史查询与发送前检查返回错误；先恢复原账本，再重试。首次使用且尚无账本时仍可按空会话完成确认。已有发送回执保持原幂等处理。
+
+计划审批反馈和 FenneNote 纯播放属于结构化动作，不使用聊天索引。既有来源引用、图片、发送前事实核验、文风、长度和幂等检查继续生效；聊天索引核对不改变接口权限。

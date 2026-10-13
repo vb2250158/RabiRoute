@@ -1,11 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { readRabiLinkConversationTimeline } from "./rabilinkConversationLedger.js";
 import type { SpeechTranscriptSegment } from "./shared/speechControlContract.js";
 import { normalizeSpeechTranscriptSegment } from "./shared/speechTranscript.js";
 import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 import type { MessageContextArchiveReadCache } from "./messageContextArchiveReadCache.js";
+import { acquireFileLockSync } from "./shared/filePersistence.js";
 
 export const MESSAGE_CONTEXT_FILE = "message-context.jsonl";
 export const MESSAGE_CONTEXT_DIR = "conversation";
@@ -20,7 +22,7 @@ export const DEFAULT_MESSAGE_CONTEXT_ARCHIVE_INCLUDE_OLDER_THAN_HOURS = 24;
 const LOCK_FILE = ".message-context.lock";
 const LOCK_TIMEOUT_MS = 5_000;
 const LOCK_STALE_MS = 30_000;
-const lockWaitBuffer = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+
 
 export type MessageContextDirection = "inbound" | "outbound" | "system";
 
@@ -63,6 +65,8 @@ export type MessageContextRecord = {
   sourceDeviceId?: string;
   sourceDeviceName?: string;
   sourceDeviceKind?: string;
+  targetDeviceIds?: string[];
+  targetDeviceKinds?: string[];
   /** Transient capture-stream identity; never use this as a reply-device target. */
   sourceStreamId?: string;
   sourceArea?: string;
@@ -108,6 +112,8 @@ export type MessageContextArchiveItem = {
   entryCount: number;
   firstSequence: number;
   lastSequence: number;
+  /** Rebuildable negative duplicate hint; positive matches still verify ledger records. */
+  duplicateFilter?: { schemaVersion: 1; bits: string; sha256: string; byteLength: number; mtimeMs: number };
 };
 
 export type MessageContextArchiveIndex = {
@@ -150,6 +156,8 @@ export type RecentMessageContextQuery = {
   /** Optional epoch-second window used to skip archive files before their bodies are read. */
   from?: number;
   to?: number;
+  afterSequence?: number;
+  beforeSequence?: number;
 };
 
 type RecentMessageContextOptions = Omit<RecentMessageContextQuery, "limit">;
@@ -296,43 +304,7 @@ function legacyContextPath(dataDir: string): string {
 }
 
 function acquireLock(dataDir: string): () => void {
-  const dir = messageContextDir(dataDir);
-  fs.mkdirSync(dir, { recursive: true });
-  const lockPath = messageContextLockPath(dataDir);
-  const deadline = Date.now() + LOCK_TIMEOUT_MS;
-  while (true) {
-    try {
-      const descriptor = fs.openSync(lockPath, "wx");
-      try {
-        fs.writeFileSync(descriptor, `${JSON.stringify({ pid: process.pid, createdAt: Date.now() })}\n`, "utf8");
-      } finally {
-        fs.closeSync(descriptor);
-      }
-      let released = false;
-      return () => {
-        if (released) return;
-        released = true;
-        try {
-          fs.unlinkSync(lockPath);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        }
-      };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      try {
-        if (Date.now() - fs.statSync(lockPath).mtimeMs >= LOCK_STALE_MS) {
-          fs.unlinkSync(lockPath);
-          continue;
-        }
-      } catch (lockError) {
-        if ((lockError as NodeJS.ErrnoException).code !== "ENOENT") throw lockError;
-        continue;
-      }
-      if (Date.now() >= deadline) throw new Error(`Timed out waiting for message context lock: ${lockPath}`);
-      Atomics.wait(lockWaitBuffer, 0, 0, 10);
-    }
-  }
+  return acquireFileLockSync(messageContextLockPath(dataDir), { timeoutMs: LOCK_TIMEOUT_MS, staleMs: LOCK_STALE_MS });
 }
 
 function inferredChannel(adapter: string, kind: string | undefined, item: Record<string, unknown>): string {
@@ -468,6 +440,8 @@ function normalizeRecord(record: MessageContextRecord, sequence?: number): Messa
     sourceDeviceId: optionalText(record.sourceDeviceId),
     sourceDeviceName: optionalText(record.sourceDeviceName),
     sourceDeviceKind: optionalText(record.sourceDeviceKind),
+    targetDeviceIds: Array.isArray(record.targetDeviceIds) ? record.targetDeviceIds.map(optionalText).filter((id): id is string => Boolean(id)) : undefined,
+    targetDeviceKinds: Array.isArray(record.targetDeviceKinds) ? record.targetDeviceKinds.map(optionalText).filter((id): id is string => Boolean(id)) : undefined,
     sourceStreamId: optionalText(record.sourceStreamId),
     sourceArea: optionalText(record.sourceArea),
     sourceHostId: optionalText(record.sourceHostId),
@@ -697,8 +671,7 @@ function dedupeRecords(records: MessageContextRecord[]): MessageContextRecord[] 
   return [...byId.values()].sort(compareRecords);
 }
 
-function migrateLegacyIfNeeded(dataDir: string, index: MessageContextArchiveIndex): MessageContextRecord[] {
-  const current = recordsFromFile(messageContextCurrentPath(dataDir));
+function migrateLegacyIfNeeded(dataDir: string, index: MessageContextArchiveIndex, current = recordsFromFile(messageContextCurrentPath(dataDir))): MessageContextRecord[] {
   if (index.legacyImportedAt) return current;
   const migrated = dedupeRecords([...legacyItems(dataDir), ...current]);
   let sequence = Math.max(1, ...index.archives.map((item) => item.lastSequence + 1));
@@ -707,6 +680,44 @@ function migrateLegacyIfNeeded(dataDir: string, index: MessageContextArchiveInde
   index.nextSequence = sequence;
   index.legacyImportedAt = new Date().toISOString();
   return sequenced;
+}
+
+function duplicateFilterPositions(key: string, byteLength: number): number[] {
+  const hash = createHash("sha256").update(key).digest();
+  return [0, 4, 8, 12].map(offset => hash.readUInt32LE(offset) % (byteLength * 8));
+}
+
+function buildDuplicateFilter(records: readonly MessageContextRecord[], filename: string): NonNullable<MessageContextArchiveItem["duplicateFilter"]> {
+  const bits = Buffer.alloc(Math.min(1024 * 1024, Math.max(128, Math.ceil(records.length * 2))));
+  for (const record of records) for (const position of duplicateFilterPositions(dedupeKey(record), bits.length)) bits[position >> 3]! |= 1 << (position & 7);
+  const stat = fs.statSync(filename);
+  return { schemaVersion: 1, bits: bits.toString("base64"), sha256: createHash("sha256").update(bits).digest("hex"), byteLength: stat.size, mtimeMs: stat.mtimeMs };
+}
+
+function archiveMayContain(archive: MessageContextArchiveItem, filename: string, key: string): boolean {
+  const filter = archive.duplicateFilter;
+  if (!filter || filter.schemaVersion !== 1 || typeof filter.bits !== "string") return true;
+  const stat = fs.statSync(filename);
+  if (stat.size !== filter.byteLength || stat.mtimeMs !== filter.mtimeMs) return true;
+  const bits = Buffer.from(filter.bits, "base64");
+  if (!bits.length || createHash("sha256").update(bits).digest("hex") !== filter.sha256) return true;
+  return duplicateFilterPositions(key, bits.length).every(position => (bits[position >> 3]! & (1 << (position & 7))) !== 0);
+}
+
+/** Archive ledgers remain authoritative. Build missing hints before acquiring the
+ * writer lock; immutable archive fingerprints fence subsequent rotation races. */
+function prepareArchiveDuplicateFilters(dataDir: string, index: MessageContextArchiveIndex): void {
+  for (const archive of index.archives) {
+    const filename = path.join(messageContextArchiveDir(dataDir), path.basename(archive.file));
+    const filter = archive.duplicateFilter;
+    const before = fs.statSync(filename);
+    if (filter && filter.schemaVersion === 1 && filter.byteLength === before.size && filter.mtimeMs === before.mtimeMs
+      && typeof filter.bits === "string" && createHash("sha256").update(Buffer.from(filter.bits, "base64")).digest("hex") === filter.sha256) continue;
+    const records = recordsFromFile(filename);
+    const after = fs.statSync(filename);
+    if (before.size !== after.size || before.mtimeMs !== after.mtimeMs) throw new Error("Conversation archive changed while preparing duplicate hints.");
+    archive.duplicateFilter = buildDuplicateFilter(records, filename);
+  }
 }
 
 function findExistingRecord(
@@ -719,8 +730,9 @@ function findExistingRecord(
   const currentMatch = current.find((item) => dedupeKey(item) === key);
   if (currentMatch) return currentMatch;
   for (const archive of [...index.archives].reverse()) {
-    const archived = recordsFromFile(path.join(messageContextArchiveDir(dataDir), path.basename(archive.file)))
-      .find((item) => dedupeKey(item) === key);
+    const filename = path.join(messageContextArchiveDir(dataDir), path.basename(archive.file));
+    if (!archiveMayContain(archive, filename, key)) continue;
+    const archived = recordsFromFile(filename).find((item) => dedupeKey(item) === key);
     if (archived) return archived;
   }
   return undefined;
@@ -761,7 +773,8 @@ function archiveEligiblePrefix(
       endedAt: archived[archived.length - 1].recordedAt!,
       entryCount: archived.length,
       firstSequence,
-      lastSequence
+      lastSequence,
+      duplicateFilter: buildDuplicateFilter(archived, archivedPath)
     }
   ]);
   writeCurrent(dataDir, remaining);
@@ -773,10 +786,21 @@ export function appendMessageContextToDir(
   input: MessageContextRecord,
   options: AppendMessageContextOptions = {}
 ): AppendMessageContextResult | undefined {
+  // Historic ledgers are immutable once rotated. Prepare their derived hints
+  // outside the writer lock, then recheck the authoritative index under lock.
+  for (let attempt = 0; attempt < 8; attempt++) {
+  const prepared = readMessageContextArchiveIndex(dataDir);
+  prepareArchiveDuplicateFilters(dataDir, prepared);
   const release = acquireLock(dataDir);
   try {
-    const index = readMessageContextArchiveIndex(dataDir);
-    let current = migrateLegacyIfNeeded(dataDir, index);
+    const capturedCurrent = recordsFromFile(messageContextCurrentPath(dataDir));
+    const index = readArchiveIndex(dataDir, capturedCurrent);
+    for (const archive of index.archives) {
+      const prior = prepared.archives.find(item => item.file === archive.file && item.firstSequence === archive.firstSequence && item.lastSequence === archive.lastSequence && item.entryCount === archive.entryCount);
+      if (prior?.duplicateFilter) archive.duplicateFilter = prior.duplicateFilter;
+    }
+    if (index.archives.some(archive => !archive.duplicateFilter)) continue;
+    let current = migrateLegacyIfNeeded(dataDir, index, capturedCurrent);
     const archived = archiveEligiblePrefix(dataDir, index, current, options);
     current = archived.records;
     const candidate = normalizeRecord(input, index.nextSequence);
@@ -834,6 +858,8 @@ export function appendMessageContextToDir(
   } finally {
     release();
   }
+  }
+  throw new Error("Conversation archive inventory kept changing; append was not started.");
 }
 
 export function messageContextFromHistoryRecord(
@@ -963,6 +989,9 @@ export function messageContextFromOutboxEvent(event: string, message: string, ra
     speakerId: optionalText(data.speakerId), speakerName: optionalText(data.speakerName), speakerKind: optionalText(data.speakerKind),
     speakerConfidence: optionalNumber(data.speakerConfidence), speakerDecision: optionalText(data.speakerDecision),
     voiceprintId: optionalText(data.voiceprintId ?? data.voiceprintProfileId), speakerVerified: optionalBoolean(data.speakerVerified),
+    targetDeviceIds: Array.isArray(data.targetDeviceIds) ? data.targetDeviceIds.map(String) : undefined,
+    targetDeviceKinds: Array.isArray(data.targetDeviceKinds) ? data.targetDeviceKinds.map(String) : undefined,
+    sourceDeviceId: optionalText(data.sourceDeviceId), sourceDeviceKind: optionalText(data.sourceDeviceKind),
     attachments: safeAttachments(data.attachments) });
 }
 
@@ -1031,7 +1060,9 @@ function archiveOverlapsQuery(item: MessageContextArchiveItem, query: RecentMess
 
 function archiveRecords(dataDir: string, query: RecentMessageContextQuery, current: readonly MessageContextRecord[], cache?: MessageContextArchiveReadCache): MessageContextRecord[] {
   return readArchiveIndex(dataDir, current).archives
-    .filter(item => archiveOverlapsQuery(item, query))
+    .filter(item => archiveOverlapsQuery(item, query)
+      && (query.afterSequence === undefined || item.lastSequence > query.afterSequence)
+      && (query.beforeSequence === undefined || item.firstSequence <= query.beforeSequence))
     .flatMap((item) => {
       const file = path.join(messageContextArchiveDir(dataDir), path.basename(item.file));
       return cache ? cache.read(file, recordsFromFile) : recordsFromFile(file);
@@ -1053,6 +1084,8 @@ function matchesMessageQuery(item: MessageContextRecord, query: RecentMessageCon
   if (query.sender && item.sender !== query.sender) return false;
   if (query.target && item.target !== query.target) return false;
   if (query.conversationKey && item.conversationKey !== query.conversationKey) return false;
+  if (query.afterSequence !== undefined && (item.sequence ?? 0) <= query.afterSequence) return false;
+  if (query.beforeSequence !== undefined && (item.sequence ?? 0) > query.beforeSequence) return false;
   if (terms.length) {
     const haystack = [item.text, item.sender, item.target].filter(Boolean).join(" ").toLocaleLowerCase();
     if (query.queryMatch === "all" ? !terms.every(term => haystack.includes(term)) : !terms.some(term => haystack.includes(term))) return false;
@@ -1102,6 +1135,123 @@ export function recentMessageContextItems(dataDirs: string[], limitOrQuery: numb
   }
   const result = selected.reverse();
   return archiveReadCache ? structuredClone(result) : result;
+}
+
+/** Sequence order is the ledger's append order, independent of platform timestamps.
+ * Read one persona owner, prune archives by sequence and retain only bounded head/tail windows.
+ * Missing/corrupt authoritative files fail the send check instead of masquerading as empty history.
+ */
+export function conversationMessageWindow(dataDir: string, options: {
+  matches: (record: MessageContextRecord) => boolean;
+  afterSequence?: number;
+  limit: number;
+}): { latestSequence: number; totalCount: number; omittedCount: number; entries: MessageContextRecord[] } {
+  const currentPath = messageContextCurrentPath(dataDir);
+  const indexPath = messageContextArchiveIndexPath(dataDir);
+  // Hold the writer's lock only while capturing index + current-file handle/size.
+  // Archive scans happen after release; rotation cannot swap the captured current file underneath us.
+  const release = acquireLock(dataDir);
+  let archives: MessageContextArchiveItem[];
+  let currentFile: { fd: number; size: number } | undefined;
+  try {
+    const indexExists = fs.existsSync(indexPath);
+    const currentExists = fs.existsSync(currentPath);
+    if (!indexExists) {
+      const archiveDir = messageContextArchiveDir(dataDir);
+      const hasArchives = fs.existsSync(archiveDir) && fs.readdirSync(archiveDir, { withFileTypes: true })
+        .some(item => item.isFile() && archiveRangeFromFileName(item.name) !== undefined);
+      if (currentExists || hasArchives) {
+        throw new Error("Conversation archive index is missing; restore it before sending.");
+      }
+    }
+    archives = indexExists
+      ? (JSON.parse(fs.readFileSync(indexPath, "utf8")) as MessageContextArchiveIndex).archives : [];
+    if (!Array.isArray(archives) || archives.some(item => !item || typeof item.file !== "string"
+      || item.file !== path.basename(item.file) || !Number.isSafeInteger(item.firstSequence)
+      || !Number.isSafeInteger(item.lastSequence) || item.firstSequence < 1 || item.lastSequence < item.firstSequence)) {
+      throw new Error("Conversation archive index is unreadable.");
+    }
+    if (currentExists) {
+      const fd = fs.openSync(currentPath, "r");
+      currentFile = { fd, size: fs.fstatSync(fd).size };
+    } else if (indexExists) {
+      throw new Error("Conversation ledger current file is missing; restore it before sending.");
+    } else if (fs.existsSync(legacyContextPath(dataDir))) {
+      throw new Error("Conversation ledger has not been initialized; refresh the message endpoint before sending.");
+    }
+  } finally { release(); }
+  try {
+    const files = sortArchives(archives).filter(item => options.afterSequence === undefined || item.lastSequence > options.afterSequence)
+      .map(item => path.join(messageContextArchiveDir(dataDir), path.basename(item.file)));
+    if (currentFile) files.push(currentPath);
+    const limit = Math.max(1, options.limit);
+    const headSize = Math.ceil(limit / 2);
+    const tailSize = Math.floor(limit / 2);
+    const head: MessageContextRecord[] = [];
+    const tail: MessageContextRecord[] = [];
+    let latestSequence = options.afterSequence ?? 0;
+    let totalCount = 0;
+    const initial = options.afterSequence === undefined;
+    // Initial reads only visit older archives until the requested recent window is filled.
+    for (const file of initial ? files.reverse() : files) {
+      const fileTail: MessageContextRecord[] = [];
+      for (const record of sequencedConversationFile(file, file === currentPath ? currentFile : undefined)) {
+        if (!options.matches(record)) continue;
+        const sequence = record.sequence!;
+        latestSequence = Math.max(latestSequence, sequence);
+        if (!initial && sequence <= options.afterSequence!) continue;
+        if (initial) {
+          fileTail.push(record);
+          if (fileTail.length > limit) fileTail.shift();
+        } else {
+          totalCount++;
+          if (head.length < headSize) head.push(record);
+          else {
+            tail.push(record);
+            if (tail.length > tailSize) tail.shift();
+          }
+        }
+      }
+      if (initial) {
+        tail.unshift(...fileTail);
+        if (tail.length > limit) tail.splice(0, tail.length - limit);
+        if (tail.length >= limit) break;
+      }
+    }
+    const entries = initial ? tail : [...head, ...tail];
+    return { latestSequence, totalCount: initial ? entries.length : totalCount,
+      omittedCount: initial ? 0 : Math.max(0, totalCount - entries.length), entries };
+  } finally { if (currentFile) fs.closeSync(currentFile.fd); }
+}
+
+function* sequencedConversationFile(file: string, snapshot?: { fd: number; size: number }): Generator<MessageContextRecord> {
+  const fd = snapshot?.fd ?? fs.openSync(file, "r");
+  const decoder = new StringDecoder("utf8");
+  const buffer = Buffer.alloc(64 * 1024);
+  let pending = "";
+  let offset = 0;
+  try {
+    const size = snapshot?.size ?? fs.fstatSync(fd).size;
+    while (offset < size) {
+      const count = fs.readSync(fd, buffer, 0, Math.min(buffer.length, size - offset), offset);
+      if (!count) break;
+      offset += count;
+      pending += decoder.write(buffer.subarray(0, count));
+      let newline: number;
+      while ((newline = pending.indexOf("\n")) >= 0) {
+        const line = pending.slice(0, newline).trim();
+        pending = pending.slice(newline + 1);
+        if (!line) continue;
+        const raw = JSON.parse(line);
+        const record = normalizeRecord(raw);
+        if (!record || !Number.isSafeInteger(record.sequence) || record.sequence! < 1) {
+          throw new Error("Conversation ledger contains an invalid message index.");
+        }
+        yield record;
+      }
+    }
+    if ((pending + decoder.end()).trim()) throw new Error("Conversation ledger has an incomplete record; retry after persistence completes.");
+  } finally { if (!snapshot) fs.closeSync(fd); }
 }
 
 function formatTime(value: number): string {

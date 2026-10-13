@@ -622,6 +622,71 @@ function formalParentViolations() {
   });
 }
 
+function productionSourcePaths() {
+  const sources = [];
+  const visit = (directory) => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const absolute = path.join(directory, entry.name);
+      if (entry.isDirectory()) visit(absolute);
+      else if (entry.isFile() && entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) sources.push(absolute);
+    }
+  };
+  visit(path.join(repoRoot, "src"));
+  return sources;
+}
+
+function runtimeImportsModule(sourceText, ownerKey) {
+  const sourceFile = ts.createSourceFile("runtime-import-fixture.ts", sourceText, ts.ScriptTarget.ESNext, true, ts.ScriptKind.TS);
+  let importsOwner = false;
+  const matchesModule = (expression) => expression && ts.isStringLiteralLike(expression)
+    && moduleOwnerKey(expression.text) === ownerKey;
+  visitTree(sourceFile, (node) => {
+    if (ts.isImportDeclaration(node) && matchesModule(node.moduleSpecifier)) {
+      const clause = node.importClause;
+      const bindings = clause?.namedBindings;
+      if (!clause || (!clause.isTypeOnly && (clause.name || !bindings || ts.isNamespaceImport(bindings)
+        || bindings.elements.length === 0 || bindings.elements.some(element => !element.isTypeOnly)))) importsOwner = true;
+    } else if (ts.isExportDeclaration(node) && !node.isTypeOnly && matchesModule(node.moduleSpecifier)) {
+      const clause = node.exportClause;
+      if (!clause || !ts.isNamedExports(clause) || clause.elements.length === 0
+        || clause.elements.some(element => !element.isTypeOnly)) importsOwner = true;
+    } else if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword
+      || (ts.isIdentifier(node.expression) && node.expression.text === "require")) && matchesModule(node.arguments[0])) {
+      importsOwner = true;
+    } else if (ts.isImportEqualsDeclaration(node) && !node.isTypeOnly
+      && ts.isExternalModuleReference(node.moduleReference) && matchesModule(node.moduleReference.expression)) {
+      importsOwner = true;
+    }
+  });
+  return importsOwner;
+}
+
+function productionModuleImporters(ownerKey) {
+  return productionSourcePaths().filter(absolute => runtimeImportsModule(fs.readFileSync(absolute, "utf8"), ownerKey))
+    .map(absolute => path.relative(repoRoot, absolute).replace(/\\/g, "/")).sort();
+}
+
+test("read-child module boundary distinguishes erased types from static, dynamic and re-exported runtime imports", () => {
+  const moduleName = "managerReadWorkerTasks";
+  for (const source of [
+    'import type { Task } from "./managerReadWorkerTasks.js";',
+    'import { type Task } from "./managerReadWorkerTasks.js";',
+    'export type { Task } from "./managerReadWorkerTasks.js";',
+    'export { type Task } from "./managerReadWorkerTasks.js";',
+    'type Task = import("./managerReadWorkerTasks.js").Task;'
+  ]) assert.equal(runtimeImportsModule(source, moduleName), false, source);
+  for (const source of [
+    'import { execute } from "./managerReadWorkerTasks.js";',
+    'import "./managerReadWorkerTasks.js";',
+    'import {} from "./managerReadWorkerTasks.js";',
+    'import { type Task, execute } from "./managerReadWorkerTasks.js";',
+    'const tasks = await import("./managerReadWorkerTasks.js");',
+    'const tasks = require("./managerReadWorkerTasks.js");',
+    'export { execute } from "./managerReadWorkerTasks.js";',
+    'export * from "./managerReadWorkerTasks.js";'
+  ]) assert.equal(runtimeImportsModule(source, moduleName), true, source);
+});
+
 test("storage parent-boundary analyzer is symbol-aware and leaves local runtime logs alone", () => {
   const fixture = [
     'import fs from "node:fs";',
@@ -711,27 +776,14 @@ test("pending formal-parent storage seams match the explicit migration ledger", 
 });
 
 test("plan feedback recovery discovery is owned only by the Manager read child", () => {
-  const sourceRoot = path.join(repoRoot, "src");
-  const importers = [];
-  const visit = (directory) => {
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      const absolutePath = path.join(directory, entry.name);
-      if (entry.isDirectory()) {
-        visit(absolutePath);
-        continue;
-      }
-      if (!entry.isFile() || !entry.name.endsWith(".ts") || entry.name.endsWith(".test.ts")) continue;
-      const sourceText = fs.readFileSync(absolutePath, "utf8");
-      if (!/from\s+["'][^"']*planFeedbackRecoveryDiscovery(?:\.js)?["']/.test(sourceText)) continue;
-      importers.push(path.relative(repoRoot, absolutePath).replace(/\\/g, "/"));
-    }
-  };
-  visit(sourceRoot);
-  assert.deepEqual(importers.sort(), ["src/manager/managerReadWorker.ts"]);
+  assert.deepEqual(productionModuleImporters("planFeedbackRecoveryDiscovery"), ["src/manager/managerReadWorkerTasks.ts"]);
+  assert.deepEqual(productionModuleImporters("managerReadWorkerTasks"), ["src/manager/managerReadWorker.ts"]);
 
   const readWorker = fs.readFileSync(path.join(repoRoot, "src/manager/managerReadWorker.ts"), "utf8");
+  assert.match(readWorker, /await import\(["']\.\/managerReadWorkerTasks\.js["']\)[\s\S]*return tasks\.execute\(task\)/);
+  const readTasks = fs.readFileSync(path.join(repoRoot, "src/manager/managerReadWorkerTasks.ts"), "utf8");
   assert.match(
-    readWorker,
+    readTasks,
     /case\s+["']plan_feedback_recovery_candidates["']:[\s\S]*listOpenPlanFeedbackRecoveryCandidates\(task\.rolesRoot\)/
   );
 });
@@ -740,18 +792,11 @@ test("production role-panel timeline I/O stays inside the read child, mutation c
   const allowed = new Set([
     "src/rolePanelTimeline.ts",
     "src/manager/managerReadWorker.ts",
+    "src/manager/managerReadWorkerTasks.ts",
     "src/manager/managerStorageMutationChild.ts"
   ]);
-  const sources = [];
-  const visit = (directory) => {
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      const absolute = path.join(directory, entry.name);
-      if (entry.isDirectory()) visit(absolute);
-      else if (entry.isFile() && entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) sources.push(absolute);
-    }
-  };
-  visit(path.join(repoRoot, "src"));
-  const violations = sources.flatMap((absolute) => {
+  assert.deepEqual(productionModuleImporters("managerReadWorkerTasks"), ["src/manager/managerReadWorker.ts"]);
+  const violations = productionSourcePaths().flatMap((absolute) => {
     const relative = path.relative(repoRoot, absolute).replace(/\\/g, "/");
     if (allowed.has(relative)) return [];
     const source = fs.readFileSync(absolute, "utf8");

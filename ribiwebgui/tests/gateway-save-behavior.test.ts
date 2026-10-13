@@ -5,6 +5,7 @@ import { cloneGatewayValue, mergeGatewayDraft } from "../src/gatewayDraft";
 import { addRouteAgent, removeRouteAgent, selectRouteAgent } from "../src/routeAgentTargetEditor";
 import { remoteAgentTargetKey } from "../../src/shared/routeAgentTargets";
 import { removePersonaOwnedGatewayConfig } from "../../src/shared/remotePersonaReference";
+import { setMessageAdapterPolicy } from "../src/utils/gatewayHelpers";
 
 Object.assign(globalThis, { window: { location: { pathname: "/", hash: "" } } });
 const { useGatewayStore } = await import("../src/stores/gatewayStore");
@@ -75,6 +76,24 @@ async function fixture(initialRows: any[] = [{ id: "a", configName: "a", enabled
     changeRevision() { revision = "b".repeat(64); }
   };
 }
+
+test("Route load, policy editing and save preserve omitted and explicit group-file restrictions", async () => {
+  for (const readableGroupFileIds of [undefined, [], ["123456"]]) {
+    const policy = readableGroupFileIds === undefined ? {} : { readableGroupFileIds };
+    const f = await fixture([{ id: "a", configName: "a", enabled: true, messageAdapters: ["napcat"],
+      messageAdapterPolicies: { napcat: policy } }]);
+    setMessageAdapterPolicy(f.store.gateways[0], "napcat", { textConfirmationThreshold: 12 });
+    await f.store.save("a");
+    assert.equal(f.writes, 1);
+    await f.store.load();
+    for (const row of [f.rows[0], f.store.gateways[0]]) {
+      const saved = row.messageAdapterPolicies.napcat;
+      assert.deepEqual(saved.readableGroupFileIds, readableGroupFileIds);
+      assert.equal(Object.hasOwn(saved, "readableGroupFileIds"), readableGroupFileIds !== undefined);
+      assert.equal(saved.textConfirmationThreshold, 12);
+    }
+  }
+});
 
 test("instance target selection survives actual store PUT and reload without overwriting local Codex", async () => {
   const f = await fixture();

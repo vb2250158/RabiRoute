@@ -66,6 +66,7 @@ export function agentSendRequestTemplateForSource(context: Record<string, unknow
     routeId,
     channel,
     styleValidation: 1,
+    ...(context.lastReadMessageIndex ? { conversationContext: { lastReadMessageIndex: context.lastReadMessageIndex } } : {}),
     params,
     payload: {
       type: "<纯文字填 text；图片填 image；NapCat Markdown 转图片填 markdown；多段混排仍填 image>",

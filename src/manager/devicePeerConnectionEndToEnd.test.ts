@@ -21,7 +21,7 @@ import { tunnelFetch } from "../peerTunnel/http.js";
 
 type Reply = { sourceDeviceId: string; deviceId: string; publicKey: string; generation: string; expiresAt: number; epoch: string };
 type Wire = { code?: number | string; cookie?: string; app?: { id: string; token: string }; device?: { id: string }; token?: string;
-  peers?: Array<{ id: string }>; data?: { structuredContent?: { statusCode?: number; data?: { code?: number | string; data?: Reply } } } };
+  peers?: Array<{ id: string; online?: boolean }>; data?: { structuredContent?: { statusCode?: number; data?: { code?: number | string; data?: Reply } } } };
 async function readBody(request: http.IncomingMessage): Promise<unknown> {
   const parts: Buffer[] = []; for await (const part of request) parts.push(Buffer.from(part));
   return parts.length ? JSON.parse(Buffer.concat(parts).toString()) : undefined;
@@ -205,16 +205,23 @@ test("real credential revocation blocks renewal and absolute lease expiry blocks
 
 test("actual queued device authorization expires before a freshly signed main-process hop can grant", { timeout: 30_000 }, async t => {
   const f = await fixture(t); await f.worker.stop();
+  // The aborted worker stream must be closed at Relay before a new registration
+  // can be kept online; a late close must not invalidate the queued fixture.
+  await until(async () => (await f.relayRequest("/api/rabilink/peers", "GET", undefined,
+    { "x-rabilink-token": f.app.token })).wire.peers?.find(row => row.id === f.target)?.online === false,
+  "original worker disconnect observed by Relay");
   const registration = new URLSearchParams({ deviceId: f.target, deviceGuid: f.workerConfig.deviceGuid, deviceName: "Fixture PC", deviceKind: "pc", waitMs: "0", capabilities: "webgui" });
   assert.equal((await f.relayRequest("/worker/webgui-requests?" + registration, "GET", undefined, { "x-rabilink-token": f.app.token })).status, 200);
-  const input = f.signed(f.eye, Date.now() + 500), operationId = randomUUID();
+  const input = f.signed(f.eye, Date.now() + 10_000), operationId = randomUUID();
   const pending = f.relayRequest("/api/rabilink/device/api", "POST", { targetDeviceId: f.target,
     request: { method: "POST", path: DEVICE_PEER_BOOTSTRAP_PATH, body: input, operationId } }, { "x-rabilink-token": f.deviceToken });
   await until(async () => {
     const result = await f.relayRequest("/api/rabilink/device/api/operations/" + operationId, "GET", undefined, { "x-rabilink-token": f.deviceToken });
     return (result.wire.data as { receipt?: { state: string } })?.receipt?.state === "pending";
   }, "original operation queued before worker restart");
-  await new Promise(resolve => setTimeout(resolve, Math.max(0, input.expiresAt - Date.now() + 50)));
+  // Advance only the PC clock after original Relay authentication has queued
+  // the request. Network deadlines remain real and the signed expiry is unchanged.
+  t.mock.timers.enable({ apis: ["Date"], now: input.expiresAt + 50 });
   await f.worker.sync(f.workerConfig);
   const finished = await pending;
   assert.equal(finished.status, 200); assert.equal(finished.wire.data?.structuredContent?.statusCode, 400, JSON.stringify(finished.wire));

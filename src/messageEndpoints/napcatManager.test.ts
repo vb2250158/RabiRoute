@@ -1224,7 +1224,7 @@ test("transient login query failure is unknown, never evidence for a human login
       body = mode === "failed-response" ? { code: 1, data: { isLogin: false, loginError: "请扫码登录" } }
         : { code: 0, data: { isLogin: false, loginError: mode === "qr" ? "请扫码登录" : mode === "conflict" ? "当前账号(10000)已登录" : "" } };
     } else if (url === "/api/QQLogin/GetQuickLoginListNew") {
-      body = mode === "empty" || mode === "failed-response" ? { code: 1 } : { code: 0, data: mode === "quick" ? [{ uin: "10000", isQuickLogin: true }] : [] };
+      body = mode === "empty" || mode === "failed-response" ? { code: 1 } : { code: 0, data: mode === "quick" || mode === "qr" ? [{ uin: "10000", isQuickLogin: true }] : [] };
     } else { actions.push(url); body = { code: 1 }; }
     response.end(JSON.stringify(body));
   });

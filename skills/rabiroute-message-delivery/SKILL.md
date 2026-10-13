@@ -44,3 +44,7 @@ description: 通过 RabiRoute 正式工具发现 Agent 会话、核对绑定、�
 ## 验收边界
 
 技能被发现、可加载、描述覆盖请求，只能证明入口已就位；不能证明模型每次都会命中，也不能证明真实投递已修复。真实投递验收需要明确的目标、获授权的正文及正式回执。技能检查不启动该验收。
+
+## 发送前聊天索引核对
+
+所有聊天类型消息端使用 `/api/agent/send` 的 `conversationContext`。上下文已给出 `lastReadMessageIndex` 时原样传递；缺省时 Manager 只复用同一 `sender.agentType + sender.sessionId + 会话` 的已核对缓存，首次返回最近 50 条并要求再次调用。收到 `conversation_context_confirmation_required` 表示尚未发送：阅读新增消息，重新判断正文是否合适；超过增量上限时按返回的会话、`afterSequence/beforeSequence` 范围和关键词补查省略内容。确认后保留原 deliveryId，提交返回的 `confirmationToken` 与 `latestMessageIndex`（作为 `lastReadMessageIndex`）；正文改变时重新审核，不能自动确认未读内容。再次有新消息时重复核对；不得换 deliveryId 绕过。不同 Agent 的已读位置和凭证互不共享，旧回执按原请求核对，不能重发。

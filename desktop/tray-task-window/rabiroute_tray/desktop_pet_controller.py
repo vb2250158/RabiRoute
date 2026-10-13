@@ -6,8 +6,8 @@ import random
 from collections import deque
 from collections.abc import Callable
 
-from PySide6.QtCore import QObject, QPoint, QTimer, Signal
-from PySide6.QtWidgets import QApplication, QMenu
+from PySide6.QtCore import QObject, QPoint, Qt, QTimer, Signal
+from PySide6.QtWidgets import QApplication, QLabel, QMenu, QSlider, QVBoxLayout, QWidget, QWidgetAction
 
 from .desktop_pet_client import DesktopPetBinding, DesktopPetClient, DesktopPetPack, LoadedDesktopPetAnimation
 from .desktop_pet_events import DesktopPetEventStream
@@ -768,12 +768,7 @@ class DesktopPetController(QObject):
         bubble.setChecked(self._bubble_enabled)
         bubble.toggled.connect(self._set_bubble_enabled)
         menu.addAction("气泡样式…", self._edit_bubble_style)
-        scale_menu = menu.addMenu("大小")
-        for label, scale in (("50%", 0.5), ("75%", 0.75), ("100%", 1.0), ("125%", 1.25)):
-            action = scale_menu.addAction(label)
-            action.setCheckable(True)
-            action.setChecked(abs(self._scale - scale) < 0.01)
-            action.triggered.connect(lambda _checked=False, value=scale: self._set_scale(value))
+        self._add_scale_control(menu)
         action_menu = menu.addMenu("播放动作")
         menu._desktop_pet_action_menu = action_menu
         if self._pack is None:
@@ -840,7 +835,48 @@ class DesktopPetController(QObject):
         dialog.deleteLater()
         self._arm_wander()
 
+    def _add_scale_control(self, menu: QMenu) -> QMenu:
+        percent = round(self._scale * 100)
+        scale_menu = menu.addMenu(f"大小：{percent}%")
+        panel = QWidget(scale_menu)
+        layout = QVBoxLayout(panel)
+        label = QLabel(f"当前大小：{percent}%", panel)
+        slider = QSlider(Qt.Orientation.Horizontal, panel)
+        slider.setRange(10, 200)
+        slider.setSingleStep(1)
+        slider.setPageStep(10)
+        slider.setValue(percent)
+        slider.setMinimumWidth(220)
+        slider.setAccessibleName("桌宠大小（10%–200%）")
+        layout.addWidget(label)
+        layout.addWidget(slider)
+        layout.addWidget(QLabel("10%                         200%", panel))
+        action = QWidgetAction(scale_menu)
+        action.setDefaultWidget(panel)
+        scale_menu.addAction(action)
+        timer = QTimer(scale_menu)
+        timer.setSingleShot(True)
+        timer.timeout.connect(lambda: self._set_scale(slider.value() / 100))
+
+        def changed(value: int) -> None:
+            label.setText(f"当前大小：{value}%")
+            scale_menu.setTitle(f"大小：{value}%")
+            timer.start(100)
+
+        def commit() -> None:
+            if timer.isActive():
+                timer.stop()
+                self._set_scale(slider.value() / 100)
+
+        slider.valueChanged.connect(changed)
+        slider.sliderReleased.connect(commit)
+        scale_menu.aboutToHide.connect(commit)
+        return scale_menu
+
     def _set_scale(self, scale: float) -> None:
+        scale = max(0.1, min(2.0, float(scale)))
+        if abs(self._scale - scale) < 0.0001:
+            return
         self._scale = scale
         self._apply_presentation()
         self._enqueue_animation_preloads()

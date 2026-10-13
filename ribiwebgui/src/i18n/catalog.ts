@@ -2244,7 +2244,7 @@ export const englishCatalog: Record<string, string> = {
   "未读取到会话": "No tasks found",
   "消息组等待": "Message-group timing",
   "长消息确认": "Long-message confirmation",
-  "超过字数时先提醒 Agent 检查和精简，再次调用确认后才发送到 QQ。": "Messages over the threshold ask the Agent to review and shorten them. QQ delivery starts only after a second confirmed call.",
+  "超过字数时提醒 Agent 先精简；一条说不清就按意思分条说。需要保留单条长消息时，再次调用确认后发送。": "Above the threshold, ask the Agent to shorten the text or continue in separate messages at natural breaks. A necessary single long message requires a second confirmed call before delivery.",
   "确认阈值（字）": "Confirmation threshold (characters)",
   "0 表示关闭。字数含数字、英文、标点和正文中的空格；引用与 @ 标记不计入。": "0 disables this check. Count includes numbers, letters, punctuation and interior spaces; quote and mention control tags are excluded.",
   "聊天消息默认使用消息组，不需要单独开启。这里仅调整等待一句话说完的时间。": "Chat messages use message groups automatically. These settings only control how long to wait for one continuous expression.",

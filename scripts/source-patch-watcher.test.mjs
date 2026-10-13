@@ -427,6 +427,41 @@ test("a catalog created after startup discovers independent modules and injects 
   } finally { watcher?.stop(); await service?.stop(); await fs.rm(root, { recursive: true, force: true }); }
 });
 
+test("files and nested directories created after startup are discovered without creating a catalog", { timeout: 45000 }, async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-live-discovery-"));
+  const baselineRoot = path.join(root, "baseline");
+  const stateRoot = path.join(root, "state");
+  const runtime = new GenerationRuntime({ host: "manager" });
+  const errors = [];
+  let watcher;
+  let service;
+  try {
+    await fs.mkdir(baselineRoot);
+    await fs.writeFile(path.join(baselineRoot, "catalog.json"), JSON.stringify({ schemaVersion: 1, modules: [] }));
+    service = new ManagerSourcePatchService({ baselineRoot, stateRoot, runtime });
+    watcher = await SourcePatchWatcher.start({ root, service, runtime, outputDirectory: path.join(stateRoot, "candidates"), onError: error => errors.push(error.message) });
+    const generation = runtime.current().id;
+    await fs.mkdir(path.join(root, "source-patches", "nested"), { recursive: true });
+    const sourcePath = path.join(root, "source-patches", "nested", "future.ts");
+    await fs.writeFile(sourcePath, "export async function read() { return 7; }");
+    const id = "auto.source-patches.nested.future";
+    await until(() => service.status().modules.some(module => module.id === id && module.state === "ready"), () => `New file was not discovered: ${errors.join('; ')}`);
+    assert.equal((await service.invoke(id, "read", [])).value, 7);
+    const pid = service.status().modules.find(module => module.id === id).active.pid;
+    await fs.writeFile(sourcePath, "export async function read() { return 8; }");
+    await until(() => service.status().modules.find(module => module.id === id)?.active?.snapshot?.revision === 1, () => errors.join('; '));
+    assert.equal((await service.invoke(id, "read", [])).value, 8);
+    assert.equal(service.status().modules.find(module => module.id === id).active.pid, pid);
+    // Creating a manifest must not drop modules discovered from directory events.
+    await fs.writeFile(path.join(root, "source-patches", "modules.json"), JSON.stringify({ schemaVersion: 1, modules: [] }));
+    await fs.writeFile(sourcePath, "export async function read() { return 9; }");
+    await until(() => service.status().modules.find(module => module.id === id)?.active?.snapshot?.revision === 2, () => errors.join('; '));
+    assert.equal((await service.invoke(id, "read", [])).value, 9);
+    assert.equal(runtime.current().id, generation);
+    assert.deepEqual(errors, []);
+  } finally { watcher?.stop(); await service?.stop(); await fs.rm(root, { recursive: true, force: true }); }
+});
+
 test("unconfirmed dynamic registration fences initialization across restart instead of replaying it", { timeout: 30000 }, async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-registration-fence-"));
   const baselineRoot = path.join(root, "baseline");

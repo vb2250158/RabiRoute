@@ -33,7 +33,6 @@ export async function runManagerCommand(args, configPath, { fetchImpl = fetch, d
   const agentId = option("--agent");
   const agent = config.agents?.find(item => item.agentId === agentId);
   if (!agentId || !agent) throw new Error("Select a registered Agent with --agent; identities are never guessed.");
-  if (agent.enabled === false) throw new Error("The selected Agent is disabled.");
   // Manager authenticates the exact registered ID and owns its current enabled state.
   const client = createManagerClient({ config, configPath, agentId, fetchImpl, discover });
   if (downloading) {

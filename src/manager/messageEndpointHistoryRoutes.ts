@@ -26,6 +26,13 @@ export function handleMessageEndpointHistoryApi(request: http.IncomingMessage, u
   }
   const from = url.searchParams.get("from");
   const to = url.searchParams.get("to");
+  const afterSequence = url.searchParams.get("afterSequence");
+  const beforeSequence = url.searchParams.get("beforeSequence");
+  if ([afterSequence, beforeSequence].some(value => value !== null && (!value.trim() || !Number.isSafeInteger(Number(value)) || Number(value) < 0))
+    || (afterSequence !== null && beforeSequence !== null && Number(afterSequence) > Number(beforeSequence))) {
+    context.json(response, 400, { code: -1, message: "afterSequence/beforeSequence must be non-negative safe integers in ascending order." });
+    return true;
+  }
   if ([from, to].some(value => value !== null && (!value.trim() || !Number.isFinite(Number(value))))
     || (from !== null && to !== null && Number(from) > Number(to))) {
     context.json(response, 400, { code: -1, errorCode: "MESSAGE_HISTORY_TIME_RANGE_INVALID",
@@ -44,7 +51,9 @@ export function handleMessageEndpointHistoryApi(request: http.IncomingMessage, u
       target: url.searchParams.get("target") || undefined, conversationKey: url.searchParams.get("conversationKey") || undefined,
       query: url.searchParams.get("query")?.trim() || undefined,
       queryMatch: url.searchParams.get("match") === "all" ? "all" : "any", includeArchives: url.searchParams.get("includeArchives") === "1",
-      from: numberParam(url.searchParams.get("from"), NaN), to: numberParam(url.searchParams.get("to"), NaN)
+      from: numberParam(url.searchParams.get("from"), NaN), to: numberParam(url.searchParams.get("to"), NaN),
+      afterSequence: afterSequence === null ? undefined : Number(afterSequence),
+      beforeSequence: beforeSequence === null ? undefined : Number(beforeSequence)
     };
     void managerReadHttpResponse(request, response, {
       read: signal => context.queryHistory(roleDir, query, { signal }),
@@ -54,6 +63,7 @@ export function handleMessageEndpointHistoryApi(request: http.IncomingMessage, u
         recordScope: "saved_role_messages", resultMode: "latest_matches", completenessUnknown: true, paginationSupported: false,
         limit: query.limit, maxChars: query.maxChars,
         from: Number.isFinite(query.from) ? query.from : null, to: Number.isFinite(query.to) ? query.to : null,
+        afterSequence: query.afterSequence ?? null, beforeSequence: query.beforeSequence ?? null,
         limitReducesArchiveScan: false
       } } })
     });

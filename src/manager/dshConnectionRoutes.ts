@@ -1,23 +1,11 @@
 import type http from "node:http";
 import { DshConnectionStore, DshConnectionError, dshLocalOrigin } from "../dshConnectionStore.js";
 import { connectDshOwner, migrateDshOwner } from "../dshHttpAuth.js";
-import { assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
+import { localModelSettingsRequestAllowed } from "./speechModelSettingsAccess.js";
 
-/** Ordinary browsers require local Origin; enabled authenticated Agents use their issued principal. */
-export function dshConnectionRequestAllowed(request: http.IncomingMessage, mutation: boolean): boolean {
-  try { if (assertTrustedLanAgentPrincipal(request)) return true; }
-  catch { return false; }
-  const loopback = (value: string) => ["127.0.0.1", "::1", "::ffff:127.0.0.1", "[::1]", "localhost"].includes(value);
-  if (!loopback(request.socket.remoteAddress || "") || request.headers.forwarded || request.headers["x-forwarded-for"]
-    || request.headers["sec-fetch-site"] === "cross-site") return false;
-  try {
-    const host = new URL(`http://${request.headers.host}`);
-    if (!loopback(host.hostname)) return false;
-    const origin = request.headers.origin;
-    if (mutation && typeof origin !== "string") return false;
-    if (origin && (typeof origin !== "string" || new URL(origin).origin !== host.origin)) return false;
-    return true;
-  } catch { return false; }
+/** Reuse the shared connection authority and safe local request checks for every operation. */
+export function dshConnectionRequestAllowed(request: http.IncomingMessage): boolean {
+  return localModelSettingsRequestAllowed(request);
 }
 
 async function readBody(request: http.IncomingMessage, signal: AbortSignal): Promise<Record<string, unknown>> {
@@ -48,7 +36,7 @@ export async function handleDshConnectionRequest(request: http.IncomingMessage, 
   if (url.pathname.endsWith("/connections") && mutation) throw new DshConnectionError("Unsupported DSH connection operation.", 405);
   const assertAuthorized = () => {
     signal.throwIfAborted();
-    if (!dshConnectionRequestAllowed(request, mutation)) throw new DshConnectionError("DSH connection management requires local browser authorization or a current enabled Agent principal.", 403);
+    if (!dshConnectionRequestAllowed(request)) throw new DshConnectionError("DSH connection management requires a trusted local request or a current authenticated connection.", 403);
   };
   assertAuthorized();
   if (mutation && !/^application\/json(?:;|$)/i.test(String(request.headers["content-type"] || ""))) throw new DshConnectionError("JSON content type is required.", 415);

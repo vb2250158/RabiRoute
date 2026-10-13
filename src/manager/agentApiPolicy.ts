@@ -89,7 +89,7 @@ function operations(group: string, prefix: string, definitions: readonly Definit
          ? {
              requestBody: "无请求体；必须传唯一非空 routeId、groupId，folderId 可选且至多一次。",
              response: "返回选定群的有界文件/文件夹元数据；completenessUnknown 与 potentiallyTruncated 表示不可据此证明文件不存在。",
-             auth: "可信本机与已认证启用 Agent 权限对等；核对精确 Route 与唯一 QQ 实例，并独立校验 readableGroupFileIds 中的精确群 ID；发送权限不能替代读取权限。",
+             auth: "可信本机与已认证启用 Agent 权限对等；核对精确 Route 与唯一 QQ 实例。readableGroupFileIds 未设置时允许读取；显式列表只允许所列精确群 ID，空列表禁用群文件读取。",
              effects: "只读所选 QQ 实例的 get_group_root_files 或 get_group_files_by_folder；不下载、不发送文件。",
              retry: "只读无幂等键；结果不完整时不据此去重，授权或实例不可用时不跨 Route 回退。", mutating: false, idempotencyRequired: false
            }
@@ -205,7 +205,7 @@ const catalog: readonly AgentApiOperation[] = Object.freeze([
     ["GET", "/knowledge/search", "按关键词或全文检索知识", "query mode kind archived limit cursor"],
     ["GET", "/knowledge/cache/status", "读取知识索引状态"],
     ["POST", "/knowledge/cache/reload", "刷新指定知识索引"],
-    ["GET", "/message-endpoint-history", "检索已记录消息的最近片段（无分页）", "query match adapter channel kind sender target conversationKey from to includeArchives limit maxChars", "", [
+    ["GET", "/message-endpoint-history", "检索已记录消息的最近片段（无分页）", "query match adapter channel kind sender target conversationKey from to afterSequence beforeSequence includeArchives limit maxChars", "", [
       "只查该人格已保存的消息；includeArchives=1 纳入归档，不保证平台全部历史。",
       "limit 默认 50、最多 200；maxChars 默认及最多 200000，按文本、分段和记录开销计预算，首条可超过预算。count 仅本次返回数，coverage 是查询范围标签；少于 limit 也不能证明完整。",
       "无 cursor/offset、nextCursor 或完整结束标记；不把本次结果当作整月统计样本或全量历史，不按最早时间减一秒模拟翻页（同秒多条会漏）。",
@@ -238,6 +238,7 @@ const catalog: readonly AgentApiOperation[] = Object.freeze([
     ["GET", "/api/agent/qq/messages/:messageId", "鉴权连接读取原消息及附件下载入口", "routeId kind target"],
     ["GET", "/api/agent/qq/messages/:messageId/attachments/:attachmentIndex", "鉴权连接下载原消息附件二进制；最多 64 MiB", "routeId kind target"],
     ["GET", "/api/agent/send/capabilities", "列出发送渠道、参数示例与不重试规则"],
+    ["GET", "/api/agent/chat-history", "按发送目标搜索聊天记录及省略索引范围", "routeId channel params afterSequence beforeSequence query limit"],
     ["POST", "/api/agent/send", "通过渠道策略发送消息或附件"],
     ["GET", "/api/agent/send/traces", "按平台消息追踪发送", "channel sentMessageId routeId"],
     ["GET", "/api/agent/send/receipts/:deliveryId", "读取渠道发送回执"],

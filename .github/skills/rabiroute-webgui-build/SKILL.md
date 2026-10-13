@@ -5,7 +5,9 @@ description: RabiRoute WebGUI 构建、打包和开发注意事项，包括常�
 
 # RabiRoute WebGUI 构建注意事项
 
-安装版提供 `/api/web-patches` 且后端兼容时，按[Web 热补丁](../../../docs/web-hot-patches.md)执行 `webgui:build` 或 `webgui:watch`，核对活动 hash 和回执，不走下方 Host 重启流程。首次安装或后端变化才协调完整发布；热更新前后 Manager 身份保持不变。
+普通 WebGUI 修改默认按[Web 热补丁](../../../docs/web-hot-patches.md)构建不可变候选，校验后热替换，核对活动 hash、回执和根 HTML 资源。原生热补丁不要求额外开启开关、设置环境变量或另起 watcher；当前安装版是否完成激活，以实际接口和运行证据为准。
+
+包含后端、共享合同或新增模块变化时读取[源码热补丁工作流](../../../skills/source-hot-patch-development/SKILL.md)，按实际兼容性和状态迁移校验处理，不一律重启。当前运行版存在能力缺口时交原维护 owner 修复并验证，不将目标能力写成已经上线。
 
 ## 构建命令
 
@@ -20,27 +22,32 @@ cmd /c "cd /d <repo> && npm run build"
 cmd /c "cd /d <repo> && npm run webgui:build"
 ```
 
-重启安装版应用代并读取新的动态 Manager 地址：
+构建命令只准备产物，不隐含重启。激活前后通过当前 Host status 与 `/meta` 核对 Manager/应用代身份；热补丁应保持进程身份不变，并从实际运行地址回读新资源及页面行为。
+
+只读发现与身份核验示例；状态尚未就绪时有界重试，不启动或重启服务：
+
 ```powershell
 $hostExe = if ($env:RABIROUTE_HOST_EXE) { $env:RABIROUTE_HOST_EXE } else { Join-Path $env:LOCALAPPDATA "Programs\RabiRoute\RabiRouteHost.exe" }
-$before = & $hostExe --command status --json | ConvertFrom-Json
-if (-not $before.applicationGenerationId) { throw "RabiRoute Host 没有发布完整 READY 身份。" }
-& $hostExe --command restart --application-generation-id $before.applicationGenerationId --json
 $current = $null
 for ($attempt = 0; $attempt -lt 30; $attempt++) {
-  $candidate = & $hostExe --command status --json | ConvertFrom-Json
-  if ($candidate.ok -eq $true -and $candidate.state -eq "healthy" -and $candidate.applicationGenerationId -and $candidate.managerInstanceId -and $candidate.managerBaseUrl) {
+  $candidate = & $hostExe --command status --json | Out-String | ConvertFrom-Json
+  if ($candidate.ok -eq $true -and ($candidate.state -eq "healthy" -or $candidate.state -eq "degraded") -and $candidate.applicationGenerationId -and $candidate.managerInstanceId -and $candidate.managerBaseUrl) {
     $current = $candidate
     break
   }
   Start-Sleep -Milliseconds 500
 }
-if (-not $current) { throw "RabiRoute Host 没有在期限内发布新的完整 READY 身份。" }
-$meta = Invoke-RestMethod "$($current.managerBaseUrl)/meta"
+if (-not $current) { throw "Host 未在查询期限内返回完整 READY 身份；保留错误证据，核对原维护任务。" }
+$meta = Invoke-RestMethod "$($current.managerBaseUrl)/meta" -TimeoutSec 5
 if ($meta.applicationGenerationId -ne $current.applicationGenerationId -or $meta.managerInstanceId -ne $current.managerInstanceId) {
-  throw "Host READY 与 Manager /meta 身份不一致。"
+  throw "Host READY 与 Manager /meta 身份不一致，须重新发现地址。"
+}
+if (-not $meta.health.live -or -not $meta.health.requiredReady -or $meta.health.state -notin @("healthy", "degraded")) {
+  throw "Manager 必需依赖尚未就绪。"
 }
 ```
+
+用户明确要求完整发布、安装包或首次安装时，按[构建与部署](../../../skills/rabiroute-build/SKILL.md)交付完整包。确有 Host/native 运行时、依赖 ABI 或活动状态无法安全迁移时，记录具体诊断，在候选准备和预检完成后由 Host 受控切换；准备期间保留旧服务。
 
 源码开发服务器不扫描端口。先运行 `npm run start:manager`，把本次标准输出中的动态地址写入 `RABIROUTE_MANAGER_URL`，再运行 `npm run webgui:dev`；Windows 已安装 Host 在线时，开发服务器也可以直接读取 Host `status --json`。地址缺失、Host 未就绪或 READY 身份不完整时，开发服务器显式失败。不得按端口查找或结束其他进程，也不得直接启动独立 Manager/托盘替代 Host 应用代。
 

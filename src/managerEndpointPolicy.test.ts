@@ -19,13 +19,8 @@ test("Manager port policy supports Host's last-known-port preference without cha
 });
 
 test("Preferred Manager port is retained when available and falls back only when occupied", async () => {
-  const preferredPort = 0;
   const seed = http.createServer();
-  await new Promise<void>((resolve, reject) => {
-    seed.once("error", reject);
-    seed.listen(preferredPort, "127.0.0.1", resolve);
-  });
-  const availablePort = (seed.address() as { port: number }).port;
+  const availablePort = (await listenManagerEndpoint({ server: seed, host: "127.0.0.1", policy: { mode: "auto" } })).port;
   await new Promise<void>(resolve => seed.close(() => resolve()));
 
   const retained = http.createServer();
@@ -71,15 +66,18 @@ test("Manager loopback detection keeps LAN and local allocation policies separat
 test("Manager endpoints reject ports blocked by browser Fetch", async () => {
   assert.equal(managerPortIsFetchSafe(6000), false);
   assert.equal(managerPortIsFetchSafe(6667), false);
+  assert.equal(managerPortIsFetchSafe(6679), false);
   assert.equal(managerPortIsFetchSafe(10080), false);
   assert.equal(managerPortIsFetchSafe(8790), true);
 
-  const server = http.createServer();
-  await assert.rejects(
-    listenManagerEndpoint({ server, host: "127.0.0.1", policy: { mode: "fixed", port: 6000 } }),
-    /blocked by browser Fetch/
-  );
-  assert.equal(server.listening, false);
+  for (const port of [6000, 6679]) {
+    const server = http.createServer();
+    await assert.rejects(
+      listenManagerEndpoint({ server, host: "127.0.0.1", policy: { mode: "fixed", port } }),
+      /blocked by browser Fetch/
+    );
+    assert.equal(server.listening, false);
+  }
 });
 
 test("Automatic loopback endpoint asks the OS for an unused port", async () => {

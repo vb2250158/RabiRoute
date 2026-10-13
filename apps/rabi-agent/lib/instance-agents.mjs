@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { resolveTaskWorkspace } from "./cwd-policy.mjs";
 import { normalizeDshBinding } from "./dsh.mjs";
 
-/** The executing computer owns its Agent configuration. Catalogs never carry connection tokens. */
+/** The executing computer owns task settings; enrolled Agent enablement belongs to Manager. */
 export function instanceAgents(config) {
   return Array.isArray(config.agents) ? config.agents : [{
     agentId: "default", name: "Agent", provider: config.agentType || "codex-desktop", enabled: true,
@@ -12,11 +12,14 @@ export function instanceAgents(config) {
 }
 
 export function agentCatalog(config) {
-  return instanceAgents(config).map(({ agentId, name, provider, enabled, workspace, sessionId, managedSessionIds, model, reasoningEffort, dsh }) => ({ agentId, name, provider, enabled, workspace, sessionId, managedSessionIds, model, reasoningEffort, dshBaseUrl: dsh?.baseUrl }));
+  // Legacy enabled is exported only for Manager's first-registration import.
+  // Retire that import when pre-Manager connector configuration snapshots are no longer supported.
+  return instanceAgents(config).map(({ agentId, name, provider, enabled, workspace, sessionId, managedSessionIds, model, reasoningEffort, dsh }) => ({ agentId, name, provider, enabled: enabled !== false, workspace, sessionId, managedSessionIds, model, reasoningEffort, dshBaseUrl: dsh?.baseUrl }));
 }
 
 export function configureInstanceAgent(config, input) {
   if (!input || typeof input !== "object") throw new Error("Agent configuration is required.");
+  if (config.nodeCredential && input.enabled !== undefined) throw new Error("Change enrolled Agent enablement through the Manager authorization endpoint.");
   const agents = instanceAgents(config);
   const agentId = input.agentId || randomUUID();
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$/.test(agentId)) throw new Error("Invalid Agent identity.");
@@ -31,12 +34,12 @@ export function configureInstanceAgent(config, input) {
   const agent = {
     agentId, provider, workspace, sessionId, name: String(input.name || current?.name || "Agent").slice(0, 160),
     managedSessionIds: current?.sessionId === sessionId ? current?.managedSessionIds : undefined,
-    enabled: input.enabled ?? current?.enabled ?? true,
+    ...(!config.nodeCredential ? { enabled: input.enabled ?? current?.enabled ?? true } : {}),
     model: String(input.model ?? current?.model ?? "").trim() || undefined,
     reasoningEffort: String(input.reasoningEffort ?? current?.reasoningEffort ?? "medium").trim(),
     dsh: provider === "dsh" ? normalizeDshBinding({ baseUrl: input.dshBaseUrl || current?.dsh?.baseUrl || config.dsh?.baseUrl, sessionId }) : undefined
   };
-  if (typeof agent.enabled !== "boolean") throw new Error("Agent enabled must be a boolean.");
+  if (!config.nodeCredential && typeof agent.enabled !== "boolean") throw new Error("Agent enabled must be a boolean.");
   if (!current && agents.length >= 128) throw new Error("This instance already has 128 Agents.");
   return { ...config, agents: current ? agents.map(item => item.agentId === agentId ? agent : item) : [...agents, agent] };
 }
@@ -56,8 +59,8 @@ export function registerManagedSession(config, agentId, sessionId) {
 export function resolveInstanceAgent(config, task) {
   const agents = instanceAgents(config);
   const agent = agents.find(agent => agent.agentId === (task.agentId || "default"));
-  // Automatic registration never overrides an explicit local stop.
-  if (!agent || agent.enabled === false) throw new Error("The requested instance Agent is missing or disabled.");
+  // Enrolled execution rechecks Manager authority immediately before the host turn.
+  if (!agent || (!config.nodeCredential && agent.enabled === false)) throw new Error("The requested instance Agent is missing or disabled.");
   if (task.targetAgent !== agent.provider) throw new Error("The requested provider does not match the bound Agent.");
   return agent;
 }

@@ -18,14 +18,18 @@ test("instance migration retains default identity; several Agents remain indepen
   assert.throws(() => resolveInstanceAgent(next, { agentId: second.agentId, targetAgent: "dsh" }), /provider/);
   assert.throws(() => configureInstanceAgent(next, { agentId: second.agentId, provider: "dsh" }), /new Agent/);
 });
-test("enrolled connector preserves explicit local disablement and exact identity", () => {
+test("enrolled connector uses Manager enablement while preserving exact identity", () => {
   const localDisabled = configureInstanceAgent(config, { agentId: "default", enabled: false });
   const managed = { ...localDisabled, nodeCredential: "test-only-node-credential" };
-  assert.throws(() => resolveInstanceAgent(managed, { agentId: "default", targetAgent: "codex-desktop" }), /disabled/);
-  const enabled = configureInstanceAgent(managed, { agentId: "default", enabled: true });
-  assert.equal(resolveInstanceAgent(enabled, { agentId: "default", targetAgent: "codex-desktop" }).sessionId, "task-a");
+  assert.equal(resolveInstanceAgent(managed, { agentId: "default", targetAgent: "codex-desktop" }).sessionId, "task-a");
+  // Preserve the old false only in the first registration catalog, then retire it on save.
+  assert.equal(agentCatalog(managed)[0].enabled, false);
+  const updated = configureInstanceAgent(managed, { agentId: "default", name: "Updated" });
+  assert.equal(Object.hasOwn(updated.agents[0], "enabled"), false);
+  assert.equal(agentCatalog(updated)[0].enabled, true);
+  assert.throws(() => configureInstanceAgent(managed, { agentId: "default", enabled: false }), /Manager authorization endpoint/);
   assert.throws(() => resolveInstanceAgent(managed, { agentId: "unknown", targetAgent: "codex-desktop" }), /missing/);
-  assert.throws(() => resolveInstanceAgent(enabled, { agentId: "default", targetAgent: "dsh" }), /provider/);
+  assert.throws(() => resolveInstanceAgent(managed, { agentId: "default", targetAgent: "dsh" }), /provider/);
 });
 
 test("instance catalog excludes private DSH connection settings", () => {

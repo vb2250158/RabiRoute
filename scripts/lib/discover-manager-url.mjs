@@ -40,23 +40,34 @@ export function discoverManagerBaseUrl(options = {}) {
     throw new Error("RabiRoute Host is not installed; set RABIROUTE_MANAGER_URL explicitly.");
   }
   const args = platform === "linux" ? [linuxHost, "--command", "status", "--json"] : ["--command", "status", "--json"];
-  const result = (options.spawnSync || spawnSync)(hostExecutable, args, {
-    encoding: "utf8",
-    windowsHide: true,
-    timeout: 10000,
-    env
-  });
-  if (result.error) throw new Error(`RabiRoute Host status failed: ${result.error.message}`);
-  if (result.status !== 0) throw new Error("RabiRoute Host is offline or did not return a healthy status.");
-  let status;
-  try {
-    status = JSON.parse(String(result.stdout || ""));
-  } catch {
-    throw new Error("RabiRoute Host returned invalid status JSON.");
+  const timeoutMs = options.timeoutMs ?? 10000;
+  const pollIntervalMs = options.pollIntervalMs ?? 250;
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000
+    || !Number.isFinite(pollIntervalMs) || pollIntervalMs < 1 || pollIntervalMs > 10000) {
+    throw new Error("Manager discovery requires bounded timeoutMs and pollIntervalMs.");
   }
-  const readyState = status?.state === "healthy" || (platform === "linux" && status?.state === "degraded");
-  if (status?.ok !== true || !readyState || !status?.managerBaseUrl || !status?.applicationGenerationId || !status?.managerInstanceId) {
-    throw new Error("RabiRoute Host has not published a healthy, complete Manager READY identity.");
+  const now = options.now || (() => performance.now());
+  const sleep = options.sleep || (ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms));
+  const deadline = now() + timeoutMs;
+  let lastState = "unknown";
+  for (;;) {
+    const remaining = deadline - now();
+    if (remaining <= 0) throw new Error(`RabiRoute Host has not published a complete Manager READY identity within ${timeoutMs} ms (state=${lastState}); startup or recovery is still pending.`);
+    const result = (options.spawnSync || spawnSync)(hostExecutable, args, {
+      encoding: "utf8", windowsHide: true, timeout: Math.max(1, Math.ceil(remaining)), env
+    });
+    if (result.error?.code === "ETIMEDOUT") throw new Error("RabiRoute Host status query timed out.");
+    if (result.error) throw new Error(`RabiRoute Host status query failed (${result.error.code || "process error"}).`);
+    if (result.status !== 0) throw new Error(`RabiRoute Host is offline or its status command failed (exit=${result.status ?? "unknown"}).`);
+    let status;
+    try { status = JSON.parse(String(result.stdout || "")); }
+    catch { throw new Error("RabiRoute Host returned invalid status JSON."); }
+    if (status?.ok !== true) throw new Error("RabiRoute Host status is unavailable (ok is not true).");
+    // Host owns publication. Aggregate state is diagnostic, not another API grant.
+    if ([status.managerBaseUrl, status.applicationGenerationId, status.managerInstanceId]
+      .every(value => typeof value === "string" && value.trim())) return loopbackManagerUrl(status.managerBaseUrl);
+    lastState = String(status.state || "unknown").slice(0, 64);
+    const wait = Math.min(pollIntervalMs, deadline - now());
+    if (wait > 0) sleep(wait);
   }
-  return loopbackManagerUrl(status.managerBaseUrl);
 }

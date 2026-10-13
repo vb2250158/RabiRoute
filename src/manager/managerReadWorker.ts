@@ -7,6 +7,10 @@ const archiveReadCache = new MessageContextArchiveReadCache();
 
 /** Search tasks must not initialize unrelated diagnostics, delivery or media modules. */
 async function execute(task: ManagerReadWorkerTask): Promise<unknown> {
+  if (task.type === "conversation_window") {
+    const { readConversationWindow } = await import("../conversationMessageQuery.js");
+    return readConversationWindow(task.dataDir, task.filter, task.query);
+  }
   if (task.type === "role_message_endpoint_history") {
     const { recentMessageContextItems } = await import("../messageContextStore.js");
     return recentMessageContextItems([task.roleDir], task.query, {}, archiveReadCache);

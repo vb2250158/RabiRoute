@@ -55,6 +55,17 @@ export class SourcePatchWatcher {
     const watchedFiles = new Set([path.join(this.root, "source-patches", "modules.json"), ...definitions.flatMap(entry => [entry.source, ...(entry.resources ?? [])].map(file => path.resolve(this.root, file)))]);
     for (const files of dependencyFiles.values()) for (const file of files) watchedFiles.add(file);
     const directories = new Set<string>();
+    // Watch the discovery tree itself, including empty folders. Unknown files are
+    // not yet in watchedFiles, so dependency-only watches cannot discover them.
+    const discoveryRoot = path.join(this.root, "source-patches");
+    const collectDirectories = async (directory: string): Promise<void> => {
+      directories.add(directory);
+      for (const entry of await fsp.readdir(directory, { withFileTypes: true })) {
+        if (entry.isDirectory() && !entry.name.startsWith(".")) await collectDirectories(path.join(directory, entry.name));
+      }
+    };
+    try { await collectDirectories(discoveryRoot); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; directories.delete(discoveryRoot); }
     for (const file of watchedFiles) {
       let directory = path.dirname(file);
       while (directory !== this.root) {
@@ -70,10 +81,14 @@ export class SourcePatchWatcher {
       for (const directory of directories) {
         if (this.watchers.has(directory)) continue;
         const handle = fs.watch(directory, (_event, filename) => {
+          const discoveryChange = filename === null ? directory : path.resolve(directory, filename.toString());
+          if (discoveryChange === discoveryRoot || discoveryChange.startsWith(discoveryRoot + path.sep)) {
+            this.schedule(path.join(discoveryRoot, "modules.json"));
+          }
           if (filename === null) {
             for (const file of this.watchedFiles) if (file.startsWith(directory + path.sep)) this.schedule(file);
           } else {
-            const file = path.resolve(directory, filename.toString());
+            const file = discoveryChange;
             for (const watched of this.watchedFiles) if (watched === file || watched.startsWith(file + path.sep)) this.schedule(watched);
           }
         });
@@ -119,8 +134,10 @@ export class SourcePatchWatcher {
     try {
       if (this.catalogDirty) {
         this.catalogDirty = false;
-        const catalog = await readSourcePatchCatalog(this.root);
-        await this.refreshWatches(catalog);
+        let catalog: readonly SourcePatchDefinition[];
+        try { catalog = await readSourcePatchCatalog(this.root); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") catalog = []; else throw error; }
+        await this.refreshWatches(await discoverSourcePatchModules(this.root, catalog));
         for (const entry of this.definitions) this.pending.add(entry.id);
       } else { await this.refreshWatches(this.definitions); }
       definitions = this.definitions.filter(definition => this.pending.has(definition.id)).sort((left, right) => left.id.localeCompare(right.id));

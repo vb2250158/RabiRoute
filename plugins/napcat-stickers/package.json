@@ -1,0 +1,8 @@
+{
+  "name": "napcat-plugin-rabi-stickers",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.mjs",
+  "description": "QQ 收藏表情元数据读取兼容接口",
+  "napcat": { "minVersion": "4.14.0" }
+}

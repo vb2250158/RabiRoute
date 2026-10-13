@@ -24,6 +24,9 @@ export class AutomaticCodeService {
   private webInputDigest = "";
   private definitions: AutomaticCodeDefinition[] = [];
   private stopped = false;
+  private sourceRoot?: string;
+  private inputHashes: Readonly<Record<string, string>> = {};
+  private startupDirtyInputs: string[] = [];
   private state: Prepared = { state: "starting" };
 
   constructor(private readonly options: Readonly<{
@@ -42,7 +45,8 @@ export class AutomaticCodeService {
   private async loadBaseline(): Promise<void> {
     const bytes = await fsp.readFile(path.join(this.options.packageRoot, "dist/automatic-code/catalog.json"));
     this.baseline = hash(bytes);
-    const catalog = JSON.parse(bytes.toString()) as { modules: Array<{ definition?: AutomaticCodeDefinition }>; webInputDigest: string };
+    const catalog = JSON.parse(bytes.toString()) as { modules: Array<{ definition?: AutomaticCodeDefinition }>; webInputDigest: string; inputHashes?: Record<string, string> };
+    this.inputHashes = catalog.inputHashes ?? {};
     this.definitions = catalog.modules.flatMap(entry => entry.definition ? [entry.definition] : []);
     this.digest = hash(JSON.stringify(this.definitions));
     if (!WEB_PATCH_HASH.test(catalog.webInputDigest)) throw new Error("The installed automatic update baseline has no Web input inventory.");
@@ -60,19 +64,32 @@ export class AutomaticCodeService {
       await this.options.publication.ready;
       if (this.options.publication.status().state !== "ready") throw new Error("The unified publication owner requires recovery.");
       if (!this.options.watch) { this.state = { state: "disabled" }; return; }
-      if (!this.options.sourceRoot) {
-        this.state = { state: "disabled", reasons: ["No source root is configured for this automatic code and Web watcher. Source-patch module status is reported separately by /api/source-patches."] };
+      const candidateRoot = await fsp.realpath(this.options.sourceRoot ?? this.options.packageRoot);
+      if (!(await fsp.stat(path.join(candidateRoot, "src")).catch(() => undefined))?.isDirectory()
+        || !(await fsp.stat(path.join(candidateRoot, "tsconfig.json")).catch(() => undefined))?.isFile()) {
+        this.state = { state: "source_unavailable", reasons: ["The running package has no compiler source inventory; native hot-patching is available, but an actual source owner is required."] };
         return;
       }
-      this.watcher = fs.watch(this.options.sourceRoot, { recursive: true }, (_event, name) => {
+      this.sourceRoot = candidateRoot;
+      for (const [relative, expected] of Object.entries(this.inputHashes)) {
+        const actual = await fsp.readFile(path.join(candidateRoot, relative)).catch(error => {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+          throw error;
+        });
+        if (!actual || hash(actual) !== expected) this.startupDirtyInputs.push(relative);
+      }
+      this.watcher = fs.watch(candidateRoot, { recursive: true }, (_event, name) => {
         const relative = name?.toString().replaceAll("\\", "/");
         if (relative?.split("/").some(part => ["dist", "node_modules", ".git", ".web-patch-build.lock"].includes(part))) return;
         if (!relative || ["src/", "ribiwebgui/", "docs/", "assets/", "scripts/", "source-patches/"].some(prefix => relative.startsWith(prefix))
           || ["src", "ribiwebgui", "docs", "assets", "package.json", "package-lock.json", "tsconfig.json"].includes(relative)) this.queue.schedule();
       });
       this.watcher.on("error", error => { this.state = { state: "failed", reasons: [String(error)] }; this.options.onError(error); });
-      this.state = { state: "ready" };
-      this.queue.schedule();
+      // Discovery is native and automatic; old shared edits are not a new
+      // publication transaction. Keep their ownership boundary visible.
+      this.state = this.startupDirtyInputs.length
+        ? { state: "requires_review", reasons: [{ reason: "Source inputs already differ from the running baseline; do not publish unowned shared edits.", files: this.startupDirtyInputs }] }
+        : { state: "ready" };
     } catch (error) { this.state = { state: "requires_recovery", reasons: [String(error)] }; throw error; }
   }
 
@@ -117,7 +134,7 @@ export class AutomaticCodeService {
   private compile(): Promise<Prepared> {
     return new Promise((resolve, reject) => {
       const worker = new Worker(path.join(this.options.packageRoot, "scripts/automatic-update-worker.mjs"), {
-        workerData: { sourceRoot: this.options.sourceRoot, packageRoot: this.options.packageRoot, webInputDigest: this.webInputDigest,
+        workerData: { sourceRoot: this.sourceRoot ?? this.options.sourceRoot, packageRoot: this.options.packageRoot, webInputDigest: this.webInputDigest,
           workRoot: path.join(this.options.stateRoot, "builds") }, execArgv: []
       });
       this.worker = worker;
@@ -136,6 +153,10 @@ export class AutomaticCodeService {
       const timeout = setTimeout(() => {
         void worker.terminate().finally(() => finish(new Error("Automatic compilation exceeded its deadline; the old version remains active.")));
       }, 120000);
+      worker.once("message", (result: Prepared) => {
+        if (!result || typeof result.state !== "string") finish(new Error("Automatic compiler returned an invalid receipt."));
+        else finish(undefined, result);
+      });
       worker.once("error", error => finish(error));
       worker.once("exit", code => finish(new Error(`Automatic compiler exited without a result (${code}).`)));
     });
@@ -153,6 +174,10 @@ export class AutomaticCodeService {
 
   private async update(isCurrent: () => boolean): Promise<void> {
     if (this.stopped || this.options.publication.status().state !== "ready") return;
+    if (this.startupDirtyInputs.length) {
+      this.state = { state: "requires_review", reasons: [{ reason: "Unowned changes existed when this source owner started; preserve the running service until an exact candidate is reviewed.", files: this.startupDirtyInputs }] };
+      return;
+    }
     this.state = { state: "building" };
     let result: Prepared;
     try {

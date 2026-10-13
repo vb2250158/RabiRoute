@@ -664,6 +664,18 @@ function messageGroupingPolicy(type: MessageAdapterType) {
   return messageAdapterPolicyFor(gateway.value, type).messageGrouping;
 }
 
+function conversationReviewPolicy(type: MessageAdapterType) {
+  if (!gateway.value || type === "disabled") return undefined;
+  return messageAdapterPolicyFor(gateway.value, type).conversationReview;
+}
+
+function setConversationReviewPolicy(type: MessageAdapterType, field: "initialMessageCount" | "maxIncrementalMessages", raw: unknown): void {
+  const value = Number(raw);
+  if (!gateway.value || type === "disabled" || !Number.isInteger(value) || value < (field === "initialMessageCount" ? 1 : 2) || value > 500) return;
+  setMessageAdapterPolicy(gateway.value, type, { conversationReview: { ...conversationReviewPolicy(type), [field]: value } });
+  store.touch();
+}
+
 function napcatTextConfirmationThreshold(): number {
   return gateway.value ? messageAdapterPolicyFor(gateway.value, "napcat").textConfirmationThreshold : 0;
 }
@@ -4351,9 +4363,23 @@ watch(
                       />
                     </div>
                   </div>
+                  <div v-if="!isNonMessageEndpoint(choice.type)" class="dependency-panel mb-3">
+                    <div class="section-title small-title">发送前聊天核对</div>
+                    <div class="section-note">Agent 的已读索引落后或缺失时，先返回聊天记录；Agent 核对正文后再次调用确认。同一会话依次发送，不同会话并行。</div>
+                    <div class="catalog-param-grid mt-2">
+                      <v-text-field type="number" :min="1" :max="500"
+                        :model-value="conversationReviewPolicy(choice.type)?.initialMessageCount"
+                        label="首次核对消息数" hint="没有已读索引时返回最近消息，默认 50 条。" persistent-hint
+                        @update:model-value="value => setConversationReviewPolicy(choice.type, 'initialMessageCount', value)" />
+                      <v-text-field type="number" :min="2" :max="500"
+                        :model-value="conversationReviewPolicy(choice.type)?.maxIncrementalMessages"
+                        label="增量返回上限" hint="默认 100 条；超过时返回最早和最新各半，并提示省略数量和搜索范围。" persistent-hint
+                        @update:model-value="value => setConversationReviewPolicy(choice.type, 'maxIncrementalMessages', value)" />
+                    </div>
+                  </div>
                   <div v-if="choice.type === 'napcat'" class="dependency-panel mb-3">
                     <div class="section-title small-title">长消息确认</div>
-                    <div class="section-note">超过字数时先提醒 Agent 检查和精简，再次调用确认后才发送到 QQ。</div>
+                    <div class="section-note">超过字数时提醒 Agent 先精简；一条说不清就按意思分条说。需要保留单条长消息时，再次调用确认后发送。</div>
                     <v-text-field
                       type="number"
                       :min="0"

@@ -58,6 +58,7 @@ export type ManagerReadWorkerTask =
   | { type: "gateway_status_snapshot"; statusPath: string }
   | { type: "desktop_pet_catalog"; roleId: string; roleDir: string; cacheRoot: string; options: import("./desktopPetRoutes.js").DesktopPetPackCatalogOptions }
   | { type: "role_message_endpoint_history"; roleDir: string; query: RecentMessageContextQuery }
+  | { type: "conversation_window"; dataDir: string; filter: import("../conversationMessageQuery.js").ConversationWindowFilter; query: { afterSequence?: number; limit: number } }
   | { type: "message_processing_send_context"; input: MessageProcessingReadInput }
   | { type: "knowledge_search_delta"; roleDir: string; previous: KnowledgeInventory }
   | {
@@ -268,7 +269,7 @@ async function readRecentPerformanceSamples(logDirectory: string, limit: number)
     .slice(-safeLimit);
 }
 
-export async function execute(task: Exclude<ManagerReadWorkerTask, { type: "role_message_endpoint_history" | "knowledge_search_delta" }>): Promise<unknown> {
+export async function execute(task: Exclude<ManagerReadWorkerTask, { type: "role_message_endpoint_history" | "knowledge_search_delta" | "conversation_window" }>): Promise<unknown> {
   switch (task.type) {
     case "all_day_recording_read": {
       const { readAllDayStorage } = await import("./allDayRecordingReadStorage.js");

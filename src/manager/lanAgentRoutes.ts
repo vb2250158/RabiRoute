@@ -210,7 +210,7 @@ export function handleLanAgentApi(
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/lan-agent/releases/manifest") {
-    if (!context.isReleaseRequestAuthorized(request)) {
+    if (!(hasAuthenticatedConnectionRequest(request) || context.isReleaseRequestAuthorized(request))) {
       agentUnauthorized(response, context);
       return true;
     }
@@ -226,7 +226,7 @@ export function handleLanAgentApi(
     ? requestUrl.pathname.match(/^\/api\/lan-agent\/releases\/([^/]+)\/([^/]+)\/(.+)$/)
     : null;
   if (releaseAssetMatch) {
-    if (!context.isReleaseRequestAuthorized(request)) {
+    if (!(hasAuthenticatedConnectionRequest(request) || context.isReleaseRequestAuthorized(request))) {
       agentUnauthorized(response, context);
       return true;
     }

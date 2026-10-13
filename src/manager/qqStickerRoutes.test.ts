@@ -31,6 +31,7 @@ test("authenticated remote connections read favorites, hide native credentials a
     const body = await response.text();
     assert.ok(!body.includes("private") && !body.includes("test-secret") && !body.includes("qpic.cn"));
     assert.equal(JSON.parse(body).data.items[0].description, "谢谢");
+    assert.equal(JSON.parse(body).data.items[0].name, "谢谢");
     const changedResponse = await fetch(`http://127.0.0.1:${address.port}/api/agent/qq/stickers?routeId=route-test&count=1`);
     assert.equal(changedResponse.status, 409);
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); }

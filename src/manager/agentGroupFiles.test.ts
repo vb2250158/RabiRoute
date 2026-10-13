@@ -9,7 +9,7 @@ import { getTrustedLanAgentSource, setTrustedLanAgentSource } from "./lanAgentBo
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
 import { RabiGlobalConfigStore } from "./globalConfig.js";
-import type { GatewayDefinition } from "../shared/gatewayConfigModel.js";
+import { normalizeGatewayDefinition, type GatewayDefinition } from "../shared/gatewayConfigModel.js";
 
 const groupId = "123456";
 const route = (): GatewayDefinition => ({
@@ -17,7 +17,6 @@ const route = (): GatewayDefinition => ({
   agentAdapters: ["dsh"], primaryAgentAdapter: "dsh",
   primaryAgentTarget: "remote:other-node:other-agent",
   remoteAgentTargets: [{ id: "remote:other-node:other-agent", instanceId: "other-node", agentId: "other-agent", provider: "dsh" }],
-  messageAdapterPolicies: { napcat: { readableGroupFileIds: [groupId] } },
   napcatInstances: [{ id: "qq-one", enabled: true, gatewayPort: 8789, httpUrl: "http://127.0.0.1:3000", accessToken: "do-not-leak" }]
 });
 const page = { files: [], folders: [], completenessUnknown: true as const, potentiallyTruncated: true as const, projectionTruncated: false };
@@ -59,7 +58,7 @@ function fixture(t: TestContext, options: { remote?: boolean; query?: string; ad
     run: () => handleAgentGroupFiles(request, new URL(target, "http://localhost:8000"), { setHeader() {} } as unknown as http.ServerResponse, context) };
 }
 
-test("enabled authenticated custom provider needs no plan source or matching primary to read allowed group", async t => {
+test("local and enabled authenticated Agents read group metadata by default without plan or primary bindings", async t => {
   for (const remote of [true, false]) {
     const value = fixture(t, { remote, query: `routeId=route-one&groupId=${groupId}&folderId=folder_1` });
     assert.equal(await value.run(), true);
@@ -70,9 +69,22 @@ test("enabled authenticated custom provider needs no plan source or matching pri
   }
 });
 
-test("group business ACL applies equally to local and remote, never inferred from target or send roots", async t => {
+test("omitted group restriction survives normalization and explicit allowed groups work for local and remote", async t => {
   for (const remote of [true, false]) {
-    for (const policy of [undefined, [], ["999999"]]) {
+    for (const policy of [undefined, {}, { readableGroupFileIds: undefined }, { readableGroupFileIds: [groupId] }]) {
+      const value = fixture(t, { remote });
+      value.definition.messageAdapterPolicies = policy === undefined ? undefined : { napcat: policy };
+      value.replaceRoute(normalizeGatewayDefinition(value.definition));
+      await value.run();
+      assert.equal(value.count(), 1);
+      assert.equal(value.responses[0].status, 200);
+    }
+  }
+});
+
+test("explicit group restrictions apply equally to local and remote and are not replaced by send permissions", async t => {
+  for (const remote of [true, false]) {
+    for (const policy of [[], ["999999"], [" 123456"], ["0123456"]]) {
       const value = fixture(t, { remote });
       value.definition.messageAdapterPolicies = { napcat: { readableGroupFileIds: policy, allowedFileRoots: ["/tmp"], outputEnabled: true } };
       value.definition.targetGroupId = groupId;
@@ -172,7 +184,7 @@ test("ACL and in-place Route/endpoint reconfiguration while reading cannot discl
     for (const variant of ["acl", "enabled", "napcat", "id", "httpUrl", "accessToken", "ambiguous"]) {
       const value = fixture(t, { remote });
       value.context.readFiles = async () => {
-        if (variant === "acl") value.definition.messageAdapterPolicies!.napcat!.readableGroupFileIds = [];
+        if (variant === "acl") value.definition.messageAdapterPolicies = { napcat: { readableGroupFileIds: [] } };
         if (variant === "enabled") value.definition.enabled = false;
         if (variant === "napcat") value.definition.messageAdapters = ["heartbeat"];
         if (variant === "id" || variant === "httpUrl" || variant === "accessToken") value.definition.napcatInstances![0]![variant] = "changed";

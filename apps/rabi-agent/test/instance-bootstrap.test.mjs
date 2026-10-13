@@ -159,6 +159,63 @@ test("prepared management captures original connection before queue execution an
   runtime.stop();
 }));
 
+test("Manager enablement controls queued execution despite a legacy local disabled field", async () => fixture(async ({ configPath, directory }) => {
+  const savedFetch = globalThis.fetch;
+  const agent = { agentId: "worker", provider: "codex-desktop", sessionId: "fixture-session", workspace: directory, enabled: false };
+  const runtime = new __test.RabiAgentRuntime({ managerUrl: "http://manager.test:54321", nodeId: "fixture-node", nodeCredential: "fixture-node",
+    defaultWorkspace: directory, allowedWorkspaces: [directory], agents: [agent] }, configPath);
+  let enabled = true;
+  let requests = 0;
+  const turns = [];
+  runtime.connected = true;
+  runtime.send = () => true;
+  runtime.desktop.startTurn = async turn => { turns.push(turn); };
+  globalThis.fetch = async (_url, init) => {
+    requests++;
+    assert.equal(init.headers["x-rabiroute-agent-id"], agent.agentId);
+    return enabled ? Response.json(identity("fixture-node")) : Response.json({ code: 403 }, { status: 403 });
+  };
+  try {
+    await runtime.runTask({ taskId: "enabled-task", agentId: agent.agentId, targetAgent: agent.provider, message: "fixture", cwd: directory });
+    assert.equal(turns.length, 1);
+    assert.equal(turns[0].threadId, agent.sessionId);
+    assert.equal(runtime.stateStore.state.tasks["enabled-task"].status, "progress");
+    enabled = false;
+    const beforeDenied = requests;
+    await runtime.runTask({ taskId: "disabled-task", agentId: agent.agentId, targetAgent: agent.provider, message: "fixture", cwd: directory });
+    assert.ok(requests > beforeDenied);
+    assert.equal(turns.length, 1);
+    assert.match(runtime.stateStore.state.tasks["disabled-task"].error, /Manager no longer authorizes/);
+  } finally { runtime.stop(); globalThis.fetch = savedFetch; }
+}));
+
+test("thread and prepared operations reach Manager authority with legacy local disabled state", async () => fixture(async ({ configPath, directory }) => {
+  const savedFetch = globalThis.fetch;
+  const agent = { agentId: "worker", provider: "codex-desktop", sessionId: "fixture-session", workspace: directory, enabled: false };
+  const runtime = new __test.RabiAgentRuntime({ managerUrl: "http://manager.test:54321", nodeId: "fixture-node", nodeCredential: "fixture-node",
+    defaultWorkspace: directory, allowedWorkspaces: [directory], agents: [agent] }, configPath);
+  const replies = [];
+  let requests = 0;
+  runtime.connected = true;
+  runtime.socket = { close() {} };
+  runtime.send = value => { replies.push(value); return true; };
+  globalThis.fetch = async () => { requests++; return Response.json({ code: 403 }, { status: 403 }); };
+  try {
+    for (const operation of ["threads", "prepared_delivery", "reconcile_prepared_delivery"]) {
+      const before = requests;
+      runtime.handleManagerMessage(JSON.stringify({ type: "manageAgent", requestId: operation, operation, params: {
+        agentId: agent.agentId, action: "read", threadId: agent.sessionId,
+        delivery: { deliveryId: "fixture-delivery", generation: "fixture-generation", target: {
+          kind: "instance", nodeId: "fixture-node", agentId: agent.agentId, provider: "codex", sessionId: agent.sessionId
+        } }
+      } }));
+      await runtime.taskQueue;
+      assert.ok(requests > before, operation);
+      assert.match(replies.at(-1).error, operation === "threads" ? /Manager no longer authorizes/ : /Original delivery authority is unavailable/);
+    }
+  } finally { runtime.stop(); globalThis.fetch = savedFetch; }
+}));
+
 test("WebSocket authenticates only with node credential after self verification", async () => fixture(async ({ configPath, directory }) => {
   const savedFetch = globalThis.fetch;
   const savedSocket = globalThis.WebSocket;

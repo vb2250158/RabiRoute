@@ -103,6 +103,10 @@ test("NapCat Fiber waits for every listener and closes clients and ports", async
   t.after(() => dispose?.());
   assert.equal(typeof dispose, "function");
   const running = readStatus(dataDir);
+  assert.equal(running.napcat.connected, false);
+  assert.equal(running.napcat.activeConnections, 0);
+  assert.equal(running.napcatInstances.first.connected, false);
+  assert.equal(running.napcatInstances.second.connected, false);
   assert.equal(running.pid, process.pid);
   assert.ok(Number.isFinite(Date.parse(running.startedAt)));
   assert.ok(Number.isFinite(Date.parse(running.updatedAt)));

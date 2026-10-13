@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PIL import Image
 from PySide6.QtCore import QPoint
 from PySide6.QtTest import QTest, QSignalSpy
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel, QMenu, QSlider
 from rabiroute_tray.desktop_pet_client import DesktopPetBinding, DesktopPetIdleBehavior, LoadedDesktopPetAnimation
 from rabiroute_tray.desktop_pet_controller import DesktopPetController
 from rabiroute_tray.desktop_pet_events import DesktopPetEventStream
@@ -189,6 +189,36 @@ class PetPlaybackTest(unittest.TestCase):
             scheduler._request_random_animation()
         self.assertEqual(chosen, ["a", "b", "c", "a"])
         scheduler.stop()
+
+    def test_size_menu_shows_percentage_and_coalesces_slider_changes(self):
+        menu = QMenu(self.window)
+        scale_menu = self.controller._add_scale_control(menu)
+        slider = scale_menu.findChild(QSlider)
+        self.assertEqual(scale_menu.title(), "大小：50%")
+        self.assertEqual((slider.minimum(), slider.maximum(), slider.singleStep()), (10, 200, 1))
+        with patch.object(self.controller, "_set_scale") as save:
+            slider.setValue(23)
+            slider.setValue(10)
+            self.assertEqual(scale_menu.title(), "大小：10%")
+            self.assertTrue(any(label.text() == "当前大小：10%" for label in scale_menu.findChildren(QLabel)))
+            save.assert_not_called()
+            scale_menu.aboutToHide.emit()
+            save.assert_called_once_with(0.1)
+            QTest.qWait(130)
+            save.assert_called_once()
+        menu.deleteLater()
+
+    def test_ten_percent_size_is_not_clamped_to_sixty_four_pixels(self):
+        self.controller._set_scale(0.1)
+        target = self.window._target_size(replace(self.pack, canvas_width=512, canvas_height=512))
+        self.assertEqual((target.width(), target.height()), (51, 51))
+
+    def test_loop_restarts_after_last_frame_without_stopping_timer(self):
+        count = len(self.window._png_frames)
+        for _ in range(count):
+            self.window._advance_png_frame()
+        self.assertEqual(self.window._png_index, 0)
+        self.assertTrue(self.window._png_timer.isActive())
 
 
 if __name__ == "__main__":

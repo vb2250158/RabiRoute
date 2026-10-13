@@ -97,12 +97,10 @@ test("CLI uses registered identity, preserves stdin JSON and never exports crede
     await assert.rejects(runManagerCommand(["--api", "GET", "/meta"], configPath, { fetchImpl }), /registered Agent/);
     config.agents[0].enabled = false;
     fs.writeFileSync(configPath, JSON.stringify(config));
-    const beforeDisabledRequest = calls.length;
-    await assert.rejects(runManagerCommand(["--api", "GET", "/meta", "--agent", "worker"], configPath, { fetchImpl }), /Agent is disabled/);
-    assert.equal(calls.length, beforeDisabledRequest);
-    // Automatic registration does not override an explicit local stop.
-    config.agents[0].enabled = true;
-    fs.writeFileSync(configPath, JSON.stringify(config));
+    const beforeLegacyRequest = calls.length;
+    assert.equal((await runManagerCommand(["--api", "GET", "/meta", "--agent", "worker"], configPath, { fetchImpl })).ok, true);
+    assert.ok(calls.length > beforeLegacyRequest);
+    // The same stale local field cannot override a Manager disable either.
     const afterManagedRequest = calls.length;
     assert.equal((await runManagerCommand(["--api", "GET", "/meta", "--agent", "worker"], configPath, { fetchImpl: async () => Response.json({ code: 403 }, { status: 403 }) })).ok, false);
     delete config.nodeCredential;

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 import { GatewayStatusSnapshotService } from "../manager/gatewayStatusSnapshot.js";
 import { testNapcatHealth, type NapcatManagerContext } from "./napcatManager.js";
@@ -20,7 +21,8 @@ test("NapCat WS health requires a fresh snapshot owned by the current Gateway pr
     normalizeNapCatInstances: () => [instance], appendLog: () => undefined,
     checkHttpEndpoint: async () => false
   };
-  // No real HTTP, QQ, WebUI login, process inspection or lifecycle operations.
+  // No real HTTP, QQ, local configuration, WebUI login, process inspection or lifecycle operations.
+  t.mock.method(fs, "existsSync", () => false);
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
     const url = String(input);
     assert.ok(url === `${instance.httpUrl}/get_status` || url === `${instance.httpUrl}/get_login_info`);
@@ -58,6 +60,35 @@ test("NapCat WS health requires a fresh snapshot owned by the current Gateway pr
     } finally { snapshots.stop(); }
   });
 
+  await t.test("current-process snapshot remains usable across a sparse supervisor refresh and recovers", async () => {
+    let clock = now;
+    let finish!: (value: Record<string, unknown>) => void;
+    const snapshots = new GatewayStatusSnapshotService({ now: () => clock, load: async () =>
+      new Promise(resolve => { finish = resolve; }) });
+    const ownedStatus = () => ({ pid: 2002, updatedAt: new Date(clock).toISOString(),
+      napcatInstances: { bot: { connected: true } } });
+    try {
+      snapshots.read("route", "fixture");
+      await settled();
+      finish(ownedStatus());
+      await settled();
+      status = snapshots.read("route", "fixture");
+      assert.equal((await testNapcatHealth(ctx, request)).ok, true);
+      clock += 30_000;
+      status = snapshots.read("route", "fixture");
+      assert.equal((status.gatewayStatusSnapshot as { state: string }).state, "refreshing");
+      assert.equal((await testNapcatHealth(ctx, request)).ok, true);
+      await settled();
+      clock += 30_001;
+      status = snapshots.read("route", "fixture");
+      assert.equal((await testNapcatHealth(ctx, request)).ok, false, "overdue reads cannot preserve WS health forever");
+      finish(ownedStatus());
+      await settled();
+      status = snapshots.read("route", "fixture");
+      assert.equal((await testNapcatHealth(ctx, request)).ok, true);
+    } finally { snapshots.stop(); }
+  });
+
   for (const state of ["warming", "stale", "stopped", "unknown"]) {
     await t.test(`snapshot state ${state} is not WS evidence`, async () => {
       status = { ...validStatus(), gatewayStatusSnapshot: { state, refreshedAt, fresh: true } };
@@ -89,6 +120,23 @@ test("NapCat WS health requires a fresh snapshot owned by the current Gateway pr
       assert.equal((await testNapcatHealth(ctx, request)).ok, false);
     });
   }
+  await t.test("missing runtime start time cannot prove process freshness", async () => {
+    status = validStatus();
+    const noStartContext = { ...ctx, getRuntimes: () => [{ definition, process: gatewayProcess, status }] };
+    assert.equal((await testNapcatHealth(noStartContext, request)).ok, false);
+  });
+  await t.test("refresh time can fence a writer that has no updatedAt field", async () => {
+    status = { ...validStatus(), updatedAt: undefined };
+    assert.equal((await testNapcatHealth(ctx, request)).ok, true);
+  });
+  await t.test("exited or killed process cannot supply connection", async () => {
+    status = validStatus();
+    gatewayProcess.killed = true;
+    assert.equal((await testNapcatHealth(ctx, request)).ok, false);
+    gatewayProcess.killed = false;
+    const exitedContext = { ...ctx, getRuntimes: () => [{ definition, process: { ...gatewayProcess, exitCode: 0 }, startedAt, status }] };
+    assert.equal((await testNapcatHealth(exitedContext, request)).ok, false);
+  });
   await t.test("stopped Gateway cannot supply connection", async () => {
     status = validStatus();
     currentProcess = null;

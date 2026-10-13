@@ -16,7 +16,7 @@ import {
   messageAdapterPolicyFor,
   type MessageEndpointType,
   type MessageAdapterPolicies,
-  type MessageAdapterPolicy,
+  type NormalizedMessageAdapterPolicy,
   type MessagePayloadKind
 } from "./shared/gatewayConfigModel.js";
 import type { LanguageStyleBinding } from "./shared/languageStyle.js";
@@ -724,7 +724,7 @@ export function agentReplyDataDirsForRoute(options: AgentReplyOptions, route: Re
   return [...dirs];
 }
 
-function conversationDataDirForRoute(options: AgentReplyOptions, route: ResolvedRoute): string {
+export function conversationDataDirForRoute(options: AgentReplyOptions, route: ResolvedRoute): string {
   if (agentReplyPersonaDeviceId(route)) {
     return resolvePath(options.rootDir, route.profile?.dataDir)
       || resolvePath(options.rootDir, route.runtime.dataDir)
@@ -1336,7 +1336,7 @@ export function napcatGroupReplyMessage(
   return result;
 }
 
-function napcatPolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
+function napcatPolicy(route: ResolvedRoute): NormalizedMessageAdapterPolicy {
   return messageAdapterPolicyFor({
     id: route.runtime.id,
     gatewayPort: 0,
@@ -1345,7 +1345,7 @@ function napcatPolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
   }, "napcat");
 }
 
-function fenneNotePolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
+function fenneNotePolicy(route: ResolvedRoute): NormalizedMessageAdapterPolicy {
   return messageAdapterPolicyFor({
     id: route.runtime.id,
     gatewayPort: 0,
@@ -1354,7 +1354,7 @@ function fenneNotePolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
   }, "fennenote");
 }
 
-function speechPolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
+function speechPolicy(route: ResolvedRoute): NormalizedMessageAdapterPolicy {
   return messageAdapterPolicyFor({
     id: route.runtime.id,
     gatewayPort: 0,
@@ -1363,7 +1363,7 @@ function speechPolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
   }, "speech");
 }
 
-function wecomPolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
+function wecomPolicy(route: ResolvedRoute): NormalizedMessageAdapterPolicy {
   return messageAdapterPolicyFor({
     id: route.runtime.id,
     gatewayPort: 0,
@@ -1372,7 +1372,7 @@ function wecomPolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
   }, "wecom");
 }
 
-function feishuPolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
+function feishuPolicy(route: ResolvedRoute): NormalizedMessageAdapterPolicy {
   return messageAdapterPolicyFor({
     id: route.runtime.id,
     gatewayPort: 0,
@@ -1381,7 +1381,7 @@ function feishuPolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
   }, "feishu");
 }
 
-function rabiLinkPolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
+function rabiLinkPolicy(route: ResolvedRoute): NormalizedMessageAdapterPolicy {
   return messageAdapterPolicyFor({
     id: route.runtime.id,
     gatewayPort: 0,
@@ -1550,7 +1550,7 @@ async function appendRolePanelReply(
   };
 }
 
-function weixinPolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
+function weixinPolicy(route: ResolvedRoute): NormalizedMessageAdapterPolicy {
   return messageAdapterPolicyFor({
     id: route.runtime.id,
     gatewayPort: 0,
@@ -1965,7 +1965,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
         "info",
         proactive ? "rabilink_proactive_queued" : "rabilink_reply_queued",
         text.slice(0, 500),
-        withConversation({ ...result, relayResult, deliveryId })
+        withConversation({ ...result, relayResult, deliveryId, targetDeviceIds, targetDeviceKinds })
       );
       return result;
     } catch (error) {

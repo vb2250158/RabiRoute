@@ -337,14 +337,22 @@ test("stop does not wait forever for a candidate scan that never settles", async
   await service.stop();
 });
 
-test("repeated scan failure backs off exponentially and emits one incident", async () => {
+test("repeated scan failure backs off exponentially and emits one incident", async t => {
   const errors: number[] = [];
   const incidents: string[] = [];
   let scans = 0;
+  let now = 1_000;
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const advance = async (milliseconds: number) => {
+    now += milliseconds;
+    t.mock.timers.tick(milliseconds);
+    await new Promise<void>(resolve => setImmediate(resolve));
+  };
   const service = new PlanFeedbackRecoveryService({
     retryDelayMs: 5,
     maximumRetryDelayMs: 20,
     incidentThreshold: 3,
+    now: () => now,
     listCandidates: () => {
       scans += 1;
       if (scans <= 3) throw new Error("NAS unavailable");
@@ -357,7 +365,20 @@ test("repeated scan failure backs off exponentially and emits one incident", asy
   });
 
   await service.start("startup");
-  await waitUntil(() => scans === 4, 500);
+  assert.equal(scans, 1);
+  await advance(4);
+  assert.equal(scans, 1);
+  await advance(1);
+  assert.equal(scans, 2);
+  assert.deepEqual(errors, [1]);
+  await advance(9);
+  assert.equal(scans, 2);
+  await advance(1);
+  assert.equal(scans, 3);
+  await advance(19);
+  assert.equal(scans, 3);
+  await advance(1);
+  assert.equal(scans, 4);
   assert.deepEqual(errors, [1, 3]);
   assert.equal(incidents.length, 1);
   assert.ok(incidents[0]);

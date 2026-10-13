@@ -22,11 +22,11 @@
 
 提示词含短期接入票据，不再携带共享 WebGUI 管理 Token。只能粘贴到目标电脑的私密任务中，不要写入仓库、群聊、日志、截图或命令历史。复制使用安全剪贴板或页面回退，支持局域网 HTTP；HTTP 不提供传输加密，只在可信网络中使用。
 
-接入成功后，连接器自动使用原节点凭据核对当前 Manager；Agent 不需要手动检查身份、重新绑定或另申请功能许可。`GET /api/lan-agent/self` 是诊断入口，返回真实 `guid`、generation、instance、`nodeId` 与 WebSocket `connected`；`connected=false` 不等于节点凭据失效，也不应作为已鉴权 HTTP 接口的第二道许可。新接入的 Agent 默认启用，页面的 **是否启用Agent** 默认勾选，与本机开关同名；启用后按本机 Agent 的方式使用，无需另开 API 或 skills 授权。远端开关由 Manager 保存，修改后立即 PUT 生效，离线也可停用，不依赖“保存到实例”。停用后，后续任务与受限 API、资源请求被拒绝；保存工作目录、任务和模型不会重新启用 Agent。界面只显示 Manager 返回的状态，读取失败不会假定已启用。已有绑定的旧关闭状态保持不变，重连不会重新启用；无法区分旧版从未授权和主动停用时，也保留关闭，由管理员确认后开启。
+接入成功后，连接器自动使用原节点凭据核对当前 Manager，不需要另申请接口或技能许可。`GET /api/lan-agent/self` 返回真实 `guid`、generation、instance、`nodeId` 与 WebSocket `connected`；WebSocket 离线不使节点凭据失效。新接入的 Agent 默认启用，页面的 **是否启用Agent** 是唯一的远端启用开关，由 Manager 保存，修改后立即 PUT 生效，离线也可停用。已接入连接器的 CLI、Hook 和任务入口不再用旧本地 `enabled` 二次拒绝；停用仍由 Manager 的当前身份与撤销检查执行。首次目录登记只在没有 Manager 决定时迁入旧显式停用；已有启用或停用决定优先，重连不会覆盖。保存工作目录、任务和模型不修改开关，并清除远端配置中的旧 `enabled` 字段；直接写该字段会提示使用总控开关接口。未接入的独立本地 Agent 保留自己的启用设置。界面读取失败时显示错误，不假定已启用。
 
-连接器本地显式 `enabled=false` 仍会拒绝执行，不因节点已接入而绕过；Manager 的停用与撤销同样保留。仅携带有效节点凭据、未指定 Agent 的精确 `GET /meta` 可用于连接诊断，不授予业务或管理权限。普通业务必须满足存活与必需依赖就绪条件；精确元数据诊断只检查身份。
+仅携带有效节点凭据、未指定 Agent 的精确 `GET /meta` 可用于连接诊断，不授予业务或管理权限。普通业务必须满足存活与必需依赖就绪条件；精确元数据诊断只检查身份。
 
-本轮默认启用与界面调整已通过源码构建，尚未部署或完成双机验收；下文历史部署记录不代表本轮行为已经上线。
+Manager 与连接器分别验收运行状态。双机验收需要远端在线并使用对应连接器版本；下文历史部署记录不能证明后续改动已经上线。
 
 ### 已连接但资源目录为空
 
@@ -162,13 +162,13 @@ node rabi-agent.mjs --api POST /api/agent/send --agent <agentId> --body-stdin
 
 ## API
 
-以下区分管理入口与节点入口；列在这里不表示节点凭据可调用全部管理操作。
+仅持有节点凭据可做接入诊断；已启用且通过鉴权的 Agent 与本机管理端具有相同公开接口和配置权限。
 
 - `POST /api/lan-agent/enrollments`：受信管理端签发一次性票据。
 - `POST /api/lan-agent/enroll`：以票据兑换独立节点凭据。
 - `GET /api/lan-agent/self`：节点读取自身身份和连接状态，不列出其他节点。
 - `GET /api/lan-agent/capabilities`、`GET /api/lan-agent/resources`、`GET /api/lan-agent/resources/read?id=<resourceId>`：已授权 Agent 发现操作和读取受限资源。
-- `PUT /api/lan-agent/instances/<instanceId>/agents/<agentId>/authorization`：兼容保留的管理端 Agent 启停接口，快照继续通过 `authorization.nodes[].enabledAgentIds` 投影启用状态，不另设 API 权限开关；启用正文为 `{ "enabled": true, "binding": { "provider": "<provider>", "sessionId": "<sessionId>", "managedSessionIds": [] } }`，其中 `managedSessionIds` 可省略，明确冻结 UI 当前显示的绑定；关闭正文仅为 `{ "enabled": false }`。先 GET instances，PUT 必须携带稳定 `Idempotency-Key` 与其强 ETag 作为 `If-Match`。授权回执持久保留 24 小时；同键同正文返回原回执，不重写授权，异正文返回 409。缺少版本返回 428，版本冲突返回 412。超时先 GET instances 核对当前授权，不自动重试；回执过期后重新读取并确认意图，再用新键与新 ETag。节点不能给自己授权。
+- `PUT /api/lan-agent/instances/<instanceId>/agents/<agentId>/authorization`：正式 Agent 启停接口，本机管理端与已启用且鉴权的 Agent 均可调用，快照继续通过 `authorization.nodes[].enabledAgentIds` 投影启用状态，不另设 API 权限开关；启用正文为 `{ "enabled": true, "binding": { "provider": "<provider>", "sessionId": "<sessionId>", "managedSessionIds": [] } }`，其中 `managedSessionIds` 可省略，明确冻结 UI 当前显示的绑定；关闭正文仅为 `{ "enabled": false }`。先 GET instances，PUT 必须携带稳定 `Idempotency-Key` 与其强 ETag 作为 `If-Match`。授权回执持久保留 24 小时；同键同正文返回原回执，不重写授权，异正文返回 409。缺少版本返回 428，版本冲突返回 412。超时先 GET instances 核对当前授权，不自动重试；回执过期后重新读取并确认意图，再用新键与新 ETag。仅持有节点凭据或已被停用的 Agent 不能自行启用。
 
 - `GET /api/lan-agent/releases/manifest` 与 `GET /api/lan-agent/releases/<version>/node/<assetPath>`：发布清单与文件。
 - `GET /api/lan-agent/nodes`：连接状态、发布信息与最近任务。

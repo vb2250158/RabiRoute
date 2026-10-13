@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type http from "node:http";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import { dshConnectionRequestAllowed, handleDshConnectionRequest } from "./dshConnectionRoutes.js";
 import { Readable } from "node:stream";
 import fs from "node:fs";
@@ -8,8 +8,11 @@ import os from "node:os";
 import path from "node:path";
 import { DshConnectionStore } from "../dshConnectionStore.js";
 import { createHash } from "node:crypto";
+import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
+import { LanAgentAuthority } from "./lanAgentAuthority.js";
+import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
 
-test("direct connect reuses only the target browser login, verifies it and saves its original expiry", async () => {
+test("local Agent without Origin connects with the target login and preserves its original expiry", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-browser-route-"));
   const store = new DshConnectionStore(path.join(root, "connections.json"), {
     scheme: "test", protect: value => Buffer.from(value).toString("base64"), unprotect: value => Buffer.from(value, "base64").toString("utf8")
@@ -22,7 +25,7 @@ test("direct connect reuses only the target browser login, verifies it and saves
   const valid = `${name}=${value({ version: 1, authority, issuedAt: Date.now() - 1000, expiresAt })}`;
   const url = new URL("http://127.0.0.1:12345/api/agent-adapters/dsh/connection");
   const make = (cookie: string, expectedRevision: number, baseUrl = origin) => Object.assign(Readable.from([JSON.stringify({ baseUrl, expectedRevision })]), {
-    method: "POST", headers: { host: url.host, origin: url.origin, cookie, "content-type": "application/json" }, socket: { remoteAddress: "127.0.0.1" }
+    method: "POST", headers: { host: url.host, cookie, "content-type": "application/json" }, socket: { remoteAddress: "127.0.0.1" }
   }) as unknown as http.IncomingMessage;
   const priorFetch = globalThis.fetch;
   let calls = 0;
@@ -76,7 +79,7 @@ test("DSH metadata and disconnect API fence revisions without exposing secrets o
   const store = new DshConnectionStore(path.join(root, "connections.json"), { scheme: "test", protect: value => value, unprotect: value => value });
   const origin = "http://127.0.0.1:39277";
   const make = (method: string, body?: unknown) => Object.assign(Readable.from(body ? [JSON.stringify(body)] : []), {
-    method, headers: { host: "127.0.0.1:12345", origin: "http://127.0.0.1:12345", "content-type": "application/json" }, socket: { remoteAddress: "127.0.0.1" }
+    method, headers: { host: "127.0.0.1:12345", "content-type": "application/json" }, socket: { remoteAddress: "127.0.0.1" }
   }) as unknown as http.IncomingMessage;
   const url = new URL("http://127.0.0.1:12345/api/agent-adapters/dsh/connection");
   try {
@@ -94,13 +97,92 @@ test("DSH metadata and disconnect API fence revisions without exposing secrets o
 });
 
 const request = (address: string, headers: http.IncomingHttpHeaders) => ({ socket: { remoteAddress: address }, headers }) as http.IncomingMessage;
-test("DSH authorization mutations require a same-origin local browser; Relay and rebinding fail closed", () => {
+test("DSH local requests allow an absent Origin while preserving browser and proxy checks", () => {
   const headers = { host: "127.0.0.1:12345", origin: "http://127.0.0.1:12345" };
-  assert.equal(dshConnectionRequestAllowed(request("127.0.0.1", headers), true), true);
-  assert.equal(dshConnectionRequestAllowed(request("127.0.0.1", { host: headers.host }), true), false);
-  assert.equal(dshConnectionRequestAllowed(request("192.0.2.1", headers), true), false);
-  assert.equal(dshConnectionRequestAllowed(request("127.0.0.1", { ...headers, origin: "http://attacker.invalid" }), true), false);
-  assert.equal(dshConnectionRequestAllowed(request("127.0.0.1", { host: "attacker.invalid", origin: "http://attacker.invalid" }), true), false);
-  assert.equal(dshConnectionRequestAllowed(request("127.0.0.1", { ...headers, "x-forwarded-for": "192.0.2.1" }), true), false);
-  assert.equal(dshConnectionRequestAllowed(request("127.0.0.1", { ...headers, "sec-fetch-site": "cross-site" }), true), false);
+  assert.equal(dshConnectionRequestAllowed(request("127.0.0.1", headers)), true);
+  assert.equal(dshConnectionRequestAllowed(request("127.0.0.1", { host: headers.host })), true);
+  assert.equal(dshConnectionRequestAllowed(request("192.0.2.1", headers)), false);
+  assert.equal(dshConnectionRequestAllowed(request("127.0.0.1", { ...headers, origin: "http://attacker.invalid" })), false);
+  assert.equal(dshConnectionRequestAllowed(request("127.0.0.1", { host: "attacker.invalid", origin: "http://attacker.invalid" })), false);
+  assert.equal(dshConnectionRequestAllowed(request("127.0.0.1", { ...headers, "x-forwarded-for": "192.0.2.1" })), false);
+  assert.equal(dshConnectionRequestAllowed(request("127.0.0.1", { ...headers, "sec-fetch-site": "cross-site" })), false);
+});
+
+function connectionFixture(t: TestContext) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-connection-authority-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new DshConnectionStore(path.join(root, "connections.json"), {
+    scheme: "test", protect: value => value, unprotect: value => value
+  });
+  const authority = new LanAgentAuthority({ statePath: path.join(root, "authority.json") });
+  const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "fixture-node");
+  authority.registerAgentCatalog(credential.token, [{ agentId: "fixture-agent", provider: "custom-provider" }]);
+  const url = new URL("http://manager.example/api/agent-adapters/dsh/connection");
+  const body = { baseUrl: "http://127.0.0.1:39277", expectedRevision: 0 };
+  let policy = { enabled: true, incarnation: "initial" };
+  let connectionActive = true;
+  const make = (kind: "agent" | "connection", beforeBody?: () => void) => {
+    const input = Object.assign(Readable.from((async function* () {
+      beforeBody?.();
+      yield JSON.stringify(body);
+    })()), {
+      method: "DELETE", url: url.pathname,
+      headers: { host: url.host, "content-type": "application/json" } as http.IncomingHttpHeaders,
+      socket: { remoteAddress: "192.0.2.1" }
+    }) as unknown as http.IncomingMessage;
+    if (kind === "agent") {
+      input.headers.authorization = `Bearer ${credential.token}`;
+      input.headers["x-rabiroute-agent-id"] = "fixture-agent";
+      assert.equal(evaluateLanAgentRequest(input, authority, true, () => policy).kind, "agent");
+    } else {
+      input.headers["x-rabilink-tunnel-local"] = "fixture-transport";
+      markAuthenticatedConnectionRequest(input, () => {
+        if (!connectionActive) throw new Error("Connection was revoked.");
+      });
+    }
+    return input;
+  };
+  return { store, authority, url, body, make,
+    replacePolicy: () => { policy = { enabled: true, incarnation: "replacement" }; },
+    revokeConnection: () => { connectionActive = false; } };
+}
+
+test("enabled remote Agent and authenticated RabiLink connection can save DSH settings without Origin", async t => {
+  for (const kind of ["agent", "connection"] as const) {
+    const fixture = connectionFixture(t);
+    const result = await handleDshConnectionRequest(fixture.make(kind), fixture.url, fixture.store);
+    assert.equal(result.revision, 1);
+    const reread = new DshConnectionStore(fixture.store.filePath, {
+      scheme: "test", protect: value => value, unprotect: value => value
+    });
+    assert.equal(reread.resolve(fixture.body.baseUrl)?.state, "disconnected");
+  }
+});
+
+test("DSH body wait cannot write after Agent or connection authority is revoked or replaced", async t => {
+  for (const variant of ["agent-revoke", "agent-aba", "global-aba", "connection"] as const) {
+    const fixture = connectionFixture(t);
+    const input = fixture.make(variant === "connection" ? "connection" : "agent", () => {
+      if (variant === "connection") fixture.revokeConnection();
+      else if (variant === "global-aba") fixture.replacePolicy();
+      else {
+        fixture.authority.setAgentEnabled("fixture-node", "fixture-agent", false);
+        if (variant === "agent-aba") fixture.authority.setAgentEnabled("fixture-node", "fixture-agent", true);
+      }
+    });
+    await assert.rejects(handleDshConnectionRequest(input, fixture.url, fixture.store), { status: 403 });
+    assert.equal(fixture.store.readMetadata().revision, 0);
+    assert.equal(fs.existsSync(fixture.store.filePath), false);
+  }
+});
+
+test("DSH authorization ignores copied connection identities and rejects forged Agent or Relay headers", () => {
+  const remote = request("192.0.2.1", { host: "manager.example", "x-rabilink-tunnel-local": "forged" });
+  assert.equal(dshConnectionRequestAllowed(remote), false);
+  markAuthenticatedConnectionRequest(remote);
+  assert.equal(dshConnectionRequestAllowed(remote), true);
+  assert.equal(dshConnectionRequestAllowed({ ...remote } as http.IncomingMessage), false);
+  const local = request("127.0.0.1", { host: "127.0.0.1:12345", "x-rabiroute-agent-id": "forged" });
+  markAuthenticatedConnectionRequest(local);
+  assert.equal(dshConnectionRequestAllowed(local), false);
 });

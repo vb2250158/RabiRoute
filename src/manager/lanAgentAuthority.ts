@@ -251,7 +251,7 @@ export class LanAgentAuthority {
    * Re-authenticate under the write lock, replace (never merge) session claims, and
    * retain Manager-owned explicit disables even across removal and reappearance.
    */
-  registerAgentCatalog(token: string, agents: readonly LanAgentApprovedBinding[]): void {
+  registerAgentCatalog(token: string, agents: readonly (LanAgentApprovedBinding & { enabled?: boolean })[]): void {
     if (!Array.isArray(agents) || agents.length > MAX_AGENTS_PER_NODE) this.reject("register-agent-catalog", "Invalid Agent catalog.");
     const bindings = agents.map(agent => copyBinding(agent));
     if (new Set(bindings.map(binding => binding.agentId)).size !== bindings.length) this.reject("register-agent-catalog", "Duplicate Agent catalog identity.");
@@ -260,6 +260,16 @@ export class LanAgentAuthority {
       if (!identity) this.reject("register-agent-catalog", "Invalid node credential.");
       const node = state.nodes.find(item => item.nodeId === identity.nodeId);
       if (!node) this.reject("register-agent-catalog", "Node is not enrolled.");
+      // Import legacy connector disables only at first registration. Existing
+      // Manager decisions win, including an enable made before the node returns.
+      // agentBindings remains present after removal, so stale catalogs cannot
+      // re-import an old local switch when that Agent later reappears.
+      if (node.agentBindings === undefined) {
+        for (const agent of agents) {
+          if (agent.enabled === false && !node.enabledAgentIds.includes(agent.agentId)
+            && !node.disabledAgentIds?.includes(agent.agentId)) setNodeAgentEnabled(node, agent.agentId, false);
+        }
+      }
       const enabledAgentIds = bindings.filter(binding => !node.disabledAgentIds?.includes(binding.agentId)).map(binding => binding.agentId);
       if (JSON.stringify(node.agentBindings) === JSON.stringify(bindings)
         && JSON.stringify(node.enabledAgentIds) === JSON.stringify(enabledAgentIds)) return false;

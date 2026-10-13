@@ -44,7 +44,7 @@ test("Hook preserves Manager deny exactly and never weakens permission fields", 
   assert.deepEqual(result, decision);
 }));
 
-test("Hook rejects disabled, shared-token, ambiguous and changing Manager identities", async () => fixture(async (configPath, config) => {
+test("Hook rejects Manager-disabled, shared-token, ambiguous and changing Manager identities", async () => fixture(async (configPath, config) => {
   let calls = 0;
   const fetcher = async url => { calls++; return Response.json(String(url).endsWith("/meta") ? { ...meta, applicationGenerationId: calls === 1 ? "first" : "changed" } : { code: 0, data: {} }); };
   await assert.rejects(requestInstanceHook({ session_id: "session-b" }, configPath, fetcher), /uncertain/);
@@ -52,9 +52,8 @@ test("Hook rejects disabled, shared-token, ambiguous and changing Manager identi
   fs.writeFileSync(configPath, JSON.stringify({ ...config, nodeCredential: undefined, lanLinkToken: "fixture-legacy" }));
   await assert.rejects(requestInstanceHook({ session_id: "session-b" }, configPath, fetcher), /re-enroll/);
   fs.writeFileSync(configPath, JSON.stringify({ ...config, agents: [{ ...config.agents[0], enabled: false }] }));
-  assert.equal(await requestInstanceHook({ session_id: "session-b" }, configPath, fetcher), undefined);
-  assert.equal(calls, 3);
-  fs.writeFileSync(configPath, JSON.stringify(config));
+  const allowed = await requestInstanceHook({ session_id: "session-b" }, configPath, async url => Response.json(String(url).endsWith("/meta") ? meta : { code: 0, data: { action: "context" } }));
+  assert.match(allowed.additionalContext, /RabiRoute Manager API/);
   await assert.rejects(requestInstanceHook({ session_id: "session-b" }, configPath, async url => Response.json(String(url).endsWith("/meta") ? meta : { code: 403 }, { status: String(url).endsWith("/meta") ? 200 : 403 })), /Hook failed/);
   fs.writeFileSync(configPath, JSON.stringify({ ...config, agents: [...config.agents, { ...config.agents[0], agentId: "duplicate" }] }));
   assert.equal(await requestInstanceHook({ session_id: "session-b" }, configPath, fetcher), undefined);
