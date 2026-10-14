@@ -6,6 +6,12 @@ import android.content.Context
 import android.content.res.Configuration
 import android.os.Bundle
 import java.util.WeakHashMap
+import com.rabi.link.recording.AllDayRecordingSettings
+
+/** Foreground entry restores the saved recording intent without changing it. */
+internal fun restoreSavedRecording(settings: AllDayRecordingSettings, resume: () -> Unit) {
+    if (settings.autoResume) resume()
+}
 
 /** Device-local appearance preference; PC appearance remains independently owned. */
 object RabiMobileTheme {
@@ -37,8 +43,6 @@ object RabiMobileTheme {
 /** Theme every Activity before inflation, including platform dialogs and dropdowns. */
 class RabiMobileApplication : Application(), Application.ActivityLifecycleCallbacks {
     private val applied = WeakHashMap<Activity, Int>()
-    private var startedActivities = 0
-    private var appEntryPending = true
 
     override fun onCreate() {
         super.onCreate()
@@ -55,22 +59,16 @@ class RabiMobileApplication : Application(), Application.ActivityLifecycleCallba
     override fun onActivityResumed(activity: Activity) {
         if (applied[activity] != RabiMobileTheme.style() && !activity.isFinishing) activity.recreate()
         else if (!activity.isFinishing) {
-            if(appEntryPending) {
-                appEntryPending = false
-                val settings = com.rabi.link.recording.AllDayRecordingSettings.load(activity)
-                if(!settings.autoResume) settings.withEnabled(true,System.currentTimeMillis()).save(activity)
+            restoreSavedRecording(AllDayRecordingSettings.load(activity)) {
+                RabiConversationService.resumeRecordingFromForeground(activity)
             }
-            RabiConversationService.resumeRecordingFromForeground(activity)
         }
     }
 
     override fun onActivityDestroyed(activity: Activity) { applied.remove(activity) }
     override fun onActivityCreated(activity: Activity, state: Bundle?) = Unit
-    override fun onActivityStarted(activity: Activity) { startedActivities++ }
+    override fun onActivityStarted(activity: Activity) = Unit
     override fun onActivityPaused(activity: Activity) = Unit
-    override fun onActivityStopped(activity: Activity) {
-        startedActivities = (startedActivities-1).coerceAtLeast(0)
-        if(startedActivities == 0 && !activity.isChangingConfigurations) appEntryPending = true
-    }
+    override fun onActivityStopped(activity: Activity) = Unit
     override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
 }

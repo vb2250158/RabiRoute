@@ -420,10 +420,6 @@ class MainActivity : Activity() {
             // remain available to the separate configuration surfaces.
             availableRoutes = routes
             RabiRouteMetadataCache.save(this@MainActivity, relay, routes)
-            val enabled = availableRoutes.filter(::isRouteChatCapable)
-            val savedTarget = RabiConversationTarget.load(this)
-            val migrationTarget = enabled.firstOrNull { it.id == savedTarget }?.id ?: enabled.singleOrNull()?.id.orEmpty()
-            RabiChatStore(this).migrateLegacyMessages(migrationTarget)
             syncAiuiChatHistory()
             if (screen == Screen.CONVERSATIONS) renderConversationList()
             if (screen == Screen.CHAT) renderChat()
