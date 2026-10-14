@@ -8,6 +8,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## 0.3.34 - 2026-10-13
 
+- Linux adaptation follow-up: the source startup script refuses root and notes a missing `xdg-open`; Markdown image rendering on Linux resolves existing Chromium/Chrome/Edge absolute paths; the capability summary and troubleshooting cover Linux Host; optional current-user systemd draft at `examples/linux/rabiroute-host.service`.
 - Retry Manager endpoint discovery within a bounded startup/transition deadline, accept usable degraded states, and reliably capture Windows GUI Host output. Connection tools validate legitimate aliases by instance identity and preserve specific failure diagnostics. Dynamic endpoint allocation avoids browser-blocked ports so Fetch can use the selected address.
 - Unify configuration API access for local Agents, RabiLink and remote Agents; trusted local DSH connection writes no longer require a browser Origin.
 - Allow QQ group-file metadata queries when no read restriction is configured. Preserve explicit lists and empty-list restrictions without generating an empty allowlist during configuration saves.

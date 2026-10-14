@@ -12,7 +12,7 @@ Linux Host 管理本机 Manager 的启动、当前地址、重启和退出；界
 
 ## 1. 准备与首次启动
 
-需要 Linux、Node.js 20+、npm，以及 util-linux 提供的 `flock`（位于 `/usr/bin/flock` 或 `/bin/flock`）。构建需访问依赖源，依赖安装可能执行仓库与依赖的安装脚本。不要以 root 运行日常实例。
+需要 Linux、Node.js 20+、npm，以及 util-linux 提供的 `flock`（位于 `/usr/bin/flock` 或 `/bin/flock`）。若要用 Host 的 `open` 命令拉起本机浏览器，还需要发行版的 `xdg-utils`（提供 `xdg-open`）。构建需访问依赖源，依赖安装可能执行仓库与依赖的安装脚本。不要以 root 运行日常实例；源码启动脚本在检测到 root 时会直接退出。
 
 在仓库根目录运行：
 
@@ -85,7 +85,7 @@ Host 从自己启动的 Manager 读取 `RABIROUTE_MANAGER_READY:` 结构化输�
 - Host 控制端点使用本机动态 TCP 回环地址。权限为 `0600` 的控制描述文件含本次随机控制 token；命令必须通过活跃连接并校验 Host 身份，重启/退出还校验当前运行代。不要分享、提交或复制控制描述文件及其 token，也不要将它用于 Relay 配置。
 - `SIGINT`、`SIGTERM` 和 `quit` 进入正常退出：请求 Manager 关闭，对 Manager 进程组发送 `SIGTERM`，超时后升级为 `SIGKILL`。
 - Host 与 Manager 的 Node IPC 连接断开时，Manager 请求正常退出。它不等同于内核对子孙进程的完整收容：被强杀、卡死或脱离进程组的进程仍需要外部监督边界。
-- 如部署要求强制回收整个应用进程树，可自行配置 systemd，使用 `--foreground`、明确的绝对路径和 `KillMode=control-group`。这是可选的运维配置，不由启动脚本安装或启用。
+- 如部署要求强制回收整个应用进程树，可自行配置 systemd，使用 `--foreground`、明确的绝对路径和 `KillMode=control-group`。仓库提供可选草稿 [`examples/linux/rabiroute-host.service`](../examples/linux/rabiroute-host.service)，复制后必须改成你的绝对路径；这是可选的运维配置，不由启动脚本安装或启用。
 
 Manager 在就绪后意外退出时，Host 以有界退避重启；15 分钟内累计五次运行代失败后进入 `faulted`，需要排查后显式 `restart`。首次启动失败也会报告 `faulted`，不会无限尝试。
 

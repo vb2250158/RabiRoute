@@ -12,7 +12,7 @@ Linux Host owns local Manager startup, current address discovery, restart, and s
 
 ## 1. Prepare and start
 
-Requirements: Linux, Node.js 20+, npm, and util-linux `flock` at `/usr/bin/flock` or `/bin/flock`. Building needs dependency-source access; dependency installation can run repository and dependency installation scripts. Do not run the everyday instance as root.
+Requirements: Linux, Node.js 20+, npm, and util-linux `flock` at `/usr/bin/flock` or `/bin/flock`. To let Host `open` launch a local browser, also install the distribution `xdg-utils` package (provides `xdg-open`). Building needs dependency-source access; dependency installation can run repository and dependency installation scripts. Do not run the everyday instance as root; the source startup script exits immediately when it detects root.
 
 From the repository root:
 
@@ -85,7 +85,7 @@ Host consumes the `RABIROUTE_MANAGER_READY:` structured output from the Manager 
 - Host control uses a dynamic local TCP loopback endpoint. Its `0600` control descriptor contains a random per-run control token. Commands require a live connection and Host identity validation; restart/shutdown additionally require the current application generation. Never share, commit, or copy the control descriptor or its token, or use it as a Relay credential.
 - `SIGINT`, `SIGTERM`, and `quit` begin normal teardown: request Manager shutdown, send `SIGTERM` to its process group, and escalate to `SIGKILL` after the timeout.
 - Losing the Host–Manager Node IPC connection requests normal Manager shutdown. This is not full kernel-enforced descendant containment: forcibly killed, stalled, or process-group-escaping processes require an external supervision boundary.
-- For deployments that require complete process-tree cleanup, configure systemd yourself with `--foreground`, explicit absolute paths, and `KillMode=control-group`. This is optional operations setup; the startup script neither installs nor enables it.
+- For deployments that require complete process-tree cleanup, configure systemd yourself with `--foreground`, explicit absolute paths, and `KillMode=control-group`. The repository includes an optional draft at [`examples/linux/rabiroute-host.service`](../examples/linux/rabiroute-host.service); copy it and replace the absolute paths before use. This is optional operations setup; the startup script neither installs nor enables it.
 
 After an admitted Manager exits unexpectedly, Host retries with bounded backoff. Five generation failures within 15 minutes enter `faulted`, requiring diagnosis and an explicit `restart`. Initial startup failure also reports `faulted` rather than retrying forever.
 

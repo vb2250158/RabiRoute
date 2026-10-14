@@ -129,6 +129,7 @@ Manager 的 31 个内置插件与树外插件统一使用 schema/profile v2。�
 ## Manager 与 WebGUI
 
 - Windows 安装版由唯一 RabiRoute Host 创建一代 Manager 与托盘子程序。两者加入同一 Windows Job；Manager 结构化 READY 身份匹配后才启动托盘，任一子程序异常都会触发有界整代重建，用户退出后不会由任何并行守护入口复活。
+- Linux 源码路径由最小 Linux Host（`scripts/linux-host.mjs`）拥有 Manager 生命周期、动态回环地址、`flock` 单实例与状态/重启/退出命令；界面复用 RibiWebGUI，不含 Windows/Qt 托盘、截图和全局快捷键。详见 [Linux Host](linux-host.md)。
 - Manager 在操作系统分配的回环端口提供 RibiWebGUI 和 HTTP API，管理 Route 配置、受 process lease 约束的子进程、扫描、日志和全局设置。Windows 安装版从 Host 状态或托盘取得本代 URL，不存在固定端口默认值。
 - Manager 把需要读取大量语音历史的查询放进独立工作线程；同时最多执行 2 个、排队最多 8 个、单次上限 30 秒，超过容量或时限会明确返回 503/504，不再让主 HTTP 线程长时间失去响应。带时间范围的语音查询先根据归档索引排除不相交文件，再读取正文；同时到达、查询范围相同且不需要正文的语音统计只执行一次扫描。`GET /meta` 的 `readWorkers` 可查看当前执行数、排队数和上限。
 - 完整 Route 诊断只从 JSONL 文件尾部读取有限记录，并在同一次响应中复用相同文件的读取结果。Manager 同时限制请求头接收为 10 秒、请求接收为 30 秒、Keep-Alive 空闲为 5 秒，并限制单连接最多 100 次请求；这些值可从 `GET /meta.httpLimits` 查看。

@@ -24,7 +24,7 @@ Windows 完整源码构建启动：双击仓库根目录的 `Start-RabiRoute-Fro
 
 ### Linux Host
 
-Linux 需要 Node.js 20+、npm 和 util-linux `flock`。按以下步骤启动已有 WebGUI：
+Linux 需要 Node.js 20+、npm 和 util-linux `flock`；要用 Host `open` 打开浏览器时另需 `xdg-utils`。按以下步骤启动已有 WebGUI：
 
 1. 进入源码目录，运行首次构建启动脚本：
 

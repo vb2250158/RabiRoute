@@ -1,0 +1,29 @@
+# Optional example only. Copy and edit absolute paths before use.
+# This unit is not installed by Start-RabiRoute-FromSource.sh.
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp examples/linux/rabiroute-host.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now rabiroute-host.service
+#
+# Replace WorkingDirectory, ExecStart package/state roots, and the Node path.
+# Prefer an existing build: run `npm ci && npm run build` once, then start with
+# scripts/linux-host.mjs --foreground (not the full FromSource script every boot).
+
+[Unit]
+Description=RabiRoute Linux Host (user)
+Documentation=file:%h/src/RabiRoute/docs/linux-host.md
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/src/RabiRoute
+ExecStart=/usr/bin/node scripts/linux-host.mjs --foreground --package-root %h/src/RabiRoute --state-root %h/.local/share/rabiroute
+Restart=on-failure
+RestartSec=15
+KillMode=control-group
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target
