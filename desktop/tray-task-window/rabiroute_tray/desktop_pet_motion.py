@@ -99,9 +99,6 @@ def corner_positions(bounds: tuple[int, int, int, int], work_area: tuple[int, in
             for corner, (x, y) in positions.items() if corner in corners}
 
 
-def travel_kind(same_screen: bool, origin: tuple[int, int], destination: tuple[int, int],
-                screen_size: tuple[int, int]) -> str:
-    # A nearby destination across a monitor edge is still a walk. One screen's
-    # diagonal is the longest ordinary travel distance within that screen.
-    distance = math.dist(origin, destination)
-    return "move" if same_screen or distance <= math.hypot(*screen_size) else "teleport"
+def travel_kind(origin: tuple[int, int], destination: tuple[int, int], screen_width: int) -> str:
+    """Choose the authored gait using logical distance and the origin's available width."""
+    return "run" if math.dist(origin, destination) > screen_width * 0.5 else "move"

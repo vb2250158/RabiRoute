@@ -24,7 +24,7 @@ Reusable role rules:
 data/roles/<RoleId>/personaConfig.json
 ```
 
-The route points to the role with `agentRoleId`. The current persona file keeps root-level `automationRules`, `speechTriggerKeywords`, and `recentMessageLimits`; it does not require a nested `configs` collection. Legacy `notificationRules` remain readable and migrate into automation rules. Several Routes may reuse the same persona-owned policy.
+The route points to the role with `agentRoleId`. The current persona file keeps root-level `automationRules`, `speechTriggerKeywords`, and `recentMessageLimits`; it does not require a nested `configs` collection. Legacy `notificationRules` remain readable and migrate into automation rules. Several Routes may reuse the same persona-owned policy. Saved rules are authoritative; reads do not restore deleted rules. See [Automation Agent delivery](automation-agent-delivery_en.md) for targets and upgrades.
 
 ## `personaConfig.json`
 
@@ -59,6 +59,7 @@ A representative shape:
       },
       "action": {
         "type": "deliver_agent",
+        "target": { "kind": "recipient", "recipientId": "primary" },
         "template": "Keep the reply concise and return it through RabiRoute."
       }
     }
@@ -89,7 +90,7 @@ weixin_message
 wearable_health_alert
 ```
 
-`role_panel_message` is Manager's built-in persona-message kind. It serves both local role-panel input and authenticated cross-persona delivery; it is not a configurable network listener. Both entry points use one delivery service, which records `sent` only after handler acceptance and records `failed` on rejection. The built-in rule cannot be removed as an ordinary custom rule.
+`role_panel_message` is Manager's built-in persona-message kind. It serves both local role-panel input and authenticated cross-persona delivery; it is not a configurable network listener. Both entry points use one delivery service, which records `sent` only after handler acceptance and records `failed` on rejection. The rule is generated on initialization; saved persona automation determines subsequent delivery.
 
 Use the narrowest kind that represents the source event. `group_message` is normally combined with `regex`; explicit mentions/replies use their dedicated kinds.
 
@@ -123,6 +124,7 @@ Message-to-Agent example:
   },
   "action": {
     "type": "deliver_agent",
+        "target": { "kind": "recipient", "recipientId": "primary" },
     "template": "Triage the issue and identify evidence, owner, and next action."
   }
 }

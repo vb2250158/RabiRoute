@@ -83,6 +83,7 @@ class DesktopPetCompanion(QObject):
         self._base = f"{manager_url.rstrip('/')}/api/roles/{quote(persona_id, safe='')}/companion"
         self._persona_id = persona_id
         self.session: dict = {}
+        self.presets: list[dict] = []
         self.busy = False
         self.control_busy = False
         self._epoch = 0
@@ -136,6 +137,27 @@ class DesktopPetCompanion(QObject):
                 return self._request("command", {"sessionId": session["id"], "revision": session["revision"], "action": "stop"})
             return self._request("start", {"requestId": str(uuid.uuid4()), "presetId": "adaptive", "title": "",
                                           "autoReview": True, "voice": True, "observationOwner": "desktop"})
+        self._work(operation, control=True)
+
+    def select_mode(self, preset_id: str) -> None:
+        if self.control_busy or self.closed or not preset_id:
+            return
+        self._epoch += 1
+        self._timer.stop()
+
+        def operation():
+            snapshot = self._request()
+            session = snapshot.get("session") or {}
+            if session.get("status") in ("active", "paused"):
+                if session.get("presetId") == preset_id:
+                    return snapshot
+                return self._request("command", {
+                    "sessionId": session["id"], "revision": session["revision"],
+                    "action": "set-mode", "presetId": preset_id})
+            return self._request("start", {
+                "requestId": str(uuid.uuid4()), "presetId": preset_id, "title": "",
+                "autoReview": True, "voice": True, "observationOwner": "desktop"})
+
         self._work(operation, control=True)
 
     def reconnect(self) -> None:
@@ -212,6 +234,9 @@ class DesktopPetCompanion(QObject):
                 return
             self._needs_reconnect = False
             self._retry_delay = 5000
+            if isinstance(result.get("presets"), list):
+                self.presets = [preset for preset in result["presets"]
+                                if isinstance(preset, dict) and isinstance(preset.get("id"), str)]
             session = result.get("session") or {}
             self.accept(session)
             self.changed.emit({"roleId": self._persona_id, "session": session})

@@ -70,9 +70,9 @@ export function companionActivityHandler(service: CompanionActivity, options: {
       else if (action === "command") {
         data = await service.command(roleId, body);
         if (body.action === "stop" || body.action === "pause") await options.continuation?.clear(roleId);
-        else if (body.action === "resume") {
+        else if (body.action === "resume" || body.action === "set-mode") {
           const session = service.snapshot(roleId).session;
-          if (session) await options.continuation?.save(session);
+          if (session?.status === "active") await options.continuation?.save(session);
         }
       }
       else if (action === "observation") data = service.observe(roleId, body.sessionId, body.revision, body.observation);

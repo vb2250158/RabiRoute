@@ -1,4 +1,5 @@
 import type { DesktopPetBinding } from "@shared/desktopSettingsContract";
+import type { DesktopPetModeAnimationSet } from "@shared/desktopPetModeAnimationSets";
 
 export type DesktopPetPackSummary = {
   id: string;
@@ -6,6 +7,8 @@ export type DesktopPetPackSummary = {
   personaId: string;
   states: Record<string, DesktopPetAnimation>;
   idleBehavior?: { randomStates: string[]; sleepState?: string };
+  companionStates?: Record<string, string>;
+  modeAnimationSets?: Record<string, DesktopPetModeAnimationSet>;
 };
 
 export type DesktopPetAnimation = {

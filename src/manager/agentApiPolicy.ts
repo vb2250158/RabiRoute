@@ -70,7 +70,7 @@ function operations(group: string, prefix: string, definitions: readonly Definit
           }
       : pathTemplate.startsWith("/api/desktop-pet/roles/") && pathTemplate.includes("/motion")
         ? {
-            requestBody: method === "POST" ? 'JSON: requestId (8-128 ASCII ID), mode? (auto/walk/teleport), target: {kind:"position",x,y} or {kind:"screen-corner",corner,screenName?} or {kind:"active-window",corner}. Idempotency-Key must equal requestId.' : "No body; use the original requestId.",
+            requestBody: method === "POST" ? 'JSON: requestId (8-128 ASCII ID), mode? (auto/walk/run/teleport), target: {kind:"position",x,y} or {kind:"screen-corner",corner,screenName?} or {kind:"active-window",corner}. Idempotency-Key must equal requestId.' : "No body; use the original requestId.",
             response: "code=0, data: receipt. accepted/running is not arrival. succeeded includes position and destination in logical desktop pixels; failed/cancelled/uncertain retains the reason. Receipts remain one hour within the same Manager generation.",
             auth: "Reuse Manager connection authentication. Runtime claim/acknowledgment endpoints are excluded from Agent tools.",
             effects: method === "POST" ? "Moves only the enabled desktop pet using its existing animations; user drag/hide/lock takes precedence. Does not focus or move application windows or change wander settings." : "Read-only motion receipt.",
@@ -195,6 +195,15 @@ const roleKnowledge: readonly Definition[] = [
 ];
 
 const catalog: readonly AgentApiOperation[] = Object.freeze([
+  ...operations("remote-terminal", "/api/lan-agent/instances/:instanceId/terminals", [
+    ["GET", "", "查询远端 CMD/PowerShell 终端及真实进程状态"],
+    ["POST", "", "新增、查询、输入、调整大小或退出远端终端"],
+    ["GET", "/:terminalId", "查询远端终端及输出；可有界等待新输出", "after waitMs"],
+    ["GET", "/:terminalId/events", "读取有界缓存和实时终端输出（SSE）", "after"]
+  ], ["Windows 默认提供 CMD 和 PowerShell，终端属于连接器主程序的子程序。", "POST action=open|list|get|input|resize|close；open 使用稳定 terminalId，input 使用递增 sequence，相同 sequence 不重复执行。", "超时后查询现有会话及 nextInputSequence，不自动重建或重发输入。输出仅保留有界内存缓存，不写入日志。"]),
+  ...operations("remote-computer", "/api/lan-agent/instances/:instanceId/computer", [
+    ["POST", "", "远端文件互传、窗口查询、桌面或窗口截图"]
+  ], ["由客户端直接执行，关联 Codex/DSH 等后端无需启动；数据、记忆、Skill 与流程归主控。", "action=file.stat|file.read|upload.begin|upload.write|upload.status|upload.commit|upload.abort|windows.list|screen.capture。文件路径必须绝对；客户端自身系统权限适用。", "下载先 file.stat(path)，以 version+offset 调用 file.read；返回 base64 data、块 sha256、nextOffset、eof，每块最多64 KiB。", "上传 begin(uploadId,path,size,sha256)，write(uploadId,offset,data,sha256)，status(uploadId)，commit(uploadId)；稳定UUID、顺序分块、整文件校验，最多2 GiB，不覆盖已存在文件。", "windows.list 可传 query 和 limit(1..200)；screen.capture 可传 maxWidth(320..3840)，窗口截图必须同时传查询得到的 windowId 和 pid。返回 image/png 的 base64 data、尺寸与 capturedAt；最多8 MiB。", "截图需要交互桌面；最小化、受保护或不支持 PrintWindow 的窗口可能无法获取有效画面。超时先查原上传或终端，不自动重放写入。"]),
   ...operations("desktop-pet", "/api/desktop-pet/roles/:roleId", [
     ["POST", "/motion", "让桌宠走路或传送到坐标、屏幕四角或激活窗口四角"],
     ["GET", "/motion/:requestId", "查询桌宠实际移动结果与抵达坐标"]

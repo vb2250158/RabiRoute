@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { validateApiRequest } from '../../../packages/rabi-api-contract/request.mjs';
+import { validateApiRequest, API_METHODS } from '../../../packages/rabi-api-contract/request.mjs';
 import { fileURLToPath } from 'node:url';
-import { contracts, METHODS } from './webgui-coverage-contract.mjs';
+import { contracts } from './webgui-coverage-contract.mjs';
 const projectRoot = path.resolve(import.meta.dirname, '..');
 export const repoRoot = path.resolve(projectRoot, '../..');
 const read = file => fs.readFileSync(file, 'utf8');
@@ -62,20 +62,29 @@ export function publicApiTransportPolicy(method, path) {
   try { validateApiRequest({ method, path, ...(!['GET','HEAD','OPTIONS'].includes(method) ? { operationId: 'audit-original' } : {}) }); return true; }
   catch { return false; }
 }
+function sampleEndpoint(endpoint) {
+  return endpoint.replaceAll(':param', 'fixture').replace(/\/?:dynamic/g, '/fixture');
+}
 export function audit(root = repoRoot, policyOverride, extraDiscovered = []) {
   const allowed = policyOverride || publicApiTransportPolicy;
   const page = read(path.join(root,'apps/rabilink-aiui/pages/home/index.ink'));
   const found = files(path.join(root,'ribiwebgui/src')).flatMap(file => discover(read(file)).map(e => ({...e,file:path.relative(root,file)})));
   const errors = [];
+  const transportPaths = new Set();
   for (const item of [...found, ...extraDiscovered]) {
-    const candidates = contracts.filter(c => c.endpoint === item.endpoint);
-    if (!candidates.length) errors.push(`Unknown discovered endpoint: ${item.endpoint} (${item.file})`);
-    // Method extraction is advisory for dynamic helper methods; actual permissions are
-    // exhaustively checked below against the explicit method contract.
+    const sample = sampleEndpoint(item.endpoint);
+    transportPaths.add(sample);
+    // A literal fetch method is advisory; dynamic helpers and future APIs must
+    // retain every method supported by the shared request transport.
+    for (const method of API_METHODS) if (!allowed(method, sample)) errors.push(`Public transport rejected discovered Manager path ${method} ${item.endpoint} (${item.file})`);
   }
   for (const c of contracts) {
-    const sample = c.endpoint.replaceAll(':param','fixture').replaceAll(':dynamic','/fixture');
-    if (c.classification === 'required') for (const method of c.methods) if (!allowed(method,sample)) errors.push(`Public transport rejected UI Manager path ${method} ${c.endpoint}`);
+    const sample = sampleEndpoint(c.endpoint);
+    // Historical classifications describe UI fixtures, never API permissions.
+    if (c.owner === 'PC') {
+      transportPaths.add(sample);
+      for (const method of API_METHODS) if (!allowed(method,sample)) errors.push(`Public transport rejected UI Manager path ${method} ${c.endpoint}`);
+    }
     if (c.classification === 'required') {
       const markers = c.endpoint.startsWith('/gateways/') ? ['gatewayActionPath'] : ({'/gateways':['loadWebguiConfigData'],'/manager-config':['loadManagerConfig'],'/open-config-file':['openPcConfigFile'],'/api/scan/agents':['runAgentScan'],'/api/scan/message-adapters':['runMessageScan']})[c.endpoint] || [c.endpoint];
       if (!page.includes(c.endpoint) && !(c.endpoint === '/api/gateways' && page.includes('loadWebguiConfigData')) && !markers.some(m => page.includes(m))) errors.push(`Missing legacy implementation: ${c.endpoint}`);
@@ -85,7 +94,7 @@ export function audit(root = repoRoot, policyOverride, extraDiscovered = []) {
       if (!fs.existsSync(file)) errors.push(`Missing dedicated fixture: ${c.evidence}`);
     }
   }
-  for (const path of ['/api/internal/fixture','/__rabilink/fixture','//external.invalid/fixture']) if (allowed('GET',path)) errors.push('Private transport boundary widened: ' + path);
+  for (const path of ['/api/internal/fixture','/__rabilink/fixture','//external.invalid/fixture']) for (const method of API_METHODS) if (allowed(method,path)) errors.push(`Private transport boundary widened: ${method} ${path}`);
   // Request-helper paths are explicit: fetch(path) cannot expose their URL to literal extraction.
   const skill = read(path.join(root,'ribiwebgui/src/roleSkillClient.ts'));
   if (!skill.includes('export function roleSkillPath') || !skill.includes('/skills${') || !skill.includes('await request(path, { signal })')) errors.push('Skill helper manifest drift');
@@ -94,6 +103,6 @@ export function audit(root = repoRoot, policyOverride, extraDiscovered = []) {
   // Additional dedicated/helper endpoint literals must be classified, not silently ignored.
   for (const match of api.matchAll(/requestJson\(config,\s*["'](\/api\/rabilink\/device\/[^"']+)["']/g)) if (!contracts.some(c => c.endpoint === match[1])) errors.push(`Unknown dedicated helper endpoint: ${match[1]}`);
   if (errors.length) throw new Error(errors.join('\n'));
-  return { discovered:found.length, contracts:contracts.length, unsupported:contracts.filter(c=>c.classification==='unsupported').length };
+  return { discovered:found.length, contracts:contracts.length, transportPaths:transportPaths.size, checkedMethods:API_METHODS.length };
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) console.log('AIUI endpoint boundary audit passed', audit());

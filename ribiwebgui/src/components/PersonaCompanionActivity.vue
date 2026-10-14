@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import type { CompanionSession, CompanionSnapshot } from "@shared/companionActivity";
-import { companionRequest } from "../companionActivityClient";
+import { companionRequest, setCompanionMode } from "../companionActivityClient";
 import { managerEventSource } from "../managerApi";
 import { speechControlClient } from "../speech/speechControlClient";
 import { userFacingError } from "../userFacingError";
@@ -11,6 +11,8 @@ const snapshot = ref<CompanionSnapshot>({ presets: [], session: null });
 const session = computed(() => snapshot.value.session);
 const active = computed(() => !!session.value && session.value.status !== "ended");
 const busy = ref(false), error = ref(""), mode = ref("adaptive"), title = ref(""), discussion = ref("");
+const working = computed(() => session.value?.activityKind === "work"
+  || snapshot.value.presets.find(preset => preset.id === mode.value)?.activityKind === "work");
 const autoReview = ref(true), voice = ref(false), saveSummary = ref(false);
 const video = ref<HTMLVideoElement | null>(null), fileInput = ref<HTMLInputElement | null>(null), subtitleInput = ref<HTMLInputElement | null>(null);
 const videoUrl = ref(""), subtitleUrl = ref(""), source = ref<"window" | "player" | null>(null);
@@ -31,6 +33,22 @@ function accept(next: CompanionSnapshot) {
   if (next.session?.id === session.value?.id && next.session && session.value && next.session.revision < session.value.revision) return;
   if (next.session?.id === session.value?.id && next.session && session.value && next.session.version < session.value.version) return;
   snapshot.value = next;
+  if (next.session && next.session.status !== "ended") mode.value = next.session.presetId;
+  else if (!next.presets.some(preset => preset.id === mode.value)) mode.value = next.presets[0]?.id || "";
+}
+async function changeMode(presetId: string) {
+  if (!active.value || busy.value) return;
+  busy.value = true; error.value = "";
+  const work = commandQueue.catch(() => undefined).then(async () => {
+    const s = session.value;
+    if (!s || s.status === "ended" || s.presetId === presetId) return;
+    const next = await setCompanionMode(props.roleId, s, presetId);
+    sequence = 0; epoch++; accept(next);
+  });
+  commandQueue = work;
+  try { await work; }
+  catch (cause) { mode.value = session.value?.presetId || mode.value; error.value = userFacingError(cause); }
+  finally { busy.value = false; }
 }
 async function action(name: "pause" | "resume" | "seek" | "stop" | "interrupt", positionSeconds?: number) {
   const work = commandQueue.catch(() => undefined).then(async () => {
@@ -66,7 +84,7 @@ async function shareWindow() {
     if (active.value) await action("stop");
     releaseSource();
     accept(await companionRequest(props.roleId, "start", { requestId: crypto.randomUUID(), gatewayId: props.gatewayId,
-      presetId: "adaptive", title: title.value, autoReview: autoReview.value, voice: voice.value, saveSummary: saveSummary.value, observationOwner: "desktop" }));
+      presetId: mode.value, title: title.value, autoReview: autoReview.value, voice: voice.value, saveSummary: saveSummary.value, observationOwner: "desktop" }));
   } catch (cause) { error.value = userFacingError(cause); }
   finally { busy.value = false; }
 }
@@ -216,15 +234,15 @@ onBeforeUnmount(() => {
     <div class="section-title-row"><h2 class="section-title">共同活动</h2><v-chip>{{ stateLabel }}</v-chip></div>
     <v-alert v-if="error || session?.error" type="error" variant="tonal" class="my-3">{{ error || session?.error }}</v-alert>
     <div class="companion-settings">
-      <v-select v-model="mode" :items="snapshot.presets" item-title="label" item-value="id" label="陪伴方式" :disabled="active" />
-      <v-text-field v-model="title" label="作品或游戏名称" maxlength="200" :disabled="active" />
+      <v-select v-model="mode" :items="snapshot.presets" item-title="label" item-value="id" label="陪伴方式" :disabled="busy" @update:model-value="changeMode" />
+      <v-text-field v-model="title" label="活动名称（可选）" maxlength="200" :disabled="active" />
     </div>
     <div v-if="!active" class="companion-options">
       <v-checkbox v-model="autoReview" label="随内容变化主动回应" hide-details />
       <v-checkbox v-model="voice" label="使用人格语音" hide-details />
       <v-checkbox v-model="saveSummary" label="结束时保存进度与本次讨论" hide-details />
     </div>
-    <p class="section-note">陪伴模式跟随前台窗口，自动判断游戏与观看场景。当前画面会交给本人格的 Agent；不采集系统声音，语音按钮只在按下后录入你的话。</p>
+    <p class="section-note">陪伴模式跟随前台窗口，可自动识别，也可选择观看、游戏、工作或安静陪伴。工作时保持安静，需要帮助时再开口。当前画面会交给本人格的 Agent；语音按钮只在按下后录入你的话。</p>
     <div class="companion-controls">
       <v-btn color="primary" :loading="busy" @click="shareWindow">开启陪伴模式</v-btn>
       <v-btn :disabled="busy" @click="fileInput?.click()">打开本地视频</v-btn>
@@ -241,7 +259,7 @@ onBeforeUnmount(() => {
     <p v-if="active" class="section-note">{{ reviewLabel }}<span v-if="session?.positionSeconds !== null"> · {{ Math.floor(session?.positionSeconds || 0) }} 秒</span></p>
     <v-alert v-if="session?.review?.error" type="warning" variant="tonal">{{ session.review.error }}</v-alert>
     <div v-if="active" class="companion-discussion">
-      <v-text-field v-model="discussion" label="和我聊刚才的内容" :disabled="busy" @keyup.enter="ask" hide-details />
+      <v-text-field v-model="discussion" :label="working ? '需要帮忙时告诉我' : '和我聊刚才的内容'" :disabled="busy" @keyup.enter="ask" hide-details />
       <v-btn :disabled="busy || (!source && session?.observationOwner !== 'desktop')" :color="microphoneRecording ? 'error' : undefined" @click="toggleMicrophone">{{ microphoneRecording ? '说完了' : '说话' }}</v-btn>
       <v-btn color="secondary" :disabled="busy || !discussion.trim() || (!source && session?.observationOwner !== 'desktop')" @click="ask">聊聊</v-btn>
     </div>

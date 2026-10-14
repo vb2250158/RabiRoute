@@ -50,6 +50,22 @@ test("bootstrap exchanges ticket once, persists only credential and registered A
   assert.equal(__test.readConfig(configPath).nodeCredential, "fixture-node-credential");
 }));
 
+test("computer-only enrollment and normal configuration loading need no Agent session", async () => fixture(async ({ configPath }) => {
+  delete process.env.RABI_AGENT_TYPE; delete process.env.RABI_AGENT_CODEX_THREAD_ID;
+  const requests = [];
+  const config = await __test.bootstrapConfig(configPath, server(requests));
+  assert.deepEqual(config.agents, []); assert.equal(config.codexDesktop, undefined);
+  const loaded = __test.readConfig(configPath);
+  assert.deepEqual(loaded.agents, []); assert.equal(loaded.nodeCredential, "fixture-node-credential");
+  await __test.bootstrapConfig(configPath, server(requests));
+  assert.equal(requests.filter(item => item.url.endsWith("/enroll")).length, 1);
+}));
+
+test("a configured Agent catalog does not depend on a legacy global session binding", async () => fixture(async ({ configPath, directory }) => {
+  fs.writeFileSync(configPath,JSON.stringify({schemaVersion:1,nodeId:"fixture-node",nodeCredential:"fixture-node-credential",managerUrl:process.env.RABI_MANAGER_URL,releasePublicKeySha256:"a".repeat(64),defaultWorkspace:directory,allowedWorkspaces:[directory],agents:[{agentId:"saved-agent",provider:"codex-desktop",sessionId:"saved-task",workspace:directory}]}));
+  const loaded=__test.readConfig(configPath);assert.equal(loaded.agents[0].sessionId,"saved-task");
+}));
+
 test("legacy configuration fails closed, then explicit enrollment preserves node, Agent catalog and workspaces", async () => fixture(async ({ configPath, directory }) => {
   const agents = [{ agentId: "stable-agent", provider: "codex-desktop", sessionId: "saved-task", enabled: false, workspace: directory }];
   const legacy = { schemaVersion: 1, managerUrl: process.env.RABI_MANAGER_URL, nodeId: "stable-instance", lanLinkToken: "fixture-legacy", agents, allowedWorkspaces: [directory] };

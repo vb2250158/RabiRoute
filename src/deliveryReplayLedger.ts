@@ -2,7 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ForwardDeliveryResult } from "./forwarding.js";
 import type { ForwardRecord, ForwardRouteKind, ForwardTemplateValues } from "./routing/types.js";
-import type { RabiMessageSource } from "./shared/rabiMessage.js";
+import type { RabiMessageSource, RabiDeliveryEnvelope } from "./shared/rabiMessage.js";
+import type { NotificationRule } from "./config.js";
+import type { AgentRecipientDefinition } from "./shared/agentDeliveryTarget.js";
 import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 
 export const deliveryReplayLedgerFileName = "delivery-replay-ledger.jsonl";
@@ -25,6 +27,11 @@ export type DeliveryReplayPacket = {
   message: string;
   messageSource?: RabiMessageSource;
   content?: string;
+  rule?: NotificationRule;
+  recipients?: AgentRecipientDefinition[];
+  ownerFingerprint?: string;
+  delivery?: RabiDeliveryEnvelope;
+  model?: string;
 };
 
 export type DeliveryReplayListOptions = {

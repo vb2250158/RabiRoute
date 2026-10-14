@@ -59,3 +59,7 @@ Routine local fixes, tests, builds, and necessary local Host reloads are mainten
 ## Acceptance
 
 Verify the actual plan/binding readback, target task receipt, enabled schedules, and reachable workflow references separately. Every subsequent bug still requires its own repair and original-scenario verification. Creating the maintenance entry does not prove completion of a quality review or a repair.
+
+## Route catalog startup recovery
+
+Windows process identity discovery requests only PID, parent PID, start time, and executable path, with a 60-second timeout. A route catalog recovery attempt allows up to 120 seconds. Failed discovery remains a failure; process ownership checks are not skipped. After initial capture fails, the existing `POST /reload` endpoint can retry without requiring an installed snapshot. The existing catalog lifecycle still serializes and validates the operation.

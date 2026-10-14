@@ -160,6 +160,12 @@ export async function buildPackageStaging(stagingRoot, options = {}) {
   for (const file of [".aixignore", "AGENTS.md", "app.js", "app.json"]) {
     copyFile(file, stagingRoot);
   }
+  const stagedAppPath = path.join(stagingRoot, "app.js");
+  const appSource = readText(stagedAppPath);
+  if (appSource.split(releaseVersionMarker).length !== 2) {
+    fail(`app.js must contain exactly one ${releaseVersionMarker} marker.`);
+  }
+  writeText(stagedAppPath, appSource.replace(releaseVersionMarker, readReleaseVersion()));
   await buildCompiledPage(stagingRoot, relayBaseUrl);
   applyPrivateRelayDefaultToAppJson(stagingRoot, relayBaseUrl);
   writeText(path.join(stagingRoot, "VERSION"), `${versionId}\n`);

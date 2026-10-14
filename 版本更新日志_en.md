@@ -6,6 +6,21 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 2026-10-14 — Source work log
+
+- Remote client enrollment defaults to no associated Agent. First ticket exchange and normal configuration loading no longer require a Codex task ID; only explicit association discovers a host task. Existing node and Agent bindings are retained. A real CLI child with an empty Agent catalog passed first enrollment, CMD, chunked file and screenshot checks; installed and two-computer acceptance remain pending.
+
+- Remote client 0.2.2 adds host Agent computer APIs: terminal output reads, chunked file transfer, window queries and desktop/window captures remain available when Codex/DSH is not running. Controller RabiPC owns business data, memory, skills and workflows; clients retain connection and execution state under the existing authentication and sole main program. Real-client empty-Agent/blocked-queue HTTP, file and native-capture tests passed; installed and real two-computer acceptance remain pending. See [computer clients](docs/remote-computer-client_en.md).
+
+- Remote connector 0.2.2 adds multiple CMD/PowerShell terminals by default, with create, query, attach and exit actions. Reuse existing connection authentication and the sole main owner; native ConPTY/Job Objects manage child processes. Output streams and input receipts are bounded, with no automatic command replay. Installed and real two-computer acceptance remain separate.
+
+- Remote connector `0.2.1` adds a Windows tray and status window. One main program owns connector, update candidates and tray children, with connector start/stop/restart, reconnect, login startup and recent-state viewing. Existing owners retain private configuration and Manager transport; the tray only exchanges parent-child pipe messages. Add native-menu, singleton, abnormal-exit, startup-ownership and signed-asset tests. Real two-computer upgrades and login startup remain pending.
+
+- Add the experimental `grokBot` Agent adapter, using the existing cloud owner's native HTTP API to read and deliver to real sessions. Reuse the active protected login without creating another Runtime, Bot or routine, or impersonating Codex Desktop. See the [Grok Bot contract](docs/grok-bot-agent-adapter_en.md).
+- Fix Desktop message and receipt recognition of source-scoped `agent-<sha256>` delivery identities. Recover a historical UUID suffix only when the original identity and exact prompt hash match, without resending the message.
+- Public `threads.send` distinguishes source and target, reports the exact field and repair for complete opaque-ID failures, verifies the source against its real owner, and does not let `system` bypass that check. Stable body `deliveryId` is scoped to the verified source; retries reuse the original operation, changed payloads fail, and unknown outcomes retain original records for receipt reconciliation.
+- WebGUI adds Grok service/profile settings, real-session selection, and explicit search, pagination and dedicated refresh. It saves the complete ID, name and owner; edits and saves do not scan. HTTP acceptance, answer completion and QQ/Codex replies require separate evidence. Maturity remains `experimental`.
+
 ## 0.3.34 - 2026-10-13
 
 - Linux adaptation follow-up: the source startup script refuses root and notes a missing `xdg-open`; Markdown image rendering on Linux resolves existing Chromium/Chrome/Edge absolute paths; the capability summary and troubleshooting cover Linux Host; optional current-user systemd draft at `examples/linux/rabiroute-host.service`.

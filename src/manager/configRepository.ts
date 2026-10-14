@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import { migrateAgentDeliveryFiles } from "./agentDeliveryMigrationFiles.js";
+import { normalizeAgentDeliveryTarget, validateAgentDeliveryTarget } from "../shared/agentDeliveryTarget.js";
 import path from "node:path";
 import {
   autoAssignGatewayPorts,
@@ -299,6 +301,12 @@ export class ManagerConfigRepository {
       "automationRules" | "notificationRules" | "recentMessageLimit" | "recentMessageLimits" | "speechTriggerKeywords" | "languageStyle" | "codexHooks"
     >
   ): void {
+    for (const rule of fragment.automationRules ?? []) {
+      if (rule.action.type === "deliver_agent") {
+        if (!rule.action.target) throw new Error("Agent delivery target is required; migrate legacy rules before saving.");
+        validateAgentDeliveryTarget(normalizeAgentDeliveryTarget(rule.action.target));
+      }
+    }
     writePersonaConfigFile(this.personaConfigPath(roleId), {
       ...fragment,
       automationRules: fragment.automationRules === undefined
@@ -315,7 +323,29 @@ export class ManagerConfigRepository {
   }
 
   migrateLegacyConfigs(): void {
+    const explicitTargets = new Map<string, Set<string>>();
+    if (fs.existsSync(this.rolesRoot)) for (const entry of fs.readdirSync(this.rolesRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const file = this.personaConfigPath(entry.name);
+      if (!fs.existsSync(file)) continue;
+      const persona = JSON.parse(fs.readFileSync(file, "utf8"));
+      explicitTargets.set(entry.name, new Set((persona.automationRules ?? []).filter((rule: any) => rule.action?.target !== undefined).map((rule: any) => rule.id)));
+    }
     migrateLegacyConfigs({ routeRoot: this.routeRoot, rolesRoot: this.rolesRoot });
+    const routesByRole = new Map<string, string[]>();
+    if (fs.existsSync(this.routeRoot)) for (const entry of fs.readdirSync(this.routeRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const file = this.adapterConfigPath(entry.name);
+      if (!fs.existsSync(file)) continue;
+      const route = JSON.parse(fs.readFileSync(file, "utf8"));
+      const roleId = sanitizeRoleId(route.agentRoleId);
+      if (!roleId || route.agentRoleDeviceId || !fs.existsSync(this.personaConfigPath(roleId))) continue;
+      routesByRole.set(roleId, [...routesByRole.get(roleId) ?? [], file]);
+    }
+    for (const [roleId, routePaths] of routesByRole) migrateAgentDeliveryFiles({
+      personaPath: this.personaConfigPath(roleId), routePaths, apply: true,
+      explicitTargetRuleIds: explicitTargets.get(roleId) ?? new Set()
+    });
   }
 
   normalize(definition: GatewayDefinition): GatewayDefinition {
@@ -374,6 +404,12 @@ export class ManagerConfigRepository {
 
   writeConfig(config: GatewayConfigFile, scope?: { configName: string; previousId: string }): GatewayConfigFile {
     if (!Array.isArray(config.gateways)) throw new Error("routes must be an array");
+    for (const gateway of config.gateways) for (const rule of gateway.automationRules ?? []) {
+      if (rule.action.type === "deliver_agent") {
+        if (!rule.action.target) throw new Error("Agent delivery target is required; migrate legacy rules before saving.");
+        validateAgentDeliveryTarget(normalizeAgentDeliveryTarget(rule.action.target));
+      }
+    }
     const normalized = { gateways: config.gateways.map((definition) => this.normalize(definition)) };
     autoAssignGatewayPorts(normalized.gateways, this.managerPort);
     validateGatewayPortConflicts(normalized.gateways);

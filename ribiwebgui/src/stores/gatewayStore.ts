@@ -782,7 +782,7 @@ export const useGatewayStore = defineStore("gateway", () => {
       name: `规则 ${next}`,
       enabled: true,
       trigger: { type: "message", routeKinds: [], targetGroupId: "", allowedSpeakerNames: [], regex: "" },
-      action: { type: "deliver_agent", template: "" }
+      action: { type: "deliver_agent", target: { kind: "recipient", recipientId: "primary" }, template: "" }
     });
     syncAutomationRuleProjection(gateway);
     saveActiveRoleRules(gateway);
@@ -856,7 +856,7 @@ export const useGatewayStore = defineStore("gateway", () => {
         : { type: "message", routeKinds: [], targetGroupId: "", allowedSpeakerNames: [], regex: "" },
       action: actionType === "run_script"
         ? { type: "run_script", scriptPath: "", arguments: [], timeoutSeconds: 300 }
-        : { type: "deliver_agent", message: "", template: "" }
+        : { type: "deliver_agent", target: { kind: "recipient", recipientId: "primary" }, message: "", template: "" }
     };
     automations.push(next);
     syncAutomationRuleProjection(gateway);

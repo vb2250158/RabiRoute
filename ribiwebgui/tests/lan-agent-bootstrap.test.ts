@@ -6,7 +6,7 @@ import ts from "typescript";
 import { buildLanAgentBootstrapPrompt } from "../src/lanAgentBootstrap";
 
 test("LAN bootstrap includes current endpoint, trust pin, both hosts and automatic binding", () => {
-  const prompt = buildLanAgentBootstrapPrompt({ managerUrl: "http://192.168.1.20:23456/#/lan-agents", token: "fixture-only", publicKeySha256: "a".repeat(64) });
+  const prompt = buildLanAgentBootstrapPrompt({ managerUrl: "http://192.168.1.20:23456/#/lan-agents", token: "fixture-only", publicKeySha256: "a".repeat(64), linkAgent: true });
   assert.match(prompt, /http:\/\/192\.168\.1\.20:23456\/api\/lan-agent\/releases\/manifest/);
   assert.match(prompt, /RABI_AGENT_DSH_SESSION_ID/);
   assert.match(prompt, /RABI_AGENT_CODEX_THREAD_ID/);
@@ -29,6 +29,12 @@ test("LAN bootstrap includes current endpoint, trust pin, both hosts and automat
   assert.match(prompt, /--api METHOD/);
   assert.match(prompt, /\/api\/lan-agent\/resources/);
   assert.match(prompt, /docs\/rabi-agent-interfaces.md/);
+});
+
+test("default enrollment is a computer client with no Agent owner requirement", () => {
+  const prompt=buildLanAgentBootstrapPrompt({managerUrl:"http://192.168.1.20:23456",token:"fixture-only",publicKeySha256:"a".repeat(64)});
+  assert.match(prompt,/新配置保持 agents: \[\]/);assert.match(prompt,/不要求安装或启动 Codex\/DSH/);
+  assert.match(prompt,/未关联 Agent 时跳过/);assert.doesNotMatch(prompt,/Codex 必须使用已打开/);
 });
 
 test("copy installs only a freshly issued ticket, never the WebGUI admin token", async () => {

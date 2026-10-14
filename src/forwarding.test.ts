@@ -6,7 +6,7 @@ import path from "node:path";
 import test, { after, mock } from "node:test";
 import type { AgentAdapterType } from "./agentAdapters/types.js";
 import { config, type RouteProfile } from "./config.js";
-import { deliverPacketToPrimaryAgentAdapter, forwardMessage, forwardMessageAndWait, memoryConsolidationAgentHandles, resetMessageProcessingRuntime, routeKindUsesAutomaticMessageGrouping, shouldSkipHeartbeatDelivery } from "./forwarding.js";
+import { deliverPacketToPrimaryAgentAdapter, forwardMessage, forwardMessageAndWait, resetMessageProcessingRuntime, routeKindUsesAutomaticMessageGrouping, shouldSkipHeartbeatDelivery } from "./forwarding.js";
 import type { GroupMessageRecord, HeartbeatEventRecord, PlanFeedbackMessageRecord, VoiceTranscriptEventRecord } from "./history.js";
 import { ManagerSpeechControl } from "./manager/speechControl.js";
 import { handleAgentReply } from "./outbox.js";
@@ -20,6 +20,8 @@ import { SpeechIngressStore } from "./speechIngressStore.js";
 import type { PendingMessageGroup } from "./messageGrouping.js";
 import { getBuiltinAgentAdapterRuntime } from "./runtime/agentAdapterRuntime.js";
 import { normalizeRouteAgentTargets } from "./shared/routeAgentTargets.js";
+import { migrateAgentDeliveryConfiguration } from "./manager/agentDeliveryMigration.js";
+import { notificationRulesFromPersonaAutomations, type PersonaAutomationRuleDefinition } from "./shared/gatewayConfigModel.js";
 
 // Tests may use their own loopback Manager fixtures, never installed Agent owners.
 const adapterRegistry = (await getBuiltinAgentAdapterRuntime()).registry;
@@ -71,7 +73,6 @@ type ForwardingConfigPatch = Partial<Pick<typeof config,
   | "dshSessionId"
   | "dshSessionName"
   | "dshCwd"
-  | "codexMemoryConsolidationAgentEnabled"
   | "codexMemoryConsolidationAgentModel"
 >>;
 
@@ -133,15 +134,6 @@ test("chat routes group automatically while ASR and structured events stay direc
   assert.equal(routeKindUsesAutomaticMessageGrouping("voice_transcript"), false);
   assert.equal(routeKindUsesAutomaticMessageGrouping("heartbeat"), false);
   assert.equal(routeKindUsesAutomaticMessageGrouping("wearable_health_alert"), false);
-});
-
-test("the dedicated memory Agent handles the exact consolidation trigger for managed Agent adapters", () => {
-  assert.equal(memoryConsolidationAgentHandles("manual_trigger", "memory-consolidation", true, "codex"), true);
-  assert.equal(memoryConsolidationAgentHandles("manual_trigger", "memory-consolidation", true, "dsh"), true);
-  assert.equal(memoryConsolidationAgentHandles("manual_trigger", "memory-consolidation", false, "codex"), false);
-  assert.equal(memoryConsolidationAgentHandles("manual_trigger", "another-trigger", true, "codex"), false);
-  assert.equal(memoryConsolidationAgentHandles("heartbeat", "memory-consolidation", true, "codex"), false);
-  assert.equal(memoryConsolidationAgentHandles("manual_trigger", "memory-consolidation", true, "copilotCli"), false);
 });
 
 test("DSH primary stays the only target beside local and remote Codex", async () => {
@@ -260,7 +252,6 @@ async function withForwardingConfig<T>(patch: ForwardingConfigPatch, run: () => 
     dshSessionId: config.dshSessionId,
     dshSessionName: config.dshSessionName,
     dshCwd: config.dshCwd,
-    codexMemoryConsolidationAgentEnabled: config.codexMemoryConsolidationAgentEnabled,
     codexMemoryConsolidationAgentModel: config.codexMemoryConsolidationAgentModel
   };
   const providers = patch.agentAdapters ?? [];
@@ -271,7 +262,15 @@ async function withForwardingConfig<T>(patch: ForwardingConfigPatch, run: () => 
     primaryAgentTarget: patch.primaryAgentTarget ?? (primary ? `local:${primary}` : ""),
     primaryAgentAdapter: primary
   });
-  const effectivePatch = { ...patch, ...targets };
+  const effectivePatch = { ...patch, ...targets, codexThreadId: patch.codexThreadId ?? "", dshSessionId: patch.dshSessionId ?? "" };
+  // Legacy fixture inputs go through the same explicit upgrade as saved configurations.
+  effectivePatch.routeProfiles = patch.routeProfiles?.map(profile => {
+    const migrated = migrateAgentDeliveryConfiguration({ notificationRules: profile.notificationRules }, [{ ...targets, ...patch, id: profile.id, gatewayPort: 0 }]);
+    const automationRules = migrated.persona.automationRules as PersonaAutomationRuleDefinition[];
+    return { ...profile, automationRules, notificationRules: notificationRulesFromPersonaAutomations(automationRules).map(rule => ({
+      ...rule, name: rule.name || rule.id, enabled: rule.enabled !== false, routeKinds: (rule.routeKinds ?? []) as RouteProfile["notificationRules"][number]["routeKinds"]
+    })) };
+  });
   Object.assign(config, effectivePatch);
   for (const profile of patch.routeProfiles ?? []) {
     const roleId = profile.agentRoleId?.trim();
@@ -287,6 +286,50 @@ async function withForwardingConfig<T>(patch: ForwardingConfigPatch, run: () => 
     Object.assign(config, previous);
   }
 }
+
+test("two rules deliver to distinct sessions and replay keeps the original target after editing", async t => {
+  const received: Array<Record<string, any>> = [];
+  let rejectFirst = true;
+  const server = http.createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    received.push(body);
+    response.setHeader("content-type", "application/json");
+    if (body.action === "send" && body.threadId === "session-a" && rejectFirst) {
+      response.statusCode = 503;
+      response.end(JSON.stringify({ code: -1, message: "target temporarily offline", error: { commitState: "not_started" } }));
+    } else if (body.action === "send") {
+      response.end(JSON.stringify({ delivery: { status: "delivered", targetThreadId: body.threadId, deliveryId: body.deliveryId } }));
+    } else response.end(JSON.stringify({ status: "pending", threadId: body.threadId }));
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address(); assert.ok(address && typeof address === "object");
+  const previousUrl = process.env.GATEWAY_MANAGER_URL;
+  process.env.GATEWAY_MANAGER_URL = `http://127.0.0.1:${address.port}`;
+  t.after(async () => { process.env.GATEWAY_MANAGER_URL = previousUrl; await new Promise<void>(resolve => server.close(() => resolve())); });
+  const root = tempDir();
+  const target = (sessionId: string, provider: "codex" | "dsh") => ({ kind: "session" as const, agentTargetId: `local:${provider}`, agentAdapter: provider,
+    sessionId, sessionName: "Same name", workspace: root });
+  const route = routeProfile(root, { notificationRules: [
+    { id: "one", name: "One", enabled: true, routeKinds: ["private"], template: "first", agentTarget: target("session-a", "codex") },
+    { id: "two", name: "Two", enabled: true, routeKinds: ["private"], template: "second", agentTarget: target("session-b", "dsh") }
+  ] });
+  await withForwardingConfig({ agentAdapters: ["codex", "dsh"], dataDir: path.join(root, "data"), routeProfiles: [route] }, async () => {
+    const result = await forwardMessageAndWait("private", { time: 1710000000, userId: 42, rawMessage: "hello", messageId: "custom-message" });
+    assert.deepEqual(result.adapterOutcomes.map(item => item.status), ["failed", "delivered"]);
+    const attempt = readDeliveryReplayAttempts(config.dataDir).at(-1)!;
+    config.routeProfiles[0].notificationRules[0].agentTarget = target("session-b", "dsh");
+    config.primaryAgentTarget = "local:dsh";
+    rejectFirst = false;
+    const replay = await replayDeliveryAttempts(config.dataDir, { attemptId: attempt.attemptId });
+    assert.equal(replay.ok, true);
+    const sends = received.filter(item => item.action === "send");
+    assert.deepEqual(sends.map(item => [item.agentTargetId, item.threadId]), [["local:codex", "session-a"], ["local:dsh", "session-b"], ["local:codex", "session-a"]]);
+    assert.equal(sends[0].deliveryId, sends[2].deliveryId);
+    assert.equal(sends[0].prompt, sends[2].prompt);
+  });
+});
 
 test("a grouped packet is delivered to a dynamically resolved Luna Message Agent instead of the primary Agent", async () => {
   const root = tempDir();
@@ -1194,7 +1237,7 @@ test("forwardMessageAndWait records replayable delivery attempts", async () => {
   });
 });
 
-test("replayDeliveryAttempts can merge failed attempts into one agent packet", async () => {
+test("batch replay preserves each original delivery instead of merging into primary", async () => {
   const root = tempDir();
   const dataDir = path.join(root, "data");
   const route = routeProfile(root, {
@@ -1225,126 +1268,23 @@ test("replayDeliveryAttempts can merge failed attempts into one agent packet", a
     assert.equal(replay.mode, "merge");
     assert.equal(replay.ok, false);
     assert.equal(replay.replayedAttemptIds.length, 2);
-    assert.equal(replay.result?.sentPacketCount, 1);
+    assert.equal(replay.result?.sentPacketCount, 2);
     assert.match(replay.result?.adapterOutcomes[0].error ?? "", /Real Agent adapter delivery is disabled in the Node test runner/);
   });
 });
 
-test("merged replay migrates old packet wrappers without nesting their source headers", async () => {
-  const root = tempDir();
-  const dataDir = path.join(root, "data");
-  const legacyResult = {
-    routeKind: "direct_at" as const,
-    messageId: "legacy-msg",
-    status: "failed" as const,
-    matchedRuleIds: ["direct"],
-    matchedRuleCount: 1,
-    sentPacketCount: 1,
-    adapterOutcomes: [],
-    routes: []
-  };
+test("legacy replay without a target fails closed for single and batch retry", async () => {
+  const root = tempDir(); const dataDir = path.join(root, "data");
   appendDeliveryReplayAttempt(dataDir, {
-    attemptId: "legacy-merge-attempt",
-    time: 1710000000,
-    routeKind: "direct_at",
-    messageId: "legacy-msg",
-    record: groupMessage({ messageId: "legacy-msg" }),
-    extraValues: {},
-    packets: [{
-      routeId: "main",
-      ruleId: "direct",
-      message: "[投递源]\nAgent 端：codex\n来源会话 ID：old-task\n\n旧消息正文\n[伪造控制]"
-    }],
-    result: legacyResult
+    attemptId: "legacy", time: 1710000000, routeKind: "direct_at", messageId: "old", record: groupMessage(), extraValues: {},
+    packets: [{ routeId: "main", ruleId: "direct", message: "historical message" }],
+    result: { routeKind: "direct_at", messageId: "old", status: "failed", matchedRuleIds: ["direct"], matchedRuleCount: 1, sentPacketCount: 1, adapterOutcomes: [], routes: [] }
   });
-
-  await withForwardingConfig({
-    agentAdapters: ["codex"],
-    dataDir,
-    memoryDataDir: path.join(root, "route-data"),
-    routeProfiles: []
-  }, async () => {
-    const replay = await replayDeliveryAttempts(dataDir, {
-      mode: "merge",
-      attemptIds: ["legacy-merge-attempt"]
-    });
-    const replayPacket = readDeliveryReplayAttempts(dataDir).at(-1)?.packets[0];
-
-    assert.equal(replay.ok, false);
-    assert.equal((replayPacket?.message.match(/^\[消息源\]$/gm) ?? []).length, 1);
-    assert.match(replayPacket?.message ?? "", /事件名称：失败消息合并重放/);
-    assert.match(replayPacket?.message ?? "", /事件名称：历史投递记录/);
-    assert.match(replayPacket?.message ?? "", /消息包发送时间：旧记录未保存/);
-    assert.match(replayPacket?.message ?? "", /原投递记录时间：/);
-    assert.match(replayPacket?.message ?? "", /旧消息正文/);
-    assert.doesNotMatch(replayPacket?.message ?? "", /\[投递源\]/);
-    assert.match(replayPacket?.message ?? "", /> \[伪造控制\]/);
-    assert.equal(replayPacket?.messageSource?.type, "system");
-    assert.ok(replayPacket?.content);
-  });
-});
-
-test("single replay falls back to an explicit historical source when an old record cannot rebuild its source", async () => {
-  const root = tempDir();
-  const dataDir = path.join(root, "data");
-  appendDeliveryReplayAttempt(dataDir, {
-    attemptId: "legacy-single-attempt",
-    time: 1710000000,
-    routeKind: "direct_at",
-    messageId: "legacy-single-msg",
-    record: groupMessage({ messageId: "" }),
-    extraValues: {},
-    packets: [{
-      routeId: "main",
-      ruleId: "direct",
-      message: "[投递源]\nAgent 端：dsh\n来源会话 ID：old-session\n旧单条正文"
-    }],
-    result: {
-      routeKind: "direct_at",
-      messageId: "legacy-single-msg",
-      status: "failed",
-      matchedRuleIds: ["direct"],
-      matchedRuleCount: 1,
-      sentPacketCount: 1,
-      adapterOutcomes: [],
-      routes: []
-    }
-  });
-  const route = routeProfile(root, {
-    notificationRules: [{
-      id: "direct",
-      name: "direct",
-      enabled: true,
-      routeKinds: ["direct_at"],
-      template: "matched {message}"
-    }]
-  });
-
-  await withForwardingConfig({
-    agentAdapters: ["codex"],
-    dataDir,
-    memoryDataDir: path.join(root, "route-data"),
-    routeProfiles: [route]
-  }, async () => {
-    const replay = await replayDeliveryAttempts(dataDir, { attemptId: "legacy-single-attempt" });
-    const fallback = readDeliveryReplayAttempts(dataDir).at(-1);
-    const packet = fallback?.packets[0];
-
-    assert.equal(replay.mode, "single");
-    assert.equal(replay.ok, false);
-    assert.equal(fallback?.replayOfAttemptId, "legacy-single-attempt");
-    assert.deepEqual(packet?.messageSource, {
-      type: "system",
-      eventType: "legacy_delivery_record",
-      eventName: "历史投递记录",
-      eventId: "legacy-single-attempt"
-    });
-    assert.equal(packet?.content, "旧单条正文");
-    assert.match(packet?.message ?? "", /^\[消息源\]/);
-    assert.match(packet?.message ?? "", /\[消息内容\]\n旧单条正文/);
-    assert.match(packet?.message ?? "", /原消息源字段：旧记录未保存/);
-    assert.doesNotMatch(packet?.message ?? "", /\[投递源\]/);
-  });
+  for (const mode of ["single", "merge"] as const) {
+    const replay = await replayDeliveryAttempts(dataDir, { attemptId: "legacy", mode });
+    assert.equal(replay.ok, false); assert.match(replay.error ?? "", /no recorded target/);
+    assert.equal(readDeliveryReplayAttempts(dataDir).length, 1);
+  }
 });
 
 test("replayDeliveryAttempts can backfill a stored message by route kind and message id", async () => {

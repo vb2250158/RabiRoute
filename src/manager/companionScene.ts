@@ -1,11 +1,11 @@
-import type { CompanionObservation, CompanionSession } from "../shared/companionActivity.js";
+import { COMPANION_ACTIVITY_KINDS, type CompanionObservation, type CompanionSession } from "../shared/companionActivity.js";
 
 type SceneRule = { kind: CompanionSession["activityKind"]; process?: RegExp; title?: RegExp };
 export function readCompanionSceneRules(value: unknown): SceneRule[] {
   const rows = (value as { rules?: unknown })?.rules;
   if (!Array.isArray(rows) || rows.length > 64) throw new Error("Invalid companion scene rules");
   return rows.map(row => {
-    if (!row || !["watch", "play", "other"].includes(row.kind)) throw new Error("Invalid companion scene rule");
+    if (!row || row.kind === "uncertain" || !COMPANION_ACTIVITY_KINDS.includes(row.kind)) throw new Error("Invalid companion scene rule");
     const pattern = (value: unknown): RegExp | undefined => {
       if (value === undefined) return undefined;
       if (typeof value !== "string" || !value || value.length > 400) throw new Error("Invalid scene pattern");

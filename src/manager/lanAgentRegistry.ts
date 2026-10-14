@@ -8,6 +8,7 @@ import { normalizeInstanceAgents, type AgentInstance, type InstanceAgent } from 
 import { WebSocket, WebSocketServer } from "ws";
 import { webguiTokenMatches } from "./webguiLanAccess.js";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
+import { LanAgentTerminals } from "./lanAgentTerminals.js";
 
 export type LanAgentNodeHello = {
   nodeId: string;
@@ -16,6 +17,8 @@ export type LanAgentNodeHello = {
   agentTypes?: string[];
   allowedWorkspaces?: string[];
   agents?: InstanceAgent[];
+  terminalShells?: string[];
+  computerCapabilities?: string[];
 };
 
 export type LanAgentUpdateState = "idle" | "requested" | "updating" | "updated" | "failed";
@@ -104,7 +107,9 @@ function normalizeHello(value: unknown): LanAgentNodeHello {
     platform,
     agentTypes: normalizeTextList(raw.agentTypes, 16, 80),
     allowedWorkspaces: normalizeTextList(raw.allowedWorkspaces, 32, 1_024),
-    agents: raw.agents === undefined ? undefined : normalizeInstanceAgents(raw.agents)
+    agents: raw.agents === undefined ? undefined : normalizeInstanceAgents(raw.agents),
+    terminalShells: normalizeTextList(raw.terminalShells, 2, 16).filter(shell => ["cmd", "powershell"].includes(shell)),
+    computerCapabilities: normalizeTextList(raw.computerCapabilities, 3, 16).filter(capability => ["files", "windows", "screenshots"].includes(capability))
   };
 }
 
@@ -149,6 +154,10 @@ export class LanAgentNodeNameConflictError extends Error {
 }
 
 export class LanAgentRegistry {
+  readonly terminals = new LanAgentTerminals((instanceId, body) => {
+    if (!this.requireNode(instanceId).terminalShells?.length) throw new Error("This connector does not support remote terminals. Update it first.");
+    return this.manageAgent(instanceId, "terminal", body, 45_000);
+  });
   private readonly connections = new Map<string, Connection>();
   private readonly nodes = new Map<string, LanAgentNodeStatus>();
   private readonly tasks = new Map<string, LanAgentTask>();
@@ -216,6 +225,11 @@ export class LanAgentRegistry {
     return [...this.nodes.values()]
       .map(node => ({ ...structuredClone(node), connected: this.connections.get(node.nodeId)?.socket.readyState === WebSocket.OPEN }))
       .sort((left, right) => left.nodeId.localeCompare(right.nodeId));
+  }
+
+  getNode(nodeId: string): LanAgentNodeStatus | undefined {
+    const node = this.nodes.get(nodeId);
+    return node ? structuredClone(node) : undefined;
   }
 
   listTasks(limit = 100): LanAgentTask[] {
@@ -348,6 +362,7 @@ export class LanAgentRegistry {
     this.managementRequests.clear();
     this.detachUpgrade?.();
     for (const connection of this.connections.values()) {
+      if (connection.nodeId) this.terminals.disconnect(connection.nodeId);
       clearTimeout(connection.authenticationTimer);
       closeSocket(connection.socket, 1001, "Manager is stopping.");
     }
@@ -382,6 +397,7 @@ export class LanAgentRegistry {
       clearTimeout(authenticationTimer);
       const nodeId = connection?.nodeId;
       if (nodeId && this.connections.get(nodeId) === connection) {
+        this.terminals.disconnect(nodeId);
         this.connections.delete(nodeId);
         const existing = this.nodes.get(nodeId);
         if (existing) {
@@ -423,6 +439,7 @@ export class LanAgentRegistry {
       if (connection.authenticatedNodeId) this.options.registerAgentCatalog?.(connection.credential!, hello.agents ?? []);
       const previous = this.connections.get(hello.nodeId);
       if (previous && previous.socket !== connection.socket) {
+        this.terminals.disconnect(hello.nodeId);
         clearTimeout(previous.authenticationTimer);
         closeSocket(previous.socket, 4000, "A newer connection uses this nodeId.");
       }
@@ -452,6 +469,10 @@ export class LanAgentRegistry {
     }
     const node = this.requireNode(connection.nodeId);
     if (this.connections.get(connection.nodeId) !== connection) throw new Error("Instance connection was replaced.");
+    if (type === "terminalEvent") {
+      if (message.event && typeof message.event === "object") this.terminals.receive(connection.nodeId, message.event as Record<string, unknown>);
+      return;
+    }
     this.nodes.set(connection.nodeId, { ...node, connected: true, lastSeenAt: nowIso() });
     if (type === "managementResult") {
       const id = typeof message.requestId === "string" ? message.requestId : "";
@@ -462,7 +483,7 @@ export class LanAgentRegistry {
       try { pending.assertAuthorized?.(); } catch (error) { pending.reject(error instanceof Error ? error : new Error(String(error))); return; }
       if (message.error) pending.reject(new Error(String(message.error).slice(0, 1024)));
       else pending.resolve(message.result);
-      if (pending.operation !== "reconcile_prepared_delivery") this.deliveryEvents.emit("change");
+      if (!["reconcile_prepared_delivery", "terminal", "computer"].includes(pending.operation)) this.deliveryEvents.emit("change");
       return;
     }
     if (type === "agentCatalog") {

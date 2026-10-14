@@ -42,13 +42,15 @@ export type AgentMaturity = "verified" | "experimental" | "stub";
 export type AgentScanSession = {
   id?: string;
   name: string;
+  /** Exact service owner returned by discovery; opaque session IDs are not decoded by the UI. */
+  ownerId?: string;
   projectPath?: string;
   projectId?: string;
   updatedAt?: string;
   userNamed?: boolean;
   /** Task status as reported by the host, when the adapter can read one. */
   status?: string;
-  /** True when a live session process can accept a delivery right now. */
+  /** True when the exact session owner can accept a delivery right now. */
   live?: boolean;
   /** Working directory; for host adapters this is the task workspace. */
   cwd?: string;
@@ -92,6 +94,7 @@ export type AgentScanResult = {
   endpoints?: Array<{ label: string; url: string; healthy?: boolean }>;
   projects?: AgentScanProject[];
   sessions?: AgentScanSession[];
+  bots?: Array<{ agentId: string; name: string }>;
   models?: AgentScanModel[];
   agentPresets?: Array<{ id: string; name?: string; description?: string; broken?: string }>;
   sessionPage?: {

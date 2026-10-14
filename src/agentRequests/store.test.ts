@@ -33,6 +33,15 @@ test("required Agent messages create a tracked request only after delivery is co
   assert.equal(committed.request?.deliveryAction, "started");
 });
 
+test("the same complete endpoint cannot send to itself by changing its Agent role", () => {
+  const store = new AgentRequestStore(new MemoryPersistence());
+  const endpoint = { kind: "local" as const, managerInstanceId: "manager", agentId: "local:codex", provider: "codex", sessionId: "same-owner", authorizationIncarnation: "owner-epoch" };
+  const source = { endpoint, threadId: endpoint.sessionId, agentAdapter: "codex" as const, agentType: "plan_agent" };
+  const target = { ...source, agentType: "agent" };
+  assert.throws(() => store.prepare({ source, target, responsePolicy: "none" }), { field: "threadId" });
+  assert.equal(store.list().length, 0);
+});
+
 test("a response closes the old request and can create a new required request in the same delivery", () => {
   let now = new Date("2026-08-07T00:00:00.000Z");
   const store = new AgentRequestStore(new MemoryPersistence(), () => now);

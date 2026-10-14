@@ -61,6 +61,39 @@ test("companion mapping keeps only existing looping actions", () => {
   } finally { fs.rmSync(roleDir, { recursive: true }); fs.rmSync(cacheRoot, { recursive: true }); }
 });
 
+test("mode animation sets expose their own normalized pools without replacing legacy scene mappings", () => {
+  const roleDir = roleFixture(), cacheRoot = roleFixture();
+  try {
+    writePack(roleDir, "sample");
+    const manifestPath = path.join(roleDir, "desktop-pet", "packs", "yeyu-library-default", "pet-pack.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.states["focus-read"] = { ...manifest.states["idle-reading"], next: "thinking" };
+    manifest.companionStates = { watch: "sleep" };
+    manifest.modeAnimationSets = { focus: { idleState: "thinking", randomIntervalSeconds: { min: 45, max: 120 },
+      randomStates: ["focus-read"], clickStates: ["focus-read"] } };
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    const pack = listDesktopPetPacks("sample", roleDir, cacheRoot).packs[0];
+    assert.deepEqual(pack.modeAnimationSets, { focus: { idleState: "thinking", randomMinSeconds: 45,
+      randomMaxSeconds: 120, randomStates: ["focus-read"], clickStates: ["focus-read"] } });
+    assert.deepEqual(pack.companionStates, { watch: "sleep" });
+    assert.deepEqual(pack.idleBehavior?.randomStates, ["idle-reading"]);
+  } finally { fs.rmSync(roleDir, { recursive: true }); fs.rmSync(cacheRoot, { recursive: true }); }
+});
+
+test("catalog reports a malformed mode group instead of silently playing a different pose", () => {
+  const roleDir = roleFixture(), cacheRoot = roleFixture();
+  try {
+    writePack(roleDir, "sample");
+    const manifestPath = path.join(roleDir, "desktop-pet", "packs", "yeyu-library-default", "pet-pack.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.modeAnimationSets = { focus: { idleState: "thinking", clickStates: ["idle-reading"] } };
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    const catalog = listDesktopPetPacks("sample", roleDir, cacheRoot);
+    assert.equal(catalog.packs.length, 0);
+    assert.match(catalog.diagnostics[0].message, /returning to thinking/);
+  } finally { fs.rmSync(roleDir, { recursive: true }); fs.rmSync(cacheRoot, { recursive: true }); }
+});
+
 test("desktop pet catalog binds packs to the role and naturally sorts PNG frames", () => {
   const roleDir = roleFixture();
   const cacheRoot = roleFixture();

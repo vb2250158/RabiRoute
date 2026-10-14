@@ -895,13 +895,48 @@ Use `channel=rabilink`, `params.proactive=true`, and at least one explicit `targ
 
 ## Codex thread bridge
 
+### External Agent sources and stable delivery IDs
+
+`POST /api/agent/threads` with `action=send` verifies both the sender and recipient. Top-level `agentAdapter/threadId` identify the target. `sourceThreadId` and `messageSource` identify the caller's real source; using the target task to fill those fields does not establish a sender.
+
+An ordinary Agent source supplies `messageSource={type:"agent",agentAdapter,sessionId,sessionName}`, `sourceThreadId`, `sourceAgentType` and `responsePolicy`. `sourceThreadId` must equal `messageSource.sessionId`, and the adapter must belong to the actual owner. `plan.sourceAgent` is valid only with a verifiable real source. The owner verifies the session and provides its current name; body claims, names and role labels alone do not prove ownership. When an authenticated connection supplies a trusted source, the declaration must match that original identity. Request-body `remoteSource` or owner fields do not create authentication.
+
+Session IDs are opaque strings and must retain their complete value. Endpoint `send` validation requires a non-empty string, no leading or trailing whitespace, at most 4096 JavaScript code units, and no NUL, newline or Unicode line separator. No special encoding is required, and the provider is not inferred from the ID's shape. A missing source returns HTTP 400 with `error.code=AGENT_SESSION_ID_REQUIRED`, `error.field=sourceThreadId` and a specific `repair`; an invalid target points to `threadId`.
+
+`system` describes how an event is displayed; it is not a source-free public `send` path. A system request with only `eventType/eventName/eventId` and no verifiable Agent owner fails. Adding the recipient's Codex ID does not establish a source. Internal Manager events retain their managed-event contracts. An external service without a source session must integrate its own service owner rather than impersonating Desktop. See [Grok Bot Agent adapter](grok-bot-agent-adapter_en.md) for discovery, configuration and transport boundaries.
+
+The Bot-to-Codex example below requires complete session IDs verified by the respective owners. The source and target are different endpoints:
+
+```json
+{
+  "action": "send",
+  "agentAdapter": "codex",
+  "threadId": "<complete target Codex session ID>",
+  "deliveryId": "bot-to-codex-check-001",
+  "prompt": "Confirm receipt of this integration check.",
+  "sourceThreadId": "<complete source Bot session ID returned by scan>",
+  "sourceAgentType": "agent",
+  "messageSource": {
+    "type": "agent",
+    "agentAdapter": "grokBot",
+    "sessionId": "<complete source Bot session ID returned by scan>",
+    "sessionName": "Integration Bot session"
+  },
+  "responsePolicy": "none"
+}
+```
+
+Public endpoint delivery accepts a stable body `deliveryId`: non-empty, no leading or trailing whitespace, at most 100 characters, and no NUL or line separators. Save the ID and complete payload before the first request. Manager scopes the key to the verified source and persists the original target, request digest, execution options and acceptance state. The same source, ID and payload reuse the operation; a changed target or payload returns `AGENT_DELIVERY_ID_CONFLICT` with `error.field=deliveryId`. Omitting the field generates a new ID per request and cannot make repeated POSTs idempotent. The plan API's `Idempotency-Key` header does not replace this field.
+
+Response `communication.deliveryId` is Manager's actual delivery identifier and may differ from the submitted ID; save it for `reconcile_delivery`. A same-key retry of `prepared` can finish the original, not-yet-started delivery; `dispatching` only reconciles its receipt, and a committed delivery returns its original result. After HTTP 202, a timeout or `delivery_unconfirmed`, retain the original payload and ID. Do not use a new key or start another turn. Missing evidence keeps the outcome unconfirmed. Formal replies retain `inReplyToRequestId/result/nextAction`; the reply request ID is not a source session.
+
 ### Authenticated cross-instance endpoint delivery (experimental implementation)
 
 `send`, formal `required` replies and remote-to-remote exchanges share one Manager request store. Use `instanceBinding={instanceId,agentId}` for the destination and preserve the complete raw `threadId`. The Manager includes formal reply parameters in the delivered message; do not replace the destination or shorten session IDs. Enabled-provider authorization is generic, while execution capability is checked separately. Providers without exact owner delivery support fail closed without an alternate Runtime.
 
 The Manager resolves the original authenticated lease and exact target, persists preparation, renders one envelope, records dispatching, invokes the owner, validates the receipt, then commits. Full identity includes `managerInstanceId`, `instanceId`, `nodeId`, `agentId`, `provider`, raw session ID and authorization incarnation. Receipts must also match the original `deliveryId`, generation and prompt hash. Connection, Agent enablement, catalog or approved binding changes cannot inherit an old authorization.
 
-Unknown outcomes return HTTP 202, `delivery_unconfirmed` and `retryable=false`, retaining the original formal reply reservation. Never repeat `send` to replay the message. `reconcile_delivery` only checks transport evidence on the original target. Startup, connection, catalog, receipt and turn events trigger deduplicated recovery without polling, replacement owners or automatic replay. Connectors store transport attempts/receipts only, not a second business request ledger. Codex can recover an exact hash from accepted user messages on the same Desktop owner; providers lacking readable acceptance evidence remain unconfirmed.
+Unknown outcomes return HTTP 202, `delivery_unconfirmed` and `retryable=false`, retaining the original formal reply reservation. Never replay the message with another delivery ID. `reconcile_delivery` only checks transport evidence on the original target. Startup, connection, catalog, receipt and turn events trigger deduplicated recovery without polling, replacement owners or automatic replay. Connectors store transport attempts/receipts only, not a second business request ledger. Codex can recover an exact hash from accepted user messages on the same Desktop owner; providers lacking readable acceptance evidence remain unconfirmed.
 
 This describes source implementation and regression scope, not updated runtime nodes or real two-computer end-to-end acceptance.
 
@@ -980,7 +1015,7 @@ Formal Agent responses validate the source and destination by their task IDs and
 }
 ```
 
-Every `create` and `send` with a non-empty `prompt` must include `messageSource`. Its `type` is required and uses one of four source shapes:
+Every `create` and `send` with a non-empty `prompt` must include `messageSource`. Its `type` is required. The delivery envelope can display four source shapes; public Agent `send` still applies the owner verification above:
 
 | `messageSource.type` | Required identity | Optional details |
 | --- | --- | --- |
@@ -1006,7 +1041,7 @@ New deliveries use `[回传参数]` with a complete JSON request. The request st
 
 Agent callers normally use `type=agent`. `agentAdapter` names the actual endpoint, such as `codex`, `dsh`, `copilotCli`, `marvis`, or `astrbot`; both `sessionName` and the complete `sessionId` are required. Agent-to-Agent delivery also requires the sender's complete `sourceThreadId`, `sourceAgentType`, and `responsePolicy`, and `messageSource.sessionId` must equal `sourceThreadId`. `sourceAgentType` accepts `primary_persona`, `message_processing`, `plan_secretary`, `plan_agent`, or the generic `agent`. `responsePolicy` must be `required` or `none`. A required response also needs `responseInstruction`; Manager creates a `requestId` and includes the formal reply parameters in the target task's delivery. `none` means the target does not have to return a result for this delivery.
 
-Non-empty `create` and `send` requests use the same source-verification rule. With `type=agent`, both require `sourceThreadId`; Manager reads the actual source name from the Codex Desktop or DSH owner and replaces a stale submitted name. Manager-owned plan progress, approval, and QA events show only the plan name and ID. `sourceAgent` is included only when the plan task itself returns a result and the source session is verified.
+Non-empty `create` and `send` requests use the same source-verification rule. With `type=agent`, both require `sourceThreadId`; Manager reads the actual source name from its owner, including Codex Desktop, DSH and the Grok Bot service, and replaces a stale submitted name. Manager-owned plan progress, approval, and QA events show only the plan name and ID. `sourceAgent` is included only when the plan task itself returns a result and the source session is verified.
 
 `contextBlocks` follow the message content, and `controlBlocks` follow context. Reply parameters and current delivery requirements belong in control blocks; generic collaboration blocks are no longer injected. Neither field may contain `[消息源]`, `[消息内容]`, or `[投递源]`. Legacy source wrappers, nested envelopes, and old Agent response wrappers are migrated automatically. A replay whose old record lacks structured provenance is labeled `历史投递记录`; RabiRoute does not guess the source identity.
 
@@ -1073,9 +1108,9 @@ Reminder delivery performs the same check first. Incomplete evidence retains the
 
 For Agent-to-Agent `create` and `send`, Manager verifies the source through the actual owner selected by `messageSource.agentAdapter + sourceThreadId`. Codex reads Desktop task state and the current sidebar name; DSH reads session name, workspace, and running state through apiproxy `session.list`. A missing source, workspace conflict, or mismatch between `sourceThreadId` and `messageSource.sessionId` fails closed. Every non-empty RabiRoute delivery starts with `[消息源]`, followed by `[消息内容]`; reminders, initialization messages, RabiLink reviews, and replays use the same envelope.
 
-`create` and `send` accept only a Codex or DSH workspace already configured in RabiRoute. Every non-empty `prompt` requires a complete `messageSource`; `type=agent` also requires `agentAdapter`, `sessionName`, and the complete `sessionId`. Agent-to-Agent sends require a verifiable `sourceThreadId` equal to `messageSource.sessionId`. The `sandbox` field cannot override the target owner model, tools, sandbox, or approvals. Codex fails closed when Desktop, IPC, or the task owner is unavailable. DSH fails closed when its endpoint is unavailable, the session is missing, or the workspace conflicts. Neither adapter falls back to another Agent or Runtime.
+Codex and DSH `create` and `send` use workspaces already configured in RabiRoute and cannot start a session in an arbitrary directory. Grok Bot service sessions need no local filesystem directory; do not fabricate `cwd` or start a local Runtime for them. Every non-empty `prompt` requires a complete `messageSource`; `type=agent` also requires `agentAdapter`, `sessionName`, and the complete `sessionId`. Agent-to-Agent sends require a verifiable `sourceThreadId` equal to `messageSource.sessionId`. The `sandbox` field cannot override the target owner model, tools, sandbox, or approvals. Codex fails closed when Desktop, IPC, or the task owner is unavailable. DSH fails closed when its endpoint is unavailable, the session is missing, or the workspace conflicts. Neither adapter falls back to another Agent or Runtime.
 
-Agent-to-Agent prompt text must be a newly composed handoff for the target task. Manager rejects bodies containing `[rabi:bind]`, Message Agent initialization, or Plan Secretary initialization, and rejects a handoff whose source and target IDs are identical. A complete injected prompt must never be copied across tasks. The Message Agent pool also refuses to initialize or deliver when task resolution returns the Primary Persona task ID.
+Agent-to-Agent prompt text must be a newly composed handoff for the target task. Manager rejects bodies containing `[rabi:bind]`, Message Agent initialization, or Plan Secretary initialization, and rejects a handoff with the same exact source and target endpoint. A complete injected prompt must never be copied across tasks. The Message Agent pool also refuses to initialize or deliver when task resolution returns the Primary Persona task ID.
 
 The fixed developer instructions for `create` and every `send` follow-up add a workspace-delivery guard, including ordinary follow-ups that still must provide `messageSource`. Unless the current user explicitly authorizes it, the Agent must not create an additional working copy, sparse checkout, copied project, or side workspace; stricter rules in the workspace `AGENTS.md` take precedence. The current workspace rules determine permitted working copies, synchronization direction, and whether historical instructions remain valid. The Agent may say “fixed” or “ready for acceptance” only after the change is present in the workspace the user actually runs or reviews and the applicable resource binding, build or compilation, and runtime checks are complete.
 
@@ -1446,3 +1481,15 @@ All chat channels (QQ, WeCom, WeChat, Feishu, RabiLink, speech, FenneNote messag
 - History queries and pre-send checks return an error if an initialized ledger is missing `conversation/current.jsonl` or its archive index, or if a read encounters a corrupt index, corrupt records or a missing archive shard. Restore the original ledger before retrying. A first-use conversation with no ledger still supports empty-conversation confirmation. Existing send receipts retain their original idempotent handling.
 
 Plan approval feedback and FenneNote playback are structured actions rather than chat sends. Existing source, image, project fact, style, length and idempotency checks still apply. Conversation review does not change API permissions.
+
+## Remote terminal API
+
+Host Agents use these APIs as well. `GET /api/lan-agent/instances/:instanceId/terminals/:terminalId?after=0&waitMs=25000` returns `terminal`, `outputEvents`, `nextOutputSequence` and `truncated`, waiting for events up to 25 seconds when no new output exists. File transfer, window queries and captures use `POST /api/lan-agent/instances/:instanceId/computer` independently of associated Agent backends. See [computer APIs](remote-computer-client_en.md) for complete parameters and limits.
+
+Existing authenticated connections may use these operations. Windows connector 0.2.2 provides CMD and PowerShell by default.
+
+- GET /api/lan-agent/instances/:instanceId/terminals returns data.shells and data.sessions, including terminalId, shell, cwd, state, pid, createdAt, nextInputSequence and exitCode.
+- POST the same path with action open, list, get, input, resize or close. Open requires a stable UUID terminalId and shell cmd|powershell, with optional existing absolute cwd. Get/close require terminalId. Input requires terminalId, a sequence starting at 1 and up to 16 KiB of data. Resize requires cols 20..400 and rows 5..200.
+- GET /api/lan-agent/instances/:instanceId/terminals/:terminalId/events?after=0 streams SSE events with increasing sequence, type output|exit|gap|disconnected and data or exitCode. The after cursor recovers missed output, without polling. A cursor older than the bounded 256 KiB replay window receives a gap first.
+
+Repeated open with the same identity returns the original session; a changed shell or directory is rejected. Repeated input with the same sequence and bytes returns the original acceptance, while conflicting, expired or out-of-order inputs fail. Acceptance means input reached the original terminal, not successful command completion. After timeouts, 5xx or disconnection, query list/get and nextInputSequence; do not change identity, recreate the session or replay input automatically. Closing a viewer only detaches it; close ends the shell and descendants. Node connection changes end terminals and old streams. Commands/output are not written to personas, plans or persistent logs. See [connector documentation](../apps/rabi-agent/README_en.md) for capacity and lifecycle.

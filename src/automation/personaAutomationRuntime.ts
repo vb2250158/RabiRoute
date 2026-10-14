@@ -115,6 +115,7 @@ export function collectScheduledAutomationTasks(routes: RouteProfile[]): Schedul
   for (const route of routes) {
     if (route.enabled === false || route.agentRoleDeviceId) continue;
     for (const rule of route.automationRules ?? []) {
+      if (rule.sourceRouteIds?.length && !rule.sourceRouteIds.includes(process.env.GATEWAY_ID || route.id)) continue;
       if (rule.enabled === false || rule.trigger.type !== "schedule" || rule.trigger.schedule.enabled === false) continue;
       tasks.push({ route, rule: rule as ScheduledAutomationTask["rule"] });
     }
@@ -132,6 +133,8 @@ function messageTriggerRule(rule: PersonaAutomationRuleDefinition): Notification
     targetGroupId: rule.trigger.targetGroupId,
     allowedSpeakerNames: rule.trigger.allowedSpeakerNames,
     regex: rule.trigger.regex,
+    sourceRouteIds: rule.sourceRouteIds,
+    triggerIds: rule.trigger.triggerIds,
     template: ""
   };
 }

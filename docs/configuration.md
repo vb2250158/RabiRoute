@@ -42,7 +42,7 @@ Manager 根 Fiber 持有三个共享读取 Worker Pool 与 `CoalescingMessagePro
 | `manager:desktop-pet` | `/api/desktop-pet/` 下的桌宠资源包、绑定、设置和素材读取入口 | 撤销桌宠入口并 drain 已接收请求；桌面端空闲调度由本机控制器停止 |
 | `manager:yeyu-gamer` | 固定 loopback 的 YeYu Gamer health/meta/snapshot/capabilities 读取，以及 plan-only work item 创建 | 撤销入口并 drain 请求；不 claim 工作项、不申请能力，也不启动游戏 |
 | `manager:gateway-runtime` | Gateway 配置、启停、重启、删除、手动触发、Agent 投递测试、回放、网络选项和重载入口；Gateway、投递测试与手动触发子进程 | 撤销入口并 drain 请求，停止本实例的手动触发进程，再停止并等待 Gateway 进程树退出 |
-| `manager:agent-adapter-catalog` | Agent Adapter 目录与 `/api/scan/agents`、`/api/scan/agents/dsh` 扫描入口；受控扫描 Worker Pool | 撤销入口、取消排队或活动扫描，并停止 Worker 进程树 |
+| `manager:agent-adapter-catalog` | Agent Adapter 目录与 `/api/scan/agents`、`/api/scan/agents/dsh`、`/api/scan/agents/grokBot` 扫描入口；受控扫描 Worker Pool | 撤销入口、取消排队或活动扫描，并停止 Worker 进程树 |
 | `manager:agent-thread-control` | Agent 任务创建、查询和绑定入口 | 撤销入口并 drain 请求；任务和业务记录继续由稳定业务模块拥有 |
 | `manager:agent-communication` | Agent 请求、发送、回执和追踪入口 | 撤销入口并 drain 请求；继续复用 Outbox、审批、回执和消息处理业务模块 |
 | `manager:remote-agent` | Remote Agent 扫描、连接、任务和事件入口；活动 WebSocket 与 Hub 回调 | 撤销入口并 drain 请求；未完成任务改为 `interrupted`，关闭 WebSocket 并等待已开始的回调结束 |
@@ -172,7 +172,7 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 - `weixinBaseUrl` / `weixinBotType`：个人微信 OpenClaw/iLink 实验原型配置；默认分别为 `https://ilinkai.weixin.qq.com` 和 `3`，也可用 `WEIXIN_BASE_URL` / `WEIXIN_BOT_TYPE` 覆盖。扫码得到的 token、同步游标、账号标识和会话 context token 只以受保护密文保存在运行期 `data/`，不得写入公开配置、示例或日志。
 - `feishuAppId` / `feishuAppSecret` / `feishuVerificationToken` / `feishuEncryptKey`：飞书企业自建应用的独立凭据。`feishuWebhookPort` / `feishuWebhookPath` 配置本机回调；只有平台侧 HTTPS 回调和 `im.message.receive_v1` 已完成配置后，才设置 `feishuEventSubscriptionEnabled: true`。群机器人 Webhook 不能替代这些字段；详见 [飞书独立消息端接入](feishu-integration.md)。
 - `napcatHttpUrl`：OneBot HTTP API 地址。
-- `agentAdapters`：Agent 端适配器列表。当前支持 `codex`、`copilotCli`、`astrbot`、`marvis`、`dsh`。成熟度分别是：Codex 已验证；Copilot CLI、AstrBot、DSH 实验支持；Marvis 仅人工接力。
+- `agentAdapters`：Agent 端适配器列表。当前目录包含 `codex`、`copilotCli`、`marvis`、`astrbot`、`dsh`、`workbuddy`、`antigravity`、`deviceAgent` 和 `grokBot`；能力与成熟度以当前 adapter manifest 和扫描结果为准，Grok Bot 保持实验状态。
 - `dshSessionId` / `dshSessionName` / `dshCwd` / `dshBaseUrl`：DSH（DeepSeek Harness）主人格绑定。WebGUI 按“API 地址 → 工作目录 → 会话”扫描并选择；地址留空时从本机 `DSH_HOME` 的 web profile 和 `logs/web-host.stdout.log` 的 `dsh web:` 横幅自动发现当前 loopback 地址，不再把文档默认端口 `3080` 当成“未安装”。也可输入新名称，保存时按名称和工作目录查找，零匹配才幂等创建。创建前先通过 DSH `workspace.create` 注册或复用该工作目录，再把返回的 `workspaceId` 传给 `session.create`；RabiRoute 创建的主人格、消息处理、计划秘书和记忆整理会话会直接进入对应工作空间分组。选择或创建后保存完整 `session-<uuid>`、名称和工作目录；“自动初始化会话”先保存绑定，再向同一 DSH owner 投递角色、计划、记忆和必读项。真实消息通过 `POST /api/session.prompt` queue 模式续投，失败时不改投 Codex。DSH“设置 → 我的插件”需要启用 `RabiRoute Agent`；该插件提供线程桥、外发、计划、消息处理、记忆和 Agent 间通信工具。WebGUI 的 DSH 刷新和会话分页使用独立的 `GET /api/scan/agents/dsh`，不等待 Codex、Copilot CLI、AstrBot 或 Marvis 的通用扫描。匿名测试路由已通过连续投递、Manager/DSH 重启读回、计划秘书、消息处理、独立记忆整理、`required` 正式回复和无效 Endpoint 失败关闭；独立扫描还会读取 `RabiRoute Agent` 的运行状态、版本、Manager 地址、通信约束和三个模型工具，缺失、未激活或版本不匹配时给出更新并重启 DSH 的修复提示。适配器仍标为实验，等待发布包和全新环境回归。
 - `dshModelProvider` / `dshModel` / `dshReasoningEffort`：可选的 DSH 主人格模型设置。WebGUI 在 DSH 可用时通过 `llm.models` 读取提供方、模型和推理强度；读取失败时仍可按 `provider/model` 手动输入。配置非空时，Gateway 在主人格下一次消息投递前先读取 `session.models`，仅在当前选择不一致时调用 `session.selectModel`，随后再调用 `session.prompt`。留空则沿用 DSH 绑定会话自己的当前设置。
 - `primaryAgentAdapter`：当前 Route 的主控 Agent，必须是 `agentAdapters` 中的一项。消息命中规则后只投递给主控，不会广播给列表里的其他 Agent。旧配置没有该字段时使用列表第一项；删除主控后自动改用仍存在的第一项。
@@ -322,17 +322,25 @@ URL 可指向 Skill 目录、`SKILL.md` 或 `references/style-data.json`。`/api
 
 ## Agent 端适配器
 
-当前内置 Agent 端适配器：
+其他 Agent 端说明：
 
 - `codex`：从 Desktop 左侧栏共用索引读取用户可见 `Name`，并按完整 ID 合并本地默认 cwd、归档、时间和 owner/rollout 状态；完整任务 ID 定位任务，当前配置的工作目录用于本次投递。投递时让 Desktop 加载目标任务，再通过 Desktop IPC start 或 steer，实际消息只由 Desktop owner 执行。
 - `copilotCli`：通过本机 Copilot CLI 命令投递一次性 prompt，输出写入 `copilot-output.jsonl`，运行态上报给 Manager。它不会注入已有 VS Code Copilot 面板线程；如需后台调用，请确保 CLI 可执行文件在 PATH 中，或设置 `COPILOT_CLI_BIN`。
 - `astrbot`：使用 `ASTRBOT_URL`、Dashboard 登录凭据和必需的 `ASTRBOT_SESSION_ID`。发送时只调用 ChatUI `POST /api/chat/send`；缺少 Session ID 时失败关闭。旧 AstrBot 插件回退与部署入口已经删除。
 - `marvis`：通过本机 handoff 方式接入 Marvis 桌面端。RabiRoute 会把 prompt 写入 `marvis-prompts/`、复制到剪贴板，并优先启动/聚焦 Windows 桌面应用 `Tencent.Marvis`；由于 Marvis 当前未提供稳定公开后台 API，这个适配器不会自动点击发送。
 
+### Grok Bot（实验）
+
+在 Agent 列表添加 **Grok Bot**，填写可选 `grokBotBackendUrl` 和 `grokBotProfilePath`，显式扫描后从已有会话中选择。界面把扫描结果的 `ownerId/id/name` 保存为 `grokBotAgentId/grokBotSessionId/grokBotSessionName`，无需手填 UUID、本地工作目录或 token。修改输入和保存不自动扫描。
+
+原生 HTTP 复用已有 Grok cloud owner；`GET /api/scan/agents/grokBot` 使用 `grokBotAgentId`、`grokBotProfilePath`、`grokBotBackendUrl`、`grokBotLimit`、`grokBotOffset`、`grokBotQuery` 参数进行专用扫描。当前服务只接入真实已有会话，不提供新建、改名或打开操作。账号资料只读并保护凭据，能力仅声明 `agentThreads`，成熟度为 `experimental`。
+
+Bot 来源使用自己的完整会话 ID；公共 `threads.send` 的稳定 `deliveryId` 按真实来源作用域复用，`system` 无可核验 owner 时明确失败。完整配置、环境变量、请求及回传边界见 [Grok Bot 接入](grok-bot-agent-adapter.md)和 [Agent 接口](rabi-agent-interfaces.md)。HTTP 受理与回答完成分别确认。
+
 ### 已删除的兼容 API
 
 - 插件对账只保留 `GET/POST /api/plugins/reconciliation`，不再提供 `POST /api/plugins/reconcile`。
-- Agent 扫描使用 `/api/scan/agents` 和 `/api/scan/agents/dsh`，不再提供 `/api/agent-adapters/availability` 与 `/api/agent-adapters/dsh/availability`。
+- Agent 扫描使用 `/api/scan/agents`、`/api/scan/agents/dsh` 和 `/api/scan/agents/grokBot`，不再提供 `/api/agent-adapters/availability` 与 `/api/agent-adapters/dsh/availability`。
 - FenneNote 播放使用 `/api/fennenote/playback`，不再提供 `/api/playback/request`。
 - AstrBot 不再提供 `/api/plug/rabiroute_agent/chat`、`/api/deploy-astrbot-adapter` 或仓库内部署脚本。
 

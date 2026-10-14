@@ -118,7 +118,7 @@ export function personaConfigFragmentFromValue(parsed: unknown): Partial<Gateway
   const fragment: Partial<GatewayDefinition> = {};
   if (isJsonObject(parsed)) {
     const configuredAutomations = normalizePersonaAutomationRules(parsed.automationRules);
-    fragment.automationRules = configuredAutomations.length > 0
+    fragment.automationRules = Array.isArray(parsed.automationRules)
       ? ensureDefaultPersonaAutomations(configuredAutomations)
       : ensureDefaultPersonaAutomations(personaAutomationRulesFromNotificationRules(rules));
     if (isJsonObject(parsed.recentMessageLimits) || parsed.recentMessageLimit != null) {
@@ -175,7 +175,7 @@ function normalizedPersonaConfigValue(
   const speechTriggerKeywords = fragment.speechTriggerKeywords ?? existingSpeechTriggerKeywords;
   const languageStyle = fragment.languageStyle ?? existingLanguageStyle;
   const configuredAutomations = normalizePersonaAutomationRules(fragment.automationRules ?? existingAutomationRules);
-  const automationRules = ensureDefaultPersonaAutomations(configuredAutomations.length > 0
+  const automationRules = ensureDefaultPersonaAutomations(Array.isArray(fragment.automationRules ?? existingAutomationRules)
     ? configuredAutomations
     : personaAutomationRulesFromNotificationRules(rules));
   const materializeDefaults = options.materializeDefaults !== false;
@@ -324,7 +324,8 @@ function mergeIntoPersona(rolesRoot: string, roleId: string, fragment: PersonaCo
     automationRules: mergePersonaAutomationRules(
       current.automationRules,
       fragment.automationRules,
-      personaAutomationRulesFromNotificationRules(fragment.notificationRules)
+      personaAutomationRulesFromNotificationRules(fragment.notificationRules),
+      existing === undefined ? ensureDefaultPersonaAutomations(undefined) : []
     ),
     codexHooks: current.codexHooks ?? fragment.codexHooks,
     recentMessageLimits: hasCurrentLimits ? current.recentMessageLimits : fragment.recentMessageLimits,
@@ -335,13 +336,15 @@ function mergeIntoPersona(rolesRoot: string, roleId: string, fragment: PersonaCo
 
 function migrateRoleConfig(rolesRoot: string, roleId: string, materializeDefaults: boolean): void {
   const filePath = personaConfigPath(rolesRoot, roleId);
+  const raw = readJsonFile(filePath);
   const current = readPersonaConfigFragment(filePath);
   const legacy = legacyRoleRules(rolesRoot, roleId);
   writePersonaConfigValue(filePath, {
     ...current,
     automationRules: mergePersonaAutomationRules(
       current.automationRules,
-      personaAutomationRulesFromNotificationRules(legacy)
+      personaAutomationRulesFromNotificationRules(legacy),
+      !isJsonObject(raw) || !Array.isArray(raw.automationRules) ? ensureDefaultPersonaAutomations(undefined) : []
     )
   }, { materializeDefaults });
   for (const legacyPath of [roleMessageConfigPath(rolesRoot, roleId), routesConfigPath(rolesRoot, roleId)]) {

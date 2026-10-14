@@ -74,12 +74,19 @@ async function handleAgentThreadBody(
   requestAuthority?: () => void,
   trustedDeviceSource?: RabiLinkAgentPrincipal
 ): Promise<void> {
+  // Capture only caller-selected execution fields before Route defaults are applied.
+  // The request body cannot supply this internal snapshot itself.
+  const callerExecutionOptions = Object.freeze(Object.fromEntries(
+    (["cwd", "model", "reasoningEffort", "sandbox", "dshDeliveryMode"] as const)
+      .filter(field => Object.prototype.hasOwnProperty.call(body, field))
+      .map(field => [field, body[field]])
+  )) as NonNullable<AgentThreadRequestOptions["callerExecutionOptions"]>;
   const managedBody = context.applyManagedAgentThreadDefaults(body);
   try {
     const result = await context.handleAgentThreadRequest(
       managedBody,
       context.agentThreadRequestOptions(managedBody, {
-        remoteSource, requestAuthority,
+        remoteSource, requestAuthority, callerExecutionOptions,
         agentRequests: context.agentRequests,
         onMessageProcessingHandoff: (event) => {
           const item = context.messageProcessingBoard.submitOutcome(event.requirementId, {

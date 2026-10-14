@@ -6,6 +6,10 @@ English | <a href="./code-architecture.md">简体中文</a>
 
 # RabiRoute Code Architecture
 
+## Remote Agent main program and tray
+
+The stable launcher in `apps/rabi-agent/rabi-agent.mjs` is the remote application's sole main program. It owns the singleton lease, connector/update-candidate children, Windows tray child and startup-setting writes. Enrollment enters that owner in the current process without retaining another bootstrap supervisor. The bridge in `lib/desktop-presentation.mjs` is serialized into the stable launcher and starts the `desktop/tray.ps1` child; windows belong to that tray process. The tray receives sanitized snapshots and submits supported commands over stdin/stdout; it neither reads configuration nor contacts Manager. The connector publishes actual state over IPC without polling or host scans. Normal shutdown waits for owned children before releasing the lease; IPC disconnect and pipe EOF release the connector and tray after abrupt parent death. One-shot CLI clients authenticate to the same owner and own no runtime state. Signed release assets include the exact tray script. Older nodes adopt the new owner on their next normal start without replacing node/task identity. See [Rabi Agent](../apps/rabi-agent/README_en.md) for Windows implementation and local isolated validation.
+
 The Linux source Host lives in `scripts/linux-host.mjs` and `scripts/lib/linux-host-runtime.mjs`: it reuses Manager READY/health identities, holds a per-user kernel `flock` lease, and exposes only a live loopback control endpoint. `src/linuxHostParent.ts` requests normal Manager shutdown when its parent's IPC channel closes. Its interface is WebGUI, without Windows tray or Qt parity; see [Linux Host](linux-host_en.md) for operation and container limits.
 
 `vacuumRemote.ts` uniquely owns remote sessions and release sequencing. WebGUI and Agents share Manager APIs; pause readback, initialization, independent HA timers and exit coordination are documented in the [device API](home-device-agent-api_en.md).
@@ -529,3 +533,18 @@ The device directory is owned by `deviceDirectory.ts` and existing `managerApi.t
 `agentSendConversationContext.ts` reuses the Outbox persona ledger owner and sequence-window reads in `messageContextStore.ts`. `conversationMessageCursor.ts` shares the cursor contract with AgentPacket. Reviewed caches and tokens are isolated per Agent/conversation; `agentSendConversationQueue.ts` serializes only one conversation. Checks run before new idempotency reservations and again after awaited source/style validation. Existing receipt retries retain their original behavior. Sequence bounds prune archives while only bounded head/tail windows are retained. See [the send contract](rabi-agent-interfaces_en.md#conversation-index-review-before-sending).
 
 Archive/window reads run asynchronously in the bounded interactive read worker pool rather than scanning history on the Manager HTTP thread.
+
+
+## Automation Agent target selection
+
+Persona rules store structured targets; Agent settings own recipient bindings. `src/automation/agentDelivery.ts` selects the executor, `sessionDelivery.ts` verifies selected-session receipts, and migration snapshots old configuration. See [Automation Agent delivery](automation-agent-delivery_en.md).
+
+## Remote terminal lifecycle
+
+Windows builds precompile native helpers, name them by normalized C# source SHA-256 and include them in the connector's signed manifest. Scripts load only the DLL matching current source. Terminal readiness follows the first shell prompt to prevent startup from discarding early input; the connector retains state ownership without another Runtime created by assets or the browser. Assemblies and scripts share one source implementation; source runs without a matching assembly compile that same source.
+
+The original controller RabiPC owns cluster business data, personas, plans, memory, skills and workflows; remote clients retain connection and execution state. `ComputerService` and `TerminalService` consume management commands directly over the authenticated connection, bypassing the Agent queue without starting Codex/DSH. File transfer uses checked 64 KiB chunks and same-directory atomic commits without overwrite. On-demand desktop helpers query Win32 windows and return PNG, with pipe EOF and deadlines releasing their processes. See [remote computer clients](remote-computer-client_en.md) for APIs and limits.
+
+TerminalService owns terminal state inside the connector child. Each session launches a native terminal-host child that uses ConPTY for UTF-8/control sequences and assigns the suspended shell to a kill-on-close Job Object before resuming it. Host pipe EOF, session exit or main-program shutdown ends the command tree. The existing main program remains the only lifecycle entry; neither the browser nor native terminal hosts own another Manager or Agent Runtime.
+
+LanAgentRegistry forwards terminal commands over the existing authenticated WebSocket. LanAgentTerminals retains only bounded output replay isolated by instance/session, and lanAgentTerminalRoutes exposes a dedicated SSE stream. Its 25-second keepalive serves transport only. The browser loads xterm.js on demand, serializes input sequences and blocks further input after uncertain results until queried; it never replays automatically. Session lists are read only on entry or an explicit query. Older connectors report missing capability and require an upgrade, without an additional permission switch.

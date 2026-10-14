@@ -6,7 +6,38 @@
 
 # Rabi Agent
 
-Rabi Agent is a headless LAN worker, not a full RabiRoute client. It opens an outbound connection to Rabi Manager, receives work, and delivers to the task selected at bootstrap through Codex Desktop IPC or the DSH local `session.prompt` API.
+Rabi Agent is a remote computer client. Windows provides a tray and status window; macOS/Linux run in the background. It connects outbound to the controller's Rabi Manager and exposes computer APIs. Associated Agents optionally execute tasks through Codex Desktop IPC or the DSH local `session.prompt` API.
+
+One controller RabiPC owns personas, memory, skills and workflows. An online remote client provides terminals, file transfer, window queries and screenshots even without running Codex/DSH. See [controller and remote computer clients](../../docs/remote-computer-client_en.md).
+
+## Remote terminals (0.2.2, experimental)
+
+In the host WebGUI, expand an online computer under **RabiLink → Remote Agents** and choose **Remote terminal**. Windows supports **CMD** and **PowerShell** by default, without another feature switch.
+
+1. Choose a shell, optionally enter an existing absolute directory on the remote computer, and create a terminal.
+2. Type directly into the terminal. Chinese text, paste, Ctrl+C and resizing are supported; directory and environment persist within the session.
+3. Query terminals to read actual remote sessions and process state. Closing the window retains sessions; reopen it to attach to an existing terminal.
+4. Exit a terminal with its stop button to end that shell and its descendants. Main-program exit, connector shutdown or transport disconnection also ends terminals. Commands are never automatically rerun.
+
+Shells run as the connector's Windows user over the existing authenticated connection, without another management password or per-feature grant. One main program owns the connector, which owns native terminal hosts. Each host uses a Windows Job Object for the shell and its children. ConPTY provides terminal semantics; the browser uses xterm.js. The required OS interface is available on Windows 10 version 1809 and later.
+
+Each node supports up to eight active terminals and 64 session records per connector lifetime. Replay retains only the latest 256 KiB in memory; browser scrollback is limited to 2000 lines. Commands and output are not written to logs. After lost responses, query the existing session and input sequence instead of recreating it or replaying input. Exit active terminals before restarting or updating the connector.
+
+Local native-shell, HTTP/WebSocket/SSE and input-receipt validation is covered. Installed and real two-computer acceptance are tracked separately.
+
+
+## Windows tray (0.2.1, experimental)
+
+Login startup and manual launch enter the same main program. The stable launcher is the sole lifecycle owner; the connector and tray are its children. The status window belongs to the tray child. Duplicate launches do not create another connector; normal exit or abrupt main-program death releases the children.
+
+- Double-click the icon for connection status, version, bound tasks, recent delivery results and up to 120 process-local state records. Agent runtime state remains unverified until real delivery; no recurring host/session scans occur.
+- The menu starts/stops/restarts the connector, reconnects to the host, opens host management, changes login startup and exits. Stopping the connector retains the tray; exit ends the application's children. Codex/DSH keep their own lifecycle. Connector controls are temporarily unavailable during updates or known active tasks.
+- The main program writes and reads back startup changes, retains the previous file and refuses to overwrite another installation's entry. Management navigation carries no credentials; the browser handles login.
+- The tray consumes sanitized snapshots and submits commands through parent-child pipes. It does not read private configuration, contact Manager or start an Agent Runtime.
+
+Windows native tray, menu, singleton, process-exit and isolated release-asset tests are covered. Real two-computer upgrades and login startup remain pending. After upgrading an older signed release, exit the original main program normally and launch once through the existing launcher to adopt the new owner and tray; keep enrollment and task bindings.
+
+CLI control uses the same owner: `node rabi-agent-launcher.mjs --config <private-config> --command status|start|pause|restart|reconnect|enable-startup|disable-startup`. `--stop` exits the whole application. CLI clients perform one request only.
 
 > Status: experimental. Setup, authorization and upload-to-group-file delivery passed local tests, a full build, and deployment health checks for `0.3.4-4b5d30118b40`. Upload integration used real HTTP and simulated NapCat; real two-computer group delivery remains unverified. This discovery-guidance and content-digest update audit requires separate verification of its final running version. Full Windows ZIP acceptance remains pending.
 
@@ -26,9 +57,11 @@ Tools cover knowledge search, plan lists/details/status catalogs, memory lists a
 
 ## First connection
 
-1. In the controlling WebGUI, copy the setup prompt from **Remote Agent** and paste it into a private Codex/DSH task on the target computer. Requires Node.js 22.13+ and a running supported host.
+1. Copy the setup prompt from **Remote Agent** in the controlling WebGUI. Enrollment defaults to a computer client, requiring Node.js 22.13+ without a running Codex/DSH host; an installation tool on the target can follow the prompt. Choose **Also associate the Agent used for installation** to discover and bind its current real task.
 2. The prompt uses a single-use ticket, valid for 30 minutes by default, to download the signed connector. `--bootstrap` exchanges it for an independent `nodeCredential`. The credential stays in current-user private configuration; Manager stores only the secret hash and grants. Login startup entries contain no credentials. The ticket is not a shared WebGUI Token and cannot be reused after a successful exchange.
 3. The connector automatically verifies the enrolled node identity. `/api/lan-agent/self` is diagnostic only; `connected=false` does not invalidate credentials or require manual verification or rebinding. **Enable Agent** (Chinese label: **是否启用Agent**) is checked by default for new enrollments. Enabled remote Agents are used in the same way as local Agents, without a separate API or skills grant. For message delivery, select the exact Agent under **RemoteAgent(<IP address>)** in the Route's message adapter and save.
+
+For a first computer-only installation, omit `RABI_AGENT_TYPE`, Codex task and DSH session variables. `--bootstrap` saves `agents: []`; normal startup, login startup and reconnection require no Agent task. Existing configurations retain their original Agent and node identities. The controller calls computer APIs directly; add an associated Agent from the controller later before installing its Hook, reading controller-owned skills or configuring message routes.
 
 Manager is the sole owner of remote enablement. Switch changes immediately send a PUT, and disabling works while offline without saving execution parameters. For enrolled nodes, the CLI, Hooks and execution paths no longer use the legacy local `enabled` field as a second gate. On initial enrollment, a legacy explicit disable is migrated only when Manager has no existing decision; existing enable or disable decisions always win across reconnects. Saving tasks, workspaces or models does not change enablement and removes the legacy remote field. Failed reads show an error rather than assuming enabled. Connector updates and actual calls across two computers require separate verification.
 

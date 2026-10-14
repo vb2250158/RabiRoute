@@ -389,7 +389,7 @@ export class RouteCatalogStartupLifecycle {
   private runtimeSnapshot: RouteCatalogStartupLifecycleSnapshot;
 
   constructor(private readonly options: RouteCatalogStartupLifecycleOptions) {
-    this.attemptTimeoutMs = positiveInteger(options.attemptTimeoutMs, 30_000);
+    this.attemptTimeoutMs = positiveInteger(options.attemptTimeoutMs, process.platform === "win32" ? 120_000 : 30_000);
     this.retryBaseMs = positiveInteger(options.retryBaseMs, 5_000);
     this.retryMaxMs = Math.max(this.retryBaseMs, positiveInteger(options.retryMaxMs, 60_000));
     this.maxAttempts = positiveInteger(options.maxAttempts, 5);

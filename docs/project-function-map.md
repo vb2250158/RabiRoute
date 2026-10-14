@@ -6,6 +6,8 @@
 
 # RabiRoute 项目功能手册
 
+一个主控 RabiPC 统一拥有人格、记忆、Skill 和流程，远端客户端提供终端、文件互传、窗口查询和截图；电脑能力独立于关联 Agent 后端。实现与验收边界见[远端电脑客户端](remote-computer-client.md)。
+
 Linux 启动、状态、重启和退出由 `scripts/linux-host.mjs` 统一拥有；动态 Manager 身份和 RibiWebGUI 继续复用现有合同。`src/linuxProcessLease.ts` 提供进程生命周期内核锁，Linux 原生托盘、截图和热键不在本次范围内，见 [Linux Host](linux-host.md)。
 
 扫地机地图页提供公共手动控制入口，W/A/D 方向、S 停止；不替代坐标导航。视频不设播放时长上限，失败可显式重新连接；见[设备界面](user-guide/home-devices.md)。
@@ -164,6 +166,7 @@ Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，
 | Agent Codex 任务桥与必回复请求 | 已有；五分钟提醒仍需本机 Hook 纵向验收 | Desktop 任务状态、已配置的工作区、统一 `messageSource`、`data/.runtime/agent-requests.json` | 主人格、计划 Agent、计划秘书、消息处理 Agent、Codex/DSH 任务 owner | Agent 调用 `/api/agent/threads`、目标轮次触发 `Stop`，或绕过投递触发 `PreToolUse` 时 | 带正文的 `create` / `send` 必须传完整 `messageSource`。Agent 来源必须包含 Agent 端、会话名称和完整会话 ID；Agent 互投还要核对 `sourceThreadId`。正文固定以 `[消息源]`、`[消息内容]` 开头，并可建立必回复请求 | `POST /api/agent/threads`、`GET /api/agent/requests` | `src/shared/rabiMessage.ts`、`src/agentThreads.ts`、`src/agentRequests/`、`src/manager/agentCommunicationHookPolicy.ts`、`src/manager/controlPlaneRoutes.ts` | `docs/rabi-agent-interfaces.md` |
 | 消息处理看板与发送需求 | 实验支持，状态机、接口和 WebGUI 已构建测试 | `data/.runtime/message-processing-board.json`、消息组来源、引用链与附件证据、结构化转交、计划变动和 Outbox 回执 | 消息处理 Agent、heartbeat、WebGUI | 消息组进入处理、Agent 转交/提交判断、计划统一写入、Outbox 返回结果时 | 直接 @、直接回复、私聊和计划进展生成必须处理项；普通群讨论保留 Agent 判断；NapCat 图片收到后立即保存并作为 Desktop 图片输入，当前讨论片段优先于宽泛历史；原消息、引用链或附件核对不完整时不能回复，附件不可读时只能重试或转交；群消息引用 Agent 外发消息时按发送回执会话增加池内任务权重；回复前读取最新双向上下文并把短期审核绑定到上下文版本、完整会话、目标和正文，精确来源超出近期窗口时只从该人格正式群消息记录恢复唯一同 Route 消息；新消息、已有回复、记录缺失/重复/冲突或请求变化时失败关闭；显示处理任务、转交、不回复原因、发送失败、超时和空闲无结果；计划通知通过写入事件触发，不扫描目录 | `GET /api/message-processing/board`、`POST /api/message-processing/requirements/:id/outcome`、`GET/POST /api/message-processing/requirements/:id/send-context`、`POST /api/agent/threads`、`POST /api/agent/send`、`GET /api/agent/send/traces` | `src/napcatMedia.ts`、`src/messageProcessing/sourceEvidence.ts`、`src/messageProcessing/board.ts`、`src/messageProcessing/persistence.ts`、`src/messageProcessing/sendContextReview.ts`、`src/messageProcessing/sourceContextRecovery.ts`、`src/messageProcessing/managerClient.ts`、`src/messageAgentPool.ts`、`src/manager/controlPlaneRoutes.ts`、`ribiwebgui/src/components/MessageProcessingBoard.vue` | `docs/group-message-batching-and-triage-plan.md`、`docs/rabi-agent-interfaces.md` |
 | Copilot CLI adapter | 实验支持 | route agent config、Copilot CLI | Copilot CLI | AgentPacket 投递时 | 启动 / 调用 CLI | route Agent 端 | `src/copilotCli.ts`、`src/agentAdapters/managerApi.ts` | `docs/code-architecture.md` |
+| Grok Bot adapter | 实验实现；真实往返单独验收 | 当前账号受保护 profile、`grokBotAgentId/SessionId/SessionName` 与服务配置 | 既有 Grok cloud owner，`kind=service` | Route 投递或精确 Agent 会话操作时 | 原生 HTTP 读取及投递真实会话；owner 核对来源，稳定 `deliveryId` 复用原操作，未知结果不重投；HTTP accepted 与 Bot 回答完成分开 | `/api/scan/agents/grokBot`、`/api/agent/threads`、Route Agent 设置 | `src/agentAdapters/grokBotClient.ts`、`grokBotDiscovery.ts`、`grokBotAdapter.ts`、`ribiwebgui/src/grokBotRouteConfig.ts` | [Grok Bot 接入](grok-bot-agent-adapter.md)、[公共来源合同](rabi-agent-interfaces.md) |
 | AstrBot adapter | 实验支持 | `ASTRBOT_URL`、Dashboard 凭据、必需的 `ASTRBOT_SESSION_ID` | AstrBot ChatUI | AgentPacket 投递时 | 登录后只调用 `POST /api/chat/send`；缺少 Session ID 时失败关闭 | route Agent 端 | `src/agentAdapters/astrbotAdapter.ts`、`src/agentAdapters/managerApi.ts` | `docs/configuration.md` |
 | Marvis adapter | 人工接力 | Marvis 本地能力 | Marvis | AgentPacket 投递时 | 写 prompt、复制剪贴板、打开应用；不能保证后台会话注入 | route Agent 端 | `src/marvis.ts`、`src/agentAdapters/managerApi.ts` | `docs/code-architecture.md` |
 | Outbox / Send | 已有 | 必填稳定 `deliveryId`、`sender.agentType + sender.sessionId`、精确 `routeId`、`channel`、渠道专用 `params` 和 `payload` 的明确发送请求 | QQ / WeCom / RabiLink / speech / role panel 等发送出口 | Agent、定时器或规划器调用 `/api/agent/send` 时 | 可能写 draft、阻止、外发、写发送日志；发送前持久化 reservation，同 ID 同请求只执行一次，超时/重启先查询 `/api/agent/send/receipts/:deliveryId`，也可按渠道和 `sentMessageId` 反查发送会话，uncertain 不自动重发；来源上下文不参与目标推断；NapCat 群聊必须显式提交 `replyToMessageId`，真实 ID 引用消息，空字符串表示明确不引用，省略则向 Agent 返回可行动错误；引用消息含图片时，发送前按来源图片数量和顺序校验 `replyImageDescriptions`，成功后在图片旁写同名 `.md` 并返回会话映射；本地群文件校验 `allowedFileRoots` 后走 `upload_group_file`；RabiLink 必须明确目标设备 | `POST /api/agent/send`、`GET /api/agent/send/receipts/:deliveryId`、`GET /api/agent/send/traces` | `src/agentSend.ts`、`src/replyImageDescriptions.ts`、`src/manager/agentSendIdempotency.ts`、`src/outbox.ts`、`src/napcat.ts` | `docs/rabi-agent-interfaces.md` |
@@ -185,7 +188,7 @@ Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，
 
 ## 边界规则
 
-- 当前兼容入口只保留 `GET/POST /api/plugins/reconciliation`、`/api/scan/agents`、`/api/scan/agents/dsh` 和 `/api/fennenote/playback`。旧的 `/api/plugins/reconcile`、Agent availability 接口、`/api/playback/request`、AstrBot 插件回退和部署接口已经删除。
+- 当前兼容入口只保留 `GET/POST /api/plugins/reconciliation`、`/api/scan/agents`、`/api/scan/agents/dsh`、`/api/scan/agents/grokBot` 和 `/api/fennenote/playback`。旧的 `/api/plugins/reconcile`、Agent availability 接口、`/api/playback/request`、AstrBot 插件回退和部署接口已经删除。
 
 - 没有“智能命中人格”。Route 通过 `agentRoleId` 固定绑定人格；`createRouteDecision` 只匹配当前 Route 中由消息触发、动作是通知 Agent 的自动化规则。脚本动作由自动化运行时单独执行。
 - 真实投递会遍历 gateway 子进程里的 active routeProfiles；如果某个 UI 只选定单 route，就只能称为“单 route profile 试算”。
@@ -287,3 +290,8 @@ Xiaomi Home 插件通过 `vacuumCloud.ts` 唯一持有独立受保护米家云�
 米家设备列表：按设备登记归组卡片、单项能力与参数预演／执行测试共用家庭接口；扫地机地图页嵌入同源云地图展示与可暂停快照刷新。导航按钮仍不可用，缺口为原生坐标正文合同。见[设备操作说明](user-guide/home-devices.md)。
 
 聊天发送索引核对：所有聊天消息端共用 Agent/会话独立缓存、增量首尾回传和再次调用确认；消息端设置默认首次 50 条、增量 100 条。入口 `/api/agent/send`、`/api/agent/chat-history`；实现 `src/agentSendConversationContext.ts`。详见 [接口合同](rabi-agent-interfaces.md#聊天发送前索引核对)。
+
+
+## 自动化 Agent 目标选择
+
+人格规则保存结构化投递目标，Agent 端配置保存接收者绑定；`src/automation/agentDelivery.ts` 统一选择执行器，`sessionDelivery.ts` 核对指定会话回执，迁移器保存旧配置快照。详见[自动化 Agent 投递](automation-agent-delivery.md)。

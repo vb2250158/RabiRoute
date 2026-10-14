@@ -72,6 +72,35 @@ test("desktop pet ZIP rejects path traversal before writing outside staging", ()
   assert.equal(fs.existsSync(path.join(roleDir, "escape.gif")), false);
 });
 
+test("mode gesture validation rejects the immutable pack before publication", () => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-pet-mode-import-"));
+  try {
+    const manifest = Buffer.from(JSON.stringify({ id: "mode-pack", personaId: "sample",
+      states: { idle: { type: "gif", source: "idle.gif", loop: true },
+        desk: { type: "gif", source: "idle.gif", loop: true }, wave: { type: "gif", source: "idle.gif", loop: false, next: "idle" } },
+      modeAnimationSets: { focus: { idleState: "desk", clickStates: ["wave"] } } }));
+    const archive = storedZip([["pet-pack.json", manifest], ["idle.gif", Buffer.from("GIF89a")]]);
+    assert.throws(() => importDesktopPetPack("sample", roleDir, "mode.zip", "application/zip", archive), /returning to desk/);
+    assert.equal(fs.existsSync(path.join(roleDir, "desktop-pet", "packs", "mode-pack")), false);
+  } finally { fs.rmSync(roleDir, { recursive: true }); }
+});
+
+test("duplicate immutable-pack import preserves the accepted original bytes", () => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-pet-duplicate-import-"));
+  try {
+    const packDir = path.join(roleDir, "desktop-pet", "packs", "accepted");
+    fs.mkdirSync(packDir, { recursive: true });
+    fs.writeFileSync(path.join(packDir, "pet-pack.json"), "accepted-original");
+    fs.writeFileSync(path.join(packDir, "idle.gif"), "accepted-image");
+    const manifest = Buffer.from(JSON.stringify({ id: "accepted", personaId: "sample",
+      states: { idle: { type: "gif", source: "idle.gif", loop: true } } }));
+    const archive = storedZip([["pet-pack.json", manifest], ["idle.gif", Buffer.from("GIF89a")]]);
+    assert.throws(() => importDesktopPetPack("sample", roleDir, "duplicate.zip", "application/zip", archive), /already exists/);
+    assert.equal(fs.readFileSync(path.join(packDir, "pet-pack.json"), "utf8"), "accepted-original");
+    assert.equal(fs.readFileSync(path.join(packDir, "idle.gif"), "utf8"), "accepted-image");
+  } finally { fs.rmSync(roleDir, { recursive: true }); }
+});
+
 test("desktop pet pack commit falls back to manifest-last copy when SMB rename is denied", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-pet-smb-"));
   const source = path.join(root, "source");

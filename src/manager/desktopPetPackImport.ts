@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
+import { validateDesktopPetModeAnimationSetManifest } from "../shared/desktopPetModeAnimationSets.js";
 
 const MAX_ARCHIVE_BYTES = 128 * 1024 * 1024;
 const MAX_EXPANDED_BYTES = 256 * 1024 * 1024;
@@ -293,10 +294,12 @@ export function importDesktopPetPack(
     const manifest = manifestFrom(fs.readFileSync(path.join(manifestDir, "pet-pack.json")));
     const packId = String(manifest.id || "").trim();
     if (!PACK_ID.test(packId) || manifest.personaId !== roleId) throw new Error("Desktop pet manifest id or personaId is invalid.");
+    validateDesktopPetModeAnimationSetManifest(manifest);
     fs.mkdirSync(packsRoot, { recursive: true });
-    finalDir = path.join(packsRoot, packId);
-    assertImportRoot(roleDir, finalDir);
-    if (fs.existsSync(finalDir)) throw new Error("A desktop pet pack with this id already exists.");
+    const destination = path.join(packsRoot, packId);
+    assertImportRoot(roleDir, destination);
+    if (fs.existsSync(destination)) throw new Error("A desktop pet pack with this id already exists.");
+    finalDir = destination;
     commitDesktopPetPackDirectory(manifestDir, finalDir);
     recordDataMutationAudit({
       group: "desktop-pet",

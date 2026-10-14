@@ -138,240 +138,35 @@ function normalizeAttemptIds(request: DeliveryReplayRequest): string[] {
 }
 
 async function replaySingleDeliveryAttempt(dataDir: string, attempt: DeliveryReplayAttempt): Promise<DeliveryReplayResult> {
-  let result: ForwardDeliveryResult;
-  try {
-    result = await forwardMessageAndWait(attempt.routeKind, attempt.record, attempt.extraValues, {
-      appendRoleRecord: false,
-      replayOfAttemptId: attempt.attemptId
-    });
-  } catch (error) {
-    if (!legacyReplayCanFallback(attempt, error)) throw error;
-    return replayLegacySingleDeliveryAttempt(dataDir, attempt);
+  if (!attempt.packets.length || attempt.packets.some(packet => !packet.rule?.agentTarget || !packet.recipients || !packet.ownerFingerprint)) {
+    return { ok: false, mode: "single", replayedAttemptIds: [], error: "The historical delivery has no recorded target. Select a destination explicitly instead of replaying to the current primary Agent." };
   }
-  appendAdapterLogToDir("router", {
-    event: "delivery_replay",
-    level: result.status === "failed" ? "error" : "info",
-    message: `Delivery replay ${result.status} mode=single replayOf=${attempt.attemptId}`,
-    data: { mode: "single", replayOfAttemptId: attempt.attemptId, result }
-  }, dataDir);
-
-  return {
-    ok: result.status !== "failed",
-    mode: "single",
-    replayedAttemptIds: [attempt.attemptId],
-    result
-  };
+  const activeRoutes = new Set(config.routeProfiles.map(route => route.id));
+  if (attempt.packets.some(packet => !activeRoutes.has(packet.routeId))) {
+    return { ok: false, mode: "single", replayedAttemptIds: [], error: "The original route is unavailable; replay cannot substitute another route." };
+  }
+  const result = await forwardMessageAndWait(attempt.routeKind, attempt.record, attempt.extraValues, {
+    appendRoleRecord: false, replayOfAttemptId: attempt.attemptId, replayPackets: attempt.packets
+  });
+  appendAdapterLogToDir("router", { event: "delivery_replay", level: result.status === "failed" ? "error" : "info",
+    message: "Delivery replay kept the original targets", data: { replayOfAttemptId: attempt.attemptId, result } }, dataDir);
+  return { ok: result.status === "delivered", mode: "single", replayedAttemptIds: [attempt.attemptId], result };
 }
 
 async function replayMergedDeliveryAttempts(dataDir: string, attempts: DeliveryReplayAttempt[]): Promise<DeliveryReplayResult> {
-  const packets = attempts.flatMap((attempt) => attempt.packets.map((packet) => ({ attempt, packet })));
-  if (packets.length === 0) {
-    return {
-      ok: false,
-      mode: "merge",
-      replayedAttemptIds: attempts.map((attempt) => attempt.attemptId),
-      error: "Selected delivery attempts do not contain replayable agent packets."
-    };
-  }
-
-  const envelope = buildMergedReplayEnvelope(attempts);
-  const message = renderRabiDelivery(envelope);
-  const outcomes = await deliverPacketToPrimaryAgentAdapter("delivery-replay", "merged", envelope);
-  const failed = outcomes.some((outcome) => outcome.status === "failed");
-  const delivered = outcomes.some((outcome) => outcome.status === "delivered");
-  const status: ForwardDeliveryResult["status"] = failed ? "failed" : delivered ? "delivered" : "routed";
-  const result: ForwardDeliveryResult = {
-    routeKind: attempts[0].routeKind,
-    messageId: attempts.map((attempt) => attempt.messageId).join(","),
-    status,
-    matchedRuleIds: ["merged"],
-    matchedRuleCount: attempts.length,
-    sentPacketCount: 1,
-    adapterOutcomes: outcomes,
-    routes: [{
-      routeId: "delivery-replay",
-      routeName: "Delivery Replay",
-      status,
-      matchedRuleIds: ["merged"],
-      matchedRuleCount: attempts.length,
-      sentPacketCount: 1,
-      adapterOutcomes: outcomes
-    }]
-  };
-
-  appendDeliveryReplayAttempt(dataDir, {
-    attemptId: createDeliveryReplayAttemptId("manual_trigger", `merged-${Date.now()}`),
-    time: Math.floor(Date.now() / 1000),
-    routeKind: "manual_trigger",
-    messageId: result.messageId,
-    record: {
-      time: Math.floor(Date.now() / 1000),
-      rawMessage: envelope.messageContent,
-      messageId: result.messageId,
-      senderName: "RabiRoute Delivery Replay",
-      triggerId: "delivery-replay",
-      triggerName: "Delivery Replay"
-    },
-    extraValues: {},
-    packets: [{
-      routeId: "delivery-replay",
-      ruleId: "merged",
-      message,
-      messageSource: envelope.messageSource,
-      content: envelope.messageContent
-    }],
-    result,
-    replayOfAttemptId: attempts.map((attempt) => attempt.attemptId).join(",")
-  });
-
-  appendAdapterLogToDir("router", {
-    event: "delivery_replay",
-    level: failed ? "error" : "info",
-    message: `Delivery replay ${status} mode=merge count=${attempts.length}`,
-    data: { mode: "merge", replayOfAttemptIds: attempts.map((attempt) => attempt.attemptId), result }
-  }, dataDir);
-
-  return {
-    ok: !failed,
-    mode: "merge",
-    replayedAttemptIds: attempts.map((attempt) => attempt.attemptId),
-    result,
-    adapterOutcomes: outcomes
-  };
-}
-
-function buildMergedReplayEnvelope(attempts: DeliveryReplayAttempt[]): RabiDeliveryEnvelope {
-  const eventId = attempts.map((attempt) => attempt.attemptId).join(",").slice(0, 300);
-  const contextBlocks = attempts.flatMap((attempt, attemptIndex) => attempt.packets.map((packet, packetIndex) => {
-    const sourceLines = packet.messageSource
-      ? rabiMessageSourceLines(packet.messageSource, originalDeliveryTime(packet.message)).slice(1)
-      : rabiMessageSourceLines({
-          type: "system",
-          eventType: "legacy_delivery_record",
-          eventName: "历史投递记录",
-          eventId: `${attempt.attemptId}:${packet.ruleId}`.slice(0, 300)
-        }, originalDeliveryTime(packet.message)).slice(1);
-    const content = normalizeRabiMessageContent(packet.content ?? packet.message, true);
-    return [
-      `[重放消息 ${attemptIndex + 1}.${packetIndex + 1}]`,
-      `attemptId：${attempt.attemptId}`,
-      `原投递记录时间：${new Date(attempt.time).toISOString()}`,
-      `routeKind：${attempt.routeKind}`,
-      `messageId：${attempt.messageId}`,
-      ...sourceLines,
-      ...(!packet.messageSource ? ["原消息源字段：旧记录未保存"] : []),
-      "原消息内容：",
-      content
-    ].join("\n");
-  }));
-  return {
-    messageSource: {
-      type: "system",
-      eventType: "delivery_replay",
-      eventName: "失败消息合并重放",
-      eventId
-    },
-    messageContent: `重放 ${attempts.length} 次失败投递。按原顺序处理；外发仍需通过原有发送安全门。`,
-    contextBlocks
-  };
-}
-
-function originalDeliveryTime(message: string): string {
-  const header = message.split(/\r?\n\r?\n\[消息内容\]/)[0];
-  return /^(?:投递时间|消息包发送时间)：([^\r\n]+)$/m.exec(header)?.[1] || "旧记录未保存";
-}
-
-function legacyReplayCanFallback(attempt: DeliveryReplayAttempt, error: unknown): boolean {
-  if (attempt.packets.length === 0 || attempt.packets.every((packet) => packet.messageSource)) return false;
-  const message = error instanceof Error ? error.message : String(error);
-  return /Message source requires|Plan message source requires|Missing messageSource\.|Missing messageSource$/.test(message);
-}
-
-async function replayLegacySingleDeliveryAttempt(
-  dataDir: string,
-  attempt: DeliveryReplayAttempt
-): Promise<DeliveryReplayResult> {
-  const envelope = buildLegacySingleReplayEnvelope(attempt);
-  const message = renderRabiDelivery(envelope);
-  const outcomes = await deliverPacketToPrimaryAgentAdapter("delivery-replay", "legacy-single", envelope);
-  const failed = outcomes.some((outcome) => outcome.status === "failed");
-  const delivered = outcomes.some((outcome) => outcome.status === "delivered");
-  const status: ForwardDeliveryResult["status"] = failed ? "failed" : delivered ? "delivered" : "routed";
-  const matchedRuleIds = [...new Set(attempt.packets.map((packet) => packet.ruleId))];
-  const result: ForwardDeliveryResult = {
-    routeKind: attempt.routeKind,
-    messageId: attempt.messageId,
-    status,
-    matchedRuleIds,
-    matchedRuleCount: matchedRuleIds.length,
-    sentPacketCount: 1,
-    adapterOutcomes: outcomes,
-    routes: [{
-      routeId: "delivery-replay",
-      routeName: "Delivery Replay",
-      status,
-      matchedRuleIds,
-      matchedRuleCount: matchedRuleIds.length,
-      sentPacketCount: 1,
-      adapterOutcomes: outcomes
-    }]
-  };
-
-  appendDeliveryReplayAttempt(dataDir, {
-    attemptId: createDeliveryReplayAttemptId(attempt.routeKind, `${attempt.messageId}-legacy`),
-    time: Math.floor(Date.now() / 1000),
-    routeKind: attempt.routeKind,
-    messageId: attempt.messageId,
-    record: attempt.record,
-    extraValues: attempt.extraValues,
-    packets: [{
-      routeId: "delivery-replay",
-      ruleId: "legacy-single",
-      message,
-      messageSource: envelope.messageSource,
-      content: envelope.messageContent
-    }],
-    result,
-    replayOfAttemptId: attempt.attemptId
-  });
-
-  appendAdapterLogToDir("router", {
-    event: "delivery_replay",
-    level: failed ? "error" : "warning",
-    message: `Delivery replay ${status} mode=legacy-single replayOf=${attempt.attemptId}`,
-    data: { mode: "legacy-single", replayOfAttemptId: attempt.attemptId, result }
-  }, dataDir);
-
-  return {
-    ok: !failed,
-    mode: "single",
-    replayedAttemptIds: [attempt.attemptId],
-    result,
-    adapterOutcomes: outcomes
-  };
-}
-
-function buildLegacySingleReplayEnvelope(attempt: DeliveryReplayAttempt): RabiDeliveryEnvelope {
-  const contents = attempt.packets.map((packet) => normalizeRabiMessageContent(packet.content ?? packet.message, true));
-  const singlePacket = attempt.packets.length === 1;
-  return {
-    messageSource: {
-      type: "system",
-      eventType: "legacy_delivery_record",
-      eventName: "历史投递记录",
-      eventId: attempt.attemptId.slice(0, 300)
-    },
-    messageContent: singlePacket
-      ? contents[0]
-      : `重放 1 次历史投递记录，其中包含 ${attempt.packets.length} 条旧消息。`,
-    contextBlocks: attempt.packets.map((packet, index) => [
-      `[历史消息 ${index + 1}]`,
-      `routeKind：${attempt.routeKind}`,
-      `routeId：${packet.routeId}`,
-      `ruleId：${packet.ruleId}`,
-      `messageId：${attempt.messageId}`,
-      "原消息源字段：旧记录未保存",
-      ...(!singlePacket ? ["原消息内容：", contents[index]] : [])
-    ].join("\n"))
-  };
+  // Batch retry preserves each original identity; combining prompts would create a new delivery.
+  const replies: DeliveryReplayResult[] = [];
+  for (const attempt of attempts) replies.push(await replaySingleDeliveryAttempt(dataDir, attempt));
+  const results = replies.flatMap(reply => reply.result ? [reply.result] : []);
+  const outcomes = results.flatMap(result => result.adapterOutcomes);
+  const ok = replies.every(reply => reply.ok);
+  const result: ForwardDeliveryResult | undefined = results.length ? {
+    routeKind: attempts[0].routeKind, messageId: attempts.map(attempt => attempt.messageId).join(","),
+    status: ok ? "delivered" : "failed", routes: results.flatMap(result => result.routes),
+    matchedRuleIds: results.flatMap(result => result.matchedRuleIds),
+    matchedRuleCount: results.reduce((sum, result) => sum + result.matchedRuleCount, 0),
+    sentPacketCount: results.reduce((sum, result) => sum + result.sentPacketCount, 0), adapterOutcomes: outcomes
+  } : undefined;
+  return { ok, mode: "merge", replayedAttemptIds: replies.flatMap(reply => reply.replayedAttemptIds),
+    result, adapterOutcomes: outcomes, error: replies.find(reply => reply.error)?.error };
 }

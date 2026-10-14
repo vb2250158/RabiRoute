@@ -2,6 +2,7 @@
 import { userFacingError } from "../userFacingError";
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import SpeechParameterSlider from "../components/SpeechParameterSlider.vue";
+import AutomationAgentTarget from "../components/AutomationAgentTarget.vue";
 import PersonaAgentHooks from "../components/PersonaAgentHooks.vue";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
 import PersonaDesktopPetPanel from "../components/PersonaDesktopPetPanel.vue";
@@ -218,6 +219,11 @@ const automations = computed(() => gateway.value ? automationRulesForGateway(gat
 const messageAutomations = computed(() => automations.value.filter(rule => rule.trigger.type === "message"));
 const scheduledAutomations = computed(() => automations.value.filter(rule => rule.trigger.type === "schedule"));
 const activeAutomation = computed(() => automations.value.find(rule => rule.id === activeAutomationId.value) || null);
+const automationDeliveryIncomplete = computed(() => {
+  const action = activeAutomation.value?.action;
+  return action?.type === "deliver_agent" && action.target?.kind === "session"
+    && (!action.target.agentTargetId || !action.target.sessionId);
+});
 const timerInputEnabled = computed(() => gateway.value ? gatewayAdapterTypes(gateway.value).includes("heartbeat") : false);
 const activeRule = computed(() => rules.value[activeRuleIndex.value] || null);
 const variableEntries = computed(() => Object.entries(gateway.value?.routeVariables || {})
@@ -763,7 +769,7 @@ function setAutomationActionType(type: "deliver_agent" | "run_script"): void {
   patchAutomation({
     action: type === "run_script"
       ? { type: "run_script", scriptPath: "", arguments: [], timeoutSeconds: 300 }
-      : { type: "deliver_agent", message: "", template: "" }
+      : { type: "deliver_agent", target: { kind: "recipient", recipientId: "primary" }, message: "", template: "" }
   });
 }
 
@@ -2650,7 +2656,7 @@ onBeforeUnmount(() => {
             <div class="automation-editor-section-body">
               <div class="automation-section-heading">
                 <strong>触发后做什么</strong>
-                <span>Agent 投递和脚本执行分别记录结果，互不冒充成功。</span>
+                <span>选择接收消息的 Agent，或运行人格脚本。</span>
               </div>
               <v-btn-toggle
                 :model-value="activeAutomation.action.type"
@@ -2665,6 +2671,8 @@ onBeforeUnmount(() => {
               </v-btn-toggle>
 
               <template v-if="activeAutomation.action.type === 'deliver_agent'">
+                <AutomationAgentTarget v-if="gateway" :gateway="gateway" :model-value="activeAutomation.action.target"
+                  @update:model-value="target => patchAutomationAction({ target })" />
                 <v-textarea
                   v-if="activeAutomation.trigger.type === 'schedule'"
                   class="mt-4"
@@ -2727,7 +2735,8 @@ onBeforeUnmount(() => {
             @click="store.removeAutomation(activeAutomation.id); automationDialog = false"
           >删除规则</v-btn>
           <v-spacer />
-          <v-btn color="primary" @click="automationDialog = false">完成</v-btn>
+          <span v-if="automationDeliveryIncomplete" class="text-caption mr-2">请选择 Agent 和会话</span>
+          <v-btn color="primary" :disabled="automationDeliveryIncomplete" @click="automationDialog = false">完成</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>

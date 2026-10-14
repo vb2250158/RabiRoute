@@ -10,14 +10,7 @@ const planFeedbackRule: NotificationRule = {
   name: "计划反馈",
   enabled: true,
   routeKinds: [PLAN_FEEDBACK_ROUTE_KIND],
-  template: ""
-};
-
-const memoryConsolidationRule: NotificationRule = {
-  id: MEMORY_CONSOLIDATION_TRIGGER_ID,
-  name: "记忆沉淀",
-  enabled: true,
-  routeKinds: ["manual_trigger"],
+  agentTarget: { kind: "recipient", recipientId: "primary" },
   template: ""
 };
 
@@ -31,7 +24,6 @@ export function systemEventRuleForRouteKind(
   extraValues: ForwardTemplateValues = {}
 ): NotificationRule | undefined {
   if (routeKind === PLAN_FEEDBACK_ROUTE_KIND) return planFeedbackRule;
-  if (routeKind === "manual_trigger" && triggerId === MEMORY_CONSOLIDATION_TRIGGER_ID) return memoryConsolidationRule;
   if (routeKind === "heartbeat" && typeof extraValues.automationRuleId === "string" && extraValues.automationRuleId.trim()) {
     return {
       id: extraValues.automationRuleId.trim(),

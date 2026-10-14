@@ -1,4 +1,4 @@
-import type { CompanionSnapshot } from "@shared/companionActivity";
+import type { CompanionCommand, CompanionSession, CompanionSnapshot } from "@shared/companionActivity";
 export async function companionRequest(roleId: string, action = "", body?: unknown, signal?: AbortSignal): Promise<CompanionSnapshot> {
   const response = await fetch(`/api/roles/${encodeURIComponent(roleId)}/companion${action ? `/${action}` : ""}`, {
     method: body === undefined ? "GET" : "POST", signal: signal || AbortSignal.timeout(action === "review" ? 50_000 : 15_000),
@@ -7,4 +7,12 @@ export async function companionRequest(roleId: string, action = "", body?: unkno
   const result = await response.json();
   if (!response.ok || result.code !== 0) throw new Error(result.message || `HTTP ${response.status}`);
   return result.data;
+}
+
+export function setCompanionMode(roleId: string, session: Pick<CompanionSession, "id" | "revision">,
+  presetId: string, signal?: AbortSignal): Promise<CompanionSnapshot> {
+  const command: CompanionCommand = {
+    sessionId: session.id, revision: session.revision, action: "set-mode", presetId
+  };
+  return companionRequest(roleId, "command", command, signal);
 }

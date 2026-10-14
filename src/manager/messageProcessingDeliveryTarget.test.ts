@@ -26,18 +26,12 @@ function gateway(overrides: Partial<GatewayDefinition> = {}): GatewayDefinition 
     codexThreadId: "primary-thread",
     codexThreadName: "主人格",
     codexCwd: "C:/workspace",
-    messageProcessingAgents: {
-      codex: {
-        enabled: false,
-        model: "gpt-5.6-luna",
-        reasoningEffort: "medium"
-      }
-    },
+    messageProcessingAgents: {},
     ...overrides
   } as GatewayDefinition;
 }
 
-test("disabled message processing routes follow-up work to the primary persona", () => {
+test("unconfigured message processing routes follow-up work to the primary persona", () => {
   assert.deepEqual(resolveMessageProcessingDeliveryTarget(gateway(), messageWorker), {
     agentType: "primary_persona",
     worker: {
@@ -49,11 +43,11 @@ test("disabled message processing routes follow-up work to the primary persona",
   });
 });
 
-test("enabled message processing keeps follow-up work on the managed worker", () => {
+test("configured message processing keeps follow-up work despite a legacy disabled flag", () => {
   assert.deepEqual(resolveMessageProcessingDeliveryTarget(gateway({
     messageProcessingAgents: {
       codex: {
-        enabled: true,
+        enabled: false,
         model: "gpt-5.6-luna",
         reasoningEffort: "medium"
       }
@@ -103,14 +97,14 @@ test("a DSH primary never reuses a persisted Codex message-processing worker", (
   });
 });
 
-test("disabled message processing does not silently select a non-Codex primary adapter", () => {
+test("unconfigured message processing does not silently select a non-Codex primary adapter", () => {
   assert.equal(resolveMessageProcessingDeliveryTarget(gateway({
     agentAdapters: ["codex", "copilotCli"],
     primaryAgentAdapter: "copilotCli"
   }), messageWorker), undefined);
 });
 
-test("disabled message processing requires a complete primary persona binding", () => {
+test("unconfigured message processing requires a complete primary persona binding", () => {
   assert.equal(resolveMessageProcessingDeliveryTarget(gateway({ codexThreadId: "" }), messageWorker), undefined);
   assert.equal(resolveMessageProcessingDeliveryTarget(gateway({ codexCwd: "" }), messageWorker), undefined);
 });

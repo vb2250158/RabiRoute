@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -90,6 +90,7 @@ test("plugin route modules retain every migrated endpoint family", () => {
   assertSourceRetainsRoutes("src/manager/agentAdapterCatalog.ts", [
     "/api/scan/agents",
     "/api/scan/agents/dsh",
+    "/api/scan/agents/grokBot",
     "/api/agent-adapters/catalog"
   ]);
   assertSourceRetainsRoutes("src/manager/agentThreadControlRoutes.ts", [
@@ -134,6 +135,36 @@ test("plugin route modules retain every migrated endpoint family", () => {
     "/api/message/napcat-restart",
     "/api/message/napcat-remove"
   ]);
+});
+
+test("catalog plugin activation owns every dedicated scan route", async () => {
+  const { EffectScope } = await import(pathToFileURL(path.join(root, "plugins/contracts/plugin-sdk/index.mjs")).href);
+  const { activate } = await import(pathToFileURL(path.join(root, "plugins/builtin/io.rabiroute.manager.agent-adapter-catalog/1.0.0/manager.mjs")).href);
+  const effects = new EffectScope();
+  let claims: Array<{ kind: string; path: string; methods: string[] }> = [];
+  let stopped = false;
+  const runtime = {
+    rootDir: root, runtimes: new Map(), managerPluginRoutes: {}, jsonResponse() {},
+    registerManagerPluginHandlerRoutes(_registry: unknown, _instance: string, _prefix: string, _handlers: unknown, routes: typeof claims) {
+      claims = routes;
+      return () => {};
+    },
+    mountAgentAdapterCatalogPlugin(options: { registerRoutes: (instance: string, prefix: string, handlers: unknown[]) => unknown }) {
+      options.registerRoutes("manager:agent-adapter-catalog", "manager.agent-adapter-catalog.api", []);
+      return { service: {}, async stop() { stopped = true; } };
+    },
+    agentAdapterCatalogService: undefined as unknown
+  };
+  await activate({ identity: { instanceId: "manager:agent-adapter-catalog" }, effects,
+    services: { require() { return runtime; }, provide() {} }, contributions: { register() {} } });
+  await effects.commit();
+  for (const url of ["/api/scan/agents", "/api/scan/agents/dsh", "/api/scan/agents/grokBot"]) {
+    const exact = claims.filter(claim => claim.kind === "exact" && claim.path === url);
+    assert.equal(exact.length, 1, `${url} must have one plugin owner`);
+    assert.deepEqual(exact[0].methods, ["GET"]);
+  }
+  await effects.dispose();
+  assert.equal(stopped, true);
 });
 
 test("Agent state reporting is registered by the Agent state plugin package", () => {

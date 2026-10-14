@@ -11,15 +11,24 @@
         "description": "审批前正在调查、分析或补齐方案。",
         "descriptionEn": "Investigation, analysis, or proposal preparation before approval.",
         "order": 0,
-        "palette": { "accent": "#0891b2", "background": "#ecfeff", "foreground": "#0e7490" },
-        "views": ["current", "plans"],
+        "palette": {
+          "accent": "#0891b2",
+          "background": "#ecfeff",
+          "foreground": "#0e7490"
+        },
+        "views": [
+          "current",
+          "plans"
+        ],
         "currentStep": "required",
         "requiresApproval": false,
         "acceptsGuidance": true,
         "setsCompletedAt": false,
         "terminal": false,
         "archiveEligible": false,
-        "legacyAliases": ["进行中"]
+        "legacyAliases": [
+          "进行中"
+        ]
       },
       {
         "key": "待补充信息",
@@ -29,8 +38,15 @@
         "description": "分析已完成，但无法根据现有信息形成可审批的具体方案。",
         "descriptionEn": "Analysis is complete, but the available information is insufficient to form a concrete proposal for approval.",
         "order": 1,
-        "palette": { "accent": "#ea580c", "background": "#fff7ed", "foreground": "#c2410c" },
-        "views": ["current", "plans"],
+        "palette": {
+          "accent": "#ea580c",
+          "background": "#fff7ed",
+          "foreground": "#c2410c"
+        },
+        "views": [
+          "current",
+          "plans"
+        ],
         "currentStep": "required",
         "requiresApproval": false,
         "acceptsGuidance": true,
@@ -47,8 +63,15 @@
         "description": "方案和执行边界已完整，正在等待审批结果。",
         "descriptionEn": "The proposal and execution boundary are complete and awaiting approval.",
         "order": 2,
-        "palette": { "accent": "#ef6c52", "background": "#fff1ed", "foreground": "#b42318" },
-        "views": ["current", "plans"],
+        "palette": {
+          "accent": "#ef6c52",
+          "background": "#fff1ed",
+          "foreground": "#b42318"
+        },
+        "views": [
+          "current",
+          "plans"
+        ],
         "currentStep": "required",
         "requiresApproval": true,
         "acceptsGuidance": false,
@@ -65,8 +88,15 @@
         "description": "审批意见已保存，等待确认投递；不代表所有方案都获准执行。",
         "descriptionEn": "Approval feedback is saved and awaiting confirmed delivery; it does not authorize every proposal.",
         "order": 3,
-        "palette": { "accent": "#0d9488", "background": "#f0fdfa", "foreground": "#0f766e" },
-        "views": ["current", "plans"],
+        "palette": {
+          "accent": "#0d9488",
+          "background": "#f0fdfa",
+          "foreground": "#0f766e"
+        },
+        "views": [
+          "current",
+          "plans"
+        ],
         "currentStep": "required",
         "requiresApproval": false,
         "acceptsGuidance": false,
@@ -83,8 +113,15 @@
         "description": "审批通过或用户直接授权后正在实施。",
         "descriptionEn": "Implementation after approval or direct user authorization.",
         "order": 4,
-        "palette": { "accent": "#16a34a", "background": "#eaf8ef", "foreground": "#15803d" },
-        "views": ["current", "plans"],
+        "palette": {
+          "accent": "#16a34a",
+          "background": "#eaf8ef",
+          "foreground": "#15803d"
+        },
+        "views": [
+          "current",
+          "plans"
+        ],
         "currentStep": "required",
         "requiresApproval": false,
         "acceptsGuidance": true,
@@ -101,8 +138,15 @@
         "description": "开发侧工作完成，正在等待目标包和进包证明。",
         "descriptionEn": "Development work is complete and awaiting the target package and inclusion proof.",
         "order": 5,
-        "palette": { "accent": "#2563eb", "background": "#eff6ff", "foreground": "#1d4ed8" },
-        "views": ["current", "plans"],
+        "palette": {
+          "accent": "#2563eb",
+          "background": "#eff6ff",
+          "foreground": "#1d4ed8"
+        },
+        "views": [
+          "current",
+          "plans"
+        ],
         "currentStep": "required",
         "requiresApproval": false,
         "acceptsGuidance": false,
@@ -119,8 +163,15 @@
         "description": "目标包已确认，正在等待 QA 验收结论。",
         "descriptionEn": "The target package is confirmed and awaiting QA acceptance.",
         "order": 6,
-        "palette": { "accent": "#7c3aed", "background": "#f3e8ff", "foreground": "#6d28d9" },
-        "views": ["current", "plans"],
+        "palette": {
+          "accent": "#7c3aed",
+          "background": "#f3e8ff",
+          "foreground": "#6d28d9"
+        },
+        "views": [
+          "current",
+          "plans"
+        ],
         "currentStep": "required",
         "requiresApproval": false,
         "acceptsGuidance": false,
@@ -137,8 +188,14 @@
         "description": "需要讨论或补充决定后才能继续。",
         "descriptionEn": "Discussion or an additional decision is required before work can continue.",
         "order": 7,
-        "palette": { "accent": "#d97706", "background": "#fffbeb", "foreground": "#92400e" },
-        "views": ["plans"],
+        "palette": {
+          "accent": "#d97706",
+          "background": "#fffbeb",
+          "foreground": "#92400e"
+        },
+        "views": [
+          "plans"
+        ],
         "currentStep": "required",
         "requiresApproval": false,
         "acceptsGuidance": false,
@@ -155,15 +212,23 @@
         "description": "计划保留，但当前不继续推进。",
         "descriptionEn": "The plan is retained but is not currently progressing.",
         "order": 8,
-        "palette": { "accent": "#8795a1", "background": "#eef1f4", "foreground": "#687786" },
-        "views": ["plans"],
+        "palette": {
+          "accent": "#8795a1",
+          "background": "#eef1f4",
+          "foreground": "#687786"
+        },
+        "views": [
+          "plans"
+        ],
         "currentStep": "optional",
         "requiresApproval": false,
         "acceptsGuidance": false,
         "setsCompletedAt": false,
         "terminal": false,
         "archiveEligible": false,
-        "legacyAliases": ["未开始"]
+        "legacyAliases": [
+          "未开始"
+        ]
       },
       {
         "key": "完成",
@@ -173,15 +238,23 @@
         "description": "所有计划步骤和验收条件均已完成。",
         "descriptionEn": "All plan steps and acceptance conditions are complete.",
         "order": 9,
-        "palette": { "accent": "#607d8b", "background": "#eaf4f7", "foreground": "#52677a" },
-        "views": ["plans"],
+        "palette": {
+          "accent": "#607d8b",
+          "background": "#eaf4f7",
+          "foreground": "#52677a"
+        },
+        "views": [
+          "plans"
+        ],
         "currentStep": "forbidden",
         "requiresApproval": false,
         "acceptsGuidance": false,
         "setsCompletedAt": true,
         "terminal": true,
         "archiveEligible": true,
-        "legacyAliases": ["已完成"]
+        "legacyAliases": [
+          "已完成"
+        ]
       },
       {
         "key": "关闭",
@@ -191,15 +264,23 @@
         "description": "计划已取消、失效或由其它计划替代。",
         "descriptionEn": "The plan was cancelled, invalidated, or replaced by another plan.",
         "order": 10,
-        "palette": { "accent": "#475569", "background": "#f1f5f9", "foreground": "#334155" },
-        "views": ["plans"],
+        "palette": {
+          "accent": "#475569",
+          "background": "#f1f5f9",
+          "foreground": "#334155"
+        },
+        "views": [
+          "plans"
+        ],
         "currentStep": "forbidden",
         "requiresApproval": false,
         "acceptsGuidance": false,
         "setsCompletedAt": false,
         "terminal": true,
         "archiveEligible": true,
-        "legacyAliases": ["已归档"]
+        "legacyAliases": [
+          "已归档"
+        ]
       }
     ],
     "roles": {
@@ -250,7 +331,11 @@
       "action": {
         "type": "deliver_agent",
         "message": "",
-        "template": ""
+        "template": "",
+        "target": {
+          "kind": "recipient",
+          "recipientId": "primary"
+        }
       }
     },
     {
@@ -269,7 +354,11 @@
       "action": {
         "type": "deliver_agent",
         "message": "",
-        "template": ""
+        "template": "",
+        "target": {
+          "kind": "recipient",
+          "recipientId": "primary"
+        }
       }
     },
     {
@@ -289,7 +378,11 @@
       "action": {
         "type": "deliver_agent",
         "message": "执行主动智能低频巡检。",
-        "template": ""
+        "template": "",
+        "target": {
+          "kind": "recipient",
+          "recipientId": "primary"
+        }
       }
     },
     {
@@ -308,7 +401,11 @@
       "action": {
         "type": "deliver_agent",
         "message": "",
-        "template": ""
+        "template": "",
+        "target": {
+          "kind": "recipient",
+          "recipientId": "primary"
+        }
       }
     },
     {
@@ -327,7 +424,11 @@
       "action": {
         "type": "deliver_agent",
         "message": "",
-        "template": ""
+        "template": "",
+        "target": {
+          "kind": "recipient",
+          "recipientId": "primary"
+        }
       }
     }
   ]

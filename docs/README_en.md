@@ -6,13 +6,15 @@ English | <a href="./README.md">简体中文</a>
 
 # RabiRoute Documentation
 
+[Controller and remote computer clients](remote-computer-client_en.md): operate multiple computers from the host using terminals, file transfer, window queries and screenshots.
+
 [Connections and API access](connection-access_en.md): authenticate once and use provided APIs.
 
 This directory contains current guides, experimental integrations, designs, research, and historical handoffs. The existence of a file does not mean its feature is complete; check its status before relying on it.
 
 ## Start here
 
-- [Desktop-pet companion mode](companion-mode_en.md) — **Experimental**. Start from the pet's context menu and adapt to the foreground game or player.
+- [Desktop-pet companion mode](companion-mode_en.md) — **Experimental**. Start from the pet's context menu and choose adaptive, watch, play, work or quiet company.
 
 - [Inspect devices and test actions](user-guide/home-devices_en.md) — Inspect device cards, capabilities and states, then test advertised actions.
 - [Workspace plan query](workspace-plan-query_en.md) — Paginated search scoped to host sessions and workspace.
@@ -48,6 +50,7 @@ This directory contains current guides, experimental integrations, designs, rese
 
 - [Delivery templates and ownership](message-delivery-templates_en.md): renderer ownership, scenario differences and historical receipt retirement for developers.
 - [Plan and memory summary search](knowledge-search_en.md)
+- [Automation Agent delivery](automation-agent-delivery_en.md) — Recipient references, session selection, migration and retries.
 - [Routing configuration](routing-configuration_en.md) — **Current guide** for `personaConfig.json`, route kinds, regex, pipelines, and template variables.
 - [Routing and personas](routing-and-personas_en.md) — **Current guide** for route/role boundaries and persona decision templates.
 - [Use a remote persona from a local Route](remote-persona-reference_en.md) — **Experimental in 0.3.19**. Select a source PC and persona in the same RabiLink application, use an automatic handshake for read-only access, and retain local message inputs and the handling Agent. Real two-PC delivery remains pending acceptance.
@@ -60,6 +63,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Pipeline presets](pipeline-presets_en.md) — Agent-session defaults, explicit external targets, and Outbox statuses; FenneNote output is archival compatibility only.
 - [Agent Adapter Integration Lessons](agent-adapter-integration-lessons_en.md) — **Current guide** for duplicate sessions, missing tools, inverted ownership, desktop startup dependencies, and verification.
 - [Standard Agent Adapter Requirements](agent-adapter-standard-requirements_en.md) — **Current guide** for discovery, authentication, tasks, idempotent creation, delivery, results, tools, lifecycle, UI, security, and acceptance.
+- [Grok Bot Agent adapter](grok-bot-agent-adapter_en.md) — **Experimental**. Deliver to exact Bot sessions on the existing cloud owner and verify source identity, idempotency and QQ/Codex replies.
 - [Device Agent adapter contract](device-agent-adapter_en.md) — **Experimental**. Configure glasses as a Route handler, execute on the glasses model, and verify the PC queue, original deliveries, and response receipts.
 - [Delegating a glasses connection to the phone](device-peer-connection_en.md) — **Experimental**. Verify device credentials, independent keys, and a short connection lease so forwarded requests retain the glasses identity.
 - [Exact Agent delivery and formal replies](agent-endpoint-delivery_en.md) — **Experimental**. Verify source and target owners, original delivery receipts, and required replies; handle timeouts and revoked identities.

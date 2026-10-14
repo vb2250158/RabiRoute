@@ -3,7 +3,7 @@ import type { AgentRequestParty } from "./store.js";
 
 /** Full opaque owner identity; names and workspaces are not owner substitutes. */
 export type AgentRequestEndpoint = {
-  kind: "local" | "instance" | "device";
+  kind: "local" | "instance" | "device" | "service";
   managerInstanceId: string;
   instanceId?: string;
   nodeId?: string;
@@ -14,7 +14,7 @@ export type AgentRequestEndpoint = {
 };
 
 export function normalizeAgentRequestEndpoint(value: AgentRequestEndpoint): AgentRequestEndpoint {
-  if (!value || !["local", "instance", "device"].includes(value.kind)) throw new Error("Invalid Agent endpoint kind.");
+  if (!value || !["local", "instance", "device", "service"].includes(value.kind)) throw new Error("Invalid Agent endpoint kind.");
   const required = ["managerInstanceId", "agentId", "provider", "sessionId", "authorizationIncarnation"] as const;
   for (const key of required) {
     if (typeof value[key] !== "string" || !value[key].trim() || value[key] !== value[key].trim() || value[key].length > 4096) {

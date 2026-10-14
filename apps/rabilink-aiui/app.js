@@ -21,6 +21,6 @@ export default {
   },
   globalData: {
     appName: "RabiLink AIUI",
-    releaseVersion: "1.0.35"
+    releaseVersion: "__RABILINK_RELEASE_VERSION__"
   }
 };

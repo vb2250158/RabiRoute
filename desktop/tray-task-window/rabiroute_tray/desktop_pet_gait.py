@@ -75,3 +75,21 @@ def walking_gait(soles: tuple[SoleFrame, ...], source_facing: str = "right") -> 
     if sum(advances) <= 1 or not all(math.isfinite(value) for value in advances):
         return None
     return WalkingGait(tuple(advances), tuple(floor - value for value in floors))
+
+
+def running_gait(soles: tuple[SoleFrame, ...], source_facing: str = "right") -> WalkingGait | None:
+    """Calibrate the run's own planted-sole sweeps without flattening its airborne frames."""
+    gait = walking_gait(soles, source_facing)
+    if gait is None:
+        return None
+    ground = max(frame.floor for frame in soles)
+    spreads = [abs(frame.right[0] - frame.left[0]) for frame in soles
+               if frame.left is not None and frame.right is not None]
+    heights = [frame.occupied_height for frame in soles if frame.occupied_height > 0]
+    tolerance = max(0.5, median(spreads) * 0.04, median(heights) * 0.015 if heights else 0)
+    advances = tuple(value if ground - soles[index - 1].floor <= tolerance
+                     and ground - soles[index].floor <= tolerance else 0.0
+                     for index, value in enumerate(gait.advances))
+    if sum(advances) <= 1:
+        return None
+    return WalkingGait(advances, (0.0,) * len(soles))

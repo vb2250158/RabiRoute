@@ -3,6 +3,8 @@ import { executeEndpointAgentDelivery, type EndpointDeliveryOptions, type Prepar
 import { agentDeliveryPromptHash } from "./agentRequests/store.js";
 export { executeEndpointOnOwner } from "./agentRequests/ownerExecution.js";
 import { AgentReplyStateError } from "./agentRequests/replyError.js";
+import { AgentThreadContractError, normalizeAgentThreadSourceType, type AgentThreadSourceType } from "./agentRequests/requestValidation.js";
+export type { AgentThreadSourceType } from "./agentRequests/requestValidation.js";
 import { promptConfirmsDelivery } from "./agentRequests/rolloutReceipt.js";
 import type { AgentInstanceBinding } from "./shared/agentInstance.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -122,13 +124,6 @@ export type AgentThreadRequest = {
   };
 };
 
-export type AgentThreadSourceType =
-  | "primary_persona"
-  | "message_processing"
-  | "plan_secretary"
-  | "plan_agent"
-  | "agent";
-
 export type AgentThreadSummary = {
   id: string;
   title: string;
@@ -189,6 +184,8 @@ export type AgentThreadRemoteSource = {
 
 export type AgentThreadRequestOptions = {
   endpointDelivery?: EndpointDeliveryOptions;
+  /** Trusted entry-point snapshot of explicit execution fields before managed defaults are applied. */
+  callerExecutionOptions?: EndpointDeliveryOptions["callerExecutionOptions"];
   /** Original HTTP admission fence, captured by the Manager route, never by request JSON. */
   requestAuthority?: () => void;
   remoteSource?: AgentThreadRemoteSource;
@@ -235,6 +232,10 @@ export function agentThreadRequestFailureData(
   error: unknown,
   request: Pick<AgentThreadRequest, "action" | "sourceAgentType"> = {}
 ): Record<string, unknown> {
+  if (error instanceof AgentThreadContractError) {
+    return { action: request.action ?? null, status: "failed", message: error.message,
+      error: { stage: error.stage, field: error.field, code: error.code, message: error.message, repair: error.repair, retryable: false } };
+  }
   const originalMessage = error instanceof Error ? error.message : String(error);
   const archivedTargetIsMissing = request.action === "send"
     && Boolean(request.sourceAgentType)
@@ -382,12 +383,6 @@ function imagePathsForDelivery(value: unknown, cwd: string): string[] {
     if (!stat?.isFile()) throw new Error(`Image attachment does not exist: ${imagePath}`);
     return imagePath;
   }))];
-}
-
-function normalizeAgentThreadSourceType(value: unknown): AgentThreadSourceType {
-  const normalized = optionalText(value, "sourceAgentType", 40) || "agent";
-  if (normalized in agentThreadSourceLabels) return normalized as AgentThreadSourceType;
-  throw new Error("Invalid sourceAgentType. Expected primary_persona, message_processing, plan_secretary, plan_agent, or agent.");
 }
 
 const forbiddenAgentHandoffRoleMarkers = [
@@ -1629,7 +1624,7 @@ async function executeAgentThreadRequest(
           };
     };
 
-    const standaloneDeliveryId = sendSource ? undefined : randomUUID();
+    const standaloneDeliveryId = sendSource ? undefined : optionalText(request.deliveryId, "deliveryId", 200) || randomUUID();
     const renderPrompt = (agentCommunication: AgentCommunicationPreparation | undefined): string => sendSource
       ? renderRabiDelivery({
           messageSource: sendSource.messageSource,

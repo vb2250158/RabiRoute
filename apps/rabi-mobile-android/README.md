@@ -2,7 +2,7 @@
 
 本目录是 RabiLink 手机端和随包构建的眼镜端工程。目录名固定为 `apps/rabi-mobile-android/`，APK、Gradle 工程和移动端录音/语音采集源码统一从这里查找。
 
-[全天记录整合](../../docs/rabilink-all-day-recording.md)（实施中）：唯一 `RabiConversationService` owner 协调手机、眼镜与健康；旧独立本地音频/录像/设备状态 service 已移除，视频为普通 controller，音频使用统一 durable spool，健康 controller 受总许可与窗口限制。[记录界面](../../docs/rabilink-mobile-recording-ui.md)区分当前源码与历史真机证据。视频仅停止后派生音轨，PC 仅转写能力及 worker 围栏已接入源码，不支持则 deferred；captureId 只读关联仅人工刷新 processedAt 最近24小时最多200条，无ID不猜。健康仅统一采集/状态、完整历史仍PC；打开应用即开启记录（仍需麦克风权限；Android 限制开机直接启动麦克风）。源码已取消录音队列容量上限，仅在手机实际剩余空间不足时暂停；历史首次读取后缓存，文件变化才增量更新，不持续显示读取或更新提示。[电脑归档](../../docs/mobile-recording-archive.md)强回执及远程历史、原音频回读校验通过后，源码才允许自动清理手机原件；普通转写或传输 ACK 不能触发清理。旧手机安装版本仍待覆盖升级；不能把源码改动或旧测试视作本轮整体验收。
+[全天记录整合](../../docs/rabilink-all-day-recording.md)（实施中）：唯一 `RabiConversationService` owner 协调手机、眼镜与健康；旧独立本地音频/录像/设备状态 service 已移除，视频为普通 controller，音频使用统一 durable spool，健康 controller 受总许可与窗口限制。[记录界面](../../docs/rabilink-mobile-recording-ui.md)区分当前源码与历史真机证据。视频仅停止后派生音轨，PC 仅转写能力及 worker 围栏已接入源码，不支持则 deferred；captureId 只读关联仅人工刷新 processedAt 最近24小时最多200条，无ID不猜。健康仅统一采集/状态、完整历史仍PC；打开应用只按用户已保存的记录开关恢复采集；开关关闭时不会开启记录（仍需麦克风权限；Android 限制开机直接启动麦克风）。源码已取消录音队列容量上限，仅在手机实际剩余空间不足时暂停；历史首次读取后缓存，文件变化才增量更新，不持续显示读取或更新提示。[电脑归档](../../docs/mobile-recording-archive.md)强回执及远程历史、原音频回读校验通过后，源码才允许自动清理手机原件；普通转写或传输 ACK 不能触发清理。旧手机安装版本仍待覆盖升级；不能把源码改动或旧测试视作本轮整体验收。
 
 [眼镜离线录像与实时预览](../../docs/rabilink-offline-recording.md)：眼镜通过原生直播推到手机，手机本地预览、分段录像与回看；实现及真机验证进行中。
 
@@ -81,7 +81,7 @@ RabiLink Relay
 
 每台安装首次运行时生成自己的稳定 `rabi-phone-*` 设备 ID，重连沿用稳定音频流 ID，并在建立音频流时一并上报 Android 设备型号；多台手机会自动登记到 RabiSpeech，语音服务页面以“型号 + 稳定 ID 后缀”区分它们，后来连接的设备不会抢占已选择的输入。多台可同时在线，但只把用户选中的一路送入 VAD/ASR；所选设备短暂离线时保留选择，网络恢复后自动续接。
 
-新 `AllDayRecordingSettings` 统一 `mode=audio|video|health`、`source=auto`（音频自动选源；音视频固定眼镜）、`processingPolicy=local_only|transcribe|agent`、`running/healthEnabled/uploadEnabled/autoResume/windowStartedAt`。升级默认 `running=false`；默认转写策略不会自动开启录音。旧启动语音开关不再作为第二份采集真源；`autoResume` 保存用户开关；`running` 表示本次采集请求，运行失败不会取消保存的开关。关闭记录取消自动恢复。开机广播恢复后台服务并提供通知入口；应用进入前台且已有麦克风权限后恢复记录，避免绕过 Android 的开机麦克风限制。系统或厂商禁止自启动时需要允许应用自启动；不会强行弹出界面。
+新 `AllDayRecordingSettings` 统一 `mode=audio|video|health`、`source=auto`（音频自动选源；音视频固定眼镜）、`processingPolicy=local_only|transcribe|agent`、`running/healthEnabled/uploadEnabled/autoResume/windowStartedAt`。升级默认 `running=false`；默认转写策略不会自动开启录音。0.3.57-dev（60）移除了进入应用时自动启用记录的旧行为。聊天目录更新保留旧记录原始归属；没有人格归属的旧消息仍在原旧记录分组显示，不会自动划入新选择的人格。旧启动语音开关不再作为第二份采集真源；`autoResume` 保存用户开关；`running` 表示本次采集请求，运行失败不会取消保存的开关。关闭记录取消自动恢复。开机广播恢复后台服务并提供通知入口；应用进入前台且已有麦克风权限后恢复记录，避免绕过 Android 的开机麦克风限制。系统或厂商禁止自启动时需要允许应用自启动；不会强行弹出界面。
 
 本轮正在将旧全量保存路径改为 Android 声学切句后仅保存有效段；持续采集不等于持续保存，预录仅在内存保留。以下可靠存储与恢复规则针对已接受的有效段和已有历史分片，不要求静音持续落盘。录音设备不按零点或固定 24 小时重启；分片由时长、大小、输入/Route 切换、暂停、播放抑制、进程停止等边界触发。崩溃后启动扫描残留 `.partial` 及其归属 sidecar，偶数字节分片原子封口并保留原序号；归属缺失、metadata 损坏、PCM 缺失或 SHA 不符会将关联文件一起隔离、写带稳定 ID 和相邻序号的 gap，再继续后项。隔离区计入存储水位且不会自动删除，只能在“录音与转写”页由用户确认清理。来电/麦克风占用、卡死退避、播放抑制、写入背压和存储不足也写本机轮转审计。传输队列仍有容量与剩余空间水位；新记录即使 ACK 也不按旧传输保留小时自动回收。未确认或隔离分片不自动删除，无法落盘时累计 `rejectedBytes` 并显示缺口；自动滚动删除及全天容量管理仍待完成。断网时上传线程休眠而声学有效录音继续落盘，联网后按本地序号逐段切换到该分片自己的来源/Route 流补传。RabiSpeech 的本机持久幂等账本以稳定设备、chunk ID、字节数和 SHA-256 记录处理结果；即使 ACK 响应丢失并重启 RabiSpeech，重放也不会再次送入 ASR。
 

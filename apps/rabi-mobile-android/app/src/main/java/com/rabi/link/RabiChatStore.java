@@ -38,7 +38,11 @@ public final class RabiChatStore {
     private final AtomicFile stateFile;
 
     public RabiChatStore(Context context) {
-        File directory = new File(context.getFilesDir(), "rabi-conversation");
+        this(context.getFilesDir());
+    }
+
+    RabiChatStore(File filesDirectory) {
+        File directory = new File(filesDirectory, "rabi-conversation");
         directory.mkdirs();
         chatFile = new AtomicFile(new File(directory, "chat.json"));
         stateFile = new AtomicFile(new File(directory, "conversation-state.json"));
@@ -205,26 +209,6 @@ public final class RabiChatStore {
                 if (value.isEmpty()) state.optJSONObject("drafts").remove(clean(conversationId));
                 else state.optJSONObject("drafts").put(clean(conversationId), value);
                 write(stateFile, state.toString());
-            } catch (Exception error) { throw new IllegalStateException(error); }
-        }
-    }
-
-    /** One-time migration: blank-route history goes to one deterministic conversation, never every conversation. */
-    public void migrateLegacyMessages(String fallbackConversationId) {
-        String target = clean(fallbackConversationId);
-        if (target.isEmpty()) target = RabiConversationRules.LEGACY_CONVERSATION_ID;
-        synchronized (LOCK) {
-            try {
-                JSONArray values = readArray(chatFile);
-                boolean changed = false;
-                for (int i = 0; i < values.length(); i++) {
-                    JSONObject value = values.getJSONObject(i);
-                    if (clean(value.optString("routeProfileId")).isEmpty()) {
-                        value.put("routeProfileId", target);
-                        changed = true;
-                    }
-                }
-                if (changed) write(chatFile, values.toString());
             } catch (Exception error) { throw new IllegalStateException(error); }
         }
     }

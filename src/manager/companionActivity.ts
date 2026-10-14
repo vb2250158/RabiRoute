@@ -2,11 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { atomicRecordingJson } from "./allDayRecording.js";
-import type { CompanionObservation, CompanionPreset, CompanionSession, CompanionSnapshot } from "../shared/companionActivity.js";
+import { COMPANION_ACTIVITY_KINDS, type CompanionCommand, type CompanionObservation, type CompanionPreset, type CompanionSession, type CompanionSnapshot } from "../shared/companionActivity.js";
 import { classifyCompanionScene, readCompanionSceneRules } from "./companionScene.js";
 
 export class CompanionError extends Error { constructor(message: string, readonly statusCode = 400) { super(message); } }
-type Review = { id: string; sessionId: string; revision: number; createdAt: number; expiresAt: number; reactionExpiresAt: number; frame: Buffer | null; replied: boolean };
+type Review = { id: string; sessionId: string; revision: number; createdAt: number; expiresAt: number; reactionExpiresAt: number; frame: Buffer | null; replied: boolean; userInitiated: boolean };
 type Start = { requestId: string; gatewayId: string; presetId: string; title: string; autoReview: boolean; voice: boolean; saveSummary: boolean; observationOwner?: "desktop" | "browser" };
 export type CompanionPorts = {
   presets: CompanionPreset[]; now?(): number;
@@ -30,6 +30,8 @@ export function readCompanionPresets(value: unknown): CompanionPreset[] {
       || row.guidance.length > 4000 || !Number.isInteger(row.reviewSeconds) || row.reviewSeconds < 0 || row.reviewSeconds > 3600
       || !Number.isInteger(row.replyAgeSeconds) || row.replyAgeSeconds < 5 || row.replyAgeSeconds > 300) throw new Error("Invalid companion preset");
     if (row.reactionAgeSeconds !== undefined && (!Number.isInteger(row.reactionAgeSeconds) || row.reactionAgeSeconds < 5 || row.reactionAgeSeconds > row.replyAgeSeconds)) throw new Error("Invalid companion reaction age");
+    if (row.activityKind !== undefined && (row.activityKind === "uncertain" || !COMPANION_ACTIVITY_KINDS.includes(row.activityKind))) throw new Error("Invalid companion preset activity kind");
+    if (row.allowAutomaticReplies !== undefined && typeof row.allowAutomaticReplies !== "boolean") throw new Error("Invalid companion automatic reply setting");
     ids.add(row.id); return { ...row } as CompanionPreset;
   });
 }
@@ -85,10 +87,11 @@ export class CompanionActivity {
         return this.snapshot(roleId);
       }
       if (this.session && this.session.status !== "ended") throw new CompanionError("请先结束当前共同活动", 409);
+      const preset = this.ports.presets.find(p => p.id === input.presetId)!;
       this.session = { id: randomUUID(), roleId, gatewayId: input.gatewayId, presetId: input.presetId, title: input.title.trim(),
         status: "active", revision: 1, startedAt: this.now(), lastObservationAt: null, positionSeconds: null, subtitle: "",
         autoReview: input.autoReview, voice: input.voice, saveSummary: input.saveSummary, notes: [], review: null, error: "",
-        observationOwner: input.observationOwner || "browser", window: null, activityKind: "uncertain", version: 0 };
+        observationOwner: input.observationOwner || "browser", window: null, activityKind: preset.activityKind || "uncertain", version: 0 };
       this.frame = null; this.sequence = -1; this.lastReviewAt = 0; this.lastReviewedFingerprint = ""; this.reviews.clear();
       this.retryAt = 0; this.failures = 0;
       this.starts.set(key, { fingerprint, sessionId: this.session.id });
@@ -96,20 +99,24 @@ export class CompanionActivity {
       this.armLease(); this.publish(); return this.snapshot(roleId);
     });
   }
-  command(roleId: string, input: { sessionId: string; revision: number; action: "pause" | "resume" | "seek" | "stop" | "interrupt"; positionSeconds?: number; pauseReason?: "capture_lost" }): Promise<CompanionSnapshot> {
+  command(roleId: string, input: CompanionCommand): Promise<CompanionSnapshot> {
     return this.serial(async () => {
       const s = this.current(roleId, input.sessionId, input.revision);
-      if (!["pause", "resume", "seek", "stop", "interrupt"].includes(input.action)) throw new CompanionError("Invalid activity action");
+      if (!["pause", "resume", "seek", "stop", "interrupt", "set-mode"].includes(input.action)) throw new CompanionError("Invalid activity action");
       if (input.action === "seek" && (!Number.isFinite(input.positionSeconds) || input.positionSeconds! < 0)) throw new CompanionError("Invalid playback position");
+      if (input.action === "set-mode" && !this.ports.presets.some(p => p.id === input.presetId)) throw new CompanionError("Invalid companion mode");
       if (s.status === "ended") {
         if (input.action !== "stop") throw new CompanionError("活动已结束", 409);
         return this.snapshot(roleId);
       }
+      if (input.action === "set-mode" && input.presetId === s.presetId) return this.snapshot(roleId);
       const oldScope = companionSpeechScope(s);
       // Fence late Agent/TTS completions before awaiting an external service.
       s.revision++; s.review = null; this.reviews.clear(); this.frame = null; this.sequence = -1;
       s.subtitle = ""; s.lastObservationAt = null;
-      s.window = null; s.activityKind = "uncertain";
+      s.window = null;
+      if (input.action === "set-mode") s.presetId = input.presetId!;
+      s.activityKind = this.ports.presets.find(p => p.id === s.presetId)!.activityKind || "uncertain";
       this.lastReviewAt = 0; this.lastReviewedFingerprint = "";
       if (input.action === "pause") { s.status = "paused"; s.pauseReason = input.pauseReason || "user"; }
       if (input.action === "resume") { s.status = "active"; delete s.pauseReason; }
@@ -167,7 +174,8 @@ export class CompanionActivity {
     this.frame = image; s.lastObservationAt = input.capturedAt;
     s.version++;
     s.window = input.window || null;
-    const inferred = classifyCompanionScene(input, this.ports.sceneRules || []);
+    const preset = this.ports.presets.find(p => p.id === s.presetId)!;
+    const inferred = preset.activityKind || classifyCompanionScene(input, this.ports.sceneRules || []);
     if (inferred !== "uncertain" && inferred !== s.activityKind) {
       s.activityKind = inferred;
       this.publish();
@@ -175,7 +183,6 @@ export class CompanionActivity {
     else if (windowChanged) this.publish();
     s.positionSeconds = input.positionSeconds ?? null; s.subtitle = input.subtitle ?? ""; this.armLease();
     const fingerprint = createHash("sha256").update(s.subtitle || image || "").digest("hex");
-    const preset = this.ports.presets.find(p => p.id === s.presetId)!;
     if (s.review?.status === "delivered") {
       const r = this.reviews.get(s.review.id);
       if (r && now > r.expiresAt) { s.review.status = "expired"; this.publish(); }
@@ -206,7 +213,7 @@ export class CompanionActivity {
     const preset = this.ports.presets.find(p => p.id === s.presetId)!;
     const r: Review = { id: randomUUID(), sessionId, revision, createdAt: now,
       expiresAt: now + (userText ? 180 : preset.replyAgeSeconds) * 1000,
-      reactionExpiresAt: now + (userText ? 180 : preset.reactionAgeSeconds ?? preset.replyAgeSeconds) * 1000, frame: this.frame, replied: false };
+      reactionExpiresAt: now + (userText ? 180 : preset.reactionAgeSeconds ?? preset.replyAgeSeconds) * 1000, frame: this.frame, replied: false, userInitiated: Boolean(userText.trim()) };
     this.reviews.clear(); this.reviews.set(r.id, r); this.lastReviewAt = now;
     s.review = { id: r.id, status: "dispatching" }; s.error = "";
     if (userText.trim()) s.notes = [...s.notes, { at: now, speaker: "user" as const, text: userText.trim() }].slice(-40);
@@ -236,11 +243,13 @@ export class CompanionActivity {
     if (!r || r.sessionId !== s.id || r.revision !== s.revision || s.status === "ended" || this.now() > r.expiresAt) throw new CompanionError("回应已过期", 409);
     if (r.replied) return this.snapshot(roleId);
     if (typeof input.text !== "string" || input.text.length > 1000 || input.state !== undefined && !/^[a-z][a-z0-9-]{0,79}$/.test(input.state)) throw new CompanionError("Invalid companion reply");
-    if (input.activityKind !== undefined && !["play", "watch", "other", "uncertain"].includes(input.activityKind)) throw new CompanionError("Invalid activity kind");
-    if (input.activityKind && input.activityKind !== "uncertain") s.activityKind = input.activityKind;
+    if (input.activityKind !== undefined && !COMPANION_ACTIVITY_KINDS.includes(input.activityKind)) throw new CompanionError("Invalid activity kind");
+    const preset = this.ports.presets.find(p => p.id === s.presetId)!;
+    if (preset.activityKind) s.activityKind = preset.activityKind;
+    else if (input.activityKind && input.activityKind !== "uncertain") s.activityKind = input.activityKind;
     this.retryAt = 0; this.failures = 0;
     r.replied = true; s.review = { id: r.id, status: "replied" };
-    const text = this.now() <= r.reactionExpiresAt ? input.text.trim() : "";
+    const text = this.now() <= r.reactionExpiresAt && (r.userInitiated || preset.allowAutomaticReplies !== false) ? input.text.trim() : "";
     if (text) {
       s.notes = [...s.notes, { at: this.now(), speaker: "assistant" as const, text }].slice(-40);
       this.ports.reaction({ roleId, sessionId: s.id, revision: s.revision, text, state: input.state || "attention", expiresAt: r.reactionExpiresAt });

@@ -78,6 +78,26 @@ test("sessionless remote management is allowed while sends require a trusted sou
   }
 });
 
+test("caller execution options are frozen before managed defaults and cannot be supplied by body", async () => {
+  let captured: AgentThreadRequestOptions["callerExecutionOptions"];
+  const routes = createAgentThreadControlRoutes(context({
+    readJsonBody: async <T>() => ({ action: "send", cwd: "C:/chosen", callerExecutionOptions: { model: "forged" } } as T),
+    applyManagedAgentThreadDefaults: body => ({ ...body, model: "route-default" }),
+    agentThreadRequestOptions: (_body, extra) => ({ ...extra } as AgentThreadRequestOptions),
+    handleAgentThreadRequest: async (body, options) => {
+      assert.equal(body.model, "route-default");
+      captured = options.callerExecutionOptions;
+      assert.equal(Object.isFrozen(captured), true);
+      return { statusCode: 200, data: { ok: true } };
+    }
+  }));
+  const res = response();
+  routes.handler(request("POST"), new URL("http://localhost/api/agent/threads"), res);
+  res.emit("close");
+  await routes.stopAcceptingAndDrain();
+  assert.deepEqual(captured, { cwd: "C:/chosen" });
+});
+
 test("application connection does not replace the trusted desktop Agent source", async () => {
   const req = request("POST");
   registerLanAgentBodyGuard(req, () => undefined);

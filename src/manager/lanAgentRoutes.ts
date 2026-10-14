@@ -7,6 +7,8 @@ import type { AgentResourceCatalog } from "./agentResourceCatalog.js";
 import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
 import { listAgentApiOperations } from "./agentApiPolicy.js";
 import { hasAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
+import { handleLanAgentTerminalApi } from "./lanAgentTerminalRoutes.js";
+import { handleLanAgentComputerApi } from "./lanAgentComputerRoutes.js";
 
 export function summarizeAgentCapabilityCoverage(operations = listAgentApiOperations()) {
   const baseline = operations.filter(item => item.help.contractLevel === "baseline").length;
@@ -58,7 +60,9 @@ function agentUnauthorized(
 function writeAsset(response: http.ServerResponse, content: Buffer, assetPath: string): void {
   response.statusCode = 200;
   response.setHeader("cache-control", "no-store");
-  response.setHeader("content-type", assetPath.endsWith(".mjs") ? "text/javascript; charset=utf-8" : "application/json; charset=utf-8");
+  response.setHeader("content-type", assetPath.endsWith(".mjs") ? "text/javascript; charset=utf-8"
+    : assetPath.endsWith(".dll") ? "application/octet-stream"
+    : assetPath.endsWith(".ps1") ? "text/plain; charset=utf-8" : "application/json; charset=utf-8");
   response.setHeader("content-length", content.byteLength);
   response.end(content);
 }
@@ -76,6 +80,14 @@ export function handleLanAgentApi(
     context.jsonResponse(response, nodeAccess.status, { code: -1, error: nodeAccess.error });
     return true;
   }
+  if (handleLanAgentTerminalApi(request, requestUrl, response, {
+    registry: context.registry, readBody: context.readJsonBody, json: context.jsonResponse,
+    authorized: () => hasAuthenticatedConnectionRequest(request) || context.isManagementRequestAuthorized(request, requestUrl)
+  })) return true;
+  if (handleLanAgentComputerApi(request, requestUrl, response, {
+    registry: context.registry, readBody: context.readJsonBody, json: context.jsonResponse,
+    authorized: () => hasAuthenticatedConnectionRequest(request) || context.isManagementRequestAuthorized(request, requestUrl)
+  })) return true;
   if (request.method === "GET" && requestUrl.pathname === "/api/lan-agent/self" && context.authority) {
     const token = typeof request.headers.authorization === "string" ? request.headers.authorization.match(/^Bearer\s+(.+)$/i)?.[1] ?? "" : "";
     const identity = context.enabled?.() === true ? context.authority.authenticate(token) : null;

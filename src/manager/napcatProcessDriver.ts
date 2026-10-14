@@ -9,8 +9,8 @@ const execute = promisify(execFile);
 export async function napcatProcessSnapshot(): Promise<NapcatProcessIdentity[]> {
   if (process.platform === "win32") {
     const { stdout } = await execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
-      "$ErrorActionPreference='Stop'; ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_Process | Where-Object {$_.ExecutablePath -and $_.CreationDate} | ForEach-Object { [pscustomobject]@{pid=$_.ProcessId;parentPid=$_.ParentProcessId;startedAt=$_.CreationDate.ToUniversalTime().ToString('o');executable=$_.ExecutablePath} })"
-    ], { windowsHide: true, timeout: 10000, maxBuffer: 4 * 1024 * 1024 });
+      "$ErrorActionPreference='Stop'; ConvertTo-Json -Compress -InputObject @(Get-CimInstance -Query 'SELECT ProcessId,ParentProcessId,CreationDate,ExecutablePath FROM Win32_Process' | Where-Object {$_.ExecutablePath -and $_.CreationDate} | ForEach-Object { [pscustomobject]@{pid=$_.ProcessId;parentPid=$_.ParentProcessId;startedAt=$_.CreationDate.ToUniversalTime().ToString('o');executable=$_.ExecutablePath} })"
+    ], { windowsHide: true, timeout: 60000, maxBuffer: 4 * 1024 * 1024 });
     return (JSON.parse(stdout || "[]") as NapcatProcessIdentity[]).map(item => ({ ...item,
       napcatRoot: path.basename(item.executable).toLowerCase() === "napcatwinbootmain.exe"
         && fs.existsSync(path.join(path.dirname(item.executable), "NapCatWinBootHook.dll"))

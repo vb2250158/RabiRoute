@@ -14,7 +14,9 @@ test("foreground players and video pages classify before an Agent reply; ordinar
   assert.equal(classifyCompanionScene(observe("msedge.exe", "A video - YouTube"), rules), "watch");
   assert.equal(classifyCompanionScene(observe("chrome.exe", "DSH Web"), rules), "uncertain");
   assert.equal(classifyCompanionScene(observe("Game-Win64-Shipping.exe", "Game"), rules), "play");
-  assert.equal(classifyCompanionScene(observe("code.exe", "Source code"), rules), "other");
+  for (const process of ["code.exe", "devenv.exe", "WindowsTerminal.exe", "WINWORD.EXE", "EXCEL.EXE", "obsidian.exe"])
+    assert.equal(classifyCompanionScene(observe(process, "Work"), rules), "work");
+  assert.equal(classifyCompanionScene(observe("explorer.exe", "Files"), rules), "other");
 });
 test("only a matching foreground video session supplies playback evidence", () => {
   const video = { kind: "video", status: "playing", title: "Episode 2" } as const;
@@ -25,6 +27,7 @@ test("only a matching foreground video session supplies playback evidence", () =
 });
 test("rules must carry bounded evidence", () => {
   assert.throws(() => readCompanionSceneRules({ rules: [{ kind: "watch" }] }));
+  assert.throws(() => readCompanionSceneRules({ rules: [{ kind: "uncertain", titlePattern: "a" }] }));
   assert.throws(() => readCompanionSceneRules({ rules: [{ kind: "watch", titlePattern: "[" }] }));
   assert.throws(() => readCompanionSceneRules({ rules: Array(65).fill({ kind: "watch", titlePattern: "a" }) }));
 });

@@ -2,7 +2,7 @@
   "openapi": "3.0.1",
   "info": {
     "title": "RabiLinkMessage",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "RabiLinkMessage 用于把 Rokid 智能体中的语音或图片上下文转发到电脑端 RabiRoute/Codex，并把回复逐条返回眼镜。使用说明和源码：https://github.com/vb2250158/RabiRoute。这是手动授权版：插件级鉴权请选择 Service token/API key，Header 参数名 X-RabiLink-Token。",
     "contact": {
       "name": "RabiRoute",
@@ -19,11 +19,11 @@
     }
   ],
   "paths": {
-    "/rokid/rabilink/tasks": {
+    "/rokid/rabilink/input": {
       "post": {
         "operationId": "submitRabiLinkTask",
         "summary": "提交 RabiLink 任务",
-        "description": "把用户原话提交到 RabiLink Relay，并立即返回新的 taskId 和当前下行 cursor。每次用户新输入都会创建新 taskId；眼镜端后续优先调用 getRabiLinkMessages，把 submit 返回的 cursor 或 nextCursor 作为 after，持续拉取下行消息并逐条转述。",
+        "description": "将用户完整原话送入通用任务传输。202 accepted 仅确认入队，eventId 标识原始输入；使用返回的 cursor 或 nextCursor 拉取下行消息。",
         "requestBody": {
           "required": true,
           "content": {
@@ -52,52 +52,47 @@
           }
         },
         "responses": {
-          "200": {
-            "description": "成功返回 JSON。",
+          "202": {
+            "description": "输入已入队，尚未由 Agent 完成。",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "required": [
+                    "ok",
+                    "code",
+                    "status",
+                    "eventId",
+                    "cursor",
+                    "nextCursor",
+                    "acceptedAt"
+                  ],
                   "properties": {
-                    "code": {
-                      "type": "integer",
-                      "description": "0 表示成功，非 0 表示失败。"
-                    },
                     "ok": {
-                      "type": "boolean",
-                      "description": "接口是否成功。"
+                      "type": "boolean"
+                    },
+                    "code": {
+                      "type": "integer"
                     },
                     "status": {
                       "type": "string",
-                      "description": "任务状态。"
+                      "enum": [
+                        "accepted"
+                      ]
                     },
-                    "taskId": {
+                    "eventId": {
                       "type": "string",
-                      "description": "任务 ID，后续轮询时使用。"
-                    },
-                    "text": {
-                      "type": "string",
-                      "description": "智能体可以转述给用户的文本。"
-                    },
-                    "answer": {
-                      "type": "string",
-                      "description": "与 text 相同，用于兼容平台。"
-                    },
-                    "reply": {
-                      "type": "string",
-                      "description": "与 text 相同，用于兼容平台。"
-                    },
-                    "content": {
-                      "type": "string",
-                      "description": "与 text 相同，用于兼容平台。"
+                      "description": "原始输入 ID，调试任务查询使用此 ID。"
                     },
                     "cursor": {
-                      "type": "string",
-                      "description": "提交任务时的全局下行游标，可作为 getRabiLinkMessages 第一次调用的 after。"
+                      "type": "string"
                     },
                     "nextCursor": {
-                      "type": "string",
-                      "description": "与 cursor 相同，可作为 getRabiLinkMessages 第一次调用的 after。"
+                      "type": "string"
+                    },
+                    "acceptedAt": {
+                      "type": "integer",
+                      "description": "入队时间，Unix 毫秒。"
                     }
                   }
                 }
@@ -232,7 +227,7 @@
       "get": {
         "operationId": "getRabiLinkTaskMessages",
         "summary": "调试：拉取指定 RabiLink 任务消息列表",
-        "description": "按 submitRabiLinkTask 返回的 taskId 拉取该任务下的新增回复列表。这个接口主要用于调试或只关心单个任务的场景；眼镜端常驻播报优先使用不需要 taskId 的 getRabiLinkMessages。",
+        "description": "按 submitRabiLinkTask 返回的 eventId 拉取该任务下的新增回复列表。这个接口主要用于调试或只关心单个任务的场景；眼镜端常驻播报优先使用不需要 taskId 的 getRabiLinkMessages。",
         "parameters": [
           {
             "name": "taskId",

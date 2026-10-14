@@ -11,6 +11,9 @@ import { normalizeDshBinding, sendDshTask } from "./lib/dsh.mjs";
 import { runManagerCommand } from "./lib/manager-cli.mjs";
 import { createManagerClient } from "./lib/manager-client.mjs";
 import { createEndpointSession } from "./lib/endpoint-session.mjs";
+import { createDesktopPresentation } from "./lib/desktop-presentation.mjs";
+import { TerminalService } from "./lib/terminal-service.mjs";
+import { ComputerService } from "./lib/computer-service.mjs";
 import { instanceAgents, agentCatalog, configureInstanceAgent, resolveInstanceAgent, registerManagedSession } from "./lib/instance-agents.mjs";
 import { normalizeAllowedWorkspaces, resolveRealDirectory, resolveTaskWorkspace } from "./lib/cwd-policy.mjs";
 
@@ -162,14 +165,15 @@ async function bootstrapConfig(configPath, fetcher = fetch) {
 
   const releasePublicKeySha256 = normalizedPublicKeySha256(process.env.RABI_AGENT_RELEASE_PUBLIC_KEY_SHA256);
   const codexThreadId = String(process.env.RABI_AGENT_CODEX_THREAD_ID || "").trim();
-  const agentType = process.env.RABI_AGENT_TYPE?.trim() || "codex-desktop";
-  if (!["codex-desktop", "dsh"].includes(agentType)) throw new Error("Unsupported RABI_AGENT_TYPE.");
+  const agentType = process.env.RABI_AGENT_TYPE?.trim() || undefined;
+  if (agentType && !["codex-desktop", "dsh"].includes(agentType)) throw new Error("Unsupported RABI_AGENT_TYPE.");
   if (agentType === "codex-desktop" && !codexThreadId) throw new Error("RABI_AGENT_CODEX_THREAD_ID is required for Codex Desktop.");
   const dsh = agentType === "dsh" ? normalizeDshBinding({ baseUrl: process.env.RABI_AGENT_DSH_URL, sessionId: process.env.RABI_AGENT_DSH_SESSION_ID }) : undefined;
   const config = {
+    ...previous,
     schemaVersion: 1,
-    agentType,
-    dsh,
+    agentType: agentType || previous?.agentType,
+    dsh: dsh || previous?.dsh,
     managerUrl,
     autoUpdate: previous?.autoUpdate !== false,
     nodeId: previous?.nodeId || String(process.env.RABI_NODE_ID || "").trim() || randomNodeId(),
@@ -179,18 +183,22 @@ async function bootstrapConfig(configPath, fetcher = fetch) {
     managerInstanceId: String(previous?.managerInstanceId || "").trim() || undefined,
     defaultWorkspace,
     allowedWorkspaces,
-    codexDesktop: {
+    codexDesktop: agentType === "codex-desktop" ? {
       threadId: codexThreadId,
       model: String(process.env.RABI_AGENT_CODEX_MODEL || "").trim() || undefined,
       reasoningEffort: String(process.env.RABI_AGENT_CODEX_REASONING || "medium").trim() || "medium"
-    }
+    } : previous?.codexDesktop
   };
   // Reconnecting an installed computer must not erase its Agent identities or permitted projects.
   if (previous) {
     config.agents = instanceAgents(previous);
     config.allowedWorkspaces = normalizeAllowedWorkspaces([...(previous.allowedWorkspaces || []), ...allowedWorkspaces], defaultWorkspace);
   }
-  config.agents = instanceAgents(config);
+  // A computer can enroll without installing or opening an Agent backend.
+  // Existing catalogs retain their identity; an explicit backend opts into binding.
+  config.agents ??= agentType ? instanceAgents(config) : [];
+  delete config.lanLinkToken;
+  delete config.bootstrapTicket;
   let response;
   let body;
   try {
@@ -246,7 +254,7 @@ async function stableLauncher(defaultConfigPath, policy) {
   const index = args.indexOf("--config");
   const requestedConfig = index >= 0 && args[index + 1] ? path.resolve(args[index + 1]) : defaultConfigPath;
   const configPath = fs.existsSync(requestedConfig) ? fs.realpathSync(requestedConfig) : requestedConfig;
-  const forwarded = args.filter((_, i) => i !== index && (index < 0 || i !== index + 1));
+  const forwarded = args.filter((value, i) => value !== "--bootstrap" && i !== index && (index < 0 || i !== index + 1));
   const currentPath = path.join(path.dirname(configPath), "current-release.json");
   const configHash = createHash("sha256").update(process.platform === "win32" ? configPath.toLowerCase() : configPath).digest("hex");
   const diagnosticPath = path.join(path.dirname(configPath), `launcher-control-${configHash}.json`);
@@ -269,7 +277,11 @@ async function stableLauncher(defaultConfigPath, policy) {
     : { host: "127.0.0.1", port: 16384 + (Number.parseInt(configHash.slice(0, 8), 16) % 16384), exclusive: true };
   const { randomBytes, createHmac } = await import("node:crypto");
   const proof = (token, operation, nonce) => createHmac("sha256", token).update(`${configHash}:${operation}:${nonce}`).digest("hex");
-  if (forwarded.includes("--stop")) {
+  const commandIndex = forwarded.indexOf("--command");
+  const requestedCommand = commandIndex >= 0 ? forwarded[commandIndex + 1] : undefined;
+  if (commandIndex >= 0 && !requestedCommand) throw new Error("Launcher command is required.");
+  if (requestedCommand && !["status", "start", "pause", "restart", "reconnect", "enable-startup", "disable-startup"].includes(requestedCommand)) throw new Error("Unsupported launcher command.");
+  if (forwarded.includes("--stop") || requestedCommand) {
     let diagnostic;
     try { diagnostic = JSON.parse(fs.readFileSync(diagnosticPath, "utf8")); } catch { /* Absence is not a lease. */ }
     await new Promise((resolve, reject) => {
@@ -290,13 +302,20 @@ async function stableLauncher(defaultConfigPath, policy) {
         while ((end = buffer.indexOf("\n")) >= 0) {
           const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
           if (!authenticated && line === `owner ${proof(diagnostic.token, "owner", nonce)}`) {
-            authenticated = true; socket.write(`stop ${proof(diagnostic.token, "stop", nonce)}\n`);
+            authenticated = true;
+            socket.write(requestedCommand ? `command ${requestedCommand} ${proof(diagnostic.token, requestedCommand, nonce)}\n` : `stop ${proof(diagnostic.token, "stop", nonce)}\n`);
           } else if (authenticated && line === "stopped") { complete = true; socket.end(); }
+          else if (authenticated && requestedCommand && line.startsWith("{")) {
+            const receipt = JSON.parse(line);
+            process.stdout.write(`${JSON.stringify(receipt)}\n`);
+            if (!receipt.ok) process.exitCode = 1;
+            complete = true; socket.end();
+          }
           else { socket.destroy(new Error("Launcher control identity mismatch; no unauthenticated stop sent.")); return; }
         }
       });
       socket.once("error", error => {
-        if (!authenticated && ["ENOENT", "ECONNREFUSED"].includes(error.code)) { complete = true; resolve(); }
+        if (!requestedCommand && !authenticated && ["ENOENT", "ECONNREFUSED"].includes(error.code)) { complete = true; resolve(); }
         else reject(error);
       });
       socket.once("close", () => complete ? resolve() : reject(new Error("Launcher stop was not acknowledged; result uncertain.")));
@@ -306,6 +325,26 @@ async function stableLauncher(defaultConfigPath, policy) {
   const token = randomBytes(32).toString("hex");
   const children = new Set(); const sockets = new Set(); const stopWaiters = new Set();
   let worker; let candidate; let stopping = false; let released = false; let retryTimer; let stopDeadline; let failures = 0; let workerStartedAt;
+  let presentation; let paused = false; let transitioning = false; let presentationClosing = false; let presentationClosed = false;
+  let publicState = { summary: "正在启动连接器", version: "", agents: "", task: "", managerOrigin: "", busy: false };
+  const recentEvents = [];
+  const startupPlan = () => startupFiles("win32", process.execPath, launcherPath(configPath), configPath, { home: process.env.USERPROFILE, env: process.env });
+  const startupEnabled = () => process.platform === "win32" && fs.existsSync(startupPlan().files[0].path);
+  const publish = (summary) => {
+    if (summary) {
+      publicState.summary = summary;
+      recentEvents.push(`${new Date().toLocaleTimeString()}  ${summary}`);
+      if (recentEvents.length > 120) recentEvents.shift();
+    }
+    presentation?.publish();
+  };
+  const publicSnapshot = () => ({
+    summary: publicState.summary, running: Boolean(worker), busy: transitioning || Boolean(candidate) || publicState.busy,
+    startup: startupEnabled(), canOpenManager: Boolean(publicState.managerOrigin),
+    details: [`状态：${publicState.summary}`, `主程序 PID：${process.pid}`, `连接器 PID：${worker?.pid || "—"}`,
+      `版本：${publicState.version || "待确认"}`, `主机：${publicState.managerOrigin || "待连接"}`,
+      `Agent：${publicState.agents || "待确认"}`, `任务：${publicState.task || "暂无"}`, "", "最近状态记录（最多 120 条）：", ...recentEvents].join("\n")
+  });
   const send = (child, message) => { if (child?.connected) child.send(message, () => undefined); };
   const control = net.createServer(socket => {
     sockets.add(socket);
@@ -323,6 +362,16 @@ async function stableLauncher(defaultConfigPath, policy) {
           if (released) socket.end("stopped\n");
           else { stopWaiters.add(socket); stop(); }
           return;
+        } else if (nonce && /^command (status|start|pause|restart|reconnect|enable-startup|disable-startup) [a-f0-9]{64}$/.test(line)) {
+          const [, action, signature] = line.split(" ");
+          if (signature !== proof(token, action, nonce)) { socket.destroy(); return; }
+          nonce = undefined;
+          const operation = action === "status" ? Promise.resolve()
+            : action.endsWith("-startup") ? desktopCommand("startup", action === "enable-startup") : desktopCommand(action);
+          void operation.then(() => {
+            socket.end(`${JSON.stringify({ ok: true, ...publicSnapshot(), pid: process.pid, workerPid: worker?.pid, trayPid: presentation?.pid })}\n`);
+          }).catch(() => socket.end(`${JSON.stringify({ ok: false, error: "Operation refused or failed; existing owner retained." })}\n`));
+          return;
         } else { socket.destroy(); return; }
       }
     });
@@ -331,6 +380,13 @@ async function stableLauncher(defaultConfigPath, policy) {
   });
   const finishStop = () => {
     if (released || children.size || !control.listening) return;
+    if (presentation && !presentationClosed) {
+      if (!presentationClosing) {
+        presentationClosing = true;
+        void presentation.close().then(() => { presentationClosed = true; finishStop(); });
+      }
+      return;
+    }
     released = true; clearTimeout(stopDeadline);
     // Keep the lease until all owned workers/candidates have actually closed.
     control.close();
@@ -352,11 +408,16 @@ async function stableLauncher(defaultConfigPath, policy) {
   };
   process.once("SIGINT", stop); process.once("SIGTERM", stop);
   const recover = () => {
-    if (stopping) return;
+    if (stopping || paused || transitioning) return;
     if (Date.now() - workerStartedAt >= policy.stableMs) failures = 0;
-    if (failures >= policy.maxRestarts) { process.stderr.write("Rabi Agent launcher restart budget exhausted.\n"); process.exitCode = 1; stop(); return; }
+    if (failures >= policy.maxRestarts) {
+      process.stderr.write("Rabi Agent launcher restart budget exhausted.\n"); process.exitCode = 1;
+      if (presentation?.pid) { paused = true; publish("连接器异常退出；请点击启动重试"); } else stop();
+      return;
+    }
     const wait = Math.min(policy.maxDelayMs, policy.baseDelayMs * 2 ** failures++);
     process.stderr.write(`Rabi Agent launcher recovering after abnormal exit in ${wait} ms.\n`);
+    publish("连接器异常退出，正在恢复");
     retryTimer = setTimeout(startWorker, wait);
   };
   const startChild = (entrypoint, isCandidate = false) => {
@@ -368,7 +429,15 @@ async function stableLauncher(defaultConfigPath, policy) {
     child.on("message", message => {
       if (child === candidate?.child) { send(candidate.owner, { type: "launcherCandidateEvent", requestId: candidate.requestId, event: message }); return; }
       if (child !== worker || stopping) return;
-      if (message?.type === "launcherSpawnCandidate" && !candidate) {
+      if (message?.type === "desktopSnapshot") {
+        for (const key of ["summary", "version", "agents", "task"]) if (typeof message[key] === "string") publicState[key] = message[key].slice(0, 2048);
+        publicState.busy = message.busy === true;
+        try {
+          const origin = new URL(message.managerOrigin);
+          if (["http:", "https:"].includes(origin.protocol) && !origin.username && !origin.password) publicState.managerOrigin = origin.origin;
+        } catch { publicState.managerOrigin = ""; }
+        publish(publicState.summary);
+      } else if (message?.type === "launcherSpawnCandidate" && !candidate) {
         candidate = { owner: child, requestId: message.requestId, child: null };
         candidate.child = startChild(path.resolve(message.entrypoint), true);
       } else if (message?.requestId === candidate?.requestId && candidate.owner === child) {
@@ -391,6 +460,8 @@ async function stableLauncher(defaultConfigPath, policy) {
       if (stopping) { if (!children.size) finishStop(); return; }
       if (child !== worker) return;
       worker = null;
+      publicState.busy = false;
+      if (paused || transitioning) { publish("连接器已停止"); return; }
       if (candidate) {
         const pending = candidate.child;
         candidate = null;
@@ -404,11 +475,64 @@ async function stableLauncher(defaultConfigPath, policy) {
     return child;
   };
   function startWorker() {
-    if (stopping) return;
+    if (stopping || paused) return;
+    publish("正在启动连接器");
     workerStartedAt = Date.now();
     try { worker = startChild(currentEntry()); }
     catch { process.stderr.write("Rabi Agent launcher could not read current release.\n"); recover(); }
   }
+  const haltWorker = async () => {
+    clearTimeout(retryTimer);
+    const owned = worker;
+    if (!owned) return;
+    await new Promise(resolve => {
+      const deadline = setTimeout(() => owned.kill("SIGKILL"), 5000);
+      owned.once("close", () => { clearTimeout(deadline); resolve(); });
+      owned.kill("SIGTERM");
+    });
+  };
+  const desktopCommand = async (action, enabled) => {
+    if (stopping) return;
+    if (action === "exit") { stop(); return; }
+    if (action === "open-manager") {
+      if (!publicState.managerOrigin) return;
+      // Credential-free navigation; the browser uses its own login flow.
+      const child = spawn("explorer.exe", [`${publicState.managerOrigin}/#/rabilink?tab=agents`], { windowsHide: true, stdio: "ignore" });
+      child.on("error", () => publish("无法打开主机管理页"));
+      return;
+    }
+    if (action === "startup") {
+      if (typeof enabled !== "boolean" || process.platform !== "win32") return;
+      const entry = startupPlan().files[0];
+      const bytes = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(entry.content, "utf16le")]);
+      const existing = fs.existsSync(entry.path) ? fs.readFileSync(entry.path) : null;
+      if (existing && !existing.equals(bytes)) throw new Error("Startup belongs to another installation; unchanged.");
+      if (existing) fs.writeFileSync(path.join(path.dirname(configPath), "startup-before-change.vbs"), existing, { mode: 0o600 });
+      if (enabled) {
+        fs.mkdirSync(path.dirname(entry.path), { recursive: true });
+        const temporary = `${entry.path}.${process.pid}.tmp`;
+        fs.writeFileSync(temporary, bytes); fs.renameSync(temporary, entry.path);
+        if (!fs.readFileSync(entry.path).equals(bytes)) throw new Error("Startup readback failed.");
+      } else if (existing) fs.unlinkSync(entry.path);
+      recentEvents.push(`${new Date().toLocaleTimeString()}  ${enabled ? "已开启开机启动" : "已关闭开机启动"}`);
+      if (recentEvents.length > 120) recentEvents.shift();
+      publish();
+      return;
+    }
+    if (transitioning || candidate || publicState.busy) throw new Error("Connector is busy.");
+    if (action === "reconnect") { send(worker, { type: "desktopReconnect" }); return; }
+    if (action === "start") {
+      if (worker) return;
+      paused = false; failures = 0; startWorker(); return;
+    }
+    if (["pause", "restart"].includes(action)) {
+      transitioning = true; paused = true; publish("正在停止连接器");
+      try {
+        await haltWorker();
+        if (action === "restart" && !stopping) { paused = false; failures = 0; startWorker(); }
+      } finally { transitioning = false; publish(); }
+    }
+  };
   try {
     await new Promise((resolve, reject) => {
       const failed = error => { control.removeListener("listening", ready); reject(error); };
@@ -430,6 +554,10 @@ async function stableLauncher(defaultConfigPath, policy) {
     fs.renameSync(temporary, diagnosticPath);
     fs.chmodSync(diagnosticPath, 0o600);
   } catch (error) { stop(); throw error; }
+  presentation = createDesktopPresentation({ currentEntry, snapshot: publicSnapshot, command: desktopCommand,
+    enabled: process.platform === "win32" && policy.desktop !== false,
+    onFailure: (summary, fatal) => { publish(summary); if (fatal) { process.exitCode = 1; stop(); } }
+  });
   startWorker();
 }
 
@@ -443,7 +571,7 @@ function writeLauncher(configPath, policy = { baseDelayMs: 1000, maxDelayMs: 300
   const hookShim = `import fs from "node:fs";\nimport path from "node:path";\nimport { pathToFileURL } from "node:url";\nexport async function requestInstanceHook(input, configPath, fetcher = fetch) {\n const current = JSON.parse(fs.readFileSync(path.join(path.dirname(path.resolve(configPath)), "current-release.json"), "utf8"));\n const module = await import(pathToFileURL(path.join(path.dirname(current.entrypoint), "lib", "instance-hook.mjs")).href);\n return module.requestInstanceHook(input, configPath, fetcher);\n}\n`;
   writeObservedText(path.join(path.dirname(configPath), "hook-client.mjs"), hookShim);
   const launcher = launcherPath(configPath);
-  const code = `import fs from "node:fs";\nimport path from "node:path";\nimport net from "node:net";\nimport { createHash } from "node:crypto";\nimport { spawn } from "node:child_process";\n(${stableLauncher.toString()})(${JSON.stringify(path.resolve(configPath))}, ${JSON.stringify(policy)}).catch(error => { process.stderr.write(error.message + "\\n"); process.exitCode = 1; });\n`;
+  const code = `import fs from "node:fs";\nimport path from "node:path";\nimport net from "node:net";\nimport { createHash } from "node:crypto";\nimport { spawn } from "node:child_process";\nconst createDesktopPresentation = ${createDesktopPresentation.toString()};\nconst startupCommand = ${startupCommand.toString()};\nconst startupFiles = ${startupFiles.toString()};\nconst launcherPath = ${launcherPath.toString()};\n(${stableLauncher.toString()})(${JSON.stringify(path.resolve(configPath))}, ${JSON.stringify(policy)}).catch(error => { process.stderr.write(error.message + "\\n"); process.exitCode = 1; });\n`;
   writeObservedText(launcher, code);
   return launcher;
 }
@@ -549,11 +677,12 @@ function readConfig(configPath) {
   const allowedWorkspaces = normalizeAllowedWorkspaces(config.allowedWorkspaces, defaultWorkspace);
   const codexThreadId = String(config.codexDesktop?.threadId || "").trim();
   const agentType = config.agentType || "codex-desktop";
+  const hasAgentCatalog = Array.isArray(config.agents);
   if (!["codex-desktop", "dsh"].includes(agentType)) throw new Error("Unsupported Rabi Agent type.");
-  if (!nodeCredential || !nodeId || (agentType === "codex-desktop" && !codexThreadId)) throw new Error(`Rabi Agent configuration is incomplete: ${configPath}`);
+  if (!nodeCredential || !nodeId || (!hasAgentCatalog && agentType === "codex-desktop" && !codexThreadId)) throw new Error(`Rabi Agent configuration is incomplete: ${configPath}`);
   return {
     agentType,
-    dsh: agentType === "dsh" ? normalizeDshBinding(config.dsh) : undefined,
+    dsh: agentType === "dsh" && (!hasAgentCatalog || config.dsh) ? normalizeDshBinding(config.dsh) : undefined,
     schemaVersion: 1,
     agents: config.agents,
     managerUrl,
@@ -739,7 +868,20 @@ class RabiAgentRuntime {
     this.updatePromise = null;
     this.candidatePending = UPDATE_CANDIDATE;
     this.taskQueue = Promise.resolve();
+    this.pendingOperations = 0;
     this.taskByThread = new Map();
+    this.desktopSummary = "正在连接主机";
+    this.lastDesktopTask = "";
+    this.agentExecutionStatus = new Map();
+    this.computer = new ComputerService({ onChange: () => this.publishDesktop() });
+    this.terminals = new TerminalService({ defaultCwd: config.defaultWorkspace,
+      emit: event => {
+        if ((this.socket?.bufferedAmount || 0) > 1048576) {
+          void this.terminals.execute({ action: "close", terminalId: event.terminalId }).catch(() => undefined);
+          return;
+        }
+        this.send({ type: "terminalEvent", event });
+      }, onChange: () => this.publishDesktop() });
     this.desktop = new CodexDesktopIpcClient({ onBroadcast: event => this.handleDesktopBroadcast(event) });
   }
 
@@ -747,18 +889,58 @@ class RabiAgentRuntime {
     this.connect();
   }
 
+  publishDesktop(summary = this.desktopSummary) {
+    this.desktopSummary = summary;
+    let managerOrigin = "";
+    try { managerOrigin = new URL(this.config.managerUrl).origin; } catch { }
+    const payload = {
+      type: "desktopSnapshot", summary, version: AGENT_VERSION, managerOrigin,
+      agents: instanceAgents(this.config).map(agent => `${agent.provider}: ${agent.sessionId || "未绑定"} · ${this.agentExecutionStatus.get(agent.agentId) || "运行未核验"}`).join("\n") || "未关联智能体 · 电脑接口可用",
+      task: `${this.lastDesktopTask}${this.terminals.activeCount ? ` · ${this.terminals.activeCount} 个终端` : ""}`,
+      busy: this.draining || Boolean(this.updatePromise) || this.pendingOperations > 0 || this.taskByThread.size > 0 || this.terminals.activeCount > 0 || this.computer.activeCount > 0
+    };
+    if (process.connected) process.send?.(payload, () => undefined);
+    return payload;
+  }
+
+  reconnect() {
+    if (this.stopped || this.draining || this.updatePromise) return;
+    clearTimeout(this.retryTimer); this.retryTimer = null;
+    clearInterval(this.heartbeatTimer);
+    const oldSocket = this.socket;
+    this.socket = null; this.connected = false;
+    oldSocket?.close(1000, "User requested reconnect");
+    void this.terminals.closeAll();
+    this.retryMs = RECONNECT_BASE_MS;
+    this.publishDesktop("正在重新连接主机");
+    if (this.connecting) this.scheduleReconnect(); else this.connect();
+  }
+
+  queueOperation(operation) {
+    this.pendingOperations++;
+    this.publishDesktop();
+    this.taskQueue = this.taskQueue.catch(() => undefined).then(operation).finally(() => {
+      this.pendingOperations--;
+      this.publishDesktop();
+    });
+  }
+
   stop() {
     if (this.stopped) return;
     this.stopped = true;
+    this.publishDesktop("连接器已停止");
     clearTimeout(this.retryTimer);
     clearInterval(this.heartbeatTimer);
     this.socket?.close(1000, "Rabi Agent stopping");
     this.desktop.close();
+    void this.terminals.stop();
+    this.computer.stop();
   }
 
   async connect() {
     if (this.stopped || this.connectionPaused || this.connecting || this.socket?.readyState === WebSocket.OPEN || this.socket?.readyState === WebSocket.CONNECTING) return;
     this.connecting = true;
+    this.publishDesktop("正在连接主机");
     let socket;
     try {
       await verifyNodeIdentity(this.config, fetch, fs.existsSync(this.configPath) ? this.configPath : undefined);
@@ -776,14 +958,16 @@ class RabiAgentRuntime {
     socket.addEventListener("close", () => {
       if (this.socket !== socket) return;
       this.connected = false;
+      void this.terminals.closeAll();
       clearInterval(this.heartbeatTimer);
       this.scheduleReconnect();
     });
     socket.addEventListener("error", () => undefined);
   }
 
-  scheduleReconnect() {
+  scheduleReconnect(error) {
     if (this.stopped || this.connectionPaused || this.retryTimer) return;
+    this.publishDesktop(error ? "主机连接失败，等待重连" : "主机连接已断开，等待重连");
     const delay = this.retryMs;
     this.retryMs = Math.min(RECONNECT_MAX_MS, this.retryMs * 2);
     this.retryTimer = setTimeout(() => {
@@ -794,6 +978,11 @@ class RabiAgentRuntime {
   }
 
   send(payload) {
+    if (payload.taskId && ["ackTask", "progress", "taskResult"].includes(payload.type)) {
+      const labels = { ackTask: "已接收", progress: "已投递", taskResult: payload.status === "completed" ? "已完成" : "失败" };
+      this.lastDesktopTask = `${String(payload.taskId).slice(0, 160)} · ${labels[payload.type]}`;
+      this.publishDesktop();
+    }
     if (this.socket?.readyState !== WebSocket.OPEN) return false;
     this.socket.send(JSON.stringify(payload));
     return true;
@@ -803,6 +992,21 @@ class RabiAgentRuntime {
     let message;
     try { message = JSON.parse(String(raw)); } catch { return; }
     if (!message || typeof message !== "object") return;
+    if (message.type === "manageAgent" && ["terminal", "computer"].includes(message.operation)) {
+      if (!this.connected || this.stopped) return;
+      const socket = this.socket;
+      const params = message.params || {};
+      const createsResource = ["open", "upload.begin", "windows.list", "screen.capture", "file.read", "file.stat"].includes(params.action);
+      const operation = (this.draining || this.candidatePending) && createsResource
+        ? Promise.reject(new Error("Connector update is in progress; no new computer operation was started."))
+        : (message.operation === "terminal" ? this.terminals : this.computer).execute(params);
+      void operation.then(result => {
+        if (this.socket === socket && this.connected) this.send({ type: "managementResult", requestId: message.requestId, result });
+      }).catch(error => {
+        if (this.socket === socket && this.connected) this.send({ type: "managementResult", requestId: message.requestId, error: boundedText(error.message, 512) });
+      });
+      return;
+    }
     if (message.type === "authenticated") {
       this.send({
         type: "hello",
@@ -812,6 +1016,8 @@ class RabiAgentRuntime {
           platform: `${process.platform}-${process.arch}`,
           agentTypes: [...new Set(instanceAgents(this.config).map(agent => agent.provider))],
           agents: agentCatalog(this.config),
+          terminalShells: process.platform === "win32" ? ["cmd", "powershell"] : [],
+          computerCapabilities: ["files", ...(process.platform === "win32" ? ["windows", "screenshots"] : [])],
           allowedWorkspaces: this.config.allowedWorkspaces
         }
       });
@@ -819,6 +1025,7 @@ class RabiAgentRuntime {
     }
     if (message.type === "connected") {
       this.connected = true;
+      this.publishDesktop("已连接主机");
       this.retryMs = RECONNECT_BASE_MS;
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = setInterval(() => this.send({ type: "heartbeat" }), HEARTBEAT_MS);
@@ -848,7 +1055,7 @@ class RabiAgentRuntime {
       const originalSocket = this.socket;
       const originalCredential = this.config.nodeCredential;
       const preparedOperation = ["prepared_delivery", "reconcile_prepared_delivery"].includes(message.operation);
-      this.taskQueue = this.taskQueue.catch(() => undefined).then(async () => {
+      this.queueOperation(async () => {
         try {
           if (preparedOperation && (!this.connected || this.socket !== originalSocket || this.config.nodeCredential !== originalCredential)) throw new Error("Original Manager connection changed before queued delivery execution.");
           let result;
@@ -936,17 +1143,19 @@ class RabiAgentRuntime {
       this.send({ type: "taskResult", taskId, status: known.status, summary: known.summary || "Rabi Agent deduplicated an already terminal task.", error: known.error });
       return;
     }
-    this.taskQueue = this.taskQueue.catch(() => undefined).then(() => this.runTask(task));
+    this.queueOperation(() => this.runTask(task));
   }
 
   async runTask(task) {
     const taskId = String(task.taskId || "").trim();
     if (this.stateStore.state.tasks[taskId]) return;
+    let activeAgent;
     this.send({ type: "ackTask", taskId });
     rememberTask(this.stateStore, taskId, { status: "acknowledged" });
     try {
       if (!this.connected) throw new Error("Manager connection is unavailable; queued task execution was refused.");
       const agent = resolveInstanceAgent(this.config, task);
+      activeAgent = agent;
       const cwd = resolveTaskWorkspace(task.cwd || agent.workspace, { defaultWorkspace: this.config.defaultWorkspace, allowedWorkspaces: this.config.allowedWorkspaces });
       const prompt = String(task.message || "").trim();
       if (!prompt) throw new Error("Rabi Agent task message is empty.");
@@ -956,6 +1165,7 @@ class RabiAgentRuntime {
       if (!authority.ok || authority.uncertain || authority.identityChanged) throw new Error("Manager no longer authorizes this Agent task; host execution was refused.");
       if (agent.provider === "dsh") {
         await sendDshTask(agent.dsh, prompt);
+        this.agentExecutionStatus.set(agent.agentId, "宿主已接收");
         this.send({ type: "progress", taskId, summary: "DSH accepted the message into the bound session queue. Read the response in that DSH session." });
         rememberTask(this.stateStore, taskId, { status: "progress" });
         return;
@@ -969,9 +1179,11 @@ class RabiAgentRuntime {
         model: agent.model,
         reasoningEffort: agent.reasoningEffort
       });
+      this.agentExecutionStatus.set(agent.agentId, "宿主已接收");
       this.send({ type: "progress", taskId, summary: "Codex Desktop accepted the task. Rabi Agent is waiting for its task state." });
       rememberTask(this.stateStore, taskId, { status: "progress" });
     } catch (error) {
+      if (activeAgent) this.agentExecutionStatus.set(activeAgent.agentId, "投递失败");
       const message = boundedText(error instanceof Error ? error.message : String(error));
       for (const [threadId, ownerTaskId] of this.taskByThread) if (ownerTaskId === taskId) this.taskByThread.delete(threadId);
       this.send({ type: "taskResult", taskId, status: "failed", error: message });
@@ -999,7 +1211,14 @@ class RabiAgentRuntime {
 
   update(requestedVersion) {
     if (this.updatePromise) return this.updatePromise;
-    this.updatePromise = this.performUpdate(requestedVersion).finally(() => { this.updatePromise = null; });
+    this.updatePromise = this.performUpdate(requestedVersion).then(result => {
+      this.desktopSummary = this.connected ? "已连接主机" : "等待连接主机";
+      return result;
+    }, error => {
+      this.desktopSummary = "连接器更新失败，保留当前版本";
+      throw error;
+    }).finally(() => { this.updatePromise = null; this.publishDesktop(); });
+    this.publishDesktop("正在更新连接器");
     return this.updatePromise;
   }
 
@@ -1010,7 +1229,7 @@ class RabiAgentRuntime {
       const queue = this.taskQueue;
       let settled = false;
       queue.catch(() => undefined).then(() => { settled = true; });
-      while (!settled || this.taskByThread.size) {
+      while (!settled || this.taskByThread.size || this.terminals.activeCount || this.computer.activeCount) {
         if (this.stopped || Date.now() >= deadline) throw new Error("Running Agent work did not drain within 30 seconds; the current version remains active.");
         await new Promise(resolve => setTimeout(resolve, 25));
       }
@@ -1128,13 +1347,13 @@ async function main() {
     initializeCurrentRelease(CONFIG_PATH, fileURLToPath(import.meta.url));
     const startup = await configureCurrentUserStartup(fileURLToPath(import.meta.url), CONFIG_PATH, { activate: true });
     if (startup.diagnostic) process.stderr.write(`Rabi Agent startup: ${startup.diagnostic}\n`);
-    // Bootstrap installs login startup, then enters the same stable owner now.
-    const child = spawn(process.execPath, [launcherPath(CONFIG_PATH), "--run", "--config", CONFIG_PATH], { stdio: "inherit", windowsHide: true });
-    child.once("error", error => { process.stderr.write(`Launcher failed: ${error.code}\n`); process.exitCode = 1; });
-    child.once("exit", code => { process.exitCode = code ?? 1; });
-    const stop = () => child.kill("SIGTERM");
-    process.once("SIGINT", stop); process.once("SIGTERM", stop);
+    // Enrollment enters the owner in this process, rather than retaining a
+    // second long-lived bootstrap parent above the stable main program.
+    await stableLauncher(CONFIG_PATH, { baseDelayMs: 1000, maxDelayMs: 30000, maxRestarts: 5, stableMs: 60000 });
     return;
+  }
+  if (process.env.RABI_AGENT_SUPERVISED === "1" && (!process.send || !process.connected)) {
+    throw new Error("Owned connector requires the main program IPC; no independent child was started.");
   }
   const loadedConfig = readConfig(CONFIG_PATH);
   if (!UPDATE_CANDIDATE && process.env.RABI_AGENT_SUPERVISED !== "1") {
@@ -1176,6 +1395,7 @@ async function main() {
       clearTimeout(deadline);
       runtime.candidatePending = false;
       runtime.send({ type: "updateResult", status: "updated" });
+      runtime.publishDesktop("已连接主机");
     };
     process.on("message", message => {
       if (message?.type === "launcherCommitted" && process.env.RABI_AGENT_SUPERVISED === "1") finishCommit();
@@ -1203,6 +1423,10 @@ async function main() {
     runtime.start();
   }
   const stop = () => { runtime.stop(); if (process.connected) process.disconnect(); };
+  process.on("message", message => {
+    if (message?.type === "desktopRefresh") runtime.publishDesktop();
+    if (message?.type === "desktopReconnect") runtime.reconnect();
+  });
   if (process.env.RABI_AGENT_SUPERVISED === "1") process.once("disconnect", () => runtime.stop());
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);

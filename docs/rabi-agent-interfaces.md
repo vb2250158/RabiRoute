@@ -1067,13 +1067,48 @@ Agent 可以主动向自己已经掌握的群号或企业微信群 chat id 发�
 
 ## Codex 正式线程桥
 
+### 外部 Agent 的来源与稳定投递 ID
+
+`POST /api/agent/threads` 的 `action=send` 同时核对发送方和接收方。顶层 `agentAdapter/threadId` 是目标；`sourceThreadId` 和 `messageSource` 是调用方的真实来源，不能填成目标任务来补齐必填字段。
+
+普通 Agent 来源至少提供 `messageSource={type:"agent",agentAdapter,sessionId,sessionName}`、`sourceThreadId`、`sourceAgentType` 和 `responsePolicy`。`sourceThreadId` 必须等于 `messageSource.sessionId`，来源 adapter 必须属于实际 owner；`plan.sourceAgent` 只有在该真实来源可核验时才成立。Owner 核对会话并提供当前名称；正文声明、显示名称和职责标签本身不证明归属。已鉴权连接有可信来源身份时，声明必须与原身份一致，不从正文中的 `remoteSource` 或 owner 字段建立认证。
+
+会话 ID是不透明字符串，必须原样保留完整值。`send` 的端点校验要求非空、无首尾空白、最多 4096 个 JavaScript 字符单元，且不含 NUL、换行或 Unicode 行分隔符；不要求特殊编码，也不从 ID格式推测 provider。来源缺失返回 HTTP 400，`error.code=AGENT_SESSION_ID_REQUIRED`、`error.field=sourceThreadId` 和具体 `repair`；目标错误对应 `threadId`。
+
+`system` 是消息展示语义，不能作为公共 `send` 的免来源入口。只有 `eventType/eventName/eventId` 而没有可核验 Agent owner 的系统请求会失败；补上目标 Codex ID也不能建立来源。内部 Manager 系统事件沿用各自的受管事件合同。无来源会话的外部服务须接入自己的服务 owner，不伪造 Desktop 会话。Grok Bot 的配置、发现和传输边界见 [Grok Bot Agent 端接入](grok-bot-agent-adapter.md)。
+
+Bot → Codex 的来源示例如下。占位值须替换成各自 owner 确认的完整会话 ID；两者是不同端点：
+
+```json
+{
+  "action": "send",
+  "agentAdapter": "codex",
+  "threadId": "<目标 Codex 完整会话 ID>",
+  "deliveryId": "bot-to-codex-check-001",
+  "prompt": "请确认本次合同复测消息已收到。",
+  "sourceThreadId": "<scan 返回的来源 Bot 完整会话 ID>",
+  "sourceAgentType": "agent",
+  "messageSource": {
+    "type": "agent",
+    "agentAdapter": "grokBot",
+    "sessionId": "<scan 返回的来源 Bot 完整会话 ID>",
+    "sessionName": "Integration Bot session"
+  },
+  "responsePolicy": "none"
+}
+```
+
+公共端点投递支持请求体中的稳定 `deliveryId`：非空、无首尾空白、最多 100 字符，不含 NUL 或行分隔符。调用方在第一次请求前保存 ID及完整载荷；Manager 按真实来源隔离幂等键，持久保存原目标、请求摘要、执行参数和受理状态。相同来源、ID及载荷复用原操作；同 ID不同目标或载荷返回 `AGENT_DELIVERY_ID_CONFLICT`，`error.field=deliveryId`。省略该字段会为每次新请求生成新 ID，不能保证调用方重复 POST 幂等。计划 API 的 `Idempotency-Key` 头不替代此字段。
+
+返回的 `communication.deliveryId` 是 Manager 的实际投递标识，可能与调用方提交的 ID不同；保存它供 `reconcile_delivery` 使用。`prepared` 的同键重试可以完成尚未开始的原投递，`dispatching` 只核对原回执，已提交则返回原结果。HTTP 202、超时或 `delivery_unconfirmed` 后保留原载荷与 ID，不换键重发、不启动另一轮；查询或核对仍缺证据时保留未确认状态。正式回复继续带原 `inReplyToRequestId/result/nextAction`，不把回复关联 ID当成来源会话。
+
 ### 已认证的跨实例端点投递（实验实现）
 
 `send`、`required` 正式回复和远端到远端往返复用同一个 Manager 请求存储。目标使用 `instanceBinding={instanceId,agentId}`，并保留原始完整 `threadId`；正式回复参数由 Manager 放入目标消息，不要自行换目标或缩短会话 ID。权限按已启用的 Provider 通用校验，但执行能力单独检查；没有精确 owner 投递能力时拒绝，不创建替代 Runtime。
 
 Manager 先从原始认证 lease 解析来源和精确目标，再持久化准备结果、渲染一次信封、记录正在投递、交给目标 owner，最后核对回执并提交。完整身份包含 `managerInstanceId`、`instanceId`、`nodeId`、`agentId`、`provider`、原始会话 ID 和授权 incarnation；回执还须匹配原 `deliveryId`、generation 和 prompt hash。连接、Agent 启停、catalog 或批准绑定变化后，不复用旧授权。
 
-发送结果不确定时返回 HTTP 202、`delivery_unconfirmed`、`retryable=false`，保留原正式回复 reservation。不得重复调用 `send` 以重发正文。`reconcile_delivery` 只核对原目标的传输证据；启动、连接、catalog、回执和 turn 事件触发有去重的恢复，不轮询、不换 owner、不自动重投。连接器只持有传输 attempt/receipt，不另建业务请求账本。Codex 可从同一个 Desktop owner 的原始用户消息恢复精确 hash；其它 Provider 缺少可读接受证据时继续待确认。
+发送结果不确定时返回 HTTP 202、`delivery_unconfirmed`、`retryable=false`，保留原正式回复 reservation。不得换投递 ID重发正文。`reconcile_delivery` 只核对原目标的传输证据；启动、连接、catalog、回执和 turn 事件触发有去重的恢复，不轮询、不换 owner、不自动重投。连接器只持有传输 attempt/receipt，不另建业务请求账本。Codex 可从同一个 Desktop owner 的原始用户消息恢复精确 hash；其它 Provider 缺少可读接受证据时继续待确认。
 
 该合同目前是源码实施与回归范围，不代表运行节点已经更新，更不代表两台真实电脑已通过端到端验收。
 
@@ -1174,7 +1209,7 @@ POST <managerBaseUrl>/api/agent/threads
 }
 ```
 
-所有带有非空 `prompt` 的 `create` 和 `send` 都必须提供 `messageSource`。字段 `type` 必填，统一支持四种消息源：
+所有带有非空 `prompt` 的 `create` 和 `send` 都必须提供 `messageSource`。字段 `type` 必填，消息信封可以展示四种来源；公共 Agent `send` 的 owner 核验仍按上节执行：
 
 | `messageSource.type` | 必填身份 | 可选补充 |
 | --- | --- | --- |
@@ -1200,7 +1235,7 @@ RabiRoute 渲染后的正文固定从以下两段开始，相关上下文和回�
 
 Agent 调用线程桥时通常使用 `type=agent`。`agentAdapter` 填实际 Agent 端，例如 `codex`、`dsh`、`copilotCli`、`marvis` 或 `astrbot`；`sessionName` 和完整 `sessionId` 都不能省略。Agent 间投递还必须提供自己的完整 `sourceThreadId`、`sourceAgentType` 和 `responsePolicy`，且 `messageSource.sessionId` 必须等于 `sourceThreadId`。`sourceAgentType` 可为 `primary_persona`、`message_processing`、`plan_secretary`、`plan_agent` 或通用的 `agent`；`responsePolicy` 只能是 `required` 或 `none`。选择 `required` 时还必须填写 `responseInstruction`，Manager 会生成 `requestId` 并把正式回复参数写进目标任务收到的内容。选择 `none` 表示本次投递不要求目标返回。
 
-带正文的 `create` 与 `send` 使用同一来源核对规则。`type=agent` 时两者都必须提供 `sourceThreadId`；Manager 从实际 Codex Desktop 或 DSH owner 读取来源会话名称并覆盖调用方提交的旧名称。计划进展、审批和 QA 等 Manager 计划事件只显示计划名称和计划 ID；只有计划任务本人回传结果时才附带并核对 `sourceAgent`。
+带正文的 `create` 与 `send` 使用同一来源核对规则。`type=agent` 时两者都必须提供 `sourceThreadId`；Manager 从实际 owner 读取来源会话名称并覆盖调用方提交的旧名称，包括 Codex Desktop、DSH 和 Grok Bot 服务 owner。计划进展、审批和 QA 等 Manager 计划事件只显示计划名称和计划 ID；只有计划任务本人回传结果时才附带并核对 `sourceAgent`。
 
 `contextBlocks` 排在消息内容之后，`controlBlocks` 再排在上下文之后。回传参数与本次必要的发送要求放入控制块；通用协作段不再注入。两个字段都不能包含 `[消息源]`、`[消息内容]` 或 `[投递源]`。旧 `[投递源]`、旧嵌套信封和旧 Agent 回复会自动迁移；旧重放记录无法还原来源时显示“历史投递记录”，不猜来源身份。
 
@@ -1269,8 +1304,8 @@ Agent 间 `create` 与 `send` 投递时，Manager 按 `messageSource.agentAdapte
 
 安全边界：
 
-- `create` / `send` 的 `cwd` 必须属于当前 RabiRoute 已配置的 Codex 或 DSH 工作区；不能用线程桥在任意路径启动会话。
-- 所有带有非空 `prompt` 的 `create` / `send` 都必须提供完整 `messageSource`。`type=agent` 时，`agentAdapter`、`sessionName` 和完整 `sessionId` 都必填；Agent 互投还必须提供可核对的 `sourceThreadId`，并保证它与 `messageSource.sessionId` 相同。`sourceAgentType` 只声明发送方当前职责，任务名以 Desktop 查询结果为准。
+- Codex / DSH 的 `create` / `send` 使用当前 RabiRoute 已配置的工作区，不能在任意路径启动会话。Grok Bot 服务会话不要求本地文件目录；不为它伪造 `cwd` 或启动本地 Runtime。
+- 所有带有非空 `prompt` 的 `create` / `send` 都必须提供完整 `messageSource`。`type=agent` 时，`agentAdapter`、`sessionName` 和完整 `sessionId` 都必填；Agent 互投还必须提供可核对的 `sourceThreadId`，并保证它与 `messageSource.sessionId` 相同。`sourceAgentType` 只声明发送方当前职责，任务名以对应 owner 查询结果为准。
 - Agent 互投正文必须是针对目标任务重新编写的交接内容。Manager 拒绝含 `[rabi:bind]`、消息处理 Agent 初始化或计划秘书初始化的正文，也拒绝来源与目标为同一任务；整份注入上下文不能跨任务复制。消息处理 Agent 的任务 ID如果与主人格 ID相同，消息池会拒绝初始化和投递。
 - `sandbox` 字段仅为接口兼容参数，不能覆盖目标 Desktop 任务的模型、工具、沙箱或审批；这些能力以 Desktop owner 为唯一真源。
 - 创建线程使用固定的调查边界；没有明确实施授权时，只能调查、整理证据和输出方案。
@@ -1865,3 +1900,15 @@ Agent 使用 `POST /api/desktop-pet/roles/:roleId/motion`，并用
 - 已初始化账本缺失 `conversation/current.jsonl` 或归档索引，或读取遇到损坏索引、损坏记录、缺失分卷时，历史查询与发送前检查返回错误；先恢复原账本，再重试。首次使用且尚无账本时仍可按空会话完成确认。已有发送回执保持原幂等处理。
 
 计划审批反馈和 FenneNote 纯播放属于结构化动作，不使用聊天索引。既有来源引用、图片、发送前事实核验、文风、长度和幂等检查继续生效；聊天索引核对不改变接口权限。
+
+## 远端终端接口
+
+主机 Agent 同样可调用。`GET /api/lan-agent/instances/:instanceId/terminals/:terminalId?after=0&waitMs=25000` 返回 `terminal`、`outputEvents`、`nextOutputSequence`、`truncated`；没有新输出时事件等待，最长 25 秒。文件互传、窗口查询和截图使用 `POST /api/lan-agent/instances/:instanceId/computer`，不依赖关联 Agent 后端；完整参数和限制见[电脑接口](remote-computer-client.md)。
+
+现有已鉴权连接可使用以下接口；Windows 连接器 0.2.2 默认提供 CMD 和 PowerShell。
+
+- GET /api/lan-agent/instances/:instanceId/terminals：返回 data.shells 和 data.sessions；会话含 terminalId、shell、cwd、state、pid、createdAt、nextInputSequence 和退出码。
+- POST 同一路径：action 为 open、list、get、input、resize 或 close。open 需要稳定 UUID terminalId、shell=cmd|powershell，可选已有绝对目录 cwd；get/close 需要 terminalId；input 需要 terminalId、从 1 递增的 sequence 和最多 16 KiB 的 data；resize 需要 cols=20..400、rows=5..200。
+- GET /api/lan-agent/instances/:instanceId/terminals/:terminalId/events?after=0：SSE 输出。事件含递增 sequence、type=output|exit|gap|disconnected，以及 data 或 exitCode。after 仅用于断线后补漏，不用于轮询；早于 256 KiB 有界缓存时先返回 gap。
+
+同一 terminalId 的重复 open 只返回原会话，类型或目录不同拒绝。input 同序号同内容只返回原接收事实；不同内容、过期回执或跳号拒绝。接收成功仅表示输入已交给原终端，不表示命令成功执行。超时、5xx 或断线后使用 list/get 核对 nextInputSequence，不更换 ID、自动重建或重发。窗口关闭仅断开查看；close 结束会话及子程序。节点连接变化结束原终端和旧流。命令与输出不进入人格、计划或持久日志。容量与进程生命周期见 [连接器说明](../apps/rabi-agent/README.md)。
