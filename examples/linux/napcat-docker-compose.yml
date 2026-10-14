@@ -1,0 +1,28 @@
+# NapCat (QQ OneBot) headless example for RabiRoute on Linux.
+# Optional template; copy it to a working directory and edit before use.
+#   docker compose -f napcat-docker-compose.yml up -d
+# Then log in once by scanning the QR code in the WebUI (http://127.0.0.1:6099/webui)
+# or `docker compose logs -f napcat`. Do not commit tokens or the data directories.
+services:
+  napcat:
+    image: mlikiowa/napcat-docker:latest
+    container_name: rabiroute-napcat
+    restart: unless-stopped
+    environment:
+      # Match your host user so mounted files stay writable (see `id -u` / `id -g`).
+      - NAPCAT_UID=${NAPCAT_UID:-1000}
+      - NAPCAT_GID=${NAPCAT_GID:-1000}
+      # Optional: QQ number for quick login after the first scan.
+      # - ACCOUNT=<your-bot-qq>
+    ports:
+      # Bind to loopback only; RabiRoute on the same host reaches them via 127.0.0.1.
+      - "127.0.0.1:3000:3000"   # OneBot HTTP Server  -> RabiRoute napcatInstances[].httpUrl
+      - "127.0.0.1:3001:3001"   # OneBot WebSocket Server (optional)
+      - "127.0.0.1:6099:6099"   # NapCat WebUI         -> RabiRoute napcatInstances[].webuiUrl
+    extra_hosts:
+      # Lets the NapCat WebSocket Client reach RabiRoute on the host:
+      # ws://host.docker.internal:<gatewayPort>
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./napcat/config:/app/napcat/config
+      - ./napcat/qq:/app/.config/QQ

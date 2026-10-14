@@ -10,6 +10,7 @@ import { NapcatState, NapcatLifecycleError, type NapcatLoginInfo, type NapcatHea
 import { KeyedAsyncLock } from "../shared/keyedAsyncLock.js";
 import { NapcatWebuiSessions, type NapcatWebuiSession } from "./napcatWebuiSession.js";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
+import { adaptLinuxNapcatLaunch, filterLinuxNapcatProcesses, LINUX_NAPCAT_APP_DIR, type LinuxProcessEntry } from "./napcatPlatform.js";
 
 const execFileAsync = promisify(execFile);
 const napcatLifecycleLock = new KeyedAsyncLock();
@@ -258,7 +259,26 @@ type NormalizedNapcatOneBotNetworkConfig = {
   };
 };
 
+function readLinuxProcessEntries(): LinuxProcessEntry[] {
+  const entries: LinuxProcessEntry[] = [];
+  try {
+    for (const name of fs.readdirSync("/proc")) {
+      if (!/^\d+$/.test(name)) continue;
+      try {
+        const cmdline = fs.readFileSync(`/proc/${name}/cmdline`, "utf8").split("\0").filter(Boolean).join(" ");
+        let exe: string | undefined;
+        try { exe = fs.readlinkSync(`/proc/${name}/exe`); } catch { exe = undefined; }
+        entries.push({ pid: Number(name), cmdline, exe });
+      } catch { /* Process exited or is not inspectable. */ }
+    }
+  } catch { /* /proc unavailable. */ }
+  return entries;
+}
+
 async function detectNapcatProcesses(): Promise<Array<{ name: string; pid: string }>> {
+  if (process.platform === "linux") {
+    return filterLinuxNapcatProcesses(readLinuxProcessEntries());
+  }
   if (process.platform !== "win32") {
     return [];
   }
@@ -374,7 +394,7 @@ function normalizeQuickLoginArgs(args: string[], botUserId: string): string[] {
   return ["-q", botUserId, ...args.filter((arg) => arg !== botUserId)];
 }
 
-export function resolveNapcatLaunchPlan(instance: NapCatInstanceDefinition, rootDir: string): NapcatLaunchPlan {
+export function resolveNapcatLaunchPlan(instance: NapCatInstanceDefinition, rootDir: string, platform: NodeJS.Platform = process.platform): NapcatLaunchPlan {
   const command = instance.launchCommand?.trim();
   if (!command) {
     throw new Error("这个 NapCat 实例还没有填写启动命令。");
@@ -415,6 +435,18 @@ export function resolveNapcatLaunchPlan(instance: NapCatInstanceDefinition, root
     || launcherBasename === "napcatwinbootmain.exe"
     ? path.dirname(resolvedPath)
     : cwd;
+  if (platform !== "win32") {
+    const adapted = adaptLinuxNapcatLaunch({
+      commandPath: resolvedPath,
+      args: resolvedArgs,
+      botUserId,
+      hasDisplay: Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY),
+      xvfbRun: ["/usr/bin/xvfb-run", "/bin/xvfb-run", "/usr/local/bin/xvfb-run"].find(file => fs.existsSync(file))
+    });
+    resolvedPath = adapted.commandPath;
+    resolvedArgs = adapted.args;
+    warnings.push(...adapted.warnings);
+  }
   const commandLine = [resolvedPath, ...resolvedArgs].map(commandLineQuote).join(" ");
   return {
     command,
@@ -521,7 +553,9 @@ function findNapcatConfigDir(shellDir: string): string | null {
   if (cached && fs.existsSync(cached)) return cached;
   const direct = [
     path.join(resolvedShellDir, "napcat", "config"),
-    path.join(resolvedShellDir, "config")
+    path.join(resolvedShellDir, "config"),
+    // Linux QQ + NapCat.Shell (official installer): <QQ root>/resources/app/app_launcher/napcat/config
+    path.join(resolvedShellDir, LINUX_NAPCAT_APP_DIR, "config")
   ];
   for (const item of direct) {
     if (fs.existsSync(item)) {
