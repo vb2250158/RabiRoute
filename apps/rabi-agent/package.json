@@ -1,9 +1,9 @@
 {
   "name": "rabi-agent",
-  "version": "0.2.0",
+  "version": "0.2.2",
   "private": true,
   "type": "module",
-  "description": "Headless LAN worker that forwards RabiRoute tasks to a bound local Codex Desktop or DSH session.",
+  "description": "Single-owner LAN connector with a Windows tray child, forwarding tasks to bound Codex Desktop or DSH sessions.",
   "engines": {
     "node": ">=22.13.0"
   },

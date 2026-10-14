@@ -124,7 +124,7 @@ function collectReleaseAssetPaths(root: string, relative = ""): string[] {
       return collectReleaseAssetPaths(root, child);
     }
     if (!entry.isFile()) return [];
-    if (entry.name === "package.json" || entry.name.endsWith(".mjs") || (child.startsWith("dist/agent-hooks/") && /\.(json|md)$/.test(entry.name))) return [normalizeAssetPath(child)];
+    if (entry.name === "package.json" || entry.name.endsWith(".mjs") || ["desktop/tray.ps1", "desktop/computer.ps1", "terminal/host.ps1"].includes(child) || /^dist\/native\/(terminal|computer|tray)-[a-f0-9]{64}\.dll$/.test(child) || (child.startsWith("dist/agent-hooks/") && /\.(json|md)$/.test(entry.name))) return [normalizeAssetPath(child)];
     return [];
   });
 }

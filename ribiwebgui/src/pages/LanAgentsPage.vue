@@ -3,6 +3,7 @@ import { userFacingError } from "../userFacingError";
 import { computed, onMounted, ref } from "vue";
 import type { AgentInstance } from "@shared/agentInstance";
 import InstanceAgentSettings from "../components/InstanceAgentSettings.vue";
+import RemoteTerminalDialog from "../components/RemoteTerminalDialog.vue";
 import { routeScopedAdaptersPath } from "../routeScopedNavigation";
 import { copyTextToClipboard } from "../clipboard";
 import { managerAccessToken } from "../managerApi";
@@ -52,11 +53,13 @@ const copied = ref(false);
 const enrollmentOpen = ref(false);
 const issuingTicket = ref(false);
 const ticketExpiresAt = ref("");
+const linkAgentOnInstall = ref(false);
 const authorization = ref<{ nodes: Array<{ nodeId: string; enabledAgentIds: string[] }> }>();
 const managerUrl = ref(window.location.origin);
 const connectionToken = ref("");
 const connectionAvailable = ref(false);
 const namingInstance = ref<AgentInstance>();
+const terminalInstance = ref<AgentInstance>();
 const nodeName = ref("");
 const savingName = ref(false);
 const nameError = ref("");
@@ -103,7 +106,7 @@ async function copyInstallPrompt(): Promise<void> {
     const data = body.data as { ticket?: string; expiresAt?: number };
     if (!data?.ticket || !Number.isFinite(data.expiresAt) || data.expiresAt! <= Date.now()) throw new Error("未取得有效的一次性接入票据，请刷新后重试。");
     ticketExpiresAt.value = new Date(data.expiresAt!).toISOString();
-    await copyTextToClipboard(buildLanAgentBootstrapPrompt({ managerUrl: managerUrl.value, token: data.ticket, expiresAt: ticketExpiresAt.value, publicKeySha256: releasePublicKeySha256.value }));
+    await copyTextToClipboard(buildLanAgentBootstrapPrompt({ managerUrl: managerUrl.value, token: data.ticket, expiresAt: ticketExpiresAt.value, publicKeySha256: releasePublicKeySha256.value, linkAgent: linkAgentOnInstall.value }));
     copied.value = true;
   } catch (reason) {
     error.value = userFacingError(reason);
@@ -189,6 +192,7 @@ onMounted(() => { void refresh(); });
     </div>
 
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
+    <RemoteTerminalDialog v-if="terminalInstance" :key="terminalInstance.instanceId" :instance-id="terminalInstance.instanceId" :name="terminalInstance.name || terminalInstance.address || '远端电脑'" :token="connectionToken" @close="terminalInstance = undefined" />
     <v-dialog :model-value="!!namingInstance" :persistent="savingName" max-width="480" @update:model-value="value => { if (!value && !savingName) namingInstance = undefined; }">
       <v-card title="修改名称">
         <v-card-text>
@@ -206,9 +210,10 @@ onMounted(() => { void refresh(); });
         <ol class="pl-5 mb-3">
           <li>复制接入提示词。</li>
           <li>粘贴给目标电脑上的智能体，让它下载并配置环境。</li>
-          <li>电脑上线后，在路由的智能体执行端中选择该实例与智能体。</li>
+          <li>电脑上线后可直接使用电脑接口；需要消息执行时再添加关联智能体。</li>
         </ol>
         <v-text-field v-model="managerUrl" label="目标电脑可访问的 RabiRoute 地址" hint="使用本机 RabiRoute 的局域网地址" density="compact" persistent-hint class="mb-2" />
+        <v-checkbox v-model="linkAgentOnInstall" label="同时关联安装时使用的智能体" hint="默认只接入电脑客户端，Codex/DSH 无需启动；以后可添加智能体。" persistent-hint density="compact" />
         <v-btn prepend-icon="mdi-content-copy" color="primary" :loading="issuingTicket" :disabled="loading || issuingTicket || !connectionAvailable || !connectionToken || !releasePublicKeySha256" @click="copyInstallPrompt">复制接入提示词</v-btn>
         <p v-if="!connectionAvailable" class="text-caption mt-2">接入其他电脑前，请在设置中开启局域网访问，然后重启 RabiRoute。</p>
         <p class="text-caption mt-2">提示词含一次性票据，30 分钟内有效，成功兑换后立即失效。只粘贴到目标电脑的私密智能体任务中，无需手填管理密钥。</p>
@@ -246,8 +251,9 @@ onMounted(() => { void refresh(); });
               </v-expansion-panel-text>
             </v-expansion-panel>
           </v-expansion-panels>
-          <p v-if="!instance.agents.length" class="text-body-2 my-3">此实例还没有智能体。</p>
+          <p v-if="!instance.agents.length" class="text-body-2 my-3">{{ instance.local ? '此实例还没有智能体。' : '未关联智能体；电脑客户端在线时仍可使用电脑接口，可稍后添加智能体。' }}</p>
           <template v-if="!instance.local">
+            <v-btn class="mt-3 mr-2" :disabled="!instance.connected" prepend-icon="mdi-console" @click="terminalInstance = instance">远端终端</v-btn>
             <v-btn class="mt-3 mr-2" :disabled="!instance.connected" @click="addingInstanceId = addingInstanceId === instance.instanceId ? '' : instance.instanceId">添加智能体</v-btn>
             <InstanceAgentSettings v-if="addingInstanceId === instance.instanceId" class="mt-4" :instance="instance" :agent="{ agentId: '', name: 'Agent', provider: instance.agents[0]?.provider || 'codex-desktop', enabled: true }" @saved="addingInstanceId = ''; refresh()" />
             <v-btn v-for="node in nodes.filter(node => node.nodeId === instance.instanceId)" :key="node.nodeId" class="mt-3" :disabled="!node.connected" :loading="updatingNodeId === node.nodeId" @click="requestUpdate(node)">更新连接程序至 {{ releaseVersion }}</v-btn>

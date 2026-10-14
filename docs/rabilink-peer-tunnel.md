@@ -54,7 +54,7 @@ PC 和手机统一使用 `bootstrap-application`；旧 `bootstrap-speech`、`boo
 
 ## 通用接口
 
-控制入口使用 Manager 主监听端口及现有 WebGUI 鉴权，支持本机局域网地址和已授权的远程浏览器；独立的对端发现端口不提供 WebGUI 控制访问。
+控制入口使用 Manager 主监听端口与已建立的连接身份。已鉴权 Agent 无需再提供 WebGUI 密钥或绑定人格、工作区、Route，即可使用设备目录、选择和通用 HTTP 接口；浏览器继续使用现有 WebGUI 鉴权。WebSocket Upgrade 在进入同一通用接口前完成相同来源接纳，并在异步连接及数据收发时复核原连接；撤销后不回退为本机身份。独立的对端发现端口不提供 WebGUI 控制访问。
 
 调用方的 Manager 入口：
 

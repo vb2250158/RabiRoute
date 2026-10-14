@@ -54,7 +54,7 @@ Read-only acceptance mode still rejects selection changes and tunnels.
 
 ## Generic API
 
-Control endpoints use the main Manager listener and existing WebGUI authorization, including local LAN addresses and authorized remote browsers. The separate peer-discovery listener does not expose WebGUI control access.
+Control endpoints use the main Manager listener and the authenticated connection identity. An authenticated Agent can use the device directory, selection and generic HTTP API without a second WebGUI key or a persona, workspace or Route binding; browsers retain existing WebGUI authentication. WebSocket Upgrade performs the same source admission before entering the generic API and rechecks the original connection during asynchronous connection setup and data transfer; revoked requests never fall back to local identity. The separate peer-discovery listener does not expose WebGUI control access.
 
 ~~~text
 GET  /api/rabilink/peer/servers
