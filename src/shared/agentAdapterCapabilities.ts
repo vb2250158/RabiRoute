@@ -1,4 +1,4 @@
-export const agentAdapterTypes = ["codex", "copilotCli", "marvis", "astrbot", "dsh", "workbuddy", "antigravity", "deviceAgent"] as const;
+export const agentAdapterTypes = ["codex", "copilotCli", "marvis", "astrbot", "dsh", "workbuddy", "antigravity", "deviceAgent", "grokBot"] as const;
 
 export type AgentAdapterType = typeof agentAdapterTypes[number];
 
@@ -124,6 +124,14 @@ const deviceAgentCapabilities: AgentAdapterCapabilities = Object.freeze({
 });
 
 const manifestsByAgentType = Object.freeze({
+  grokBot: Object.freeze({
+    type: "grokBot",
+    label: "Grok Bot",
+    maturity: "experimental",
+    transport: Object.freeze({ protocol: "http", mode: "grok-bot-owner" }),
+    host: Object.freeze({ name: "Grok Bot cloud owner", required: true }),
+    capabilities: Object.freeze({ managedTasks: Object.freeze<Partial<Record<ManagedTaskAgentFeature, true>>>({ agentThreads: true }) })
+  }),
   deviceAgent: Object.freeze({
     type: "deviceAgent",
     label: "设备 Agent（实验）",

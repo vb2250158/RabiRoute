@@ -88,6 +88,7 @@ function cloneManifest(manifest: AgentAdapterManifest): AgentAdapterCatalogSnaps
 
 function fullScanOptions(requestUrl: URL): AgentScanOptions {
   return {
+    ...grokBotScanOptions(requestUrl),
     codexLimit: queryNumber(requestUrl.searchParams.get("codexLimit"), 200),
     codexOffset: queryNumber(requestUrl.searchParams.get("codexOffset"), 0),
     codexQuery: requestUrl.searchParams.get("codexQuery") || undefined,
@@ -95,6 +96,17 @@ function fullScanOptions(requestUrl: URL): AgentScanOptions {
     dshOffset: queryNumber(requestUrl.searchParams.get("dshOffset"), 0),
     dshQuery: requestUrl.searchParams.get("dshQuery") || undefined,
     dshBaseUrl: requestUrl.searchParams.get("dshBaseUrl") || undefined
+  };
+}
+
+function grokBotScanOptions(requestUrl: URL): AgentScanOptions {
+  return {
+    grokBotLimit: queryNumber(requestUrl.searchParams.get("grokBotLimit"), 100),
+    grokBotOffset: queryNumber(requestUrl.searchParams.get("grokBotOffset"), 0),
+    grokBotQuery: requestUrl.searchParams.get("grokBotQuery") || undefined,
+    grokBotAgentId: requestUrl.searchParams.get("grokBotAgentId") || undefined,
+    grokBotProfilePath: requestUrl.searchParams.get("grokBotProfilePath") || undefined,
+    grokBotBackendUrl: requestUrl.searchParams.get("grokBotBackendUrl") || undefined
   };
 }
 
@@ -197,6 +209,15 @@ export class AgentAdapterCatalogService {
 
   workerStatus(): AgentAdapterCatalogWorkerPoolStatus {
     return this.workerPool.status();
+  }
+
+  scanGrokBot(options: AgentScanOptions = {}, signal?: AbortSignal): Promise<Record<string, unknown>> {
+    this.assertAccepting();
+    return this.track(this.runControlled(
+      controller => this.workerPool.query<Record<string, unknown>>({
+        kind: "grokBot", rootDir: this.rootDir, runtimes: this.runtimeSnapshots(), options
+      }, { signal: controller.signal }), signal
+    ));
   }
 
   activeCount(): number {
@@ -322,12 +343,15 @@ export function handleAgentAdapterCatalogApi(
 
   const allScan = requestUrl.pathname === "/api/scan/agents";
   const dshScan = requestUrl.pathname === "/api/scan/agents/dsh";
-  if (request.method !== "GET" || (!allScan && !dshScan)) return false;
+  const grokBotScan = requestUrl.pathname === "/api/scan/agents/grokBot";
+  if (request.method !== "GET" || (!allScan && !dshScan && !grokBotScan)) return false;
 
   const requestLifetime = responseAbortSignal(request, response);
   const operation = dshScan
     ? context.service.scanDsh(dshScanOptions(requestUrl), requestLifetime.signal)
-    : context.service.scanAll(fullScanOptions(requestUrl), requestLifetime.signal);
+    : grokBotScan
+      ? context.service.scanGrokBot(grokBotScanOptions(requestUrl), requestLifetime.signal)
+      : context.service.scanAll(fullScanOptions(requestUrl), requestLifetime.signal);
   void operation
     .then(data => {
       if (!response.writableEnded && !response.destroyed) context.jsonResponse(response, 200, data);

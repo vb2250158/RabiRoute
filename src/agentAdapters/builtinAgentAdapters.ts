@@ -13,9 +13,11 @@ import {
   type AgentAdapterType
 } from "../shared/agentAdapterCapabilities.js";
 import { notifyAstrbot } from "./astrbotAdapter.js";
+import { createGrokBotAdapter } from "./grokBotAdapter.js";
 import type { AgentAdapter, AgentAdapterDefinition } from "./contracts.js";
 
 const factories = Object.freeze({
+  grokBot: (): AgentAdapter => createGrokBotAdapter(),
   deviceAgent: (): AgentAdapter => createDeviceAgentAdapter(configuredInstanceBinding("deviceAgent")),
   codex: (): AgentAdapter => ({
     type: "codex",

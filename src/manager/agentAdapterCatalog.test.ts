@@ -27,6 +27,25 @@ async function settleRoute(): Promise<void> {
   await new Promise<void>(resolve => setImmediate(resolve));
 }
 
+test("Grok explicit scan forwards its paging and profile only to the dedicated worker", async () => {
+  const calls: unknown[] = [];
+  const service = {
+    scanAll: () => { throw new Error("unexpected full scan"); },
+    scanDsh: () => { throw new Error("unexpected DSH scan"); },
+    async scanGrokBot(options: unknown, signal?: AbortSignal) {
+      calls.push(options); assert.equal(signal instanceof AbortSignal, true);
+      return { agents: { grokBot: { sessions: [] } } };
+    }
+  } as unknown as AgentAdapterCatalogService;
+  const statuses: number[] = [];
+  assert.equal(handleAgentAdapterCatalogApi(request(), new URL("http://localhost/api/scan/agents/grokBot?grokBotLimit=25&grokBotOffset=50&grokBotQuery=existing&grokBotAgentId=owner&grokBotProfilePath=C%3A%2Fprofiles%2Fa&grokBotBackendUrl=https%3A%2F%2Fapi2.cursor.sh%2F"), response(), {
+    service, jsonResponse: (_res, status) => { statuses.push(status); }
+  }), true);
+  await settleRoute();
+  assert.deepEqual(statuses, [200]);
+  assert.deepEqual(calls, [{ grokBotLimit: 25, grokBotOffset: 50, grokBotQuery: "existing", grokBotAgentId: "owner", grokBotProfilePath: "C:/profiles/a", grokBotBackendUrl: "https://api2.cursor.sh/" }]);
+});
+
 test("Agent adapter catalog exposes catalog, scan, and Hook update routes", async () => {
   const calls: Array<{ kind: string; options?: unknown; signal?: AbortSignal }> = [];
   const responses: RecordedResponse[] = [];
@@ -102,6 +121,12 @@ test("Agent adapter catalog exposes catalog, scan, and Hook update routes", asyn
 
   assert.deepEqual(calls.map(call => call.kind), ["hooks:codex", "catalog", "all", "dsh"]);
   assert.deepEqual(calls[2]?.options, {
+    grokBotAgentId: undefined,
+    grokBotBackendUrl: undefined,
+    grokBotLimit: 100,
+    grokBotOffset: 0,
+    grokBotProfilePath: undefined,
+    grokBotQuery: undefined,
     codexLimit: 12,
     codexOffset: 3,
     codexQuery: undefined,

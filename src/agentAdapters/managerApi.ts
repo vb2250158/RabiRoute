@@ -25,6 +25,8 @@ import {
 } from "../dshDiscovery.js";
 import { scanWorkbuddyAgentAdapter } from "./workbuddyManagerApi.js";
 import { scanAntigravityAgentAdapter } from "./antigravityManagerApi.js";
+import { scanGrokBotAgentAdapter as scanNativeGrokBotAgentAdapter } from "./grokBotManagerApi.js";
+import { DEFAULT_GROK_BOT_BACKEND_URL, grokBotProfilePath } from "./grokBotClient.js";
 
 type AgentMaturity = AgentAdapterMaturity;
 
@@ -41,6 +43,8 @@ export type AgentScanModel = {
 
 export type AgentScanSession = {
   id?: string;
+  /** Native owner identity supplied by the adapter, separate from its opaque session ID. */
+  ownerId?: string;
   name: string;
   projectPath?: string;
   projectId?: string;
@@ -71,6 +75,12 @@ export type AgentSessionPage = {
 };
 
 export type AgentScanOptions = {
+  grokBotAgentId?: string;
+  grokBotProfilePath?: string;
+  grokBotBackendUrl?: string;
+  grokBotLimit?: number;
+  grokBotOffset?: number;
+  grokBotQuery?: string;
   codexLimit?: number;
   codexOffset?: number;
   codexQuery?: string;
@@ -135,6 +145,11 @@ function agentScanManifestFields(type: AgentAdapterType): Pick<
 }
 
 export type GatewayDefinitionLike = {
+  grokBotProfilePath?: string;
+  grokBotBackendUrl?: string;
+  grokBotAgentId?: string;
+  grokBotSessionId?: string;
+  grokBotSessionName?: string;
   id?: string;
   name?: string;
   routeName?: string;
@@ -362,6 +377,16 @@ export async function scanDshAgentAdapter(
 }
 
 
+export async function scanGrokBotAgentAdapter(ctx: AgentManagerApiContext, options: AgentScanOptions = {}) {
+  const runtime = getRuntimeList(ctx).find(item => item.definition.agentAdapters?.includes("grokBot"));
+  return scanNativeGrokBotAgentAdapter(ctx, {
+    ...options,
+    profilePath: options.grokBotProfilePath || runtime?.definition.grokBotProfilePath,
+    backendUrl: options.grokBotBackendUrl || runtime?.definition.grokBotBackendUrl,
+    grokBotAgentId: options.grokBotAgentId || runtime?.definition.grokBotAgentId
+  });
+}
+
 export async function scanAgentAdapters(
   ctx: AgentManagerApiContext,
   options: AgentScanOptions = {}
@@ -508,6 +533,17 @@ export async function scanAgentAdapters(
   }, options);
   const antigravityAgent = antigravityScan.agents.antigravity;
   const antigravityCwdOptions = antigravityScan.cwdOptions;
+  const grokBotRequested = runtimes.some(runtime => runtime.definition.agentAdapters?.includes("grokBot"))
+    || Boolean(options.grokBotAgentId || options.grokBotProfilePath || options.grokBotBackendUrl || options.grokBotQuery !== undefined);
+  const grokBotManifest = agentAdapterManifest("grokBot");
+  // An unselected cloud adapter must not query every Bot when another adapter's settings page loads.
+  const grokBotScan = grokBotRequested ? await scanGrokBotAgentAdapter(ctx, options) : { agents: { grokBot: {
+    ...grokBotManifest, installed: fs.existsSync(path.join(grokBotProfilePath(), "desktop-status.json")),
+    hasProject: false, hasSession: true, canListSessions: true,
+    auth: { required: true, message: "点击扫描以核验当前 Grok Bot 登录账号与已有会话。" },
+    endpoints: [{ label: "Grok Bot 云端 owner", url: DEFAULT_GROK_BOT_BACKEND_URL, healthy: false }],
+    projects: [], sessions: [], bots: [], warnings: ["尚未扫描当前 Grok Bot 云端会话。"]
+  } } };
 
   const astrbotEndpoints = await Promise.all(astrbotUrls.map(async (url) => ({
     label: url.includes("127.0.0.1") || url.includes("localhost") ? "本机 AstrBot" : "AstrBot",
@@ -545,6 +581,7 @@ export async function scanAgentAdapters(
   }
 
   const agents: Record<AgentAdapterType, AgentScanResult> = {
+    grokBot: grokBotScan.agents.grokBot,
     codex: buildCodexAgentScan({
       codexBins,
       projects,

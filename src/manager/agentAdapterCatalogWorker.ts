@@ -1,6 +1,7 @@
 import {
   scanAgentAdapters,
   scanDshAgentAdapter,
+  scanGrokBotAgentAdapter,
   type AgentScanOptions,
   type AgentScanRuntimeSnapshot
 } from "../agentAdapters/managerApi.js";
@@ -17,6 +18,12 @@ export type AgentAdapterCatalogWorkerTask =
       rootDir: string;
       runtimes: AgentScanRuntimeSnapshot[];
       options: Pick<AgentScanOptions, "dshLimit" | "dshOffset" | "dshQuery" | "dshBaseUrl">;
+    }
+  | {
+      kind: "grokBot";
+      rootDir: string;
+      runtimes: AgentScanRuntimeSnapshot[];
+      options: AgentScanOptions;
     };
 
 export type AgentAdapterCatalogWorkerRequest = {
@@ -37,7 +44,9 @@ export async function executeAgentAdapterCatalogWorkerTask(
   const context = { rootDir: task.rootDir, runtimes: task.runtimes };
   return task.kind === "dsh"
     ? scanDshAgentAdapter(context, task.options)
-    : scanAgentAdapters(context, task.options);
+    : task.kind === "grokBot"
+      ? scanGrokBotAgentAdapter(context, task.options)
+      : scanAgentAdapters(context, task.options);
 }
 
 function send(message: AgentAdapterCatalogWorkerResponse): void {
