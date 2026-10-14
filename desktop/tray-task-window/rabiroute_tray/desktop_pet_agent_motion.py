@@ -49,9 +49,7 @@ def resolve_motion_target(target: dict, window):
             raise ValueError("Unsupported target kind.")
         area = screen.availableGeometry()
         destination = corner_positions(bounds, area.getRect(), (window.width(), window.height()), (target["corner"],))[target["corner"]]
-    geometry = origin.geometry()
-    return destination, travel_kind(origin is screen, (window.x(), window.y()), destination,
-                                     (geometry.width(), geometry.height()))
+    return destination, travel_kind((window.x(), window.y()), destination, origin.availableGeometry().width())
 
 
 class DesktopPetAgentMotion(QObject):
@@ -149,12 +147,12 @@ class DesktopPetAgentMotion(QObject):
         try:
             destination, kind = resolve_motion_target(self.command["target"], window)
             mode = self.command["mode"]
-            kind = {"walk": "move", "teleport": "teleport"}.get(mode, kind)
+            kind = {"walk": "move", "run": "run", "teleport": "teleport"}.get(mode, kind)
             self.destination, self.kind = destination, kind
-            required = ("move",) if kind == "move" else ("teleport-out", "teleport-in")
+            required = (kind,) if kind in {"move", "run"} else ("teleport-out", "teleport-in")
             if controller._pack is None or not all(controller._is_action_ready(state) for state in required):
                 if controller._pack is not None and any(state not in controller._pack.states for state in required):
-                    raise ValueError("Active pet pack does not provide the required travel animations.")
+                    raise ValueError(f"Active pet pack does not provide the required travel animations: {', '.join(required)}.")
                 if time.monotonic() - self.wait_started > 10:
                     raise ValueError("Travel animations are not ready.")
                 self.timer.start(200)

@@ -1,4 +1,5 @@
 import os
+import math
 import time
 import unittest
 from unittest.mock import patch
@@ -9,7 +10,7 @@ from rabiroute_tray.desktop_pet_controller import DesktopPetController
 from rabiroute_tray.desktop_pet_events import DesktopPetEventStream
 from rabiroute_tray.desktop_pet_agent_motion import resolve_motion_target
 from rabiroute_tray.desktop_pet_client import DesktopPetPack, DesktopPetState
-from pet_motion_fixture import play_walk, finish_walk, advance_walk
+from pet_motion_fixture import play_walk, play_run, finish_walk, advance_walk
 
 
 class AgentMotionTest(unittest.TestCase):
@@ -26,7 +27,7 @@ class AgentMotionTest(unittest.TestCase):
         self.controller = DesktopPetController("http://127.0.0.1:1", "sample", lambda _: None)
         self.controller._pack = DesktopPetPack("sample", "Sample", "sample", 512, 512, 0.5, {
             name: DesktopPetState(name, "png-sequence", ("/frame.png",), 12, True)
-            for name in ("idle", "move", "teleport-out", "teleport-in")})
+            for name in ("idle", "move", "run", "teleport-out", "teleport-in")})
         self.controller.window.show()
         self.controller.window.move(100, 100)
         play_walk(self.controller.window)
@@ -103,7 +104,26 @@ class AgentMotionTest(unittest.TestCase):
         area = self.app.primaryScreen().availableGeometry()
         self.assertLessEqual(destination[0] + self.controller.window.width(), area.left() + area.width())
         self.assertLessEqual(destination[1] + self.controller.window.height(), area.top() + area.height())
-        self.assertEqual(kind, "move")
+        expected = "run" if math.dist((self.controller.window.x(), self.controller.window.y()), destination) > area.width() / 2 else "move"
+        self.assertEqual(kind, expected)
+
+    def test_explicit_run_uses_run_state_and_returns_a_running_receipt_after_arrival(self):
+        play_run(self.controller.window)
+        self.command("run")
+        self.assertEqual(self.controller.window._travel_kind, "run")
+        finish_walk(self.controller.window)
+        self.assertEqual(self.results[-1]["status"], "succeeded")
+        self.assertEqual(self.results[-1]["travelKind"], "run")
+
+    def test_missing_run_animation_fails_without_using_move_or_changing_position(self):
+        self.controller._pack.states.pop("run")
+        self.ready.stop()
+        self.ready = patch.object(self.controller, "_is_action_ready", return_value=False)
+        self.ready.start()
+        self.command("run")
+        self.assertEqual(self.results[0]["status"], "failed")
+        self.assertIn("run", self.results[0]["reason"])
+        self.assertEqual((self.controller.window.x(), self.controller.window.y()), (100, 100))
 
     def test_missing_animation_fails_instead_of_sliding_idle(self):
         self.controller._pack.states.pop("move")

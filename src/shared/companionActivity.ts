@@ -1,4 +1,14 @@
-export type CompanionPreset = { id: string; label: string; labelEn: string; reviewSeconds: number; replyAgeSeconds: number; reactionAgeSeconds?: number; guidance: string };
+export const COMPANION_ACTIVITY_KINDS = ["play", "watch", "work", "other", "uncertain"] as const;
+export type CompanionActivityKind = typeof COMPANION_ACTIVITY_KINDS[number];
+export type CompanionPreset = {
+  id: string; label: string; labelEn: string; reviewSeconds: number; replyAgeSeconds: number;
+  reactionAgeSeconds?: number; guidance: string; activityKind?: Exclude<CompanionActivityKind, "uncertain">;
+  allowAutomaticReplies?: boolean;
+};
+export type CompanionCommand = {
+  sessionId: string; revision: number; action: "pause" | "resume" | "seek" | "stop" | "interrupt" | "set-mode";
+  positionSeconds?: number; pauseReason?: "capture_lost"; presetId?: string;
+};
 export type CompanionObservation = {
   sequence: number; capturedAt: number; source: "window" | "player";
   subtitle?: string; positionSeconds?: number; paused?: boolean; jpeg?: string;
@@ -16,7 +26,7 @@ export type CompanionSession = {
   error: string;
   observationOwner: "desktop" | "browser";
   window: CompanionObservation["window"] | null;
-  activityKind: "play" | "watch" | "other" | "uncertain";
+  activityKind: CompanionActivityKind;
   version: number;
 };
 export type CompanionResumeIntent = Pick<CompanionSession, "gatewayId" | "presetId" | "title" | "autoReview" | "voice" | "saveSummary"> & { observationOwner: "desktop" };

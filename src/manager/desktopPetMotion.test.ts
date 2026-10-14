@@ -11,7 +11,11 @@ test("motion validates coordinates, target fields and reviewed Agent boundary", 
     assert.throws(() => parseDesktopPetMotion({ requestId: "sample-motion-1", target }));
   }
   assert.equal(parseDesktopPetMotion({ requestId: "sample-motion-1", target: { kind: "position", x: -1920, y: 100 } }).mode, "auto");
-  assert.equal(authorizeAgentApiRequest("POST", "/api/desktop-pet/roles/sample/motion").allowed, true);
+  assert.equal(parseDesktopPetMotion({ requestId: "sample-motion-run", mode: "run", target: { kind: "position", x: 100, y: 100 } }).mode, "run");
+  assert.throws(() => parseDesktopPetMotion({ requestId: "sample-motion-sprint", mode: "sprint", target: { kind: "position", x: 100, y: 100 } }));
+  const admission = authorizeAgentApiRequest("POST", "/api/desktop-pet/roles/sample/motion");
+  assert.ok(admission.allowed);
+  assert.match(admission.operation.help.request.body, /auto\/walk\/run\/teleport/);
   assert.equal(authorizeAgentApiRequest("POST", "/api/desktop-pet/roles/sample/motion/runtime").allowed, false);
   assert.equal(authorizeAgentApiRequest("GET", "/api/desktop-pet/roles/sample/motion/runtime").allowed, false);
 });
@@ -58,6 +62,12 @@ test("motion runs once, verifies renderer claim and arrival, retains interruptio
   assert.equal(events.filter(e => e === "desktop_pet_motion_result").length, 1);
   assert.equal((await (await post(base, request)).json()).data.status, "succeeded");
   assert.equal((await (await fetch(`${base}/${requestId}`)).json()).data.position.x, 100);
+  const runId = "sample-motion-run";
+  assert.equal((await post(base, { ...request, requestId: runId, mode: "run" }, runId)).status, 202);
+  const runClaim = (await (await post(`${base}/runtime`, {})).json()).data;
+  assert.equal(runClaim.mode, "run");
+  assert.equal((await post(`${base}/runtime`, { ...result, requestId: runId, token: runClaim.token, travelKind: "run" })).status, 200);
+  assert.equal((await (await fetch(`${base}/${runId}`)).json()).data.travelKind, "run");
   const stalledId = "sample-motion-stalled";
   assert.equal((await post(base, { ...request, requestId: stalledId }, stalledId)).status, 202);
   await post(`${base}/runtime`, {});

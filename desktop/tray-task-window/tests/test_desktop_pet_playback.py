@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PIL import Image
-from PySide6.QtCore import QPoint
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest, QSignalSpy
 from PySide6.QtWidgets import QApplication, QLabel, QMenu, QSlider
 from rabiroute_tray.desktop_pet_client import DesktopPetBinding, DesktopPetIdleBehavior, LoadedDesktopPetAnimation
@@ -85,6 +85,66 @@ class PetPlaybackTest(unittest.TestCase):
         self.finish_reaction()
         self.assertEqual(self.window.active_state, "talking")
         self.controller._speech_changed({"status": "completed"})
+        self.assertEqual(self.window.active_state, "idle")
+
+    def test_each_click_restarts_attention_using_prepared_frames(self):
+        self.controller._clicked()
+        frames = self.window._png_frames
+        self.window._advance_png_frame()
+        self.assertEqual(self.window._png_index, 1)
+        with patch.object(self.window, "_decode_png_frames", wraps=self.window._decode_png_frames) as decode:
+            self.controller._clicked()
+            self.assertEqual(self.window.active_state, "attention")
+            self.assertEqual(self.window._png_index, 0)
+            self.assertIs(self.window._png_frames, frames)
+            decode.assert_not_called()
+        self.finish_reaction()
+        self.assertEqual(self.window.active_state, "idle")
+
+    def test_blocked_idle_request_rearms_after_menu_closes(self):
+        scheduler = self.controller._idle_scheduler
+        scheduler.configure(DesktopPetIdleBehavior(1, 1, ("attention",)))
+        scheduler.set_active(True)
+        menu = QMenu(self.window)
+        self.controller._context_menu = menu
+        scheduler._request_random_animation()
+        self.assertEqual(self.window.active_state, "idle")
+        self.assertEqual(scheduler._current_state, "idle")
+        self.assertTrue(scheduler._random_timer.isActive())
+        self.controller._context_menu = None
+        scheduler._request_random_animation()
+        self.assertEqual(self.window.active_state, "attention")
+        self.finish_reaction()
+        self.assertEqual(self.window.active_state, "idle")
+        self.assertTrue(scheduler._random_timer.isActive())
+        menu.deleteLater()
+
+    def test_companion_disconnect_restores_idle_scheduling(self):
+        concerned = replace(self.animations["attention"], state=replace(self.animations["attention"].state, name="concerned"))
+        self.controller._pack = replace(self.pack, states={**self.pack.states, "concerned": concerned.state})
+        self.controller._animation_cache["concerned"] = concerned
+        scheduler = self.controller._idle_scheduler
+        scheduler.configure(DesktopPetIdleBehavior(1, 1, ("attention",)))
+        scheduler.set_active(False)
+        self.controller._companion_session = {"id": "session", "status": "active"}
+        self.controller._event_connection_changed(False)
+        self.assertTrue(scheduler._active)
+        self.assertEqual(self.window.active_state, "concerned")
+        self.finish_reaction()
+        self.assertEqual(self.window.active_state, "idle")
+        self.assertTrue(scheduler._random_timer.isActive())
+
+    def test_drag_does_not_emit_click_on_release(self):
+        clicked = QSignalSpy(self.window.clicked)
+        started = QSignalSpy(self.window.drag_started)
+        finished = QSignalSpy(self.window.drag_finished)
+        QTest.mousePress(self.window, Qt.MouseButton.LeftButton, pos=QPoint(10, 10))
+        QTest.mouseMove(self.window, QPoint(50, 50), delay=1)
+        self.assertEqual(self.window.active_state, "drag")
+        QTest.mouseRelease(self.window, Qt.MouseButton.LeftButton, pos=QPoint(50, 50))
+        self.assertEqual(clicked.count(), 0)
+        self.assertEqual(started.count(), 1)
+        self.assertEqual(finished.count(), 1)
         self.assertEqual(self.window.active_state, "idle")
 
     def test_speech_ending_during_drag_does_not_restore_stale_talking(self):
@@ -190,22 +250,79 @@ class PetPlaybackTest(unittest.TestCase):
         self.assertEqual(chosen, ["a", "b", "c", "a"])
         scheduler.stop()
 
-    def test_size_menu_shows_percentage_and_coalesces_slider_changes(self):
+    def test_size_menu_previews_without_rebuilding_until_entire_menu_closes(self):
         menu = QMenu(self.window)
         scale_menu = self.controller._add_scale_control(menu)
         slider = scale_menu.findChild(QSlider)
         self.assertEqual(scale_menu.title(), "大小：50%")
         self.assertEqual((slider.minimum(), slider.maximum(), slider.singleStep()), (10, 200, 1))
-        with patch.object(self.controller, "_set_scale") as save:
-            slider.setValue(23)
+        frames = self.window._png_frames
+        cached = self.window._prepared_png_frames.copy()
+        self.window._advance_png_frame()
+        with patch.object(self.window, "_decode_png_frames", wraps=self.window._decode_png_frames) as decode:
+            for value in range(10, 201):
+                slider.setValue(value)
             slider.setValue(10)
             self.assertEqual(scale_menu.title(), "大小：10%")
             self.assertTrue(any(label.text() == "当前大小：10%" for label in scale_menu.findChildren(QLabel)))
-            save.assert_not_called()
+            self.assertEqual(self.controller._scale, 0.5)
+            self.assertEqual(self.window._scale, 0.5)
+            self.assertIs(self.window._png_frames, frames)
+            self.assertEqual(self.window._prepared_png_frames, cached)
+            self.assertEqual(self.window._png_index, 1)
+            self.assertEqual(self.window.size(), self.window._preview_size())
+            self.assertLessEqual(self.window._label.pixmap().width(), self.window.width())
+            self.assertTrue(self.window._png_timer.isActive())
+            slider.sliderReleased.emit()
             scale_menu.aboutToHide.emit()
-            save.assert_called_once_with(0.1)
-            QTest.qWait(130)
-            save.assert_called_once()
+            QTest.qWait(160)
+            decode.assert_not_called()
+            self.controller._persist.assert_not_called()
+            self.controller._enqueue_animation_preloads.assert_not_called()
+            menu.aboutToHide.emit()
+            self.assertEqual(self.controller._scale, 0.5)
+            self.app.processEvents()
+            self.assertEqual(self.controller._scale, 0.1)
+            self.assertIsNone(self.window._scale_preview)
+            decode.assert_called_once()
+            self.controller._persist.assert_called_once_with({"scale": 0.1})
+            self.controller._enqueue_animation_preloads.assert_called_once()
+        menu.deleteLater()
+
+    def test_scale_preview_returning_to_original_does_not_rebuild_or_save(self):
+        menu = QMenu(self.window)
+        slider = self.controller._add_scale_control(menu).findChild(QSlider)
+        original_position = self.window.pos()
+        with patch.object(self.window, "play") as play:
+            slider.setValue(200)
+            slider.setValue(50)
+            menu.aboutToHide.emit()
+            self.app.processEvents()
+            self.assertIsNone(self.window._scale_preview)
+            self.assertEqual(self.window.pos(), original_position)
+            play.assert_not_called()
+            self.controller._persist.assert_not_called()
+        menu.deleteLater()
+
+    def test_unedited_menu_does_not_overwrite_new_binding_scale(self):
+        menu = QMenu(self.window)
+        self.controller._add_scale_control(menu)
+        self.controller._scale = 0.75
+        menu.aboutToHide.emit()
+        self.app.processEvents()
+        self.assertEqual(self.controller._scale, 0.75)
+        self.controller._persist.assert_not_called()
+        menu.deleteLater()
+
+    def test_queued_resize_does_not_apply_after_controller_shutdown(self):
+        menu = QMenu(self.window)
+        slider = self.controller._add_scale_control(menu).findChild(QSlider)
+        slider.setValue(20)
+        menu.aboutToHide.emit()
+        self.controller._closed = True
+        with patch.object(self.controller, "_set_scale") as apply:
+            self.app.processEvents()
+            apply.assert_not_called()
         menu.deleteLater()
 
     def test_ten_percent_size_is_not_clamped_to_sixty_four_pixels(self):

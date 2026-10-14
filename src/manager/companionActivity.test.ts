@@ -1,12 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { promises as fs } from "node:fs";
+import { promises as fs, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { readCompanionSceneRules } from "./companionScene.js";
 import { CompanionActivity, lastCompanionSummary, readCompanionPresets, saveCompanionSummary, type CompanionPorts } from "./companionActivity.js";
 const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString("base64");
 const start = { requestId: "request-first", gatewayId: "route", presetId: "adaptive", title: "", autoReview: false, voice: true, saveSummary: false, observationOwner: "desktop" as const };
+const catalog = readCompanionPresets(JSON.parse(readFileSync("packages/rabi-companion/presets.json", "utf8")));
 function fixture(t: import("node:test").TestContext, overrides: Partial<CompanionPorts> = {}) {
   let now = 1_000_000;
   const cancelled: string[] = [], spoken: string[] = [], delivered: string[] = [];
@@ -14,8 +15,8 @@ function fixture(t: import("node:test").TestContext, overrides: Partial<Companio
     now: () => now, changed: () => {}, reaction: () => {}, save: async () => {}, cancelSpeech: async scope => { cancelled.push(scope); },
     speak: async (_s, text) => { spoken.push(text); }, deliver: async (_s, review) => { delivered.push(review.text); }, ...overrides });
   t.after(() => service.dispose());
-  const observe = (sequence = 1) => { const s = service.snapshot("one").session!; return service.observe("one", s.id, s.revision,
-    { sequence, capturedAt: now, source: "window", jpeg, window: { id: "123:45", title: "Episode 1", processName: "player.exe" } }); };
+  const observe = (sequence = 1, frame = jpeg) => { const s = service.snapshot("one").session!; return service.observe("one", s.id, s.revision,
+    { sequence, capturedAt: now, source: "window", jpeg: frame, window: { id: "123:45", title: "Episode 1", processName: "player.exe" } }); };
   const command = (action: "stop" | "pause" | "resume" | "interrupt" | "seek", positionSeconds?: number) => { const s = service.snapshot("one").session!; return service.command("one", { sessionId: s.id, revision: s.revision, action, positionSeconds }); };
   return { service, observe, command, cancelled, spoken, delivered, advance: (ms: number) => { now += ms; } };
 }
@@ -136,4 +137,64 @@ test("failed dispatch backs off and a later fresh observation recovers", async t
   f.advance(35_000); f.observe(3); await new Promise(resolve => setImmediate(resolve));
   assert.equal(attempts, 2);
   assert.equal(f.service.snapshot("one").session!.review!.status, "delivered");
+});
+
+test("mode changes keep the activity and discussion while fencing the old review and speech", async t => {
+  const f = fixture(t, { presets: catalog }); const s = (await f.service.start("one", start)).session!; f.observe();
+  await f.service.review("one", s.id, s.revision, "请帮忙看一下");
+  const before = f.service.snapshot("one").session!, reviewId = before.review!.id;
+  const switched = (await f.service.command("one", { sessionId: before.id, revision: before.revision, action: "set-mode", presetId: "work" })).session!;
+  assert.equal(switched.id, before.id); assert.equal(switched.revision, before.revision + 1);
+  assert.equal(switched.presetId, "work"); assert.equal(switched.activityKind, "work");
+  assert.equal(switched.gatewayId, before.gatewayId); assert.equal(switched.observationOwner, "desktop");
+  assert.equal(switched.voice, before.voice); assert.deepEqual(switched.notes, before.notes);
+  assert.equal(switched.review, null); assert.equal(switched.lastObservationAt, null);
+  assert.ok(f.cancelled.includes(`companion.${before.id}.${before.revision}`));
+  assert.throws(() => f.service.frameFor("one", reviewId), /expired/);
+  await assert.rejects(f.service.reply("one", { sessionId: before.id, revision: before.revision, reviewId, text: "old" }), /版本/);
+  const snapshot = f.service.snapshot("one");
+  assert.deepEqual(await f.service.command("one", { sessionId: switched.id, revision: switched.revision, action: "set-mode", presetId: "work" }), snapshot);
+  await assert.rejects(f.service.command("one", { sessionId: switched.id, revision: switched.revision, action: "set-mode", presetId: "missing" }), /mode/);
+  assert.deepEqual(f.service.snapshot("one"), snapshot);
+});
+
+test("explicit watch, play and work modes retain their configured scene when observations or replies disagree", async t => {
+  for (const presetId of ["watch", "play", "work"] as const) {
+    const f = fixture(t, { presets: catalog, sceneRules: readCompanionSceneRules({ rules: [{ kind: "other", processPattern: "player" }] }) });
+    const s = (await f.service.start("one", { ...start, presetId })).session!;
+    assert.equal(s.activityKind, presetId); assert.equal(f.observe().session!.activityKind, presetId);
+    await f.service.review("one", s.id, s.revision, "");
+    const reviewId = f.service.snapshot("one").session!.review!.id;
+    await f.service.reply("one", { sessionId: s.id, revision: s.revision, reviewId, text: "", activityKind: "other" });
+    assert.equal(f.service.snapshot("one").session!.activityKind, presetId);
+  }
+});
+
+test("work mode observes at a lower rate and automatic replies stay silent while explicit help may speak", async t => {
+  const f = fixture(t, { presets: catalog }); const s = (await f.service.start("one", { ...start, presetId: "work", autoReview: true })).session!;
+  f.observe(); await new Promise(resolve => setImmediate(resolve));
+  const first = f.service.snapshot("one").session!.review!.id;
+  await f.service.reply("one", { sessionId: s.id, revision: s.revision, reviewId: first, text: "unsolicited comment", activityKind: "work" });
+  assert.deepEqual(f.spoken, []); assert.deepEqual(f.service.snapshot("one").session!.notes, []);
+  const changed = Buffer.from([0xff, 0xd8, 0x01, 0xff, 0xd9]).toString("base64");
+  f.advance(59_000); f.observe(2, changed); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.delivered.length, 1);
+  f.advance(1000); f.observe(3, changed); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.delivered.length, 2);
+  const automatic = f.service.snapshot("one").session!.review!.id;
+  await f.service.reply("one", { sessionId: s.id, revision: s.revision, reviewId: automatic, text: "", activityKind: "work" });
+  await f.service.review("one", s.id, s.revision, "请解释当前错误");
+  const manual = f.service.snapshot("one").session!;
+  await f.service.reply("one", { sessionId: s.id, revision: manual.revision, reviewId: manual.review!.id, text: "这里缺少一个参数。", activityKind: "work" });
+  assert.deepEqual(f.spoken, ["这里缺少一个参数。"]);
+});
+
+test("mode changes preserve a user pause and validate optional catalog policy fields", async t => {
+  const f = fixture(t, { presets: catalog }); await f.service.start("one", start); await f.command("pause");
+  const paused = f.service.snapshot("one").session!;
+  const changed = (await f.service.command("one", { sessionId: paused.id, revision: paused.revision, action: "set-mode", presetId: "work" })).session!;
+  assert.equal(changed.status, "paused"); assert.equal(changed.pauseReason, "user");
+  const work = catalog.find(p => p.id === "work")!;
+  assert.throws(() => readCompanionPresets({ presets: [{ ...work, activityKind: "invalid" }] }), /kind/);
+  assert.throws(() => readCompanionPresets({ presets: [{ ...work, allowAutomaticReplies: "false" }] }), /automatic/);
 });

@@ -6,7 +6,7 @@ import type { DesktopPetSettingsAccess, DesktopPetEventPublisher } from "./deskt
 type MotionTarget = { kind: "position"; x: number; y: number } | {
   kind: "active-window" | "screen-corner"; corner: string; screenName?: string;
 };
-type MotionRequest = { requestId: string; mode: "auto" | "walk" | "teleport"; target: MotionTarget };
+type MotionRequest = { requestId: string; mode: "auto" | "walk" | "run" | "teleport"; target: MotionTarget };
 type Receipt = MotionRequest & { personaId: string; status: string; createdAt: number; updatedAt: number;
   reason?: string; position?: { x: number; y: number }; destination?: { x: number; y: number }; travelKind?: string };
 type Entry = { receipt: Receipt; token?: string; fingerprint: string };
@@ -30,7 +30,7 @@ export function parseDesktopPetMotion(value: unknown): MotionRequest {
   if (Object.keys(body).some(key => !["requestId", "target", "mode"].includes(key))) throw new Error("Unknown motion field.");
   if (typeof body.requestId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.-]{7,127}$/.test(body.requestId)) throw new Error("requestId must be 8-128 ASCII identifier characters.");
   const mode = body.mode ?? "auto";
-  if (!["auto", "walk", "teleport"].includes(String(mode))) throw new Error("Invalid travel mode.");
+  if (!["auto", "walk", "run", "teleport"].includes(String(mode))) throw new Error("Invalid travel mode.");
   let normalized: MotionTarget;
   if (target.kind === "position") {
     if (Object.keys(target).some(key => !["kind", "x", "y"].includes(key))) throw new Error("Unknown position field.");
@@ -95,7 +95,7 @@ export function handleDesktopPetMotion(request: http.IncomingMessage, url: URL, 
         if (!["running", "succeeded", "failed", "cancelled"].includes(String(input.status))) throw new Error("Invalid runtime result.");
         const position = point(input.position);
         if (input.status === "running") {
-          // A slow frame-driven walk may last more than the receipt deadline.
+          // Frame-driven locomotion may last more than the receipt deadline.
           // Only the current renderer claim can renew liveness; it is not arrival.
           if (!entry.receipt.position || position.x !== entry.receipt.position.x || position.y !== entry.receipt.position.y) {
             entry.receipt.position = position;
@@ -107,7 +107,7 @@ export function handleDesktopPetMotion(request: http.IncomingMessage, url: URL, 
         if (input.status === "succeeded" && (!destination || Math.hypot(position.x - destination.x, position.y - destination.y) >= 8)) throw new Error("Arrival position does not match destination.");
         Object.assign(entry.receipt, { status: input.status, position, destination,
           reason: typeof input.reason === "string" ? input.reason.slice(0, 300) : undefined,
-          travelKind: ["move", "teleport"].includes(String(input.travelKind)) ? input.travelKind : undefined, updatedAt: Date.now() });
+          travelKind: ["move", "run", "teleport"].includes(String(input.travelKind)) ? input.travelKind : undefined, updatedAt: Date.now() });
         publish?.("desktop_pet_motion_result", entry.receipt);
         reply(response, 200, { code: 0, data: entry.receipt }); return;
       }

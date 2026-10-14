@@ -5,9 +5,9 @@ from unittest.mock import patch
 from rabiroute_tray.desktop_pet_client import DesktopPetPack, DesktopPetState, LoadedDesktopPetAnimation
 
 
-def walking_animation():
+def walking_animation(state_name="move", shifts=(0, -4, -8, -4)):
     assets = []
-    for shift in (0, -4, -8, -4):
+    for shift in shifts:
         pixmap = QPixmap(512, 512)
         pixmap.fill(QColor(0, 0, 0, 0))
         painter = QPainter(pixmap)
@@ -20,13 +20,17 @@ def walking_animation():
         buffer.open(QIODevice.OpenModeFlag.WriteOnly)
         pixmap.save(buffer, "PNG")
         assets.append(bytes(data))
-    state = DesktopPetState("move", "png-sequence", tuple(f"/{i}.png" for i in range(4)), 12, True)
-    pack = DesktopPetPack("sample", "Sample", "sample", 512, 512, 0.5, {"move": state})
+    state = DesktopPetState(state_name, "png-sequence", tuple(f"/{i}.png" for i in range(len(shifts))), 12, True)
+    pack = DesktopPetPack("sample", "Sample", "sample", 512, 512, 0.5, {state_name: state})
     return pack, LoadedDesktopPetAnimation(state, tuple(assets))
 
 
 def play_walk(window):
     window.play(*walking_animation())
+
+
+def play_run(window):
+    window.play(*walking_animation("run", (0, -8, -16, -8)))
 
 
 def advance_walk(window, seconds=0.05):

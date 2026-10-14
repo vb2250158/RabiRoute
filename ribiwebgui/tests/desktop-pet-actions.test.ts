@@ -18,3 +18,14 @@ test("custom actions use manifest triggers and single PNG images are counted sep
   assert.equal(result.find(item => item.id === "success")?.group, "任务与连接反馈");
   assert.equal(result.find(item => item.id === "attention")?.group, "鼠标交互");
 });
+
+test("mode gestures are described from the manifest pools and run has a motion use", () => {
+  const loop: DesktopPetAnimation = { type: "png-sequence", assets: ["/frame.png"], fps: 12, loop: true };
+  const result = desktopPetActions({ id: "sample", name: "Sample", personaId: "sample", states: {
+    idle: loop, desk: loop, nod: { ...loop, loop: false, next: "desk" }, run: loop
+  }, modeAnimationSets: { focus: { idleState: "desk", randomMinSeconds: 45, randomMaxSeconds: 120,
+    randomStates: ["nod"], clickStates: ["nod"] } } });
+  assert.equal(result.find(action => action.id === "desk")?.group, "陪伴模式动作");
+  assert.deepEqual(result.find(action => action.id === "nod")?.uses, ["focus：随机动作", "focus：点击动作"]);
+  assert.deepEqual(result.find(action => action.id === "run")?.uses, ["较远距离移动时奔跑"]);
+});

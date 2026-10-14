@@ -8,7 +8,7 @@ from PySide6.QtGui import QColor, QImage, QImageReader, QMouseEvent, QPainter, Q
 from PySide6.QtWidgets import QApplication, QGraphicsOpacityEffect, QLabel, QWidget
 
 from .desktop_pet_client import DesktopPetPack, LoadedDesktopPetAnimation
-from .desktop_pet_gait import SoleFrame, WalkingGait, walking_gait
+from .desktop_pet_gait import SoleFrame, WalkingGait, running_gait, walking_gait
 from .desktop_pet_bubble import DesktopPetBubble, place_dialogue_bubble
 
 class _TravelHalo(QWidget):
@@ -103,6 +103,7 @@ class DesktopPetWindow(QWidget):
         self._png_frame_delays: tuple[int, ...] = ()
         self._drag_offset: QPoint | None = None
         self._dragging = False
+        self._double_click_release = False
         self._png_frames: tuple[QPixmap, ...] = ()
         self._prepared_png_frames: dict[tuple[str, str, int, int], tuple[QPixmap, ...]] = {}
         self._png_index = 0
@@ -114,14 +115,13 @@ class DesktopPetWindow(QWidget):
         self._bubble_timer = QTimer(self)
         self._bubble_timer.setSingleShot(True)
         self._bubble_timer.timeout.connect(self.hide_bubble)
-        self._single_click_timer = QTimer(self)
-        self._single_click_timer.setSingleShot(True)
-        self._single_click_timer.timeout.connect(self.clicked.emit)
         self._bubble = DesktopPetBubble(self.windowFlags())
         self._placed = False
         self._active_pack: DesktopPetPack | None = None
         self._active_animation: LoadedDesktopPetAnimation | None = None
         self._scale = 0.5
+        self._scale_preview: float | None = None
+        self._scale_preview_origin: QPoint | None = None
         self._fps_cap = 15
         self._locked = False
         self._bubble_enabled = True
@@ -155,6 +155,8 @@ class DesktopPetWindow(QWidget):
                 and self._active_animation.state.name == state_name)
 
     def travel_to(self, target: QPoint, kind: str) -> bool:
+        if kind not in {"move", "run", "teleport"}:
+            return False
         if self._locked or self.pointer_engaged or not self.isVisible() or self.travelling:
             return False
         distance = math.hypot(target.x() - self.x(), target.y() - self.y())
@@ -171,14 +173,14 @@ class DesktopPetWindow(QWidget):
         self._travel_distance = distance
         self._walked_distance = 0.0
         self._travel_arrived = False
-        self.travel_phase_changed.emit("teleport-out" if kind == "teleport" else "move")
+        self.travel_phase_changed.emit("teleport-out" if kind == "teleport" else kind)
         if kind == "teleport":
             self._travel_timer.start(33)
             self._travel_halo.setGeometry(self.rect())
             self._travel_halo.show()
             self._travel_halo.raise_()
         else:
-            if not self._png_frames or self._gait is None:
+            if not self._png_frames or self._gait is None or self.active_state != kind:
                 self.cancel_travel()
                 return False
             desired_left = target.x() < self.x() if abs(target.x() - self.x()) >= 8 else self._facing_left
@@ -195,8 +197,8 @@ class DesktopPetWindow(QWidget):
             self._travel_timer.start(16)
         qInfo(f"rabiroute.desktop-pet.motion desktop_pet_travel_started kind={kind} "
               f"distance={distance:.1f} duration={self._travel_duration:.2f} "
-              f"cycleDistance={self._gait.cycle_distance if kind == 'move' and self._gait else 0:.2f} "
-              f"speed={self._walk_speed if kind == 'move' else 0:.2f} canvas={self.width()}x{self.height()}")
+              f"cycleDistance={self._gait.cycle_distance if kind in {'move', 'run'} and self._gait else 0:.2f} "
+              f"speed={self._walk_speed if kind in {'move', 'run'} else 0:.2f} canvas={self.width()}x{self.height()}")
         return True
 
     def cancel_travel(self, *, completed: bool = False) -> None:
@@ -243,7 +245,7 @@ class DesktopPetWindow(QWidget):
         self._display_png_frame()
 
     def _advance_travel(self) -> None:
-        if self._travel_kind == "move":
+        if self._travel_kind in {"move", "run"}:
             if not self._png_frames or self._gait is None or self._active_animation is None:
                 self.cancel_travel()
                 return
@@ -305,8 +307,8 @@ class DesktopPetWindow(QWidget):
         previous_state = self.active_state
         blend = (previous is not None and not previous.isNull() and self._active_pack is pack
                  and not self.travelling and not self.pointer_engaged and self._turn_scale is None
-                 and previous_state not in {"move", "drag", "teleport-out", "teleport-in"}
-                 and animation.state.name not in {"move", "drag", "teleport-out", "teleport-in"})
+                 and previous_state not in {"move", "run", "drag", "teleport-out", "teleport-in"}
+                 and animation.state.name not in {"move", "run", "drag", "teleport-out", "teleport-in"})
         self.stop_animation()
         self._sprite_bounds = QRect()
         if self._active_pack is None or self._active_pack.pack_id != pack.pack_id:
@@ -315,7 +317,7 @@ class DesktopPetWindow(QWidget):
         self._active_pack = pack
         self._active_animation = animation
         target = self._target_size(pack)
-        self.resize(target)
+        self.resize(self._preview_size() or target)
         self._keep_visible()
         self._label.setGeometry(self.rect())
         self._label.setText("")
@@ -354,11 +356,11 @@ class DesktopPetWindow(QWidget):
         if not frames:
             return False
         self._prepared_png_frames[cache_key] = frames
-        if animation.state.name == "move":
-            self._prepared_gaits[cache_key] = self._prepare_walking_gait(pack, animation, frames)
+        if animation.state.name in {"move", "run"}:
+            self._prepared_gaits[cache_key] = self._prepare_locomotion_gait(pack, animation, frames)
         return True
 
-    def _prepare_walking_gait(self, pack: DesktopPetPack, animation: LoadedDesktopPetAnimation,
+    def _prepare_locomotion_gait(self, pack: DesktopPetPack, animation: LoadedDesktopPetAnimation,
                               frames: tuple[QPixmap, ...]) -> WalkingGait | None:
         reference_size = QSize(pack.canvas_width, pack.canvas_height).scaled(
             256, 256, Qt.AspectRatioMode.KeepAspectRatio)
@@ -370,7 +372,8 @@ class DesktopPetWindow(QWidget):
                 return None
             self._prepared_png_frames[reference_key] = reference_frames
         if reference_key not in self._prepared_gaits:
-            self._prepared_gaits[reference_key] = walking_gait(
+            calibrate = running_gait if animation.state.name == "run" else walking_gait
+            self._prepared_gaits[reference_key] = calibrate(
                 tuple(self._measure_soles(frame) for frame in reference_frames), pack.source_facing)
         gait = self._prepared_gaits[reference_key]
         if gait is None:
@@ -380,7 +383,7 @@ class DesktopPetWindow(QWidget):
 
     def is_animation_prepared(self, pack: DesktopPetPack, animation: LoadedDesktopPetAnimation) -> bool:
         key = self._prepared_key(pack, animation, self._target_size(pack))
-        return key in self._prepared_png_frames and (animation.state.name != "move" or self._prepared_gaits.get(key) is not None)
+        return key in self._prepared_png_frames and (animation.state.name not in {"move", "run"} or self._prepared_gaits.get(key) is not None)
 
     def clear_prepared_animations(self) -> None:
         self._prepared_png_frames.clear()
@@ -458,8 +461,10 @@ class DesktopPetWindow(QWidget):
         if pixmap is None or pixmap.isNull() or self._sprite_bounds.isNull() or self._sprite_canvas.isEmpty():
             return self.frameGeometry()
         factor = pixmap.width() / self._sprite_canvas.width()
-        bounds = QRect(round(self._sprite_bounds.x() * factor), self._sprite_bounds.y(),
-                       max(1, round(self._sprite_bounds.width() * factor)), self._sprite_bounds.height())
+        vertical_factor = pixmap.height() / self._sprite_canvas.height()
+        bounds = QRect(round(self._sprite_bounds.x() * factor), round(self._sprite_bounds.y() * vertical_factor),
+                       max(1, round(self._sprite_bounds.width() * factor)),
+                       max(1, round(self._sprite_bounds.height() * vertical_factor)))
         if self._facing_scale() < 0:
             bounds.moveLeft(pixmap.width() - bounds.right() - 1)
         origin = self._label.mapToGlobal(QPoint((self._label.width() - pixmap.width()) // 2,
@@ -476,6 +481,27 @@ class DesktopPetWindow(QWidget):
         if bubble_visible:
             self._bubble.show()
 
+    def _preview_size(self) -> QSize | None:
+        if self._scale_preview is None or self._active_pack is None:
+            return None
+        return QSize(max(1, min(1024, int(self._active_pack.canvas_width * self._scale_preview))),
+                     max(1, min(1024, int(self._active_pack.canvas_height * self._scale_preview))))
+
+    def set_scale_preview(self, scale: float | None) -> None:
+        """Resize decoded frames only; keep playback, prepared actions and saved scale intact."""
+        if scale is not None and self._scale_preview_origin is None:
+            self._scale_preview_origin = self.pos()
+            self._finish_transition()
+        self._scale_preview = max(0.1, min(2.0, float(scale))) if scale is not None else None
+        if self._active_pack is not None:
+            self.resize(self._preview_size() or self._target_size(self._active_pack))
+            if self._scale_preview_origin is not None:
+                self.move(self._scale_preview_origin)
+            self._keep_visible()
+            self._display_png_frame()
+        if scale is None:
+            self._scale_preview_origin = None
+
     def apply_presentation_settings(
         self,
         *,
@@ -489,6 +515,9 @@ class DesktopPetWindow(QWidget):
         previous_scale = self._scale
         previous_fps_cap = self._fps_cap
         self._scale = max(0.1, min(2.0, float(scale)))
+        if abs(self._scale - previous_scale) > 0.001:
+            self._scale_preview = None
+            self._scale_preview_origin = None
         self._fps_cap = min((6, 12, 15, 24), key=lambda candidate: abs(candidate - int(fps_cap)))
         self._locked = bool(locked)
         self._bubble_enabled = bool(bubble_enabled)
@@ -570,15 +599,15 @@ class DesktopPetWindow(QWidget):
             self._sprite_bounds = self._sprite_bounds.united(QRegion(frame.mask()).boundingRect())
         self._sprite_canvas = frames[0].size()
         self._png_frame_delays = self._prepared_gif_delays.get(cache_key, ())
-        if animation.state.name == "move":
+        if animation.state.name in {"move", "run"}:
             if cache_key not in self._prepared_gaits:
-                self._prepared_gaits[cache_key] = self._prepare_walking_gait(self._active_pack, animation, frames)
+                self._prepared_gaits[cache_key] = self._prepare_locomotion_gait(self._active_pack, animation, frames)
             self._gait = self._prepared_gaits[cache_key]
         self._png_index = 0
         self._png_loop = animation.state.loop
         self._png_next_state = animation.state.next_state
         self._display_png_frame()
-        if self._travel_kind != "move":
+        if self._travel_kind not in {"move", "run"}:
             self._png_timer.start(self._frame_interval(animation.state.fps))
 
     def _frame_interval(self, fps: int) -> int:
@@ -645,13 +674,13 @@ class DesktopPetWindow(QWidget):
             return
         next_index = self._png_index + 1
         if next_index >= len(self._png_frames):
-            if not self._png_loop and self._travel_kind != "move":
+            if not self._png_loop and self._travel_kind not in {"move", "run"}:
                 self._png_timer.stop()
                 self.animation_finished.emit(self._png_next_state)
                 return
             next_index = 0
         self._png_index = next_index
-        if self._png_frame_delays and self._active_animation and self._travel_kind != "move":
+        if self._png_frame_delays and self._active_animation and self._travel_kind not in {"move", "run"}:
             self._png_timer.start(self._frame_interval(self._active_animation.state.fps))
         self._display_png_frame()
 
@@ -692,9 +721,13 @@ class DesktopPetWindow(QWidget):
         if not self._png_frames:
             return
         frame = self._png_frames[self._png_index]
+        preview_size = self._preview_size()
+        if preview_size is not None:
+            frame = frame.scaled(preview_size, Qt.AspectRatioMode.KeepAspectRatio,
+                                 Qt.TransformationMode.FastTransformation)
         horizontal_scale = self._facing_scale()
         self._label.setPixmap(frame.transformed(QTransform().scale(horizontal_scale, 1)))
-        floor_offset = self._gait.floor_offsets[self._png_index] if self._travel_kind == "move" and self._gait else 0
+        floor_offset = self._gait.floor_offsets[self._png_index] if self._travel_kind in {"move", "run"} and self._gait else 0
         self._label.move(0, round(floor_offset))
         if self._bubble.isVisible():
             self._place_bubble()
@@ -706,10 +739,12 @@ class DesktopPetWindow(QWidget):
         super().resizeEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.MouseButton.LeftButton and not self._locked:
-            self.cancel_travel()
-            self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            self._dragging = False
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._double_click_release = False
+            if not self._locked:
+                self.cancel_travel()
+                self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                self._dragging = False
             event.accept()
             return
         super().mousePressEvent(event)
@@ -717,6 +752,10 @@ class DesktopPetWindow(QWidget):
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if self._drag_offset is not None and event.buttons() & Qt.MouseButton.LeftButton:
             if not self._dragging:
+                displacement = event.globalPosition().toPoint() - self.frameGeometry().topLeft() - self._drag_offset
+                if displacement.manhattanLength() < QApplication.startDragDistance():
+                    event.accept()
+                    return
                 self._dragging = True
                 self.drag_started.emit()
             self.move(event.globalPosition().toPoint() - self._drag_offset)
@@ -731,14 +770,17 @@ class DesktopPetWindow(QWidget):
             was_dragging = self._dragging
             self._drag_offset = None
             self._dragging = False
-            self._keep_visible()
-            placement = self.placement()
-            if placement is not None:
-                self.placement_changed.emit(placement)
             if was_dragging:
+                self._keep_visible()
+                placement = self.placement()
+                if placement is not None:
+                    self.placement_changed.emit(placement)
                 self.drag_finished.emit()
-            else:
-                self._single_click_timer.start(QApplication.doubleClickInterval())
+            elif not self._double_click_release:
+                self.clicked.emit()
+            self._double_click_release = False
+            event.accept()
+            return
         elif event.button() == Qt.MouseButton.RightButton:
             self.context_menu_requested.emit(event.globalPosition().toPoint())
             event.accept()
@@ -747,7 +789,9 @@ class DesktopPetWindow(QWidget):
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            self._single_click_timer.stop()
+            self._double_click_release = True
+            self._drag_offset = None
+            self._dragging = False
             self.double_clicked.emit()
             event.accept()
             return
@@ -756,12 +800,14 @@ class DesktopPetWindow(QWidget):
     def closeEvent(self, event) -> None:
         self.cancel_travel()
         self.stop_animation()
-        self._single_click_timer.stop()
         self._bubble_timer.stop()
         self._bubble.close()
         super().closeEvent(event)
 
     def hideEvent(self, event) -> None:
+        self._drag_offset = None
+        self._dragging = False
+        self._double_click_release = False
         self._finish_transition()
         self._cancel_turn()
         self.hide_bubble()

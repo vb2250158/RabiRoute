@@ -3,19 +3,20 @@ import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { promises as fs } from "node:fs";
+import { promises as fs, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CompanionContinuationStore } from "./companionContinuation.js";
-import { CompanionActivity } from "./companionActivity.js";
+import { CompanionActivity, readCompanionPresets } from "./companionActivity.js";
 import { companionActivityHandler } from "./companionActivityRoutes.js";
+const presets = readCompanionPresets(JSON.parse(readFileSync("packages/rabi-companion/presets.json", "utf8")));
 
 test("local menu admission resolves the persona Route and recording consent, rejects origin/tunnel/readonly requests", async t => {
   let readOnly = false, consent = false;
   const recoveryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "companion-route-recovery-"));
   t.after(() => fs.rm(recoveryRoot, { recursive: true, force: true }));
   const continuation = new CompanionContinuationStore(recoveryRoot);
-  const service = new CompanionActivity({ presets: [{ id: "adaptive", label: "自适应", labelEn: "Adaptive", reviewSeconds: 25, replyAgeSeconds: 30, guidance: "observe" }],
+  const service = new CompanionActivity({ presets,
     changed: () => {}, reaction: () => {}, save: async () => {}, cancelSpeech: async () => {}, speak: async () => {}, deliver: async () => {} });
   const handler = companionActivityHandler(service, { continuation, local: () => true, readOnly: () => readOnly,
     verifyGateway: (role, gateway) => { assert.equal(role, "one"); return gateway || "persona-route"; },
@@ -33,8 +34,8 @@ test("local menu admission resolves the persona Route and recording consent, rej
   const s = (await accepted.json() as any).data.session;
   assert.equal(s.gatewayId, "persona-route"); assert.equal(s.saveSummary, false);
   assert.equal((await continuation.read("one"))?.gatewayId, "persona-route");
-  const command = async (session: any, action: string) => {
-    const response = await fetch(`${base}/command`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sessionId: session.id, revision: session.revision, action }) });
+  const command = async (session: any, action: string, presetId?: string) => {
+    const response = await fetch(`${base}/command`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sessionId: session.id, revision: session.revision, action, presetId }) });
     assert.equal(response.status, 200);
     return (await response.json() as any).data.session;
   };
@@ -42,7 +43,12 @@ test("local menu admission resolves the persona Route and recording consent, rej
   assert.equal(await continuation.read("one"), null);
   const resumed = await command(paused, "resume");
   assert.equal((await continuation.read("one"))?.gatewayId, "persona-route");
-  const end = await fetch(`${base}/command`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sessionId: resumed.id, revision: resumed.revision, action: "stop" }) });
+  const working = await command(resumed, "set-mode", "work");
+  assert.equal(working.id, resumed.id); assert.equal(working.presetId, "work");
+  assert.equal((await continuation.read("one"))?.presetId, "work");
+  const snapshot = ((await (await fetch(base)).json()) as any).data;
+  assert.ok(snapshot.presets.some((preset: any) => preset.id === "work"));
+  const end = await fetch(`${base}/command`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sessionId: working.id, revision: working.revision, action: "stop" }) });
   assert.equal(end.status, 200);
   assert.equal(await continuation.read("one"), null);
   assert.equal(((await (await fetch(base)).json()) as any).data.resumeIntent, null);
@@ -56,7 +62,7 @@ test("authenticated remote Agents share companionship start, read and stop", asy
   const authority = new LanAgentAuthority({ statePath: path.join(root, "auth.json") });
   const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "remote-fixture");
   authority.registerAgentCatalog(credential.token, [{ agentId: "worker", provider: "custom-provider" }]);
-  const service = new CompanionActivity({ presets: [{ id: "adaptive", label: "自适应", labelEn: "Adaptive", reviewSeconds: 25, replyAgeSeconds: 30, guidance: "observe" }],
+  const service = new CompanionActivity({ presets,
     changed: () => {}, reaction: () => {}, save: async () => {}, cancelSpeech: async () => {}, speak: async () => {}, deliver: async () => {} });
   const handler = companionActivityHandler(service, { local: () => false, readOnly: () => false,
     verifyGateway: () => "persona-route", saveSummaryDefault: async () => false, last: async () => null });
@@ -73,7 +79,11 @@ test("authenticated remote Agents share companionship start, read and stop", asy
   assert.equal(start.status, 200);
   const session = ((await start.json()) as any).data.session;
   assert.equal((await fetch(base, { headers })).status, 200);
-  const stop = await fetch(`${base}/command`, { method: "POST", headers, body: JSON.stringify({ sessionId: session.id, revision: session.revision, action: "stop" }) });
+  const mode = await fetch(`${base}/command`, { method: "POST", headers, body: JSON.stringify({ sessionId: session.id, revision: session.revision, action: "set-mode", presetId: "work" }) });
+  assert.equal(mode.status, 200);
+  const working = ((await mode.json()) as any).data.session;
+  assert.equal(working.id, session.id); assert.equal(working.activityKind, "work");
+  const stop = await fetch(`${base}/command`, { method: "POST", headers, body: JSON.stringify({ sessionId: working.id, revision: working.revision, action: "stop" }) });
   assert.equal(stop.status, 200);
   authority.setAgentEnabled("remote-fixture", "worker", false);
   assert.equal((await fetch(base, { headers })).status, 403);

@@ -27,6 +27,20 @@ class DesktopPetIdleBehavior:
     random_states: tuple[str, ...] = ()
     sleep_after_seconds: float = 0.0
     sleep_state: str = ""
+    idle_state: str = "idle"
+
+
+@dataclass(frozen=True)
+class DesktopPetModeAnimationSet:
+    idle_state: str
+    random_min_seconds: float = 0.0
+    random_max_seconds: float = 0.0
+    random_states: tuple[str, ...] = ()
+    click_states: tuple[str, ...] = ()
+
+    def idle_behavior(self) -> DesktopPetIdleBehavior:
+        return DesktopPetIdleBehavior(self.random_min_seconds, self.random_max_seconds,
+                                      self.random_states, idle_state=self.idle_state)
 
 
 @dataclass(frozen=True)
@@ -41,6 +55,7 @@ class DesktopPetPack:
     idle_behavior: DesktopPetIdleBehavior = DesktopPetIdleBehavior()
     source_facing: str = "right"
     companion_states: dict[str, str] = field(default_factory=dict)
+    mode_animation_sets: dict[str, DesktopPetModeAnimationSet] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -223,6 +238,25 @@ def parse_desktop_pet_catalog(payload: object, persona_id: str) -> tuple[Desktop
             ),
             sleep_state=sleep_state,
         )
+        mode_sets: dict[str, DesktopPetModeAnimationSet] = {}
+        raw_mode_sets = row.get("modeAnimationSets")
+        for mode_id, group in (raw_mode_sets.items() if isinstance(raw_mode_sets, dict) else ()):
+            if not isinstance(mode_id, str) or not isinstance(group, dict):
+                continue
+            idle_state = str(group.get("idleState") or "")
+            if idle_state not in states or not states[idle_state].loop:
+                continue
+
+            def action_pool(field: str) -> tuple[str, ...]:
+                values = group.get(field)
+                return tuple(dict.fromkeys(name for name in values
+                    if isinstance(name, str) and name in states and not states[name].loop
+                    and states[name].next_state == idle_state)) if isinstance(values, list) else ()
+
+            minimum = _bounded_number(group.get("randomMinSeconds"), 90, 0, 3600)
+            mode_sets[mode_id] = DesktopPetModeAnimationSet(idle_state, minimum,
+                _bounded_number(group.get("randomMaxSeconds"), max(240, minimum), minimum, 3600),
+                action_pool("randomStates"), action_pool("clickStates"))
         packs.append(
             DesktopPetPack(
                 pack_id=pack_id,
@@ -238,6 +272,7 @@ def parse_desktop_pet_catalog(payload: object, persona_id: str) -> tuple[Desktop
                                   if isinstance(kind, str) and isinstance(state, str)
                                   and state in states and states[state].loop}
                 if isinstance(row.get("companionStates"), dict) else {},
+                mode_animation_sets=mode_sets,
             )
         )
     return tuple(packs)

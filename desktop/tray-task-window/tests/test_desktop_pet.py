@@ -586,13 +586,14 @@ class DesktopPetWindowTest(unittest.TestCase):
         window = DesktopPetWindow()
         clicked = QSignalSpy(window.clicked)
         started = QSignalSpy(window.drag_started)
+        placement = QSignalSpy(window.placement_changed)
         try:
             window.resize(200, 200)
             window.show()
             QTest.mouseClick(window, Qt.MouseButton.LeftButton, pos=QPoint(50, 50))
-            QTest.qWait(QApplication.doubleClickInterval() + 50)
             self.assertEqual(clicked.count(), 1)
             self.assertEqual(started.count(), 0)
+            self.assertEqual(placement.count(), 0)
         finally:
             window.close()
 
@@ -604,9 +605,66 @@ class DesktopPetWindowTest(unittest.TestCase):
             window.resize(200, 200)
             window.show()
             QTest.mouseDClick(window, Qt.MouseButton.LeftButton, pos=QPoint(50, 50))
+            QTest.mouseRelease(window, Qt.MouseButton.LeftButton, pos=QPoint(50, 50))
             QTest.qWait(QApplication.doubleClickInterval() + 50)
             self.assertEqual(clicked.count(), 0)
             self.assertEqual(double_clicked.count(), 1)
+        finally:
+            window.close()
+
+    def test_click_jitter_stays_a_click_without_moving_or_saving(self) -> None:
+        window = DesktopPetWindow()
+        clicked = QSignalSpy(window.clicked)
+        started = QSignalSpy(window.drag_started)
+        placement = QSignalSpy(window.placement_changed)
+        try:
+            window.resize(200, 200)
+            window.show()
+            origin = window.pos()
+            point = QPoint(50, 50)
+            jitter = point + QPoint(max(1, QApplication.startDragDistance() - 1), 0)
+            QTest.mousePress(window, Qt.MouseButton.LeftButton, pos=point)
+            QTest.mouseMove(window, jitter, delay=1)
+            QTest.mouseRelease(window, Qt.MouseButton.LeftButton, pos=jitter)
+            self.assertEqual(window.pos(), origin)
+            self.assertEqual(clicked.count(), 1)
+            self.assertEqual(started.count(), 0)
+            self.assertEqual(placement.count(), 0)
+        finally:
+            window.close()
+
+    def test_first_click_reacts_and_double_click_release_does_not_react_again(self) -> None:
+        window = DesktopPetWindow()
+        clicked = QSignalSpy(window.clicked)
+        double_clicked = QSignalSpy(window.double_clicked)
+        try:
+            window.resize(200, 200)
+            window.show()
+            QTest.mouseClick(window, Qt.MouseButton.LeftButton, pos=QPoint(50, 50))
+            self.assertEqual(clicked.count(), 1)
+            QTest.mouseDClick(window, Qt.MouseButton.LeftButton, pos=QPoint(50, 50))
+            QTest.mouseRelease(window, Qt.MouseButton.LeftButton, pos=QPoint(50, 50))
+            self.assertEqual(clicked.count(), 1)
+            self.assertEqual(double_clicked.count(), 1)
+            self.assertFalse(window.pointer_engaged)
+        finally:
+            window.close()
+
+    def test_locked_pet_still_responds_without_dragging(self) -> None:
+        window = DesktopPetWindow()
+        clicked = QSignalSpy(window.clicked)
+        started = QSignalSpy(window.drag_started)
+        try:
+            window.resize(200, 200)
+            window.show()
+            window._locked = True
+            origin = window.pos()
+            QTest.mousePress(window, Qt.MouseButton.LeftButton, pos=QPoint(50, 50))
+            QTest.mouseMove(window, QPoint(90, 90), delay=1)
+            QTest.mouseRelease(window, Qt.MouseButton.LeftButton, pos=QPoint(90, 90))
+            self.assertEqual(clicked.count(), 1)
+            self.assertEqual(started.count(), 0)
+            self.assertEqual(window.pos(), origin)
         finally:
             window.close()
 

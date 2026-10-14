@@ -14,6 +14,7 @@ import {
 } from "../shared/desktopSettingsContract.js";
 import { sanitizeRoleId } from "../shared/routeIdentity.js";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
+import { normalizeDesktopPetModeAnimationSets, type DesktopPetModeAnimationSet } from "../shared/desktopPetModeAnimationSets.js";
 
 const PACK_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}$/;
 const IMAGE_EXTENSIONS = new Set([".gif", ".png"]);
@@ -53,6 +54,7 @@ export type DesktopPetPackPresentation = {
   states: Record<string, DesktopPetStateAsset>;
   idleBehavior?: DesktopPetIdleBehavior;
   companionStates?: Record<string, string>;
+  modeAnimationSets?: Record<string, DesktopPetModeAnimationSet>;
 };
 
 export type DesktopPetPackCatalog = {
@@ -247,6 +249,7 @@ function readPack(roleId: string, packDir: string): DesktopPetPackPresentation {
   const companionStates = Object.fromEntries(Object.entries(objectValue(manifest.companionStates))
     .filter(([kind, state]) => /^[a-z][a-z0-9-]{0,39}$/.test(kind) && typeof state === "string"
       && states[state]?.loop === true).slice(0, 16)) as Record<string, string>;
+  const modeAnimationSets = normalizeDesktopPetModeAnimationSets(manifest.modeAnimationSets, states);
 
   return {
     id: packId,
@@ -262,7 +265,8 @@ function readPack(roleId: string, packDir: string): DesktopPetPackPresentation {
     sourceFacing: manifest.sourceFacing === "left" ? "left" : "right",
     states,
     ...(idleBehavior ? { idleBehavior } : {}),
-    ...(Object.keys(companionStates).length ? { companionStates } : {})
+    ...(Object.keys(companionStates).length ? { companionStates } : {}),
+    ...(Object.keys(modeAnimationSets).length ? { modeAnimationSets } : {})
   };
 }
 

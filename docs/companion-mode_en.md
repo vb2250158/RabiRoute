@@ -4,9 +4,11 @@
 
 Companion comments use the [shared desktop pet bubble and speech presentation](desktop-pet-bubbles_en.md). Text follows playback and fades after its display lease. Ordinary persona speech shares the same customizable bubble, without collapse or replay buttons.
 
-Status: experimental first release. Right-click the Windows desktop pet and toggle **Companion mode**; click again to end it. No game, streaming site, activity category or window selection is required.
+Status: experimental. Enable **Companion mode** from the Windows pet's context menu, then choose Adaptive, Watch together, Play together, Work mode or Quiet company under **Companion style**. Options come from Manager's preset catalog. Switching retains the session, Route and discussion while invalidating earlier frame replies and speech.
 
-The pet follows the foreground window and sends its current frame, title and process name to this persona's enabled local Agent Route. The Agent classifies the activity as playing, watching, other or uncertain. It stays quiet during focused work or uncertain observations, discusses only visible story content without looking up future plot, and observes games without controlling them. Classification can be returned without speech. Reduced frames are delivered as actual image attachments. The local attachment lease retains only the current review for at most 180 seconds and removes it when switching or ending. A crash may leave that generation's temporary file; recovery never uses it as the current frame.
+The pet observes the foreground window and sends its current frame, title and process name to this persona's enabled local Agent Route. Adaptive mode classifies playing, watching, working, other or uncertain activities. Explicit watch, play and work modes retain the chosen activity kind. It stays quiet during focused work or uncertain observations, discusses only visible story content without looking up future plot, and observes games without controlling them. Classification can be returned without speech. Reduced frames are delivered as actual image attachments. The local attachment lease retains only the current review for at most 180 seconds and removes it when switching or ending. A crash may leave that generation's temporary file; recovery never uses it as the current frame.
+
+Work mode delivers the current frame to the Agent every 60 seconds. Automatic reviews only update classification, without displaying or speaking comments; explicit questions can receive replies. Quiet company reviews only when the user speaks. Capture still rearms every five seconds; preset timing controls delivery to the Agent.
 
 Acquisition rearms five seconds after completion, without overlapping jobs. Frames remain briefly in memory and are reduced to a maximum dimension of 960 pixels. Enabling companionship does not enable cameras, microphones or system audio. Window or title changes invalidate earlier replies and cancel only the activity's previous speech scope. Capture interruption pauses the activity after 20 seconds and resumes when foreground capture returns. Explicit pauses, hiding, muting and ended sessions do not resume this way.
 
@@ -14,7 +16,26 @@ The bound local DSH owner is discovered automatically. If offline, its Home's ex
 
 Foreground players, video page titles and matching foreground video playback metadata classify the scene before the Agent replies. Playback metadata is read-only; background music is not foreground video evidence. Rules live in `packages/rabi-companion/scene-rules.json`; unmatched scenes retain Agent visual classification. Every review returns classification, including empty text when remaining quiet. An uncertain reply preserves existing window evidence. Automatic classifications may return within 180 seconds; scene comments expire after 30 seconds and are then discarded without speech.
 
-Packs can map `watch` and `play` to looping actions through `companionStates`. Watching retains the sofa pose and playing retains the gaming chair pose while comments use the bubble. Ordinary random actions, sleep and wandering pause during companionship. Scene changes switch poses; pausing or ending leaves the scene pose, and ending restores ordinary idle behavior. Packs without the mapping retain their existing presentation.
+Packs can map `watch`, `play` and `work` to looping actions through `companionStates`. Watching retains the sofa pose and playing retains the gaming chair pose. Work uses its mapped pose, falling back to a looping thinking action or idle when unavailable. Comments use the bubble. Ordinary random actions, sleep and wandering pause during companionship. Scene changes switch poses; pausing or ending leaves the scene pose, and ending restores ordinary idle behavior.
+
+## Mode animation sets
+
+Use `modeAnimationSets` when each mode needs its own idle and gestures. The current preset ID takes precedence over activity kind. Adaptive classification can therefore select the `work` set as well.
+
+```json
+"modeAnimationSets": {
+  "work": {
+    "idleState": "work-idle",
+    "randomIntervalSeconds": {"min": 45, "max": 120},
+    "randomStates": ["work-type", "work-read", "work-stretch"],
+    "clickStates": ["work-nod"]
+  }
+}
+```
+
+The set's idle must loop. Random and click actions play once and declare `next` as that set's idle. Clicks prefer the set's click pool; random gestures run only when playback is available. Speech retains the current pose within the set, and dragging or travel restores the current mode after ending. Switching drops old gestures. Companionship pauses sleep, and ending restores ordinary idle, sleep and wandering settings.
+
+Older `companionStates` mappings retain their single looping pose without copying the ordinary random pool. New packs use `modeAnimationSets`, with the old mapping used only when no set matches. In the new pack, declare the set and remove its same-name legacy mapping. Import a new immutable ID and retain the accepted old pack; do not overwrite it.
 
 While companionship is enabled, the pet remains visible over fullscreen applications and pauses random wandering. Ending restores its settings. Existing click-through settings are preserved; use the tray to disable click-through before right-clicking. Exactly one enabled local Agent Route is required for menu admission; the management page can explicitly use a selected Route. Manager retains the desktop enable intent in a machine-local recovery checkpoint. After Manager or pet restart, the original Route is revalidated and a fresh activity starts, without reusing frames, replies or speech. Explicit pause, hide, mute or stop clears recovery intent. The optional browser local-video player does not resume automatically.
 
@@ -36,11 +57,11 @@ Discover `managerBaseUrl` from the current Host `status --json`, then verify gen
 
 - `GET /api/roles/{roleId}/companion`: presets and current session.
 - `POST .../start`: `requestId`, optional `gatewayId`, `presetId`, `title`, `autoReview`, `voice`, optional `saveSummary`, `observationOwner`.
-- `POST .../command`: `sessionId`, `revision`, `action` (pause/resume/seek/interrupt/stop); seek also requires `positionSeconds`.
+- `POST .../command`: `sessionId`, `revision`, `action` (pause/resume/seek/interrupt/stop/set-mode); seek requires `positionSeconds`, and set-mode requires a catalog `presetId` and returns the updated session revision.
 - `POST .../observation`: session/revision plus ordered, timestamped JPEG `observation`.
 - `POST .../review`: session/revision and optional user `text`.
 - `GET .../frame?reviewId=...`: frozen review frame, unavailable after expiry.
-- `POST .../reply`: `sessionId`, `revision`, `reviewId`, `text`, optional `state` and `activityKind` (play/watch/other/uncertain). Empty text means silence.
+- `POST .../reply`: `sessionId`, `revision`, `reviewId`, `text`, optional `state` and `activityKind` (play/watch/work/other/uncertain). Empty text means silence.
 - `GET .../last`: latest opted-in summary; never starts or resumes a session.
 
 The companion module does not automatically create memories or plans. Reduced frames and text delivered to the Agent may still be retained by the existing Route as attachments, chat history or caches under its existing retention policy; disabling activity summaries does not delete Agent history. Summaries use atomic writes and stable activity IDs. Manager owns live session state. Agents must return fenced replies; an expired 409 ends silently without task announcements or external messages.

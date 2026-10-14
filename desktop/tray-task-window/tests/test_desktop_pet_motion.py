@@ -18,8 +18,8 @@ from rabiroute_tray.desktop_pet_controller import DesktopPetController
 from rabiroute_tray.desktop_pet_events import DesktopPetEventStream
 from rabiroute_tray.desktop_pet_motion import ForegroundWindow, corner_positions, logical_bounds, matches_monitor, travel_kind
 from rabiroute_tray.desktop_pet_window import DesktopPetWindow
-from rabiroute_tray.desktop_pet_gait import SoleFrame, walking_gait
-from pet_motion_fixture import play_walk, finish_walk, walking_animation, advance_walk
+from rabiroute_tray.desktop_pet_gait import SoleFrame, running_gait, walking_gait
+from pet_motion_fixture import play_walk, play_run, finish_walk, walking_animation, advance_walk
 
 
 class DesktopPetMotionTest(unittest.TestCase):
@@ -52,11 +52,14 @@ class DesktopPetMotionTest(unittest.TestCase):
         self.assertTrue(matches_monitor((-3840, -707, 0, 1453), (-3840, -707, 2560, 1440), 1.5))
         self.assertFalse(matches_monitor((-3840, -707, 0, 1453), (0, 0, 2560, 1440), 1.5))
 
-    def test_nearby_monitor_edge_walks_and_more_than_one_screen_teleports(self):
-        self.assertEqual(travel_kind(True, (0, 0), (1920, 1080), (1920, 1080)), "move")
-        self.assertEqual(travel_kind(False, (1900, 100), (1950, 100), (1920, 1080)), "move")
-        self.assertEqual(travel_kind(False, (-1920, 0), (-640, 720), (1280, 720)), "move")
-        self.assertEqual(travel_kind(False, (0, 0), (3000, 100), (1920, 1080)), "teleport")
+    def test_auto_uses_half_available_width_and_euclidean_logical_distance_even_across_screens(self):
+        self.assertEqual(travel_kind((0, 0), (500, 0), 1000), "move")
+        self.assertEqual(travel_kind((0, 0), (501, 0), 1000), "run")
+        self.assertEqual(travel_kind((0, 0), (300, 400), 1000), "move")
+        self.assertEqual(travel_kind((0, 0), (400, 400), 1000), "run")
+        self.assertEqual(travel_kind((1900, 100), (1950, 100), 1920), "move")
+        self.assertEqual(travel_kind((-1920, 0), (-640, 720), 1280), "run")
+        self.assertEqual(travel_kind((0, 0), (3000, 100), 1920), "run")
 
     def test_wander_waits_then_reads_foreground_and_respects_pause_conditions(self):
         with (patch.object(DesktopPetEventStream, "start"), patch.object(DesktopPetEventStream, "stop"),
@@ -153,6 +156,44 @@ class DesktopPetMotionTest(unittest.TestCase):
         self.assertAlmostEqual(window._gait.cycle_distance, small * 2)
         self.assertEqual(window._png_timer.interval(), 167)
         window.close()
+
+    def test_run_uses_its_own_animation_stride_and_the_existing_clock_without_speeding_walk_frames(self):
+        window = DesktopPetWindow()
+        play_walk(window); window.show(); window.move(100, 100)
+        self.assertTrue(window.travel_to(QPoint(400, 100), "move"))
+        walking_speed = window._walk_speed
+        walking_interval = window._frame_interval(window._active_animation.state.fps)
+        window.cancel_travel()
+        play_run(window); window.move(100, 100)
+        self.assertTrue(window.travel_to(QPoint(400, 100), "run"))
+        self.assertEqual(window.active_state, "run")
+        self.assertEqual(window._frame_interval(window._active_animation.state.fps), walking_interval)
+        self.assertAlmostEqual(window._walk_speed, walking_speed * 2)
+        self.assertFalse(window._png_timer.isActive())
+        for _ in range(20):
+            advance_walk(window, 0.0166)
+        self.assertAlmostEqual(window._walked_distance, window._gait.cycle_distance, places=5)
+        self.assertEqual(window._png_index, 0)
+        finish_walk(window)
+        self.assertEqual(window.pos(), QPoint(400, 100))
+        window.close()
+
+    def test_run_cannot_reuse_a_loaded_walk_as_a_fake_running_animation(self):
+        window = DesktopPetWindow()
+        play_walk(window); window.show(); window.move(100, 100)
+        self.assertFalse(window.travel_to(QPoint(400, 100), "run"))
+        self.assertEqual(window.pos(), QPoint(100, 100))
+        self.assertFalse(window.travelling)
+        window.close()
+
+    def test_run_calibration_ignores_airborne_sweeps_and_preserves_authored_lift(self):
+        frames = (SoleFrame((10, 90), (30, 80)), SoleFrame((8, 90), (35, 80)),
+                  SoleFrame((5, 80), (40, 75)), SoleFrame((3, 80), (45, 75)),
+                  SoleFrame((10, 90), (30, 80)))
+        gait = running_gait(frames)
+        self.assertIsNotNone(gait)
+        self.assertEqual(gait.advances, (0, 2, 0, 0, 0))
+        self.assertEqual(gait.floor_offsets, (0, 0, 0, 0, 0))
 
     def test_stride_scales_linearly_at_small_and_large_sizes(self):
         window = DesktopPetWindow()

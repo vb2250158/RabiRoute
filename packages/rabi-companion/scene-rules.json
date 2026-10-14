@@ -5,6 +5,7 @@
     {"kind":"watch","processPattern":"^(chrome|msedge|firefox|brave|opera)\\.exe$","titlePattern":"(_哔哩哔哩_bilibili|[-–|] YouTube|[-–|] Netflix|番剧|正在播放|视频播放|bilibili.*全屏)"},
     {"kind":"play","processPattern":"^(game|gameclient|unityplayer|unrealgame|.*-win64-shipping)\\.exe$"},
     {"kind":"play","titlePattern":"(原神|崩坏：?星穹铁道|绝区零|鸣潮|FINAL FANTASY XIV|World of Warcraft|Minecraft|Counter-Strike|Dota 2|League of Legends|ELDEN RING|Stardew Valley)$"},
-    {"kind":"other","processPattern":"^(code|devenv|notepad|windowsterminal|powershell|pwsh|explorer)\\.exe$"}
+    {"kind":"work","processPattern":"^(code|code-insiders|devenv|notepad|notepad[+][+]|windowsterminal|powershell|pwsh|winword|excel|powerpnt|onenote|obsidian)\\.exe$"},
+    {"kind":"other","processPattern":"^explorer\\.exe$"}
   ]
 }
