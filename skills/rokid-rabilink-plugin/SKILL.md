@@ -31,9 +31,9 @@ Rizon has two similar but different import flows:
 
 When the user says "导入工具", generate or point them to a tool-import JSON, not the full plugin import JSON.
 
-For Rizon tool import, prefer the Postman Collection tool-import file first. Rizon's plugin-detail "导入工具" flow may still reject otherwise valid OpenAPI files with `convert protocol failed: inconsistent API URL prefix`. The Postman file must use absolute HTTPS URLs like `https://<domain>/rokid/rabilink/tasks` and `https://<domain>/rokid/rabilink/messages?after=`. Do not use `{{base_url}}`; Rizon currently treats Postman variables as literal invalid URLs.
+For Rizon tool import, prefer the Postman Collection tool-import file first. Rizon's plugin-detail "导入工具" flow may still reject otherwise valid OpenAPI files with `convert protocol failed: inconsistent API URL prefix`. The Postman file must use absolute HTTPS URLs like `https://<domain>/rokid/rabilink/input` and `https://<domain>/rokid/rabilink/messages?after=`. Do not use `{{base_url}}`; Rizon currently treats Postman variables as literal invalid URLs.
 
-OpenAPI remains a fallback. If using OpenAPI for tool import, use `servers.url = https://<domain>/rokid/rabilink` and relative paths `/tasks` and `/messages`.
+OpenAPI remains a fallback. If using OpenAPI for tool import, use `servers.url = https://<domain>` and full paths `/rokid/rabilink/input` and `/rokid/rabilink/messages`.
 
 ## Rizon Import Constraints
 
@@ -41,7 +41,7 @@ OpenAPI remains a fallback. If using OpenAPI for tool import, use `servers.url =
 - HTTPS is safest for Rizon validation; HTTP may fail or be blocked.
 - All APIs in one import must share the same URL prefix.
 - Rizon import is picky:
-  - Response status should only use `"200"` for each operation.
+  - Response statuses must match the current wire contract: `202` for input acceptance and `200` for downstream reads. Verify platform import support separately.
   - JSON responses must include `content.application/json.schema`.
   - POST JSON bodies need a concrete `requestBody.content.application/json.schema`.
   - Avoid `default` responses unless the platform has been verified to accept them.
@@ -51,7 +51,7 @@ OpenAPI remains a fallback. If using OpenAPI for tool import, use `servers.url =
 
 For the Rizon/Lingzhu task-channel interaction, expose only:
 
-- `submitRabiLinkTask`: `POST /rokid/rabilink/tasks`
+- `submitRabiLinkTask`: `POST /rokid/rabilink/input`
   - Sends the user's full utterance or image-derived request to the relay.
   - Required body: `text`.
   - Optional body: `sender`, `context`.
@@ -71,7 +71,7 @@ Use these rules in the Rokid agent prompt:
 2. Put the complete user utterance into `text`; do not rewrite, summarize, or omit details.
 3. Put `sender` as `Rokid Glass`.
 4. Put a short current conversation summary or visual observation into `context`.
-5. Then call `RabiLinkMessage.getRabiLinkMessages`.
+5. Then call `RabiLinkMessage.getRabiLinkMessages` using the accepted response cursor. `eventId` identifies the original input; acceptance is not Agent completion.
 6. First call can use empty `after`.
 7. Later calls use previous `nextCursor` or `cursor`.
 8. `getRabiLinkMessages` does not need `taskId`.
@@ -120,7 +120,7 @@ getRabiLinkMessages 不需要 taskId。
 getRabiLinkTaskResult 只用于查看状态，不要把它的 text、reply、answer、content 转述给用户，避免重复回复。
 
 如果 done 为 true 或 shouldContinue 为 false，停止轮询。
-如果工具返回错误、超时或没有 taskId，告诉用户：RabiLink 转发暂时失败，请稍后再试。
+如果工具返回错误、超时或没有 eventId，告诉用户：RabiLink 转发暂时失败，请稍后再试。
 ```
 
 Opening:

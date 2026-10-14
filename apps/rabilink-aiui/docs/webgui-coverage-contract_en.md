@@ -2,16 +2,14 @@
 
 English | [简体中文](webgui-coverage-contract.md)
 
-`npm run check` retains `Audit-WebguiCoverage.mjs`. The audit checks explicit endpoint/method/owner/mode/classification contracts. It neither requires glasses to duplicate every PC management screen nor claims the former 35 missing entries were implemented.
+`Audit-WebguiCoverage.mjs`, included in `npm run check`, checks whether public Manager paths discovered in the WebGUI can use the generic API transport. New public APIs need no audit catalog entry, Relay change, or per-interface authorization. Actual business results remain subject to the target PC handler, parameters, versions, object ownership, and explicit user disabling.
 
-- `required`: existing legacy configuration retains both page implementation and actual Relay method permission requirements.
-- `unsupported`: PC-only hooks, LAN Agents, login controls, Xiaomi, desktop pets/settings, processing board, performance, plugins, cache, video, access management and unimplemented role records/documents remain denied by generic forwarding.
-- `dedicated`: device profiles, knowledge calls and owner grants use authenticated dedicated routes. Plan statuses map to `plan_statuses`, not generic role API access.
-- `pc-helper`: role Skill request helpers have a stable manifest; PC browsing does not prove glasses Skill execution.
-- `dynamic-prefix`: peer and dynamic gateway actions are not complete endpoints or wildcard grants. Supported gateway actions are individually required.
+The audit uses the shared `validateApiRequest` and `API_METHODS` to check GET, HEAD, POST, PUT, PATCH, DELETE, and OPTIONS for every discovered path. Mutation samples carry a stable operationId. Extracted fetch methods are descriptive; a statically observed GET must not hide restrictions on dynamic writes.
 
-Balanced template scanning handles nested expressions and quotes; query suffixes no longer become paths. Unknown discoveries fail closed. Dynamic suffixes retain `:dynamic`. Literal fetch scanning is supplemented by checked helper manifests, not full TypeScript data-flow analysis; new indirect helpers require explicit registration.
+`webgui-coverage-contract.mjs` retains a regression fixture index for known UI features and connection protocols. Historical `required` entries still check existing page features, and linked fixtures still require their files to exist. Old `unsupported`, `pc-only`, and `dedicated` labels do not define public Manager API permissions. All known PC paths also receive generic transport checks; explicit Relay connection helper contracts remain separate.
 
-The audit extracts and executes the actual current `mobileWebguiPathAllowed(method,path)` for GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS, rather than searching the whole Relay file for pathname text. Dedicated endpoints must remain generically denied. Contracts link existing profile HTTP, knowledge E2E and grant HTTP fixtures; checking fixture existence does not replace executing those tests.
+Balanced template scanning handles nested `${...}` expressions and quotes. Parameters and dynamic suffixes remain `:param` and `:dynamic`, with safe samples used for transport checks. A dynamic sample is neither a complete business endpoint nor proof of a successful real request. Literal fetch scanning and a checked Skill helper are covered; this is not complete TypeScript data-flow analysis. Indirect helpers still need discovery fixtures.
 
-Run `node --test scripts/webgui-coverage.test.mjs` for positive cases and rejection of unknown endpoints or sensitive permission widening. The local snapshot audit and four tests passed. No Relay permissions, model ownership, layout, installation or device state were changed. Manifest methods define explicit permission boundaries; a default fetch GET is not evidence of server support.
+Internal paths, transport-private paths, and protocol-relative external URLs remain rejected for every shared method. Generic transport still validates relative paths, headers, limits, and mutation idempotency keys. Persona, workspace, Route, and catalog registration do not add another capability permission.
+
+Run `node --test scripts/webgui-coverage.test.mjs` from the application directory. Tests cover current discoveries, unlisted future APIs, dynamic persona and scan paths, deliberate restrictions on future writes, and private-boundary negatives across every method. Static checks and fixture-file existence do not replace actual HTTP, streaming, or device acceptance. Glasses need not duplicate the entire PC management UI.

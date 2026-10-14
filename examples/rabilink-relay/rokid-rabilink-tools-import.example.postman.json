@@ -27,7 +27,7 @@
           }
         },
         "url": {
-          "raw": "https://rabi.example.com/rokid/rabilink/tasks",
+          "raw": "https://rabi.example.com/rokid/rabilink/input",
           "protocol": "https",
           "host": [
             "rabi",
@@ -37,16 +37,16 @@
           "path": [
             "rokid",
             "rabilink",
-            "tasks"
+            "input"
           ]
         },
         "description": "提交 RabiLink 任务。text 填用户完整原话；sender 通常填 Rokid Glass；context 填当前对话或照片观察上下文。"
       },
       "response": [
         {
-          "name": "200 task accepted",
-          "status": "OK",
-          "code": 200,
+          "name": "202 input accepted",
+          "status": "Accepted",
+          "code": 202,
           "_postman_previewlanguage": "json",
           "header": [
             {
@@ -54,7 +54,7 @@
               "value": "application/json"
             }
           ],
-          "body": "{\n  \"ok\": true,\n  \"code\": 0,\n  \"status\": \"pending\",\n  \"taskId\": \"rabilink-relay-example\",\n  \"text\": \"已收到，正在转交 RabiLink 和后端 Agent。请稍后查询结果。\"\n}"
+          "body": "{\n  \"code\": 0,\n  \"ok\": true,\n  \"status\": \"accepted\",\n  \"eventId\": \"event-example\",\n  \"cursor\": \"\",\n  \"nextCursor\": \"\",\n  \"acceptedAt\": 1767225600000\n}"
         }
       ]
     },

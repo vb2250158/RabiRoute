@@ -3,7 +3,7 @@
   "info": {
     "title": "RabiLinkMessage Tools",
     "description": "RabiLinkMessage tools for forwarding Rokid agent utterances to RabiLink Relay and pulling downstream messages.",
-    "version": "1.0.0"
+    "version": "1.1.0"
   },
   "servers": [
     {
@@ -11,11 +11,11 @@
     }
   ],
   "paths": {
-    "/rokid/rabilink/tasks": {
+    "/rokid/rabilink/input": {
       "post": {
         "operationId": "submitRabiLinkTask",
         "summary": "提交 RabiLink 任务",
-        "description": "把用户在 Rokid 智能体中说出的完整内容提交到 RabiLink Relay。调用成功后返回 taskId，随后用 getRabiLinkMessages 拉取下行消息。",
+        "description": "将用户完整原话送入通用任务传输。202 accepted 仅确认入队，eventId 标识原始输入；使用返回的 cursor 或 nextCursor 拉取下行消息。",
         "requestBody": {
           "required": true,
           "content": {
@@ -44,8 +44,8 @@
           }
         },
         "responses": {
-          "200": {
-            "description": "任务提交结果。",
+          "202": {
+            "description": "输入已入队，尚未由 Agent 完成。",
             "content": {
               "application/json": {
                 "schema": {
@@ -54,29 +54,37 @@
                     "ok",
                     "code",
                     "status",
-                    "taskId",
-                    "text"
+                    "eventId",
+                    "cursor",
+                    "nextCursor",
+                    "acceptedAt"
                   ],
                   "properties": {
                     "ok": {
-                      "type": "boolean",
-                      "description": "接口是否调用成功。"
+                      "type": "boolean"
                     },
                     "code": {
-                      "type": "integer",
-                      "description": "0 表示成功。"
+                      "type": "integer"
                     },
                     "status": {
                       "type": "string",
-                      "description": "任务状态，例如 pending。"
+                      "enum": [
+                        "accepted"
+                      ]
                     },
-                    "taskId": {
+                    "eventId": {
                       "type": "string",
-                      "description": "任务 ID，可用于日志和调试；正常拉取消息不需要它。"
+                      "description": "原始输入 ID，调试任务查询使用此 ID。"
                     },
-                    "text": {
-                      "type": "string",
-                      "description": "提交确认文案，不是后端 Agent 的最终回答。"
+                    "cursor": {
+                      "type": "string"
+                    },
+                    "nextCursor": {
+                      "type": "string"
+                    },
+                    "acceptedAt": {
+                      "type": "integer",
+                      "description": "入队时间，Unix 毫秒。"
                     }
                   }
                 }

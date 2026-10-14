@@ -30,3 +30,5 @@ Validate the examples with:
 ```powershell
 npm run relay:rabilink:openapi:check
 ```
+
+Rizon/Lingzhu submits to `POST /rokid/rabilink/input`. HTTP 202 with `eventId` and a cursor confirms enqueueing; downstream messages establish the Agent response. Native AIUI uses the generic API transport described in the [AIUI client](../../apps/rabilink-aiui/README_en.md). `--examples-only` validates public templates without converting private imports.

@@ -68,14 +68,14 @@ const toolImportPostmanCandidates = [
 ];
 
 const requiredPaths = [
-  ["/rokid/rabilink/tasks", "post"],
+  ["/rokid/rabilink/input", "post"],
   ["/rokid/rabilink/messages", "get"],
   ["/rokid/rabilink/tasks/{taskId}/messages", "get"],
   ["/rokid/rabilink/tasks/{taskId}", "get"],
 ];
 
 const toolImportRequiredPaths = [
-  ["/rokid/rabilink/tasks", "post"],
+  ["/rokid/rabilink/input", "post"],
   ["/rokid/rabilink/messages", "get"],
 ];
 
@@ -100,18 +100,19 @@ function getOperation(document, routePath, method) {
 
 function validateResponses(relativePath, operation, routePath, method) {
   const responseKeys = Object.keys(operation.responses || {});
+  const expectedStatus = routePath === "/rokid/rabilink/input" && method === "post" ? "202" : "200";
   assert(
     responseKeys.length > 0,
     `${relativePath}: ${method.toUpperCase()} ${routePath} has no responses.`,
   );
   assert(
-    responseKeys.every((status) => status === "200"),
-    `${relativePath}: ${method.toUpperCase()} ${routePath} must only define 200 responses, got ${responseKeys.join(", ")}.`,
+    responseKeys.every((status) => status === expectedStatus),
+    `${relativePath}: ${method.toUpperCase()} ${routePath} must only define ${expectedStatus} responses, got ${responseKeys.join(", ")}.`,
   );
-  const content = operation.responses["200"]?.content;
+  const content = operation.responses[expectedStatus]?.content;
   assert(
     content?.["application/json"]?.schema,
-    `${relativePath}: ${method.toUpperCase()} ${routePath} 200 response must define application/json schema.`,
+    `${relativePath}: ${method.toUpperCase()} ${routePath} ${expectedStatus} response must define application/json schema.`,
   );
 }
 
@@ -199,7 +200,7 @@ function validateToolImportDocument(candidate) {
   const pathNames = new Set(Object.keys(document.paths || {}));
   assert(!pathNames.has("/rokid/rabilink/tasks/{taskId}/messages"), `${candidate.file}: tool import must not include task-scoped message polling.`);
   assert(!pathNames.has("/rokid/rabilink/tasks/{taskId}"), `${candidate.file}: tool import must not include task status debug tool.`);
-  assert(!pathNames.has("/tasks"), `${candidate.file}: tool import should use full /rokid/rabilink/tasks path with root servers.url.`);
+  assert(!pathNames.has("/tasks"), `${candidate.file}: tool import should use full /rokid/rabilink/input path with root servers.url.`);
   assert(!pathNames.has("/messages"), `${candidate.file}: tool import should use full /rokid/rabilink/messages path with root servers.url.`);
 
   for (const [routePath, method] of toolImportRequiredPaths) {
@@ -238,11 +239,12 @@ function flattenPostmanItems(items, output = []) {
 
 function validatePostmanResponse(candidateFile, item) {
   const responses = item.response || [];
-  const okResponse = responses.find((response) => response.code === 200);
-  assert(okResponse, `${candidateFile}: ${item.name} should include a 200 response example.`);
+  const expectedStatus = item.request.method === "POST" ? 202 : 200;
+  const okResponse = responses.find((response) => response.code === expectedStatus);
+  assert(okResponse, `${candidateFile}: ${item.name} should include a ${expectedStatus} response example.`);
   const contentType = (okResponse.header || []).find((header) => header.key?.toLowerCase() === "content-type")?.value || "";
-  assert(contentType.includes("application/json"), `${candidateFile}: ${item.name} 200 response must be application/json.`);
-  assert(okResponse.body, `${candidateFile}: ${item.name} 200 response should include JSON body.`);
+  assert(contentType.includes("application/json"), `${candidateFile}: ${item.name} ${expectedStatus} response must be application/json.`);
+  assert(okResponse.body, `${candidateFile}: ${item.name} ${expectedStatus} response should include JSON body.`);
   JSON.parse(okResponse.body);
 }
 
@@ -292,7 +294,7 @@ function validateToolImportPostman(candidate) {
   }
 
   assert(submit.request.method === "POST", `${candidate.file}: submitRabiLinkTask must use POST.`);
-  assert(submit.request.url?.raw === `${expectedBaseUrl}/rokid/rabilink/tasks`, `${candidate.file}: submitRabiLinkTask URL must be ${expectedBaseUrl}/rokid/rabilink/tasks.`);
+  assert(submit.request.url?.raw === `${expectedBaseUrl}/rokid/rabilink/input`, `${candidate.file}: submitRabiLinkTask URL must be ${expectedBaseUrl}/rokid/rabilink/input.`);
   assert(submit.request.body?.mode === "raw", `${candidate.file}: submitRabiLinkTask should use raw JSON body.`);
   const submitBody = JSON.parse(submit.request.body.raw);
   assert(typeof submitBody.text === "string", `${candidate.file}: submitRabiLinkTask body should include text.`);
@@ -315,9 +317,9 @@ function validateToolImportPostman(candidate) {
 
 try {
   const results = [
-    ...candidates.map(validateDocument),
-    ...toolImportCandidates.map(validateToolImportDocument),
-    ...toolImportPostmanCandidates.map(validateToolImportPostman),
+    ...candidates.filter(candidate => !process.argv.includes("--examples-only") || !candidate.optional).map(validateDocument),
+    ...toolImportCandidates.filter(candidate => !process.argv.includes("--examples-only") || !candidate.optional).map(validateToolImportDocument),
+    ...toolImportPostmanCandidates.filter(candidate => !process.argv.includes("--examples-only") || !candidate.optional).map(validateToolImportPostman),
   ].filter(Boolean);
   for (const result of results) {
     console.log(`[ok] ${result.file} title=${result.title} server=${result.serverUrl} auth=${result.security}`);

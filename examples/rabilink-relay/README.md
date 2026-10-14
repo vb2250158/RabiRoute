@@ -36,10 +36,12 @@ RabiLinkMessage 用于把 Rokid 智能体中的语音或图片上下文转发到
 插件图标使用仓库根目录的 `assets/rabiroute-icon.png`。OpenAPI 示例里已写入 `info.x-logo.url` 指向 GitHub raw 图标；如果 Rizon/灵珠不自动读取 `x-logo`，就在插件编辑页手动上传这个图标。
 
 工具导入示例只包含正式交互需要的 `submitRabiLinkTask` 和 `getRabiLinkMessages`，避免导入旧的 taskId 拉取调试接口。
-如果 Rizon 的 OpenAPI 工具导入报 `convert protocol failed: inconsistent API URL prefix`，使用 Postman Collection 版。Postman 版必须写成完整 HTTPS URL，例如 `https://rabi.example.com/rokid/rabilink/tasks`；不要使用 `{{base_url}}`，Rizon 当前不会展开 Postman 变量。
+如果 Rizon 的 OpenAPI 工具导入报 `convert protocol failed: inconsistent API URL prefix`，使用 Postman Collection 版。Postman 版必须写成完整 HTTPS URL，例如 `https://rabi.example.com/rokid/rabilink/input`；不要使用 `{{base_url}}`，Rizon 当前不会展开 Postman 变量。
 
 校验命令：
 
 ```powershell
 npm run relay:rabilink:openapi:check
 ```
+
+Rizon/灵珠使用 `POST /rokid/rabilink/input`。HTTP 202、`eventId` 和 cursor 只确认入队，Agent 响应以原输入的下行消息为准。新版 AIUI 采用[客户端通用 API 传输](../../apps/rabilink-aiui/README.md)。校验命令加 `--examples-only` 可只检查公开模板，不转换私有旧导入文件。

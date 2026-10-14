@@ -2,16 +2,14 @@
 
 [English](webgui-coverage-contract_en.md) | 简体中文
 
-`npm run check` 保留 `Audit-WebguiCoverage.mjs` 入口。它验证显式端点／方法／owner／运行模式／分类合同，不要求眼镜复制全部 PC 管理界面，也不把原先 35 个缺项宣称为已实现。
+`npm run check` 中的 `Audit-WebguiCoverage.mjs` 检查 WebGUI 发现的公共 Manager 路径能否使用通用 API 传输。新增公共 API 不需要加入审计目录、修改 Relay 或补充逐接口授权。实际业务是否成功，由目标 PC 接口及其参数、版本、对象归属和用户明确禁用项决定。
 
-- `required`：原有 legacy 配置功能继续要求页面实现与实际 Relay 方法权限同时存在。
-- `unsupported`：PC 专用 hooks、LAN Agent、登录控制、小爱、桌宠、桌面、处理看板、性能、插件、缓存、视频、访问设置，以及未实现角色记录／文档能力，通用转发必须拒绝。
-- `dedicated`：设备 profile、知识请求和 owner 授权仅走专用认证入口；角色计划状态通过 `plan_statuses` 工具映射，不开放通用角色接口。
-- `pc-helper`：角色 Skill 浏览器的 request helper 用稳定 manifest 声明，仅 PC 界面功能，不等于眼镜 Skill 执行。
-- `dynamic-prefix`：peer、动态 gateway action 等不是完整 endpoint，也不是泛权限；具体可用 gateway action 单独列入 required。
+审计使用共享 `validateApiRequest` 和 `API_METHODS`，对每个发现路径检查 GET、HEAD、POST、PUT、PATCH、DELETE、OPTIONS。写入样本带稳定 operationId。发现的 fetch 方法仅供描述；动态调用不能因为静态扫描显示 GET 就漏查写入方法。
 
-模板解析平衡嵌套 `${...}` 和引号，查询后缀不再成为路径；未知发现路径失败关闭。动态尾部保留 `:dynamic`，不能误标完整覆盖。当前扫描 fetch 字面量，间接 request helper 由受检 manifest 补齐；这不是全 TypeScript 数据流分析，新 helper 仍须显式登记。
+`webgui-coverage-contract.mjs` 保留已知 UI 和连接协议的回归夹具索引。历史 `required` 项继续检查原有页面功能，关联 fixture 继续检查文件存在；旧 `unsupported`、`pc-only`、`dedicated` 等标签不决定公共 Manager API 权限。所有已知 PC 路径同样检查通用传输；Relay 连接 helper 的显式合同独立保留。
 
-权限验证从当前 Relay 提取真实 `mobileWebguiPathAllowed(method,path)` 并执行，逐 GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS 核对，不再对整文件搜索 pathname。专用入口仍必须被 generic 权限拒绝，合同关联现有真实 profile HTTP、knowledge E2E 和授权 HTTP fixture；审计检查 fixture 存在，实际 fixture 必须单独执行，不能把静态关联当业务测试成功。
+模板扫描平衡嵌套 `${...}` 和引号，参数与动态尾部分别保留为 `:param`、`:dynamic`，并用安全样本检查传输。动态样本不是完整业务端点或实际请求成功的证明。当前扫描覆盖 fetch 字面量和受检 Skill helper，不是完整 TypeScript 数据流分析；间接 helper 的发现覆盖仍需相应夹具。
 
-`node --test scripts/webgui-coverage.test.mjs` 验证未知端点及敏感权限扩大都会失败。本轮本机快照主审计和 4 项测试通过；未扩大 Relay 白名单，未改变模型、布局、安装或设备状态。动态 endpoint 的 HTTP 方法由 manifest明确授权边界，不能仅凭 fetch 的默认 GET 推断服务器支持。
+内部路径、传输私有路径和协议相对外部 URL 对全部共享方法保持拒绝。通用传输仍校验相对路径、请求头、大小及写入幂等键，不把人格、工作区、Route 或目录登记当作额外功能许可。
+
+从应用目录运行 `node --test scripts/webgui-coverage.test.mjs`。测试覆盖当前发现路径、未登记的未来接口、动态人格与扫描路径、故意收窄未来写入方法，以及全部方法的私有边界负例。静态审计与 fixture 文件存在检查不代替实际 HTTP、流式或设备验收；眼镜也无需复制 PC 的全部管理界面。

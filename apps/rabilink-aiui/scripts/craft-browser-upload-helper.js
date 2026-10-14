@@ -64,7 +64,7 @@
 
   const DEFAULTS = {
     agentName: "RabiLink",
-    version: "1.0.37",
+    version: "1.0.38",
     description: "AI glasses continuous Agent stream and native AIUI LanguageModel configuration surface through RabiLink Relay.",
     iconUrl: "https://basecloud.rokidcdn.com/basecloud/prod/coze/default_agent_icon.png",
     permissions: "RECORD_AUDIO,SPEECH_RECOGNITION,INTERNET",

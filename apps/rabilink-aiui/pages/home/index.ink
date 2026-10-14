@@ -4462,6 +4462,7 @@ export default {
         },
         onError: (error) => {
           const errorCode = String(error?.nativeCode || error?.code || "unknown");
+          console.error(`[RabiLink AIUI] ${purpose}-asr:error ${cloudSafeMessage(errorCode)}`);
           const fatal = ["not-allowed", "service-not-allowed", "audio-capture"].includes(errorCode);
           this.setData(purpose === "configuration"
             ? {
@@ -4480,6 +4481,7 @@ export default {
         onEnd: () => finishRound("end")
       });
     } catch (error) {
+      console.error(`[RabiLink AIUI] ${purpose}-asr:create-failed ${cloudSafeMessage(error?.message || error)}`);
       this.appendLog(`创建 AIUI 原生 ASR 失败：${error?.message || error}`);
       finishRound("fatal");
       return;

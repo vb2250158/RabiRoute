@@ -59,6 +59,9 @@ function validateReader(reader, label) {
 
   const markup = Buffer.from(reader.read_file("pages/home/index.wxml")).toString("utf8");
   const pageScript = Buffer.from(reader.read_file("pages/home/index.js")).toString("utf8");
+  const appScript = Buffer.from(reader.read_file("app.js")).toString("utf8");
+  assert(appScript.includes(`releaseVersion: ${JSON.stringify(releaseVersion)}`), `${label} app version differs from the Craft release version.`);
+  assert(!appScript.includes("__RABILINK_RELEASE_VERSION__"), `${label} app version marker is unresolved.`);
   const appJson = JSON.parse(Buffer.from(reader.read_file("app.json")).toString("utf8"));
   assert(markup.includes("unifiedModeHud"), `${label} is missing the shared transcription/configuration HUD.`);
   assert((markup.match(/class="releaseVersion"/g) || []).length === 1, `${label} must show its release version beside battery in the shared card/immersive HUD.`);

@@ -17,6 +17,8 @@ The model-turn runtime is separate from page interaction: one task serializes re
 
 ## Current implementation and boundaries
 
+Packaging injects the same `craft-release.json` version into the app and page; archive validation checks both. Native ASR construction and runtime errors retain sanitized reasons in simulator logs to distinguish application failures from host capability issues.
+
 - The default runtime is `local-aiui`. Obtaining device credentials or connecting Relay/PC does not automatically change the model owner.
 - “Local” means that the AIUI page calls its host model, not that inference necessarily runs physically on the glasses or works offline. Current code calls `LanguageModel.create(options)`, checks availability and rejects known offline state.
 - Spoken “set/bind agent” commands only change the **local display name**, not a Lingzhu platform binding. `agentId` is not a verified platform invocation route. Renaming saves the complete `{id,name,prompt}` first; storage failure preserves the existing name/model, and late obsolete models cannot replace a newer session.
