@@ -1303,3 +1303,15 @@ test("launch does not accept HTTP 200 empty or explicitly failed OneBot status a
     assert.equal(launches, 2);
   } finally { await close(server); fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test("Linux launch plan wraps QQ binary with sandbox flag and quick login while Windows plan is unchanged", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "napcat-linux-plan-"));
+  try {
+    const instance = { id: "bot", gatewayPort: 8789, httpUrl: "http://127.0.0.1:3000", launchCommand: "/opt/QQ/qq", workingDir: root, botUserId: "10000" };
+    const linux = resolveNapcatLaunchPlan(instance, root, "linux");
+    assert.ok(linux.args.includes("--no-sandbox"));
+    assert.deepEqual(linux.args.slice(-2), ["-q", "10000"]);
+    const win = resolveNapcatLaunchPlan(instance, root, "win32");
+    assert.deepEqual(win.args, []);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
