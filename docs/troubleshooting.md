@@ -14,6 +14,15 @@
 
 > 状态：现行指南。Codex 正式链路是 Desktop IPC 与目标任务 owner；真实消息不使用共享 4510、每 route stdio 或备用 Runtime。
 
+## Linux Host 启动或状态失败
+
+1. 确认不是以 root 运行；源码脚本会拒绝 root。需要 Node.js 20+、npm、util-linux `flock`；要用 `open` 打开浏览器时安装 `xdg-utils`。
+2. 首次源码启动用仓库根目录 `bash Start-RabiRoute-FromSource.sh`（会执行 `npm ci` 与完整构建）。已有构建时用 `npm run start:linux`，查询用 `npm run status:linux -- --json`，退出用 `npm run stop:linux`。
+3. 状态命令失败时，查看 `<stateRoot>/logs/linux-host/host.log`（默认状态根是仓库目录）。不要扫描端口或复用历史端口；每次都以 Host 返回的当前 `managerBaseUrl` 为准。
+4. 需要只检查页面、不启用自动集成时，先退出已有 Host，再运行 `npm run start:linux -- --foreground --read-only`。切换只读/状态根前必须先正常退出。
+5. 可选用户级 systemd 草稿见 [`examples/linux/rabiroute-host.service`](../examples/linux/rabiroute-host.service)；完整边界见 [Linux Host](linux-host.md)。
+
+
 ## QQ 合并转发只显示转发 ID 或 `[object Object]`
 
 新版 RabiRoute 收到 NapCat 的 `forward` 消息段或 `[CQ:forward,...]` 后，会使用当前 NapCat 实例的 OneBot HTTP Server 调用 `get_forward_msg`。查询成功后：

@@ -52,6 +52,20 @@ hr{border:0;border-top:1px solid #d9e4ed;margin:1.3em 0}.link{color:#196ca7;text
 </style></head><body><article>${content}</article></body></html>`;
 }
 
+function resolveExecutable(command: string): string | undefined {
+  if (path.isAbsolute(command)) return fs.existsSync(command) ? command : undefined;
+  for (const dir of String(process.env.PATH || "").split(path.delimiter)) {
+    if (!dir) continue;
+    const candidate = path.join(dir, command);
+    try {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate;
+    } catch {
+      /* ignore transient path races */
+    }
+  }
+  return undefined;
+}
+
 function browserCandidates(): string[] {
   const configured = process.env.RABIROUTE_MARKDOWN_BROWSER_PATH?.trim();
   if (configured) {
@@ -73,7 +87,34 @@ function browserCandidates(): string[] {
       "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
     ].filter(candidate => fs.existsSync(candidate));
   }
-  return ["chromium", "chromium-browser", "google-chrome", "microsoft-edge"];
+  // Linux and other Unix hosts: prefer absolute paths that actually exist so spawn
+  // does not rely on PATH lookup after filtering, and include common distro names.
+  const names = [
+    "chromium",
+    "chromium-browser",
+    "google-chrome-stable",
+    "google-chrome",
+    "microsoft-edge-stable",
+    "microsoft-edge"
+  ];
+  const absoluteHints = [
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "/usr/bin/google-chrome-stable",
+    "/usr/bin/google-chrome",
+    "/usr/bin/microsoft-edge-stable",
+    "/usr/bin/microsoft-edge",
+    "/snap/bin/chromium"
+  ];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const candidate of [...absoluteHints, ...names]) {
+    const resolved = resolveExecutable(candidate);
+    if (!resolved || seen.has(resolved)) continue;
+    seen.add(resolved);
+    result.push(resolved);
+  }
+  return result;
 }
 
 async function launchBrowser(profileDir: string): Promise<{ process: ChildProcessWithoutNullStreams; port: number }> {
@@ -246,7 +287,7 @@ async function captureHtmlOnSocket(socket: WebSocket, html: string, timeoutMs = 
 }
 
 /** @internal Socket-level seam for deterministic CDP lifecycle tests. */
-export const markdownImageInternals = { captureHtmlOnSocket };
+export const markdownImageInternals = { captureHtmlOnSocket, browserCandidates };
 
 export async function renderMarkdownToPng(markdown: string): Promise<Buffer> {
   if (!markdown.trim() || Buffer.byteLength(markdown, "utf8") > MAX_MARKDOWN_BYTES) {

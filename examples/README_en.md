@@ -31,6 +31,7 @@ cp -R examples/data/. data/
 | [`data/`](./data/README_en.md) | Current example | Copyable Routes, personas, plans, and memory structures. |
 | [`rabilink-relay/`](./rabilink-relay/README_en.md) | Current example | Sanitized Relay tool-import and authentication templates. |
 | [`plugin-bundles/manager-echo/`](./plugin-bundles/manager-echo/README_en.md) | Current example | Controlled Manager Bundle, Profile Patch, and hot-replacement template. |
+| [`linux/`](./linux/README_en.md) | Current example | Optional current-user systemd unit draft for running an existing Linux Host build in the foreground; not installed by the startup script. |
 | [`rabi-link-vela-probe/`](./rabi-link-vela-probe/README_en.md) | Historical probe | Retained evidence from the vela wearable investigation. |
 | `.env.example` | Optional template | Environment-variable startup for a single Gateway without the Manager. |
 | `send-webhook-demo.*` | Current example | Sends test text to the generic Webhook endpoint. |

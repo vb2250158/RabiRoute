@@ -14,6 +14,15 @@ Rediscover the current Manager address through Host, then read `/meta` for curre
 
 > Status: current guide. The formal Codex path is Desktop IPC plus the target task owner; real messages do not use a shared port, per-route stdio process, or fallback Runtime.
 
+
+## Linux Host startup or status fails
+
+1. Do not run as root; the source script refuses root. Requires Node.js 20+, npm, and util-linux `flock`. Install `xdg-utils` when using Host `open` to launch a browser.
+2. First source start: `bash Start-RabiRoute-FromSource.sh` from the repository root (runs `npm ci` and a full build). With an existing build use `npm run start:linux`, query with `npm run status:linux -- --json`, and shut down with `npm run stop:linux`.
+3. When status fails, inspect `<stateRoot>/logs/linux-host/host.log` (the repository is the default state root). Do not scan ports or reuse historical ports; always take the current `managerBaseUrl` returned by Host.
+4. To inspect pages without automatic integrations, quit any existing Host, then run `npm run start:linux -- --foreground --read-only`. Quit cleanly before switching read-only mode or state roots.
+5. An optional current-user systemd draft is at [`examples/linux/rabiroute-host.service`](../examples/linux/rabiroute-host.service). Full boundaries: [Linux Host](linux-host_en.md).
+
 ## Forwarded QQ messages show only an ID or `[object Object]`
 
 RabiRoute resolves NapCat `forward` segments through OneBot `get_forward_msg`. On success, it keeps the outer content in `originalRawMessage`, writes expanded text to `rawMessage`, and stores structured `forwardedMessages` nodes.

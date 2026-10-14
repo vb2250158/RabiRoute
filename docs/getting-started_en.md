@@ -22,7 +22,7 @@ For a full Windows source build, double-click `Start-RabiRoute-FromSource.bat` i
 
 ### Linux Host
 
-Linux requires Node.js 20+, npm, and util-linux `flock`. To start the existing WebGUI:
+Linux requires Node.js 20+, npm, and util-linux `flock`; install `xdg-utils` when using Host `open` to launch a browser. To start the existing WebGUI:
 
 1. Enter the checkout and run the initial build/start script:
 

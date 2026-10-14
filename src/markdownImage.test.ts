@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { EventEmitter } from "node:events";
 import type WebSocket from "ws";
@@ -116,6 +118,15 @@ test("Markdown image HTML keeps raw markup and remote images inert", () => {
   assert.ok(!html.includes("<img"));
   assert.ok(!html.includes("href=\"javascript:"));
   assert.ok(html.includes("default-src 'none'"));
+});
+
+
+test("Linux browser discovery returns only existing absolute executables", { skip: process.platform === "win32" || process.platform === "darwin" }, () => {
+  const candidates = markdownImageInternals.browserCandidates();
+  for (const candidate of candidates) {
+    assert.ok(path.isAbsolute(candidate), candidate);
+    assert.ok(fs.existsSync(candidate), candidate);
+  }
 });
 
 test("real browser renders Chinese Markdown, a table, and code to PNG", async (t) => {
