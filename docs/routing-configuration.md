@@ -34,7 +34,7 @@ data/roles/DevAssistant/personaConfig.json
 
 Manager 会扫描 `data/roles/*/personaConfig.json`。当前格式以文件根级的 `automationRules`、`speechTriggerKeywords` 和 `recentMessageLimits` 为真源，不再要求在人格文件里另建 `configs` 嵌套。旧 `notificationRules` 会兼容读取并转换。
 
-路由入口参数来自 `data/route/<配置名>/adapterConfig.json`。manager 用其中的 `agentRoleId` 找到对应人格；多条 Route 绑定同一人格时，复用同一套人格规则、语音关键词和分消息端上下文额度。新增并启用消息端时，Manager 会为尚未被现有规则覆盖的 route kind 自动补一条空白兜底模板，避免入口已经收到消息却因空规则静默丢失；现有自定义规则不会被覆盖，已明确禁用的对应规则也不会被重新启用。内置 `role_panel_message` 规则仍会保留。
+路由入口参数来自 `data/route/<配置名>/adapterConfig.json`。manager 用其中的 `agentRoleId` 找到对应人格；多条 Route 绑定同一人格时，复用同一套人格规则、语音关键词和分消息端上下文额度。默认规则在初始化或显式迁移时生成。已保存的自动化规则是投递真源，读取不会补回已删除项。目标引用与升级步骤见[自动化 Agent 投递](automation-agent-delivery.md)。
 
 ## personaConfig.json 结构
 
@@ -68,6 +68,7 @@ Manager 会扫描 `data/roles/*/personaConfig.json`。当前格式以文件根�
       },
       "action": {
         "type": "deliver_agent",
+        "target": { "kind": "recipient", "recipientId": "primary" },
         "template": ""
       }
     }
@@ -90,6 +91,7 @@ Manager 会扫描 `data/roles/*/personaConfig.json`。当前格式以文件根�
   },
   "action": {
     "type": "deliver_agent",
+        "target": { "kind": "recipient", "recipientId": "primary" },
     "template": "<由真实换行模板正文保存得到>"
   }
 }
@@ -128,7 +130,7 @@ Manager 会扫描 `data/roles/*/personaConfig.json`。当前格式以文件根�
 - `private`：私聊消息。
 - `heartbeat`：定时触发消息。
 - `manual_trigger`：手动触发事件，例如托盘菜单主动触发某条任务/规则。它不是消息 adapter 类型，也不会伪装成 heartbeat；是否投递仍由规则的 `enabled` 和 `routeKinds` 勾选决定。
-- `role_panel_message`：Manager 内置的人格消息。它同时承载本地角色面板和经过身份校验的跨人格投递，不是可配置网络 listener。两种入口共用同一投递服务：处理端接收后才写 `sent`，失败写 `failed`；内置规则会自动存在，不能当成普通可删除规则。
+- `role_panel_message`：Manager 内置的人格消息。它同时承载本地角色面板和经过身份校验的跨人格投递，不是可配置网络 listener。两种入口共用同一投递服务：处理端接收后才写 `sent`，失败写 `failed`；规则在初始化时生成，之后由人格自动化保存的配置决定是否投递。
 - `plan_feedback`：Manager 在计划审批意见落盘后生成的独立系统事件。它由明确的 `roleId / gatewayId / planId` 定位，不依赖可编辑消息规则，不写角色面板 timeline 或统一会话账本，也不注入最近消息。
 - `voice_transcript`：Webhook / 语音转写文本。
 - `rabilink`：RabiLink 显式消息或本地兼容入口事件。AIUI observation 的主链通常先 record-first 写统一账本，不会让每条 observation 都直接成为该 route kind 的 Agent 任务。

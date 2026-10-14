@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeAgentRecipients } from "./shared/agentDeliveryTarget.js";
 import { normalizeRouteAgentTargets } from "./shared/routeAgentTargets.js";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
@@ -59,6 +60,9 @@ export const defaultVoiceTranscriptNotificationTemplate = "";
 export type NotificationRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat" | "manual_trigger" | "role_panel_message" | "plan_feedback" | "voice_transcript" | "rabilink" | "wearable_health_alert" | "wecom_message" | "weixin_message" | "feishu_message" | "xiaomi_home_event";
 
 export type NotificationRule = {
+  agentTarget?: import("./shared/agentDeliveryTarget.js").AgentDeliveryTarget;
+  sourceRouteIds?: string[];
+  triggerIds?: string[];
   id: string;
   name: string;
   enabled: boolean;
@@ -349,6 +353,9 @@ function normalizeNotificationRule(item: unknown, index: number): NotificationRu
 
   return {
     id: raw.id || `rule-${index + 1}`,
+    agentTarget: raw.agentTarget,
+    sourceRouteIds: raw.sourceRouteIds,
+    triggerIds: raw.triggerIds,
     name: raw.name || raw.id || `规则 ${index + 1}`,
     enabled: raw.enabled !== false,
     routeKinds,
@@ -375,7 +382,7 @@ function normalizeRouteProfile(item: unknown, index: number, defaults: RouteProf
   const roleId = identity.roleId;
   const id = identity.runtimeId;
   const automationRules = normalizePersonaAutomationRules(raw.automationRules);
-  const rules = automationRules.length > 0
+  const rules = Array.isArray(raw.automationRules)
     ? parseNotificationRules(JSON.stringify(notificationRulesFromPersonaAutomations(automationRules))) ?? []
     : parseNotificationRules(JSON.stringify(raw.notificationRules ?? [])) ?? [];
   const pipelinePreset = typeof raw.pipelinePreset === "string" && raw.pipelinePreset.trim() ? raw.pipelinePreset.trim() : undefined;
@@ -476,10 +483,6 @@ const codexPlanAssistantEnabled = parseBoolean(
   process.env.CODEX_PLAN_ASSISTANT_ENABLED,
   configuredCodexPlanAssistantSessions.length > 0
 );
-const codexMemoryConsolidationAgentEnabled = parseBoolean(
-  process.env.CODEX_MEMORY_CONSOLIDATION_AGENT_ENABLED,
-  false
-);
 const codexMemoryConsolidationAgentModel = normalizeCodexMemoryConsolidationAgentModel(
   process.env.CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL
 );
@@ -571,6 +574,7 @@ export const config = {
   remoteAgentTargets: routeAgentTargets.remoteAgentTargets,
   primaryAgentAdapter: routeAgentTargets.primaryAgentAdapter,
   messageProcessingAgents,
+  agentRecipients: normalizeAgentRecipients(parseJsonEnvironmentValue(process.env.AGENT_RECIPIENTS, "AGENT_RECIPIENTS")),
   agentModel,
   agentReasoningEffort,
   codexThreadId: process.env.CODEX_THREAD_ID?.trim() || "",
@@ -584,6 +588,11 @@ export const config = {
   dshModel: process.env.DSH_MODEL?.trim() || "",
   dshReasoningEffort: process.env.DSH_REASONING_EFFORT?.trim() || "",
   workbuddySessionId: process.env.WORKBUDDY_SESSION_ID?.trim() || "",
+  grokBotProfilePath: process.env.GROK_BOT_PROFILE_PATH?.trim() || "",
+  grokBotBackendUrl: process.env.GROK_BOT_BACKEND_URL?.trim() || "",
+  grokBotAgentId: process.env.GROK_BOT_AGENT_ID?.trim() || "",
+  grokBotSessionId: process.env.GROK_BOT_SESSION_ID?.trim() || "",
+  grokBotSessionName: process.env.GROK_BOT_SESSION_NAME?.trim() || "",
   workbuddySessionName: process.env.WORKBUDDY_SESSION_NAME?.trim() || "",
   workbuddyCwd: normalizeCodexCwd(process.env.WORKBUDDY_CWD) ?? "",
   workbuddyEndpoint: process.env.WORKBUDDY_ENDPOINT?.trim() || "",
@@ -595,7 +604,6 @@ export const config = {
   codexPlanAssistantEnabled,
   codexPlanAssistantModel,
   codexPlanAssistantSessions: activeCodexPlanAssistantSessions,
-  codexMemoryConsolidationAgentEnabled,
   codexMemoryConsolidationAgentModel,
   copilotThreadName: process.env.COPILOT_THREAD_NAME?.trim() || "Copilot CLI",
   targetGroupId: process.env.TARGET_GROUP_ID ?? "",

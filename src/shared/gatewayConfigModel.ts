@@ -1,4 +1,5 @@
 import { type AgentInstanceBinding } from "./agentInstance.js";
+import { normalizeAgentDeliveryTarget, normalizeAgentRecipients, type AgentDeliveryTarget, type AgentRecipientDefinition } from "./agentDeliveryTarget.js";
 import { normalizeRemotePersonaReference } from "./remotePersonaReference.js";
 import { normalizeRouteAgentTargets, resolvePrimaryAgentTarget, type RemoteAgentTarget } from "./routeAgentTargets.js";
 import { normalizeAgentCompletionDeliveries, type AgentCompletionDeliveryRule } from "./agentHookAutomation.js";
@@ -220,6 +221,9 @@ export type PipelineDefinition = {
 };
 
 export type NotificationRuleDefinition = {
+  agentTarget?: AgentDeliveryTarget;
+  sourceRouteIds?: string[];
+  triggerIds?: string[];
   id: string;
   name?: string;
   enabled?: boolean;
@@ -248,6 +252,7 @@ export type NotificationScheduleDefinition = {
 export type PersonaAutomationTriggerDefinition =
   | {
     type: "message";
+    triggerIds?: string[];
     routeKinds?: string[];
     targetGroupId?: string;
     allowedSpeakerNames?: string[];
@@ -261,6 +266,7 @@ export type PersonaAutomationTriggerDefinition =
 export type PersonaAutomationActionDefinition =
   | {
     type: "deliver_agent";
+    target?: AgentDeliveryTarget;
     message?: string;
     template?: string;
   }
@@ -273,6 +279,7 @@ export type PersonaAutomationActionDefinition =
 
 export type PersonaAutomationRuleDefinition = {
   id: string;
+  sourceRouteIds?: string[];
   name?: string;
   enabled?: boolean;
   trigger: PersonaAutomationTriggerDefinition;
@@ -329,6 +336,7 @@ export type ResolvedNapCatInstances = {
 };
 
 export type GatewayDefinition = {
+  agentRecipients?: AgentRecipientDefinition[];
   id: string;
   name?: string;
   enabled?: boolean;
@@ -431,6 +439,11 @@ export type GatewayDefinition = {
   astrbotPassword?: string;
   astrbotProjectId?: string;
   astrbotSessionId?: string;
+  grokBotProfilePath?: string;
+  grokBotBackendUrl?: string;
+  grokBotAgentId?: string;
+  grokBotSessionId?: string;
+  grokBotSessionName?: string;
   rolesDir?: string;
   routesDir?: string;
   configName?: string;
@@ -647,6 +660,9 @@ export function normalizeRuleDefinitions(rules: unknown): NotificationRuleDefini
     const raw = rule && typeof rule === "object" ? rule as Partial<NotificationRuleDefinition> : {};
     return {
       id: typeof raw.id === "string" && raw.id.trim() ? raw.id : `rule-${index + 1}`,
+      ...(raw.agentTarget === undefined ? {} : { agentTarget: normalizeAgentDeliveryTarget(raw.agentTarget) }),
+      ...(raw.sourceRouteIds ? { sourceRouteIds: raw.sourceRouteIds } : {}),
+      ...(raw.triggerIds ? { triggerIds: raw.triggerIds } : {}),
       name: raw.name,
       enabled: raw.enabled !== false,
       routeKinds: Array.isArray(raw.routeKinds) ? raw.routeKinds.map(String) : [],
@@ -662,7 +678,7 @@ export function normalizeRuleDefinitions(rules: unknown): NotificationRuleDefini
 }
 
 export function defaultRolePanelNotificationRule(): NotificationRuleDefinition {
-  return createBuiltinRolePanelRule();
+  return { ...createBuiltinRolePanelRule(), agentTarget: { kind: "recipient", recipientId: "primary" } };
 }
 
 function defaultRouteKindsForMessageAdapter(adapter: MessageEndpointType): string[] {
@@ -704,6 +720,7 @@ export function defaultMessageAdapterNotificationRules(adapters: MessageEndpoint
     if (routeKinds.length === 0) return [];
     return [{
       id: `default-${adapter}`,
+      agentTarget: { kind: "recipient" as const, recipientId: "primary" },
       name: defaultRuleNameForMessageAdapter(adapter),
       enabled: true,
       routeKinds,
@@ -795,6 +812,7 @@ function normalizeAutomationAction(value: unknown): PersonaAutomationActionDefin
   }
   return {
     type: "deliver_agent",
+    target: raw.target === undefined ? undefined : normalizeAgentDeliveryTarget(raw.target),
     message: typeof raw.message === "string" ? normalizeTemplateText(raw.message) : "",
     template: typeof raw.template === "string" ? normalizeTemplateText(raw.template) : ""
   };
@@ -818,6 +836,7 @@ function normalizeAutomationTrigger(value: unknown, index: number): PersonaAutom
   }
   return {
     type: "message",
+    ...(Array.isArray(raw.triggerIds) ? { triggerIds: raw.triggerIds.map(String) } : {}),
     routeKinds: Array.isArray(raw.routeKinds) ? raw.routeKinds.map(String) : [],
     targetGroupId: typeof raw.targetGroupId === "string" ? raw.targetGroupId : "",
     allowedSpeakerNames: Array.isArray(raw.allowedSpeakerNames)
@@ -835,6 +854,7 @@ export function normalizePersonaAutomationRules(value: unknown): PersonaAutomati
       : {};
     return {
       id: typeof raw.id === "string" && raw.id.trim() ? raw.id.trim() : `automation-${index + 1}`,
+      ...(raw.sourceRouteIds ? { sourceRouteIds: raw.sourceRouteIds.map(String) } : {}),
       name: typeof raw.name === "string" ? raw.name : undefined,
       enabled: raw.enabled !== false,
       trigger: normalizeAutomationTrigger(raw.trigger, index),
@@ -865,6 +885,7 @@ function notificationRuleAutomation(rule: NotificationRuleDefinition): PersonaAu
     enabled: rule.enabled !== false,
     trigger: {
       type: "message",
+      triggerIds: rule.triggerIds,
       routeKinds: rule.routeKinds ?? [],
       targetGroupId: rule.targetGroupId ?? "",
       allowedSpeakerNames: rule.allowedSpeakerNames ?? [],
@@ -872,6 +893,7 @@ function notificationRuleAutomation(rule: NotificationRuleDefinition): PersonaAu
     },
     action: {
       type: "deliver_agent",
+      target: rule.agentTarget === undefined ? undefined : normalizeAgentDeliveryTarget(rule.agentTarget),
       template: rule.template ?? ""
     }
   };
@@ -905,6 +927,7 @@ export function personaAutomationRulesFromNotificationRules(
         trigger: { type: "schedule", schedule },
         action: {
           type: "deliver_agent",
+          target: rule.agentTarget,
           message: `定时计划触发：${rule.name || rule.id} / ${schedule.name || schedule.id}`,
           template: rule.template ?? ""
         }
@@ -928,7 +951,10 @@ export function notificationRulesFromPersonaAutomations(
       targetGroupId: automation.trigger.targetGroupId ?? "",
       allowedSpeakerNames: automation.trigger.allowedSpeakerNames ?? [],
       regex: automation.trigger.regex ?? "",
-      template: automation.action.template ?? ""
+      triggerIds: automation.trigger.triggerIds,
+      template: automation.action.template ?? "",
+      agentTarget: automation.action.target === undefined ? undefined : normalizeAgentDeliveryTarget(automation.action.target),
+      sourceRouteIds: automation.sourceRouteIds
     });
   }
   return rules;
@@ -938,7 +964,7 @@ export function ensureDefaultPersonaAutomations(
   automations: PersonaAutomationRuleDefinition[] | undefined
 ): PersonaAutomationRuleDefinition[] {
   const normalized = normalizePersonaAutomationRules(automations);
-  if (!normalized.some((rule) => rule.id === "role-panel-message")) {
+  if (automations === undefined && !normalized.some((rule) => rule.id === "role-panel-message")) {
     normalized.push(notificationRuleAutomation(defaultRolePanelNotificationRule()));
   }
   const rolePanelIndex = normalized.findIndex((rule) => rule.id === "role-panel-message");
@@ -1296,7 +1322,7 @@ export function primaryMessageProcessingAgentAdapter(definition: Pick<
   const primary = resolvePrimaryAgentTarget(definition)?.provider;
   return primary
     && agentAdapterSupportsManagedTaskFeature(primary, "messageProcessingAgent")
-    && definition.messageProcessingAgents?.[primary]?.enabled === true
+    && Boolean(definition.messageProcessingAgents?.[primary])
     ? primary
     : undefined;
 }
@@ -1336,10 +1362,10 @@ function normalizeRouteProfile(
   const { agentRoleId: roleId, agentRoleDeviceId } = normalizeRemotePersonaReference(profile);
   const id = sanitizeRoleId(profile.id) || roleId || `route-${index + 1}`;
   const profileAutomations = normalizePersonaAutomationRules(profile.automationRules ?? definition.automationRules);
-  const baseRules = profileAutomations.length > 0
+  const baseRules = Array.isArray(profile.automationRules ?? definition.automationRules)
     ? notificationRulesFromPersonaAutomations(profileAutomations)
     : normalizeRuleDefinitions(profile.notificationRules) ?? [];
-  const rules = gatewayAdapterTypes(definition).includes("speech")
+  const rules = !Array.isArray(profile.automationRules ?? definition.automationRules) && gatewayAdapterTypes(definition).includes("speech")
     ? ensureSpeechRouteNotificationRule(baseRules)
     : baseRules;
   if (rules.length === 0 && profileAutomations.length === 0) {
@@ -1436,13 +1462,13 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
   const baseNotificationRules = (configuredNotificationRules.length > 0 && !hasPersonaOnlyRules) || agentRoleId
     ? configuredNotificationRules
     : defaultMessageAdapterNotificationRules(activeMessageAdapters);
-  const baseAutomations = configuredAutomations.length > 0
+  const baseAutomations = Array.isArray(definition.automationRules)
     ? configuredAutomations
     : personaAutomationRulesFromNotificationRules(
       baseNotificationRules,
       normalizePositiveNumber(definition.heartbeatIntervalSeconds, 900)
     );
-  const automationRules = ensureMessageAdapterAutomationRules(baseAutomations, activeMessageAdapters, {
+  const automationRules = Array.isArray(definition.automationRules) ? baseAutomations : ensureMessageAdapterAutomationRules(baseAutomations, activeMessageAdapters, {
     includeRolePanel: false
   });
   const notificationRules = notificationRulesFromPersonaAutomations(automationRules);
@@ -1531,6 +1557,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     codexThreadId: isCodexTaskId(rawCodexThreadId) ? rawCodexThreadId : undefined,
     codexThreadName: definition.codexThreadName?.trim() || legacyCodexThreadName || undefined,
     remoteAgentTargets: targets.remoteAgentTargets,
+    agentRecipients: normalizeAgentRecipients(definition.agentRecipients),
     primaryAgentTarget: targets.primaryAgentTarget,
     dshSessionId: normalizeDshSessionId(definition.dshSessionId),
     dshSessionName: definition.dshSessionName?.trim() || undefined,
@@ -1556,9 +1583,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     codexPlanAssistantSessions: codexPlanAssistantSessions.length > 0
       ? codexPlanAssistantSessions
       : undefined,
-    codexMemoryConsolidationAgentEnabled: memoryConsolidationSupported
-      ? definition.codexMemoryConsolidationAgentEnabled === true
-      : undefined,
+    codexMemoryConsolidationAgentEnabled: undefined,
     codexMemoryConsolidationAgentModel: memoryConsolidationSupported
       ? normalizeCodexMemoryConsolidationAgentModel(definition.codexMemoryConsolidationAgentModel)
       : undefined,

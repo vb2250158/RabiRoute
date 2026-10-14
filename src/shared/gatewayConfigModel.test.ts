@@ -592,16 +592,16 @@ test("Codex plan assistant switch can disable existing task bindings without del
   assert.equal(normalized.codexPlanAssistantSessions?.length, 1);
 });
 
-test("Codex memory consolidation Agent is opt-in and defaults to GPT-5.6 Terra", () => {
+test("memory consolidation keeps model settings and removes the legacy routing switch", () => {
   const disabled = normalizeGatewayDefinition(gateway());
-  assert.equal(disabled.codexMemoryConsolidationAgentEnabled, false);
+  assert.equal(disabled.codexMemoryConsolidationAgentEnabled, undefined);
   assert.equal(disabled.codexMemoryConsolidationAgentModel, "gpt-5.6-terra");
 
   const enabled = normalizeGatewayDefinition(gateway({
     codexMemoryConsolidationAgentEnabled: true,
     codexMemoryConsolidationAgentModel: ""
   }));
-  assert.equal(enabled.codexMemoryConsolidationAgentEnabled, true);
+  assert.equal(enabled.codexMemoryConsolidationAgentEnabled, undefined);
   assert.equal(enabled.codexMemoryConsolidationAgentModel, "gpt-5.6-terra");
 });
 

@@ -6,13 +6,15 @@
 
 # RabiRoute 文档
 
+[主控与远端电脑客户端](remote-computer-client.md)：从主机操作多台电脑，使用终端、互传文件、查询窗口和查看画面。
+
 [连接与接口使用](connection-access.md)：完成一次鉴权后使用接口，说明已移除的重复限制。
 
 这里同时包含现行使用说明、实验集成、设计方案、调研和历史交接。文件存在不代表功能已经完成；阅读前先看状态。
 
 ## 先看这里
 
-- [桌宠陪伴模式](companion-mode.md) — **实验功能**。桌宠右键开启，跟随前台窗口，自适应陪玩与陪看。
+- [桌宠陪伴模式](companion-mode.md) — **实验功能**。桌宠右键开启，可选自适应、观看、游戏、工作或安静陪伴。
 
 - [查看设备并测试动作](user-guide/home-devices.md) — 查看设备卡片、能力和状态，并测试已接通的设备动作。
 - [工作区计划查询](workspace-plan-query.md) — 按宿主会话与工作区过滤的分页搜索接口。
@@ -48,6 +50,7 @@
 
 - [消息投递模板与归属](message-delivery-templates.md)：开发者查看渲染入口、场景差异和历史回执退出条件。
 - [计划与记忆摘要搜索](knowledge-search.md)
+- [自动化 Agent 投递](automation-agent-delivery.md) — 接收者引用、指定会话、迁移和重试。
 - [路由配置](routing-configuration.md) — **现行指南**。`personaConfig.json`、route kind、regex、schedule、pipeline 和模板变量。
 - [路由与人格](routing-and-personas.md) — **现行指南**。route 与 role 的边界、人格包和消息模板判断框架。
 - [本机路由使用远端人格](remote-persona-reference.md) — **0.3.19 实验实现**。选择同一 RabiLink 应用中的来源 PC 和人格，自动握手并只读资料，沿用本机消息端与处理 Agent；真实双 PC 投递仍待验收。
@@ -60,6 +63,7 @@
 - [Pipeline presets](pipeline-presets.md) — Agent 会话、明确外部目标和 Outbox 状态；其中 FenneNote 输出章节仅为归档兼容说明。
 - [Agent 端接入：历史问题、正确边界与验证手册](agent-adapter-integration-lessons.md) — **现行指南**。会话重复创建、工具缺失、owner 倒置和桌面启动依赖的复盘与验证方法。
 - [标准 Agent 端接入需求](agent-adapter-standard-requirements.md) — **现行指南**。发现、认证、任务、幂等创建、投递、结果、工具、生命周期、UI、安全和验收要求。
+- [Grok Bot Agent 端接入](grok-bot-agent-adapter.md) — **实验实现**。使用现有 cloud owner 精确投递 Bot 会话，核对真实来源、幂等与 QQ/Codex 原路回传。
 - [设备 Agent 接入合同](device-agent-adapter.md) — **实验实现**。配置眼镜为消息路线的处理端，使用眼镜模型执行，核验 PC 队列、原投递和响应回执。
 - [手机代眼镜建立连接](device-peer-connection.md) — **实验实现**。核验设备凭据、独立密钥与短期连接授权，让手机转发时保留眼镜身份。
 - [Agent 精确投递与正式回复](agent-endpoint-delivery.md) — **实验实现**。核验来源与目标 owner、原消息回执和必回复记录，处理超时及身份撤销。

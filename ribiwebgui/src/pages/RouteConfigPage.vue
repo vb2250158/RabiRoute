@@ -6,11 +6,13 @@ import { useGatewayStore } from "../stores/gatewayStore";
 import { useSpeechStore } from "../stores/speechStore";
 import InstanceAgentSettings from "../components/InstanceAgentSettings.vue";
 import DshConnectionPanel from "../components/DshConnectionPanel.vue";
+import { normalizeAgentRecipients, resolveAgentDeliveryExecutor } from "@shared/agentDeliveryTarget";
 import PrimaryAgentAdvancedSettings from "../components/PrimaryAgentAdvancedSettings.vue";
 import { localAgentTargetKey, remoteAgentTargetKey, resolvePrimaryAgentTarget } from "@shared/routeAgentTargets";
 import { addRouteAgent, removeRouteAgent, selectRouteAgent } from "../routeAgentTargetEditor";
 import { postRouteAgentThreadAction } from "../routeAgentThreadClient";
 import { routeAgentOperationGuard } from "../routeAgentOperationGuard";
+import { createGrokBotRouteScan, grokBotScanParameters, grokBotSessionPickerItems, selectGrokBotRouteSession, type GrokBotRouteConnection } from "../grokBotRouteConfig";
 import type { AgentInstance } from "@shared/agentInstance";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
 import TrustedWebRendererHost from "../components/TrustedWebRendererHost.vue";
@@ -26,7 +28,7 @@ import { isNonMessageEndpoint, adapterDefaultWebhookPath, adapterLabel, adapterR
 import { initializeAgentSessionForRoute } from "@shared/codexSessionInitialization";
 import { codexThreadItems, selectCodexThread, type CodexThreadSummary } from "@shared/codexThreadSelection";
 import { DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL, codexMemoryConsolidationAgentTitle } from "@shared/codexMemoryConsolidationAgent";
-import { agentAdapterManifest, agentAdapterSupportsManagedTaskFeature, primaryMessageProcessingAgentEnabled, DEFAULT_CODEX_HOOK_SETTINGS, DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL, DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT, MAX_MESSAGE_PROCESSING_AGENTS, messageAdapterUsesAutomaticGrouping } from "@shared/gatewayConfigModel";
+import { agentAdapterManifest, agentAdapterSupportsManagedTaskFeature, DEFAULT_CODEX_HOOK_SETTINGS, DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL, DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT, MAX_MESSAGE_PROCESSING_AGENTS, messageAdapterUsesAutomaticGrouping } from "@shared/gatewayConfigModel";
 import {
   DEFAULT_CODEX_PLAN_ASSISTANT_MODEL,
   codexPlanAssistantInitializationPrompt,
@@ -86,6 +88,17 @@ const agentScan = ref({
 });
 const dshScanLoading = ref(false);
 const dshScanRevision = ref(0);
+const grokBotOwnerFilter = ref("");
+const grokBotSelectionError = ref("");
+const grokBotScan = createGrokBotRouteScan(grokBotConnection);
+watch(() => grokBotScan.state.result, result => {
+  if (result) agentScan.value.agents = { ...agentScan.value.agents, grokBot: result };
+}, { flush: "sync" });
+
+function grokBotConnection(): GrokBotRouteConnection {
+  return { id: gateway.value?.id || "", grokBotBackendUrl: gateway.value?.grokBotBackendUrl,
+    grokBotProfilePath: gateway.value?.grokBotProfilePath, grokBotAgentId: grokBotOwnerFilter.value };
+}
 
 const codexModelItems = computed(() => codexModelPickerItems(agentScan.value.agents.codex?.models ?? []));
 const codexReasoningEffortItems = computed(() => {
@@ -229,10 +242,13 @@ async function runAgentScan(): Promise<void> {
   if (agentScan.value.loading) return;
   agentScan.value.loading = true;
   const dshRevisionAtStart = dshScanRevision.value;
+  const grokBotRevisionAtStart = grokBotScan.revision;
+  const grokBotConnectionAtStart = grokBotConnection();
   try {
     const params = new URLSearchParams();
     const dshBaseUrl = gateway.value?.dshBaseUrl?.trim();
     if (dshBaseUrl) params.set("dshBaseUrl", dshBaseUrl);
+    for (const [key, value] of grokBotScanParameters(grokBotConnectionAtStart)) params.set(key, value);
     const res = await fetch(`/api/scan/agents${params.size ? `?${params}` : ""}`);
     const data = await res.json();
     agentScan.value.threadNames = data.threadNames ?? [];
@@ -241,9 +257,12 @@ async function runAgentScan(): Promise<void> {
     agentScan.value.copilotBins = data.copilotBins ?? [];
     agentScan.value.marvisAppIds = data.marvisAppIds ?? [];
     const currentDsh = agentScan.value.agents.dsh;
+    grokBotScan.seed(data.agents?.grokBot, grokBotConnectionAtStart, grokBotRevisionAtStart);
+    const currentGrokBot = grokBotScan.state.result ?? agentScan.value.agents.grokBot;
     agentScan.value.agents = {
       ...(data.agents ?? {}),
-      ...(dshScanRevision.value !== dshRevisionAtStart && currentDsh ? { dsh: currentDsh } : {})
+      ...(dshScanRevision.value !== dshRevisionAtStart && currentDsh ? { dsh: currentDsh } : {}),
+      grokBot: currentGrokBot
     };
   } catch { /* ignore */ }
   finally { agentScan.value.loading = false; }
@@ -284,8 +303,28 @@ async function refreshLanAgentNodes(): Promise<void> {
 }
 
 function refreshAgentScan(type: AgentAdapterType): void {
+  if (type === "grokBot") { void runGrokBotAgentScan(); return; }
   const scan = type === "dsh" ? runDshAgentScan : runAgentScan;
   void scan();
+}
+
+async function runGrokBotAgentScan(): Promise<void> {
+  grokBotSelectionError.value = "";
+  await grokBotScan.refresh();
+}
+
+function grokBotSessionItems() {
+  return grokBotSessionPickerItems(gateway.value, grokBotScan.state.result?.sessions ?? []);
+}
+
+function selectGrokBotSession(value: unknown): void {
+  if (!gateway.value || grokBotScan.needsRefresh.value) return;
+  if (!selectGrokBotRouteSession(gateway.value, grokBotScan.state.result?.sessions ?? [], value)) {
+    grokBotSelectionError.value = "此会话缺少真实 owner 身份，请重新扫描并从已有会话中选择。";
+    return;
+  }
+  grokBotSelectionError.value = "";
+  touch();
 }
 
 async function runDshAgentScan(options: { append?: boolean; offset?: number; limit?: number } = {}): Promise<void> {
@@ -366,6 +405,7 @@ onMounted(() => { void runAgentScan(); });
 onMounted(() => { void speech.refreshPersonas().catch(() => undefined); });
 
 onBeforeUnmount(() => {
+  grokBotScan.dispose();
   window.clearTimeout(speechConfigSaveTimer);
   for (const timer of napcatNewDevicePollTimers.values()) window.clearTimeout(timer);
   napcatNewDevicePollTimers.clear();
@@ -3196,6 +3236,7 @@ function renameCurrentConfig(value: unknown): void {
 }
 
 const agentDefs: Array<{ type: AgentAdapterType; title: string; note: string; icon: string; hasCwd: boolean; hasThread: boolean }> = [
+  { type: "grokBot", title: "Grok Bot", note: "由已有 Grok cloud 服务执行，复用当前账号的真实会话", icon: "mdi-cloud-outline", hasCwd: false, hasThread: true },
   { type: "codex",       title: "Codex Agent",    note: "消息由桌面任务执行并实时显示", icon: "mdi-monitor-dashboard", hasCwd: true, hasThread: true },
   { type: "copilotCli",  title: "Copilot CLI",   note: "通过 GitHub Copilot CLI 投递消息",  icon: "mdi-robot-outline", hasCwd: true, hasThread: true },
   { type: "marvis",      title: "Marvis",         note: "打开 Marvis 并复制 prompt（人工接力）", icon: "mdi-message-processing-outline", hasCwd: false, hasThread: false },
@@ -3212,7 +3253,8 @@ const agentShortLabels: Partial<Record<AgentAdapterType, string>> = {
   dsh: "DSH",
   workbuddy: "WorkBuddy",
   antigravity: "Antigravity",
-  deviceAgent: "设备 Agent"
+  deviceAgent: "设备 Agent",
+  grokBot: "Grok Bot 云端会话"
 };
 
 const addAgentMenu = ref(false);
@@ -3220,7 +3262,7 @@ const testingAstrbotLogin = ref(false);
 const astrbotLoginResult = ref<{ ok: boolean; message: string } | null>(null);
 
 const agentTypes = computed(() => gateway.value?.agentAdapters ?? []);
-const visibleAgentItems = computed(() => agentDefs.filter(agent => agentTypes.value.includes(agent.type)).map(agent => ({ ...agent, title: `本机 · ${agent.title}` })));
+const visibleAgentItems = computed(() => agentDefs.filter(agent => agentTypes.value.includes(agent.type)).map(agent => ({ ...agent, title: `${agent.type === "grokBot" ? "云端" : "本机"} · ${agent.title}` })));
 const remoteAgentItems = computed(() => (gateway.value?.remoteAgentTargets || []).map(target => {
   const instance = agentInstances.value.find(item => item.instanceId === target.instanceId);
   const agent = instance?.agents.find(item => item.agentId === target.agentId);
@@ -3229,7 +3271,7 @@ const remoteAgentItems = computed(() => (gateway.value?.remoteAgentTargets || []
   return { ...target, instance, agent, title: `远端 · ${instance?.name ? `${instance.name} / ` : ''}${agentLabel}（${instance?.address || target.instanceId}）` };
 }));
 const availableAgentsToAdd = computed(() => [
-  ...agentDefs.filter(agent => agent.type !== "deviceAgent" && !agentTypes.value.includes(agent.type)).map(agent => ({ ...agent, key: localAgentTargetKey(agent.type), title: `本机 · ${agent.title}`, nodeId: undefined as string | undefined, agentId: undefined as string | undefined })),
+  ...agentDefs.filter(agent => agent.type !== "deviceAgent" && !agentTypes.value.includes(agent.type)).map(agent => ({ ...agent, key: localAgentTargetKey(agent.type), title: `${agent.type === "grokBot" ? "云端" : "本机"} · ${agent.title}`, nodeId: undefined as string | undefined, agentId: undefined as string | undefined })),
   ...agentInstances.value.flatMap(instance => instance.agents.flatMap(remote => {
     if (instance.local && remote.provider !== "deviceAgent") return [];
     const def = agentDefs.find(agent => agent.type === (remote.provider === "codex-desktop" ? "codex" : remote.provider));
@@ -3244,7 +3286,11 @@ const primaryAgentType = computed(() => primaryAgent.value?.provider);
 const primaryLocalAgentType = computed(() => primaryAgent.value?.binding ? undefined : primaryAgent.value?.provider);
 const remoteAgentParamOpen = ref<Record<string, boolean>>({});
 const managedMessageAgentModeEnabled = computed(() => (
-  gateway.value ? primaryMessageProcessingAgentEnabled(gateway.value) : false
+  gateway.value?.automationRules?.some(rule => {
+    if (rule.enabled === false || rule.action.type !== "deliver_agent" || !rule.action.target) return false;
+    try { return resolveAgentDeliveryExecutor(rule.action.target, normalizeAgentRecipients(gateway.value?.agentRecipients)) === "message_pool"; }
+    catch { return false; }
+  }) ?? false
 ));
 const primaryAgentItems = computed(() => [
   ...visibleAgentItems.value.map(agent => ({ title: agent.title, value: localAgentTargetKey(agent.type) })),
@@ -3392,9 +3438,16 @@ function maturityColor(value?: AgentMaturity): string {
   return "warning";
 }
 
+function agentAuthLabel(type: AgentAdapterType): string {
+  const loggedIn = agentScanFor(type)?.auth?.loggedIn;
+  if (type === "grokBot" && loggedIn === undefined) return "尚未扫描";
+  return loggedIn ? "已登录" : "未登录";
+}
+
 function agentConnectionLabel(type: AgentAdapterType): string {
   const scan = agentScanFor(type);
   if (!scan) return agentScan.value.loading ? "扫描中" : "未扫描";
+  if (type === "grokBot" && scan.auth?.loggedIn === undefined) return "尚未扫描";
   if (scan.auth?.required && scan.auth.loggedIn === false) return "未登录";
   if (scan.plugins?.some(plugin => !plugin.installed)) return "插件缺失";
   if (scan.endpoints?.length && !scan.endpoints.some(endpoint => endpoint.healthy)) return "未连接";
@@ -3404,7 +3457,7 @@ function agentConnectionLabel(type: AgentAdapterType): string {
 function agentConnectionColor(type: AgentAdapterType): string {
   const label = agentConnectionLabel(type);
   if (label === "已发现") return "success";
-  if (label === "扫描中" || label === "未扫描") return "secondary";
+  if (label === "扫描中" || label === "未扫描" || label === "尚未扫描") return "secondary";
   if (label === "未登录" || label === "插件缺失" || label === "未连接") return "warning";
   return "error";
 }
@@ -4065,6 +4118,9 @@ watch(() => gateway.value?.configName, (name, previousName) => {
 });
 
 watch(() => gateway.value?.id, () => {
+  grokBotOwnerFilter.value = gateway.value?.grokBotAgentId || "";
+  grokBotScan.state.queryDraft = "";
+  grokBotSelectionError.value = "";
   window.clearTimeout(napcatPanelPollTimer);
   napcatLoginPanels.value = {};
   napcatInstanceHealthResult.value = {};
@@ -4969,7 +5025,7 @@ watch(
                   </div>
                   <div v-else-if="choice.type === 'heartbeat'" class="catalog-param-grid">
                     <v-alert v-if="managedMessageAgentModeEnabled" class="full-span" type="success" variant="tonal" density="compact">
-                      Codex 消息处理 Agent 模式已开启。heartbeat 会立即交给独立消息处理 Agent，不会因为主人格会话正在工作而跳过，也不进入聊天消息合并等待。
+                      Codex 消息处理 Agent已开启。heartbeat 会立即交给独立消息处理 Agent，不会因为主人格会话正在工作而跳过，也不进入聊天消息合并等待。
                     </v-alert>
                     <v-alert v-else class="full-span" type="info" variant="tonal" density="compact">
                       定时计划在“人格配置 / 消息模板规则”的 heartbeat 规则里维护。下面的忙时策略只影响 heartbeat，普通群聊、私聊和其他消息仍按正常路由直接投递。
@@ -5427,7 +5483,7 @@ watch(
                   <div class="section-title-row compact-row">
                     <div>
                       <div class="section-title small-title">环境和依赖</div>
-                      <div class="section-note">先确认处理端是否安装、登录、插件可用，以及能否读取项目和会话。</div>
+                      <div class="section-note">{{ agent.type === 'grokBot' ? "确认当前 Grok Bot 账号与云端会话；服务负责实际执行。" : "先确认处理端是否安装、登录、插件可用，以及能否读取项目和会话。" }}</div>
                     </div>
                     <div class="d-flex ga-2 flex-wrap">
                       <v-chip size="small" :color="maturityColor(agentScanFor(agent.type)?.maturity)" variant="tonal">
@@ -5436,7 +5492,7 @@ watch(
                       <v-chip size="small" :color="agentConnectionColor(agent.type)" variant="tonal">
                         {{ agentConnectionLabel(agent.type) }}
                       </v-chip>
-                      <v-btn size="small" variant="text" prepend-icon="mdi-refresh" :loading="agent.type === 'dsh' ? dshScanLoading : agentScan.loading" @click="refreshAgentScan(agent.type)">
+                      <v-btn size="small" variant="text" prepend-icon="mdi-refresh" :loading="agent.type === 'grokBot' ? grokBotScan.state.loading : agent.type === 'dsh' ? dshScanLoading : agentScan.loading" @click="refreshAgentScan(agent.type)">
                         重新扫描
                       </v-btn>
                     </div>
@@ -5452,8 +5508,8 @@ watch(
                       </div>
                     </div>
                     <div v-if="agentScanFor(agent.type)?.auth" class="dependency-row">
-                      <v-chip size="x-small" :color="agentScanFor(agent.type)?.auth?.loggedIn ? 'success' : 'warning'" variant="tonal">
-                        {{ agentScanFor(agent.type)?.auth?.loggedIn ? "已登录" : "未登录" }}
+                      <v-chip size="x-small" :color="agentAuthLabel(agent.type) === '尚未扫描' ? 'secondary' : agentScanFor(agent.type)?.auth?.loggedIn ? 'success' : 'warning'" variant="tonal">
+                        {{ agentAuthLabel(agent.type) }}
                       </v-chip>
                       <div>
                         <strong>鉴权</strong>
@@ -5527,22 +5583,14 @@ watch(
                   <div class="section-title-row compact-row">
                     <div>
                       <div class="section-title small-title">消息处理 Agent 模式</div>
-                      <div class="section-note">开启时，聊天消息和相关后续通知交给消息处理 Agent；关闭时改投给主人格。计划秘书和一计划一 Agent 的绑定不会改变。</div>
+                      <div class="section-note">这里配置消息处理 Agent 的模型和运行参数。消息投给谁由人格自动化规则决定。</div>
                     </div>
-                    <v-switch
-                      color="primary"
-                      density="compact"
-                      hide-details
-                      inset
-                      label="启用"
-                      :model-value="messageProcessingAgentPolicy(agent.type).enabled"
-                      @update:model-value="value => setMessageProcessingAgentPolicy(agent.type, { enabled: value === true })"
-                    />
+
                   </div>
                   <v-alert type="info" variant="tonal" density="compact" class="mt-2 mb-0">
-                    开启后，聊天消息默认形成消息组，并动态创建或复用当前主 Agent 端的消息处理 Agent；关闭后，新消息、计划进展通知、回调提醒和 Agent 间待回复改投给主人格，不再打开消息处理会话。ASR 和结构化事件照常直接投递。
+                    自动化选择“消息处理 Agent”后，使用这里配置的消息池。选择其他目标的规则不受影响。
                   </v-alert>
-                  <div v-if="messageProcessingAgentPolicy(agent.type).enabled" class="catalog-param-grid mt-2">
+                  <div class="catalog-param-grid mt-2">
                     <v-text-field
                       :model-value="messageProcessingAgentPolicy(agent.type).model"
                       label="消息处理模型"
@@ -5572,7 +5620,7 @@ watch(
                     />
                   </div>
                   <v-btn
-                    v-if="messageProcessingAgentPolicy(agent.type).enabled"
+                    
                     class="mt-3"
                     variant="tonal"
                     prepend-icon="mdi-view-dashboard-outline"
@@ -5588,7 +5636,7 @@ watch(
                       </v-card-title>
                       <v-card-text>
                         <MessageProcessingBoard
-                          v-if="messageProcessingBoardOpen && managedMessageAgentModeEnabled"
+                          v-if="messageProcessingBoardOpen"
                           :gateway-id="gateway.id"
                           :enabled="true"
                         />
@@ -5702,6 +5750,99 @@ watch(
                     <div class="status-row"><span>投递协议</span><b>{{ codexDeliveryChannelLabel(agentStateFor('codex')) }}</b></div>
                     <div class="status-row"><span>桌面宿主</span><b>Codex/ChatGPT Desktop（必需）</b></div>
                   </template>
+                </template>
+                <!-- Grok Bot -->
+                <template v-else-if="agent.type === 'grokBot'">
+                  <v-alert type="info" variant="tonal" density="compact" class="mb-2">
+                    Grok Bot 云端服务执行消息，使用当前已登录账号的已有会话。电脑负责投递与回执；本接入仍为实验状态。
+                  </v-alert>
+                  <div class="catalog-param-grid">
+                    <v-text-field
+                      v-model="gateway.grokBotBackendUrl"
+                      label="Grok Bot 服务地址"
+                      placeholder="留空使用安装版默认服务"
+                      hint="这是 Grok 服务地址；修改后点击重新扫描确认连接。"
+                      persistent-hint
+                      data-no-i18n
+                      @update:model-value="touch"
+                    />
+                    <v-text-field
+                      v-model="gateway.grokBotProfilePath"
+                      label="本机登录资料目录（可选）"
+                      placeholder="留空使用当前 Windows 用户的 Grok Bot 资料"
+                      hint="只读当前账号的受保护登录资料；请先在 Grok Bot 中登录。"
+                      persistent-hint
+                      data-no-i18n
+                      @update:model-value="touch"
+                    />
+                    <v-select
+                      v-model="grokBotOwnerFilter"
+                      :items="grokBotScan.state.result?.bots?.map(bot => ({ title: bot.name, value: bot.agentId })) ?? []"
+                      item-title="title"
+                      item-value="value"
+                      label="按 Bot 筛选"
+                      hint="选择后点击搜索；筛选不会改变已保存的会话。"
+                      persistent-hint
+                      clearable
+                    />
+                    <v-text-field
+                      v-model="grokBotScan.state.queryDraft"
+                      label="搜索已有会话"
+                      placeholder="Bot 名称"
+                      hint="输入后点击搜索或按 Enter；不会自动扫描。"
+                      persistent-hint
+                      @keydown.enter.prevent="runGrokBotAgentScan"
+                    >
+                      <template #append-inner>
+                        <v-btn icon="mdi-magnify" size="small" variant="text" title="搜索 Grok Bot 会话"
+                          :loading="grokBotScan.state.loading" @click.stop="runGrokBotAgentScan" />
+                      </template>
+                    </v-text-field>
+                    <v-autocomplete
+                      class="full-span"
+                      :model-value="gateway.grokBotSessionId || null"
+                      :items="grokBotSessionItems()"
+                      item-title="title"
+                      item-value="value"
+                      :return-object="false"
+                      :disabled="grokBotScan.state.loading || grokBotScan.needsRefresh.value"
+                      label="已有 Grok Bot 会话"
+                      hint="从扫描结果选择；同时保存真实名称、完整会话 ID 和 owner ID。"
+                      persistent-hint
+                      clearable
+                      @update:model-value="selectGrokBotSession"
+                    >
+                      <template #item="{ props, item }">
+                        <v-list-item v-bind="props" :subtitle="item.raw.subtitle" />
+                      </template>
+                    </v-autocomplete>
+                  </div>
+                  <div class="d-flex align-center ga-2 flex-wrap mt-2">
+                    <v-btn size="small" variant="tonal" prepend-icon="mdi-refresh"
+                      :loading="grokBotScan.state.loading" @click="runGrokBotAgentScan">重新扫描 Grok Bot</v-btn>
+                    <v-btn v-if="grokBotScan.state.result?.sessionPage?.hasMore && !grokBotScan.limitReached.value"
+                      size="small" variant="text" prepend-icon="mdi-chevron-down"
+                      :loading="grokBotScan.state.loading" :disabled="grokBotScan.needsRefresh.value"
+                      @click="grokBotScan.loadMore()">加载更多 Grok Bot 会话</v-btn>
+                    <span class="section-note">已加载 {{ grokBotScan.state.result?.sessions?.length ?? 0 }} 个已有会话。</span>
+                  </div>
+                  <v-alert v-if="grokBotScan.state.error || grokBotSelectionError" type="error" variant="tonal" density="compact" class="mt-2">
+                    {{ grokBotScan.state.error || grokBotSelectionError }}
+                  </v-alert>
+                  <v-alert v-else-if="grokBotScan.needsRefresh.value" type="warning" variant="tonal" density="compact" class="mt-2">
+                    连接或 Bot 筛选已修改，请按当前设置重新扫描后选择会话。
+                  </v-alert>
+                  <v-alert v-else-if="agentScanFor('grokBot')?.auth?.loggedIn === undefined" type="info" variant="tonal" density="compact" class="mt-2">
+                    尚未扫描当前 Grok Bot 云端会话，请点击“重新扫描 Grok Bot”核验当前账号与已有会话。
+                  </v-alert>
+                  <v-alert v-else-if="grokBotScan.state.result && !grokBotScan.state.result.sessions?.length" type="warning" variant="tonal" density="compact" class="mt-2">
+                    当前没有可选会话。请在 Grok Bot 中确认登录与已有 Bot，或调整筛选后重新扫描。
+                  </v-alert>
+                  <v-alert v-if="grokBotScan.limitReached.value" type="info" variant="tonal" density="compact" class="mt-2">
+                    会话列表已达到本页上限，请选择 Bot 或按名称搜索。
+                  </v-alert>
+                  <div v-if="gateway.grokBotSessionId" class="status-row mt-2"><span>当前选择的完整会话 ID</span><code class="text-break">{{ gateway.grokBotSessionId }}</code></div>
+                  <div class="section-note mt-2">当前服务不提供新建、重命名或打开会话操作；请从已有会话中选择。会话执行不需要本地工作目录。</div>
                 </template>
                 <!-- Copilot CLI -->
                 <template v-else-if="agent.type === 'copilotCli'">
@@ -6245,24 +6386,12 @@ watch(
                     <div class="section-title-row compact-row">
                       <div>
                         <div class="section-title small-title">独立记忆整理 Agent</div>
-                        <div class="section-note">开启后，记忆沉淀请求交给独立的 {{ managedAgentLabel(agent.type) }} 会话，不占用主人格当前上下文。</div>
+                        <div class="section-note">这里配置记忆整理 Agent 的模型；消息去向在人格自动化中选择。</div>
                       </div>
-                      <v-switch
-                        color="primary"
-                        density="compact"
-                        hide-details
-                        inset
-                        :model-value="gateway.codexMemoryConsolidationAgentEnabled === true"
-                        @update:model-value="value => { gateway.codexMemoryConsolidationAgentEnabled = value === true; touch(); }"
-                      />
+
                     </div>
-                    <v-alert v-if="gateway.codexMemoryConsolidationAgentEnabled" type="info" variant="tonal" density="compact" class="mt-2 mb-2">
-                      触发沉淀时会创建或复用“{{ codexMemoryConsolidationAgentTitle(managedAgentSessionContext(agent.type)?.sessionName || fallbackCodexThreadName()) }}”。请求不会再投给主人格；目标 Agent 端不可用或会话投递失败时，本轮会明确失败，不会切换到备用处理端。
-                    </v-alert>
-                    <v-alert v-else type="info" variant="tonal" density="compact" class="mt-2 mb-0">
-                      关闭时，记忆沉淀请求仍由当前主人格处理。
-                    </v-alert>
-                    <div v-if="gateway.codexMemoryConsolidationAgentEnabled" class="catalog-param-grid mt-2">
+                    <v-alert type="info" variant="tonal" density="compact" class="mt-2 mb-2">自动化选择“记忆整理 Agent”后，创建或复用已配置的整理会话。投递失败会保留具体错误。</v-alert>
+                    <div class="catalog-param-grid mt-2">
                       <v-text-field
                         v-if="agent.type === 'codex'"
                         :model-value="gateway.codexMemoryConsolidationAgentModel || DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL"

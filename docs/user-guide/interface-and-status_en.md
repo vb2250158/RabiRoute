@@ -212,7 +212,11 @@ The User Guide selects the matching language file. Developer documents, code pat
 
 The Available template variables button opens a dismissible reference dialog. The variable list no longer occupies the automation page.
 
-Under Agent Hook → Event delivery, configure Event → Conditions → Destination. Task completed is currently supported; the turn must pass completion checks. Add or remove Project filter, Require a linked plan, Include sessions, and Exclude sessions conditions. Every condition must match; no conditions means all Codex tasks match.
+Agent Hook shows Agent cards on the left, or above the settings on narrow screens. Each card shows its enabled-item count, and the settings for the selected Agent appear on the right. Each Agent is configured independently, and settings for multiple Agents can take effect at the same time. Switching cards only changes which settings you view. Click Save to apply changes.
+
+Session context, tool context refresh, completion notifications, and sending Agent messages through Rabi remain visible as switches. Plan task follow-up and Event delivery are collapsed by default; select a heading to expand its parameters. Collapsing a panel keeps its enabled state unchanged.
+
+Expand Agent Hook → Event delivery, then configure Event → Conditions → Destination. Task completed is currently supported; the turn must pass completion checks. Add or remove Project filter, Require a linked plan, Include sessions, and Exclude sessions conditions. Every condition must match; no conditions means all Codex tasks match.
 
 Session conditions support searchable multi-selection and explicit paginated loading. Include sessions matches any selected session; Exclude sessions takes precedence, and all other conditions must still match. Matching uses full session IDs, so renaming does not change the rule. Names are display labels only. Empty selections cannot be enabled; scanning runs only when requested with the button.
 
@@ -222,7 +226,7 @@ With a project filter, Codex projects in different repository directories remain
 
 Repeated events reuse the receipt for the same task, turn, and target. Uncertain sending outcomes are not automatically retried; check the Route's sending log. Events without a turn ID or final reply are ignored. Rules start disabled and do not send historical messages when added.
 
-Persona → Automation has Receive messages, Custom tasks, and Agent Hook tabs. Hook settings belong to the persona in `personaConfig.json`, survive Agent changes, and are shared by Routes using that persona. Legacy Route settings move into the persona file on save or explicit migration.
+Persona → Automation has Receive messages, Custom tasks, and Agent Hook tabs. Hook settings are stored per Agent in the persona's `personaConfig.json`; Routes using that persona share the settings for the corresponding Agent. Legacy Route settings move into the persona file on save or explicit migration.
 
 The Agent panel provides only Update Hooks in Agent for initial installation and later updates. Codex uses its official plugin installer. DSH installs into the local `web` profile and requires a plugin reload or DSH restart. Packages live in `plugins/rabi-codex-context/` and `plugins/rabi-dsh-context/`.
 

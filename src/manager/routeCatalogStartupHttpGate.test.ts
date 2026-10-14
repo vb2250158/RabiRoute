@@ -54,7 +54,6 @@ const SNAPSHOT_REQUESTS = Object.freeze([
 const MUTATION_REQUESTS = Object.freeze([
   ["POST", "/gateways"],
   ["POST", "/gateways/route-a/delete"],
-  ["POST", "/reload"],
   ["POST", "/manager-config"],
   ["POST", "/open-config-file"],
   ["PATCH", "/api/rabi/instances/local/routes/route-a/message-processing"],
@@ -147,4 +146,11 @@ test("public rejection state proves readiness without leaking raw paths or error
     revision: undefined,
     snapshotInstalled: false
   });
+});
+
+ test("reload can retry initial capture after startup failure", () => {
+  for (const state of ["idle", "running", "degraded", "stopped"] as const) {
+    assert.equal(routeCatalogStartupUnavailable("POST", "/reload", snapshot(state)), null);
+  }
+  assert.equal(routeCatalogHttpDependency("POST", "/reload"), null);
 });

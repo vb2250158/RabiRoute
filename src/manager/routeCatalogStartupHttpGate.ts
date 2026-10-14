@@ -54,7 +54,8 @@ export function routeCatalogHttpDependency(
   if (normalizedMethod === "POST" && /^\/gateways\/[^/]+\/(?:start|stop|restart|weixin-login|manual-trigger|agent-delivery-test|delivery-replay)$/.test(pathname)) {
     return "snapshot";
   }
-  if (normalizedMethod === "POST" && pathname === "/reload") return "mutation";
+  // Reload captures the initial snapshot; requiring that snapshot would prevent recovery.
+  if (normalizedMethod === "POST" && pathname === "/reload") return null;
 
   if (normalizedMethod === "GET" && pathname === "/api/personas") return "snapshot";
   if (normalizedMethod === "GET" && /^\/api\/personas\/messages\/receipts\/[^/]+$/.test(pathname)) return null;

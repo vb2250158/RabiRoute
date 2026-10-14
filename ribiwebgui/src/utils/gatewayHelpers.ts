@@ -418,13 +418,13 @@ export function migrateLegacyHeartbeatSchedules(gateway: GatewayDefinition): voi
 
 export function automationRulesForGateway(gateway: GatewayDefinition): PersonaAutomationRuleDefinition[] {
   const configured = normalizePersonaAutomationRules(gateway.automationRules);
-  const migrated = configured.length > 0
+  const migrated = Array.isArray(gateway.automationRules)
     ? configured
     : personaAutomationRulesFromNotificationRules(
       gateway.notificationRules,
       Number(gateway.heartbeatIntervalSeconds || 900)
     );
-  gateway.automationRules = ensureMessageAdapterAutomationRules(migrated, gatewayAdapterTypes(gateway), {
+  gateway.automationRules = Array.isArray(gateway.automationRules) ? migrated : ensureMessageAdapterAutomationRules(migrated, gatewayAdapterTypes(gateway), {
     includeRolePanel: Boolean(gateway.agentRoleId)
   });
   gateway.notificationRules = notificationRulesFromPersonaAutomations(gateway.automationRules)
@@ -699,7 +699,6 @@ export function createDefaultGateway(next: number): GatewayDefinition {
     codexThreadName: `路由配置 ${next}`,
     copilotThreadName: `路由配置 ${next}`,
     codexCwd: "",
-    codexMemoryConsolidationAgentEnabled: false,
     codexMemoryConsolidationAgentModel: "gpt-5.6-terra",
     agentRoleId: "",
     agentRoleFile: "persona.md",

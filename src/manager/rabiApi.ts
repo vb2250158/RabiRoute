@@ -96,6 +96,11 @@ type AgentBindingPatch = {
   astrbotPassword?: string;
   astrbotProjectId?: string;
   astrbotSessionId?: string;
+  grokBotProfilePath?: string;
+  grokBotBackendUrl?: string;
+  grokBotAgentId?: string;
+  grokBotSessionId?: string;
+  grokBotSessionName?: string;
   dshSessionId?: string;
   dshSessionName?: string;
   dshCwd?: string;
@@ -339,6 +344,16 @@ function routeSummary(
     astrbotUrl: definition.astrbotUrl ?? "",
     astrbotProjectId: definition.astrbotProjectId ?? "",
     astrbotSessionId: definition.astrbotSessionId ?? "",
+
+    grokBotProfilePath: definition.grokBotProfilePath ?? "",
+
+    grokBotBackendUrl: definition.grokBotBackendUrl ?? "",
+
+    grokBotAgentId: definition.grokBotAgentId ?? "",
+
+    grokBotSessionId: definition.grokBotSessionId ?? "",
+
+    grokBotSessionName: definition.grokBotSessionName ?? "",
     messageAdapters,
     messageAdaptersDisabled,
     agentRoleId: roleId,
@@ -460,7 +475,17 @@ function routeOptionsFromAgentScan(route: GatewayDefinition, scan: Record<string
       copilotThreadName: route.copilotThreadName ?? "",
       copilotCwd: route.copilotCwd ?? "",
       astrbotProjectId: route.astrbotProjectId ?? "",
-      astrbotSessionId: route.astrbotSessionId ?? ""
+      astrbotSessionId: route.astrbotSessionId ?? "",
+
+      grokBotProfilePath: route.grokBotProfilePath ?? "",
+
+      grokBotBackendUrl: route.grokBotBackendUrl ?? "",
+
+      grokBotAgentId: route.grokBotAgentId ?? "",
+
+      grokBotSessionId: route.grokBotSessionId ?? "",
+
+      grokBotSessionName: route.grokBotSessionName ?? ""
     },
     cwdOptions: scan.cwdOptions ?? [],
     threadNames: scan.threadNames ?? [],
@@ -649,6 +674,11 @@ async function setLocalAgentBinding(
   // Legacy input migrates once; never replaces explicit instance targets.
   if (patch.agentInstanceBindings !== undefined && patch.remoteAgentTargets === undefined && route.remoteAgentTargets === undefined) route.agentInstanceBindings = normalizeAgentInstanceBindings(patch.agentInstanceBindings);
   if (patch.astrbotSessionId !== undefined) route.astrbotSessionId = String(patch.astrbotSessionId || "");
+  if (patch.grokBotProfilePath !== undefined) route.grokBotProfilePath = String(patch.grokBotProfilePath || "");
+  if (patch.grokBotBackendUrl !== undefined) route.grokBotBackendUrl = String(patch.grokBotBackendUrl || "");
+  if (patch.grokBotAgentId !== undefined) route.grokBotAgentId = String(patch.grokBotAgentId || "");
+  if (patch.grokBotSessionId !== undefined) route.grokBotSessionId = String(patch.grokBotSessionId || "");
+  if (patch.grokBotSessionName !== undefined) route.grokBotSessionName = String(patch.grokBotSessionName || "");
   if (patch.dshSessionId !== undefined) route.dshSessionId = String(patch.dshSessionId || "");
   if (patch.dshSessionName !== undefined) route.dshSessionName = String(patch.dshSessionName || "");
   if (patch.dshCwd !== undefined) route.dshCwd = String(patch.dshCwd || "");

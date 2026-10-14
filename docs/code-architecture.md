@@ -6,6 +6,10 @@
 
 # RabiRoute 代码架构
 
+## 远端 Agent 主程序与托盘
+
+`apps/rabi-agent/rabi-agent.mjs` 中的稳定启动器是远端唯一主程序，持有单实例租约、连接器/更新候选子程序、Windows 托盘子程序及启动设置写入权。首次接入直接在本进程进入该 owner，不保留另一层常驻 bootstrap。`lib/desktop-presentation.mjs` 的表现桥序列化进稳定启动器，启动 `desktop/tray.ps1` 子程序；窗口在该托盘子程序内创建。托盘只经 stdin/stdout 消费脱敏快照和提交受支持命令，不读配置或联系 Manager。连接器通过 IPC 发布真实状态；不以轮询或扫描宿主获取变化。停止主程序等待全部所属子程序退出后释放租约；主程序意外结束时连接器的 IPC disconnect 和托盘的管道 EOF 结束子程序。单次 CLI 客户端经既有身份核验通道请求同一 owner，不拥有运行状态。签名发布清单纳入唯一托盘脚本；旧节点下次正常启动采用新 owner，不重建节点或任务身份。Windows 实现和本机隔离验证见 [Rabi Agent](../apps/rabi-agent/README.md)。
+
 Linux 源码 Host 由 `scripts/linux-host.mjs` 和 `scripts/lib/linux-host-runtime.mjs` 拥有：复用 Manager 的 READY/健康身份合同，以内核 `flock` 保证同用户单实例，使用仅回环的当前进程控制接口。`src/linuxHostParent.ts` 在父 Host 的 IPC 断开后请求 Manager 正常退出。界面复用 WebGUI，不替代 Windows 托盘或 Qt 功能；运行和容器边界见 [Linux Host](linux-host.md)。
 
 家庭设备遥控由 `vacuumRemote.ts` 唯一持有会话和松键序列，WebGUI 与 Agent 共用 Manager 接口；暂停读回、初始化等待、HA 独立计时器与退出协调见[设备 API](home-device-agent-api.md)。
@@ -893,3 +897,18 @@ Manager 复用 Route catalog worker 的 upsert、日志、回滚和持久化回�
 `agentSendConversationContext.ts` 复用 Outbox 的人格账本拥有者和 `messageContextStore.ts` 的序号窗口读取；`conversationMessageCursor.ts` 为 AgentPacket 与发送提供同一索引合同。确认凭证和已核对缓存分别按 Agent/会话隔离，`agentSendConversationQueue.ts` 只串行同一会话。校验在新幂等 reservation 前执行，等待来源/文风检查后再次读取；回执重试保留原处理。历史搜索按序号跳过无关归档，并只保留有界首尾窗口。参见 [发送合同](rabi-agent-interfaces.md#聊天发送前索引核对)。
 
 归档与消息窗口读取通过受限的交互读取 Worker 池异步执行，不在 Manager HTTP 主线程扫描全部归档。
+
+
+## 自动化 Agent 目标选择
+
+人格规则保存结构化投递目标，Agent 端配置保存接收者绑定；`src/automation/agentDelivery.ts` 统一选择执行器，`sessionDelivery.ts` 核对指定会话回执，迁移器保存旧配置快照。详见[自动化 Agent 投递](automation-agent-delivery.md)。
+
+## 远端终端生命周期
+
+Windows 构建预编译原生辅助程序集，按规范化 C# 源码 SHA-256 命名并纳入连接器签名清单；脚本只加载匹配当前源码的 DLL。启动完成以 Shell 首个提示符为准，避免初始化清空提前输入；状态仍由连接器拥有，不由编译资产或网页创建第二 Runtime。程序集和脚本共用同一份源逻辑，源码运行缺少匹配程序集时编译同一源代码。
+
+集群业务数据、人格、计划、记忆、Skill 和流程由原主控 RabiPC 拥有；远端客户端仅保存连接及执行状态。`ComputerService` 与 `TerminalService` 直接消费既有已鉴权连接上的管理命令，绕过 Agent 任务队列，不调用 Codex/DSH 启动入口。文件以 64 KiB 校验块传输，上传在同目录不覆盖原子提交；桌面辅助子程序按需查询 Win32 窗口与输出 PNG，管道 EOF 和期限释放进程。API 与限制见[远端电脑客户端](remote-computer-client.md)。
+
+TerminalService 是连接器子程序内的终端状态 owner。每个会话启动独立原生终端宿主子程序，以 ConPTY 提供 UTF-8 与控制序列，并在恢复主线程前把 shell 加入 kill-on-close Job Object。宿主管道 EOF、会话退出或主程序退出结束整棵命令进程树。主程序仍是唯一生命周期入口；网页和原生宿主都不拥有另一套 Manager 或 Agent Runtime。
+
+LanAgentRegistry 在既有已鉴权 WebSocket 上转发 terminal 管理命令，LanAgentTerminals 只保留按实例/会话隔离的有界输出缓存，lanAgentTerminalRoutes 通过独立 SSE 提供事件。25 秒 keepalive 只维持传输，不查询业务状态。网页按需加载 xterm.js，输入按会话序号串行提交，超时停止输入并要求查询，不自动重放；终端列表只在打开页面或点击查询时读取。旧连接器通过能力缺失提示升级，不引入额外权限开关。

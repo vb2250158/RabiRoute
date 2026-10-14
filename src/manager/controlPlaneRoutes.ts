@@ -57,6 +57,9 @@ import { normalizeAgentAdapters, parseAgentAdapterType, type AgentAdapterType } 
 import { agentAdapterManifest, isPlanAssistantAgentType, normalizePlanBindingAgentType } from "../shared/agentAdapterCapabilities.js";
 import { agentThreadRequestFailureData, handleAgentThreadRequest as handleLocalAgentThreadRequest, readAgentEndpointSummary, type AgentThreadRequest, type AgentThreadRequestOptions } from "../agentThreads.js";
 import { createAgentEndpointDelivery } from "./agentEndpointDelivery.js";
+import { createGrokBotEndpointBridge } from "./grokBotEndpointBridge.js";
+import { handleGrokBotThreadRequest } from "./grokBotThreads.js";
+import { grokBotEndpointConfiguration } from "./grokBotConfiguration.js";
 import { handleAgentDeliveryAuthority } from "./agentDeliveryAuthorityRoutes.js";
 import { routeInstanceThread, type InstanceThreadTransport } from "./instanceThreadRouting.js";
 import { instanceWorkerStateDirectory } from "../agentAdapters/instanceClient.js";
@@ -669,6 +672,7 @@ function registerManagerPluginHandlerRoutes(
 }
 
 type GatewayDefinition = {
+  agentRecipients?: import("../shared/agentDeliveryTarget.js").AgentRecipientDefinition[];
   id: string;
   name?: string;
   enabled?: boolean;
@@ -761,6 +765,11 @@ type GatewayDefinition = {
   astrbotPassword?: string;
   astrbotProjectId?: string;
   astrbotSessionId?: string;
+  grokBotProfilePath?: string;
+  grokBotBackendUrl?: string;
+  grokBotAgentId?: string;
+  grokBotSessionId?: string;
+  grokBotSessionName?: string;
   rolesDir?: string;
   routesDir?: string;
   configName?: string;
@@ -877,6 +886,8 @@ function primaryAgentSessionFields(
   agentAdapter: AgentAdapterType
 ): { sessionId?: string; sessionName?: string; workspace?: string } {
   switch (agentAdapter) {
+    case "grokBot":
+      return { sessionId: definition.grokBotSessionId, sessionName: definition.grokBotSessionName };
     case "dsh":
       return { sessionId: definition.dshSessionId, sessionName: definition.dshSessionName, workspace: definition.dshCwd };
     case "antigravity":
@@ -945,6 +956,7 @@ function runtimeOwnsAgentSession(runtime: GatewayRuntime, sessionId: string): bo
   if (normalizeRouteAgentTargets(runtime.definition).remoteAgentTargets.some(binding => instanceAgentSessions(binding).includes(id))) return true;
   if (String(runtime.definition.codexThreadId || "").trim() === id) return true;
   if (String(runtime.definition.dshSessionId || "").trim() === id) return true;
+  if (String(runtime.definition.grokBotSessionId || "").trim() === id) return true;
   if ((runtime.definition.codexPlanAssistantSessions ?? []).some((session) => session.threadId === id)) return true;
   const target = currentMessageProcessingTargetByThreadId(id);
   if (target && runtimeForMessageProcessingTarget(target)?.definition.id === runtime.definition.id) return true;
@@ -962,12 +974,16 @@ function runtimeOwnsAgentSession(runtime: GatewayRuntime, sessionId: string): bo
 
 let instanceThreadTransport: InstanceThreadTransport | undefined;
 let agentEndpointDelivery: ReturnType<typeof createAgentEndpointDelivery> | undefined;
+function currentGrokBotConfiguration(sessionId?: string) {
+  return grokBotEndpointConfiguration([...runtimes.values()].map(runtime => runtime.definition), sessionId);
+}
 function effectiveInstanceDefinition(definition: GatewayDefinition): GatewayDefinition {
   const target = resolvePrimaryAgentTarget(definition);
   const adapter = target?.provider;
   const binding = target?.binding;
   if (!binding) return definition;
   const agent = instanceThreadTransport?.instances().find(instance => instance.instanceId === binding.instanceId)?.agents.find(agent => agent.agentId === binding.agentId);
+  if (adapter === "grokBot") return { ...definition, grokBotSessionId: agent?.sessionId, grokBotSessionName: agent?.name };
   return adapter === "dsh" ? { ...definition, dshSessionId: agent?.sessionId, dshSessionName: agent?.name, dshCwd: agent?.workspace, dshBaseUrl: agent?.dshBaseUrl }
     : { ...definition, codexThreadId: agent?.sessionId, codexThreadName: agent?.name, codexCwd: agent?.workspace };
 }
@@ -988,7 +1004,7 @@ async function handleAgentThreadRequest(request: AgentThreadRequest, options: Ag
   if (request.action === "send" || request.action === "reconcile_delivery") {
     if (!agentEndpointDelivery) throw new Error("Manager endpoint delivery authority is unavailable.");
     return handleLocalAgentThreadRequest(request, { ...options,
-      endpointDelivery: agentEndpointDelivery.options(options.remoteSource, options.requestAuthority, trustedDeviceSource),
+      endpointDelivery: agentEndpointDelivery.options(options.remoteSource, options.requestAuthority, trustedDeviceSource, undefined, options.callerExecutionOptions),
       // A remote source's formal reply is routed through the same lease that admitted the
       // original request, so a revoked or unapproved endpoint keeps refusing it.
       ...(options.remoteSource ? { remoteEndpoint: agentEndpointDelivery.remoteEndpoint } : {}) });
@@ -996,7 +1012,12 @@ async function handleAgentThreadRequest(request: AgentThreadRequest, options: Ag
   options.requestAuthority?.();
   const remote = instanceThreadTransport ? await routeInstanceThread(request, instanceThreadTransport) : undefined;
   options.requestAuthority?.();
-  if (!remote) return handleLocalAgentThreadRequest(request, options);
+  if (!remote) {
+    const grokBot = await handleGrokBotThreadRequest(request,
+      request.agentAdapter === "grokBot" ? currentGrokBotConfiguration(request.threadId) : {});
+    options.requestAuthority?.();
+    return grokBot ?? handleLocalAgentThreadRequest(request, options);
+  }
   return remote;
 }
 
@@ -1773,7 +1794,7 @@ function createManagerPeerRuntime() {
   tunnel = new PeerTunnelRuntime({
     readOnly: managerReadOnly,
     allowApplicationConnection: () => rabiLinkRelayConfigForMeta().enabled,
-    allowControl: (request, url) => request.socket.localPort === managerPort && webguiLanRequestAllowed(request, url),
+    allowControl: (request, url) => request.socket.localPort === managerPort && (hasAuthenticatedConnectionRequest(request) || webguiLanRequestAllowed(request, url)),
     dataDir: path.join(rootDir, "data", "rabilink"),
     deviceId: rabiLinkRelayConfigForMeta().deviceId,
     generation: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
@@ -1913,6 +1934,7 @@ function remoteRequestUsesIndependentAuthorization(request: http.IncomingMessage
 function webguiLanRequestAllowed(request: http.IncomingMessage, requestUrl: URL): boolean {
   if (
     !managerListensOnLan(managerHost)
+    || isLocalMachineRemoteAddress(request.socket.remoteAddress, [])
     || isLocalMachineRemoteAddress(request.socket.remoteAddress, localIpv4AddressEntries().map(item => item.address))
   ) return true;
   if (isPublicWebguiStaticRequest(request.method, requestUrl.pathname)) return true;
@@ -2157,6 +2179,7 @@ export function adapterConfigItem(definition: GatewayDefinition): Record<string,
     codexCwd: configPathValue(definition.codexCwd),
     remoteAgentTargets: definition.remoteAgentTargets,
     primaryAgentTarget: definition.primaryAgentTarget,
+    agentRecipients: definition.agentRecipients,
     dshSessionId: definition.dshSessionId,
     dshSessionName: definition.dshSessionName,
     dshCwd: configPathValue(definition.dshCwd),
@@ -2165,7 +2188,6 @@ export function adapterConfigItem(definition: GatewayDefinition): Record<string,
     codexPlanAssistantEnabled: definition.codexPlanAssistantEnabled,
     codexPlanAssistantModel: definition.codexPlanAssistantModel,
     codexPlanAssistantSessions: definition.codexPlanAssistantSessions,
-    codexMemoryConsolidationAgentEnabled: definition.codexMemoryConsolidationAgentEnabled,
     codexMemoryConsolidationAgentModel: definition.codexMemoryConsolidationAgentModel,
     codexHooks: definition.codexHooks,
     messageProcessingAgents: definition.messageProcessingAgents,
@@ -2178,6 +2200,11 @@ export function adapterConfigItem(definition: GatewayDefinition): Record<string,
     astrbotPassword: definition.astrbotPassword,
     astrbotProjectId: definition.astrbotProjectId,
     astrbotSessionId: definition.astrbotSessionId,
+    grokBotProfilePath: definition.grokBotProfilePath,
+    grokBotBackendUrl: definition.grokBotBackendUrl,
+    grokBotAgentId: definition.grokBotAgentId,
+    grokBotSessionId: definition.grokBotSessionId,
+    grokBotSessionName: definition.grokBotSessionName,
     rolesDir: configPathValue(definition.rolesDir),
     agentRoleId: definition.agentRoleId,
     agentRoleDeviceId: definition.agentRoleDeviceId,
@@ -2946,6 +2973,7 @@ function envFor(
     DSH_REASONING_EFFORT: definition.dshReasoningEffort?.trim() || "",
     RABI_DSH_ROUTE_CONFIG_PATH: adapterConfigPath(configName),
     MESSAGE_PROCESSING_AGENTS: JSON.stringify(definition.messageProcessingAgents ?? {}),
+    AGENT_RECIPIENTS: JSON.stringify(definition.agentRecipients ?? []),
     PIPELINE_PRESET: definition.pipelinePreset ?? "",
     PIPELINE: definition.pipeline ? JSON.stringify(definition.pipeline) : "",
     HEARTBEAT_INTERVAL_SECONDS: String(definition.heartbeatIntervalSeconds ?? 900),
@@ -3007,7 +3035,6 @@ function envFor(
     CODEX_PLAN_ASSISTANT_ENABLED: definition.codexPlanAssistantEnabled === true ? "true" : "false",
     CODEX_PLAN_ASSISTANT_MODEL: normalizeCodexPlanAssistantModel(definition.codexPlanAssistantModel),
     CODEX_PLAN_ASSISTANT_SESSIONS: JSON.stringify(definition.codexPlanAssistantSessions ?? []),
-    CODEX_MEMORY_CONSOLIDATION_AGENT_ENABLED: definition.codexMemoryConsolidationAgentEnabled === true ? "true" : "false",
     CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL: normalizeCodexMemoryConsolidationAgentModel(definition.codexMemoryConsolidationAgentModel),
     COPILOT_THREAD_NAME: resolveCopilotThreadName(definition),
     COPILOT_CLI_BIN: definition.copilotCliBin?.trim() || process.env.COPILOT_CLI_BIN || resolveWingetCopilot() || (process.env.APPDATA ? path.join(process.env.APPDATA, "npm", "copilot.cmd") : "") || "copilot",
@@ -3018,6 +3045,11 @@ function envFor(
     ASTRBOT_PASSWORD: definition.astrbotPassword?.trim() || process.env.ASTRBOT_PASSWORD || "",
     ASTRBOT_PROJECT_ID: definition.astrbotProjectId?.trim() || process.env.ASTRBOT_PROJECT_ID || "",
     ASTRBOT_SESSION_ID: definition.astrbotSessionId?.trim() || process.env.ASTRBOT_SESSION_ID || "",
+    GROK_BOT_PROFILE_PATH: definition.grokBotProfilePath?.trim() || process.env.GROK_BOT_PROFILE_PATH || "",
+    GROK_BOT_BACKEND_URL: definition.grokBotBackendUrl?.trim() || process.env.GROK_BOT_BACKEND_URL || "",
+    GROK_BOT_AGENT_ID: definition.grokBotAgentId?.trim() || process.env.GROK_BOT_AGENT_ID || "",
+    GROK_BOT_SESSION_ID: definition.grokBotSessionId?.trim() || process.env.GROK_BOT_SESSION_ID || "",
+    GROK_BOT_SESSION_NAME: definition.grokBotSessionName?.trim() || process.env.GROK_BOT_SESSION_NAME || "",
     ROLES_DIR: routeRolesDir,
     AGENT_ROLE_ID: sanitizeRoleId(definition.agentRoleId),
     AGENT_ROLE_DEVICE_ID: definition.agentRoleDeviceId || "",
@@ -3276,6 +3308,13 @@ function readAgentState(definition: GatewayDefinition, adapterType: AgentAdapter
 }
 
 function defaultAgentState(definition: GatewayDefinition, adapterType: AgentAdapterType): Record<string, unknown> {
+  if (adapterType === "grokBot") {
+    return {
+      agentAdapterType: adapterType, bound: false, owner: "grok_bot_cloud", transport: "native-cloud-owner-http",
+      monitorThreadId: definition.grokBotSessionId, monitorThreadName: definition.grokBotSessionName,
+      message: "Grok Bot 云端会话已配置；等待当前 Manager 收到原生投递回执。"
+    };
+  }
   if (adapterType === "copilotCli") {
     return {
       agentAdapterType: adapterType,
@@ -4408,7 +4447,6 @@ function runtimeStatusWithRoleInfoCache(
     codexPlanAssistantEnabled: runtime.definition.codexPlanAssistantEnabled === true,
     codexPlanAssistantModel: normalizeCodexPlanAssistantModel(runtime.definition.codexPlanAssistantModel),
     codexPlanAssistantSessions: runtime.definition.codexPlanAssistantSessions ?? [],
-    codexMemoryConsolidationAgentEnabled: runtime.definition.codexMemoryConsolidationAgentEnabled === true,
     codexMemoryConsolidationAgentModel: normalizeCodexMemoryConsolidationAgentModel(runtime.definition.codexMemoryConsolidationAgentModel),
     codexHooks: normalizeCodexHookSettings(runtime.definition.codexHooks),
     copilotThreadName: resolveCopilotThreadName(runtime.definition),
@@ -4420,6 +4458,11 @@ function runtimeStatusWithRoleInfoCache(
     astrbotPassword: runtime.definition.astrbotPassword,
     astrbotProjectId: runtime.definition.astrbotProjectId,
     astrbotSessionId: runtime.definition.astrbotSessionId,
+    grokBotProfilePath: runtime.definition.grokBotProfilePath,
+    grokBotBackendUrl: runtime.definition.grokBotBackendUrl,
+    grokBotAgentId: runtime.definition.grokBotAgentId,
+    grokBotSessionId: runtime.definition.grokBotSessionId,
+    grokBotSessionName: runtime.definition.grokBotSessionName,
     rolesDir: runtime.definition.rolesDir,
     routesDir: runtime.definition.routesDir,
     agentRoleId: runtime.definition.agentRoleId,
@@ -9795,6 +9838,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   };
   agentEndpointDelivery = createAgentEndpointDelivery({ store: agentRequests, authority: lanAgentAuthority,
     registry: lanAgentRegistry, config: rabiGlobalConfig,
+    service: createGrokBotEndpointBridge({ managerInstanceId: lanAgentRegistry.localInstanceId, configuration: currentGrokBotConfiguration }),
     device: {
       resolveSource: (request, principal) => currentDeviceAgentEndpointBridge(lanAgentRegistry.localInstanceId).resolveSource(request, principal),
       resolveTarget: request => currentDeviceAgentEndpointBridge(lanAgentRegistry.localInstanceId).resolveTarget(request),
@@ -11016,7 +11060,34 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   activeServer.headersTimeout = managerHttpLimits.headersTimeoutMs;
   activeServer.keepAliveTimeout = managerHttpLimits.keepAliveTimeoutMs;
   activeServer.maxRequestsPerSocket = managerHttpLimits.maxRequestsPerSocket;
-  const peerTunnelUpgrade = (request: http.IncomingMessage, socket: import("node:stream").Duplex, head: Buffer) => { activePeerTunnel?.proxyUpgrade(request, socket, head); };
+  const peerTunnelUpgrade = (request: http.IncomingMessage, socket: import("node:stream").Duplex, head: Buffer) => {
+    const url = new URL(request.url || "/", "http://manager.invalid");
+    if (!url.pathname.startsWith("/api/rabilink/peer/http/")) return;
+    try {
+      const generation = managerHostIdentity?.applicationGenerationId ?? managerInstanceId;
+      const scope = rabiLinkConnectionScope(rabiLinkRelayConfigForMeta());
+      if (rabiLinkTransportAssertionPresent(request) && !rabiLinkTrustedTransport(request, generation, scope)) {
+        socket.destroy(); return;
+      }
+      const access = evaluateLanAgentRequest(request, lanAgentAuthority, rabiGlobalConfig.read().webguiLan.enabled,
+        () => rabiGlobalConfig.getLanAgentAdmissionPolicy());
+      if (access.kind === "denied") { socket.destroy(); return; }
+      if (access.kind === "agent") assertTrustedLanAgentPrincipal(request);
+      else if (!webguiLanRequestAllowed(request, url)) { socket.destroy(); return; }
+      const admittedRabiLink = rabiLinkTrustedTransport(request, generation, scope);
+      markAuthenticatedConnectionRequest(request, () => {
+        if (access.kind === "agent") assertTrustedLanAgentPrincipal(request);
+        if (admittedRabiLink && (scope !== rabiLinkConnectionScope(rabiLinkRelayConfigForMeta())
+          || !rabiLinkTrustedTransport(request, managerHostIdentity?.applicationGenerationId ?? managerInstanceId, scope))) {
+          throw new Error("Authenticated connection scope or generation was revoked.");
+        }
+        if (access.kind !== "agent" && !webguiLanRequestAllowed(request, url)) {
+          throw new Error("Authenticated Manager connection was revoked.");
+        }
+      });
+      activePeerTunnel?.proxyUpgrade(request, socket, head);
+    } catch { socket.destroy(); }
+  };
   activeServer.on("upgrade", peerTunnelUpgrade);
   managerRuntimeOwner.register("peer_tunnel_upgrade", () => { activeServer.removeListener("upgrade", peerTunnelUpgrade); });
   const detachLanAgentUpgrade = lanAgentRegistry.attach(activeServer, {

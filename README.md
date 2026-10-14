@@ -35,6 +35,7 @@ Experimental vacuum cloud map files can be connected through Mi Home QR login in
 
 - **Route chat to an Agent.** QQ groups, direct messages, the persona panel, and other inputs can enter a fixed project and Desktop task through a Route.
 - **Run scheduled Agent work.** Persona rules can trigger an Agent by interval, time window, daily time, or one-time schedule, or run a configured local script.
+- **Operate remote computers.** One controller owns memory, skills and workflows; online clients expose terminals, files, windows and screenshots even when their Agent backend is stopped. See [remote computer clients](docs/remote-computer-client_en.md) for experimental scope.
 - **Carry continuous context.** Each persona owns its message history and references to plans, memories, and skills; every Route can limit the recent messages included in a delivery.
 - **Configure each persona's plan workflow.** Plan status keys, labels, descriptions, colors, order, views, approval behavior, and delayed archival come from that persona's configuration; Agents can evolve the catalog without a code release.
 - **Control external sends.** Agents reply to QQ, RabiLink, and other channels through one sending API. Targets, quoted messages, sender identity, and receipts are validated and recorded.
@@ -91,6 +92,7 @@ The repository version is `0.3.34`. The table lists behavior backed by current c
 | Windows desktop | Core path implemented | Host owns one application generation containing Manager and the tray/task-window surface; use selected-text actions, screenshots, and annotations. Some system interactions still need Windows device acceptance. |
 | Linux Host | Experimental | Minimal source Host: after build it owns Manager, prints the current loopback WebGUI URL, and supports status, open, restart, and quit. No Windows/Qt tray, screenshots, or global hotkeys; real Relay and endurance acceptance remain pending. |
 | DSH | Experimental | Bind an explicit API address, workspace, and session as the primary or an auxiliary handler. |
+| Grok Bot | Experimental | Use native HTTP to deliver to an existing cloud-owned session. Select a real session in Route settings; source identity, stable delivery IDs and QQ/Codex replies follow the [Grok Bot adapter contract](docs/grok-bot-agent-adapter_en.md). Real round-trip acceptance remains separate. |
 | WorkBuddy | Experimental | Deliver a message into a WorkBuddy task the user already owns, using that task's own model, tools and approvals. Delivery needs a one-time local gateway credential; without it, delivery fails closed. Discovery, binding, and lifecycle hooks are implemented; the desktop exposes no pairing handoff yet and cold start is unverified. |
 | RabiSpeech / RabiLink / mobile and wearables | Experimental | Connect speech, phones, glasses, Relay, and health-data paths, with separate acceptance for each device and network environment. |
 | Media workspace | Experimental | Save media canvas projects, combine image/video/audio/text cards, and optionally use local H3; model setup and GPU inference require separate acceptance. |

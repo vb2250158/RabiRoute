@@ -151,7 +151,7 @@ test("repository migrates the legacy persona limit and writes split Route/person
   });
   writeJson(personaPath, {
     recentMessageLimit: 3,
-    notificationRules: [{ id: "heartbeat", routeKinds: ["heartbeat"], template: "tick" }]
+    notificationRules: [{ id: "heartbeat", routeKinds: ["heartbeat"], template: "tick", agentTarget: { kind: "recipient", recipientId: "primary" } }]
   });
 
   const repo = new ManagerConfigRepository({ rootDir, managerPort: 8790 });
@@ -219,7 +219,7 @@ test("repository migrates persona-owned fields out of legacy adapter and profile
   assert.equal(persona.recentMessageLimits?.napcat, 23);
   assert.equal(persona.recentMessageLimits?.speech, 23);
   assert.deepEqual(persona.speechTriggerKeywords, ["Rabi", "兔叽"]);
-  assert.deepEqual(persona.automationRules?.filter(rule => rule.trigger.type === "message").map(rule => rule.id), ["existing", "speech", "role-panel-message"]);
+  assert.deepEqual(persona.automationRules?.filter(rule => rule.trigger.type === "message").map(rule => rule.id), ["existing", "speech", "role-panel-message", "memory-consolidation"]);
   assert.equal(config.gateways[0].speechPushMode, "keyword");
   assert.equal(config.gateways[0].recentMessageLimits?.wecom, 23);
 });
@@ -281,7 +281,8 @@ test("repository migrates legacy role rules to personaConfig and keeps adapter c
     "legacy-adapter",
     "legacy-profile",
     "legacy-role-map",
-    "role-panel-message"
+    "role-panel-message",
+    "memory-consolidation"
   ]);
   assert.deepEqual(config.gateways[0].notificationRules?.map(rule => rule.id), [
     "legacy-role",
@@ -289,13 +290,10 @@ test("repository migrates legacy role rules to personaConfig and keeps adapter c
     "legacy-adapter",
     "legacy-profile",
     "legacy-role-map",
-    "role-panel-message",
-    "default-rolePanel"
+    "memory-consolidation",
+    "role-panel-message"
   ]);
-  assert.deepEqual(
-    config.gateways[0].notificationRules?.find(rule => rule.id === "default-rolePanel")?.routeKinds,
-    ["manual_trigger"]
-  );
+  assert.equal(config.gateways[0].notificationRules?.some(rule => rule.id === "default-rolePanel"), false);
   const momoPersona = JSON.parse(fs.readFileSync(path.join(rootDir, "data", "roles", "Momo", "personaConfig.json"), "utf8")) as GatewayDefinition;
   assert.deepEqual(momoPersona.automationRules?.filter(rule => rule.trigger.type === "message").map(rule => rule.id), [
     "momo-profile",
@@ -332,7 +330,8 @@ test("repository migration preserves existing personaConfig fields and rules", (
     .map(rule => [rule.id, rule.action.type === "deliver_agent" ? rule.action.template : ""]), [
     ["existing", "keep me"],
     ["adapter-new", "persona wins by id"],
-    ["role-panel-message", ""]
+    ["role-panel-message", ""],
+    ["memory-consolidation", ""]
   ]);
 
   repo.writePersonaConfig("Rabi", {
@@ -347,6 +346,7 @@ test("repository migration preserves existing personaConfig fields and rules", (
     .map(rule => [rule.id, rule.action.type === "deliver_agent" ? rule.action.template : ""]), [
     ["existing", "keep me"],
     ["adapter-new", "persona wins by id"],
+    ["memory-consolidation", ""],
     ["role-panel-message", ""]
   ]);
   assert.equal(updated.recentMessageLimits?.speech, 42);
@@ -367,7 +367,7 @@ test("repository writes normalized configs and removes renamed route files", () 
     messageAdapters: ["webhook"],
     gatewayPort: 8790,
     agentRoleId: "Rabi",
-    notificationRules: [{ id: "heartbeat", routeKinds: ["heartbeat"], template: "hello" }]
+    notificationRules: [{ id: "heartbeat", routeKinds: ["heartbeat"], template: "hello", agentTarget: { kind: "recipient", recipientId: "primary" } }]
   };
 
   const written = repo.writeConfig({ gateways: [next] });
