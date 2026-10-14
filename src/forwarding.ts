@@ -1,4 +1,8 @@
 import path from "node:path";
+import { executeAgentDelivery } from "./automation/agentDelivery.js";
+import { deliverSessionOnce } from "./automation/sessionDelivery.js";
+import { resolveAgentDeliveryExecutor, type AgentSessionDestination } from "./shared/agentDeliveryTarget.js";
+import { getPlan } from "./roleKnowledge.js";
 import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
 import { readBoundInstanceAgent, requestInstanceThread, instanceWorkerStateDirectory } from "./agentAdapters/instanceClient.js";
 import { resolvePrimaryAgentTarget, type RouteAgentTarget } from "./shared/routeAgentTargets.js";
@@ -74,7 +78,7 @@ import {
   mergePendingMessageGroup,
   messageGroupEnqueueInputForForward
 } from "./routing/messageGroupingForward.js";
-import { MessageAgentPool, messageAgentPoolStatePath } from "./messageAgentPool.js";
+import { MessageAgentPool, messageAgentPoolStatePath, requestMessageAgentManager } from "./messageAgentPool.js";
 import { MemoryConsolidationAgent, memoryConsolidationAgentStatePath } from "./memoryConsolidationAgent.js";
 import {
   findReferencedAgentSenders,
@@ -85,8 +89,6 @@ import { collectMessageGroupSourceEvidence, type MessageGroupSourceEvidence } fr
 import {
   DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL,
   DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT,
-  agentAdapterSupportsManagedTaskFeature,
-  primaryMessageProcessingAgentAdapter,
   normalizeMessageGroupingPolicy,
   type MessageGroupingPolicy,
   type RecentMessageEndpoint
@@ -135,6 +137,7 @@ export type ForwardMessageOptions = {
   appendRoleRecord?: boolean;
   logReplayAttempt?: boolean;
   replayOfAttemptId?: string;
+  replayPackets?: DeliveryReplayPacket[];
   recordInbound?: boolean;
   messageGroup?: PendingMessageGroup;
   signal?: AbortSignal;
@@ -199,10 +202,6 @@ function primaryManagedAgentBinding(): {
   return undefined;
 }
 
-function messageAgentModeEnabled(): boolean {
-  return Boolean(primaryMessageProcessingAgentAdapter(config) && (resolvePrimaryAgentTarget(config)?.binding || primaryManagedAgentBinding()));
-}
-
 async function managedAgentExecution() {
   const target = resolvePrimaryAgentTarget(config);
   const instanceBinding = target?.binding;
@@ -225,9 +224,9 @@ async function activeMessageAgentPool(): Promise<MessageAgentPool> {
   const execution = await managedAgentExecution();
   const { binding } = execution;
   if (messageAgentPool && messageAgentPoolScope === execution.dataDir) return messageAgentPool;
-  const adapter = primaryMessageProcessingAgentAdapter(config);
+  const adapter = configuredPrimaryAgentAdapter();
   const policy = adapter ? config.messageProcessingAgents[adapter] : undefined;
-  if (!binding || !adapter || !policy?.enabled) throw new Error("Primary Agent Message Agent mode is not enabled.");
+  if (!binding || !adapter || !policy) throw new Error("Message processing Agent is not configured.");
   messageAgentPool = new MessageAgentPool({
     statePath: messageAgentPoolStatePath(execution.dataDir),
     managerBaseUrl: managerBaseUrl(),
@@ -568,16 +567,9 @@ function configuredPrimaryAgentAdapter(): AgentAdapterType | undefined {
   return resolvePrimaryAgentTarget(config)?.provider;
 }
 
-export function memoryConsolidationAgentHandles(
-  routeKind: ForwardRouteKind,
-  triggerId: string | undefined,
-  enabled: boolean,
-  primaryAdapter: AgentAdapterType | undefined
-): boolean {
-  return routeKind === "manual_trigger"
-    && triggerId === "memory-consolidation"
-    && enabled
-    && Boolean(primaryAdapter && agentAdapterSupportsManagedTaskFeature(primaryAdapter, "memoryConsolidationAgent"));
+function deliveryOwnerFingerprint(): string {
+  return createHash("sha256").update(JSON.stringify({ target: resolvePrimaryAgentTarget(config),
+    binding: primaryManagedAgentBinding(), secretary: config.codexPlanAssistantSessions })).digest("hex");
 }
 
 export function shouldSkipHeartbeatDelivery(
@@ -604,7 +596,7 @@ async function heartbeatShouldSkipForBusyAgent(routeKind: ForwardRouteKind): Pro
     config.heartbeatSkipWhenAgentBusy,
     adapters,
     true,
-    messageAgentModeEnabled()
+    false
   )) {
     return false;
   }
@@ -702,6 +694,22 @@ export async function deliverPacketToPrimaryAgentAdapter(
       error: error instanceof Error ? error.message : String(error)
     }];
   }
+}
+
+async function deliverPacketToSession(
+  routeId: string, ruleId: string, target: AgentSessionDestination,
+  envelope: RabiDeliveryEnvelope, messageId: string, imagePaths: string[], model?: string
+): Promise<ForwardAdapterOutcome[]> {
+  const remote = config.remoteAgentTargets.find(item => item.id === target.agentTargetId);
+  if (remote ? remote.provider !== target.agentAdapter : target.agentTargetId !== `local:${target.agentAdapter}`
+    || !config.agentAdapters.includes(target.agentAdapter)) throw new Error("The selected Agent instance is unavailable or mismatched.");
+  const deliveryId = `automation-${createHash("sha256").update(JSON.stringify([routeId, ruleId, envelope.deliveryId ?? messageId, target])).digest("hex")}`;
+  await deliverSessionOnce(path.join(config.dataDir, "automation-deliveries", `${deliveryId}.json`), target, envelope, deliveryId,
+    payload => remote ? requestInstanceThread(remote, payload) : requestMessageAgentManager(managerBaseUrl(), payload),
+    { remote: Boolean(remote), imagePaths, model });
+  appendAdapterLogToDir("router", { event: "automation_agent_delivered", message: `Automation delivered to ${target.sessionId}`,
+    data: { routeId, ruleId, deliveryId, agentTargetId: target.agentTargetId, sessionId: target.sessionId } }, config.dataDir);
+  return [{ routeId, ruleId, adapter: target.agentAdapter, status: "delivered" }];
 }
 
 async function deliverPacketToMemoryConsolidationAgent(
@@ -1036,18 +1044,32 @@ async function forwardMessageToRoute(
   const processingRequirementId = options.messageGroup && options.messageGroup.endpoint !== "heartbeat"
     ? messageProcessingRequirementId(options.messageGroup, route.id)
     : undefined;
-  const decision = measureSyncPerformanceOperation(
+  let decision = measureSyncPerformanceOperation(
     PERFORMANCE_OPERATIONS.gatewayRouteDecision,
     () => createRouteDecision(route, routeKind, record, processingRequirementId
       ? { ...extraValues, messageProcessingRequirementId: processingRequirementId }
       : extraValues)
   );
+  const replayPackets = options.replayPackets?.filter(packet => packet.routeId === route.id);
+  if (replayPackets) {
+    if (!replayPackets.length) return routeResult(route, "skipped");
+    const rules = replayPackets.map(packet => packet.rule!);
+    // Original rules remain the authority even after a user edits or removes a rule.
+    const original = { ...route, notificationRules: rules.map(rule => ({ ...rule, enabled: true,
+      routeKinds: [], regex: "", sourceRouteIds: undefined })) };
+    decision = createRouteDecision(original, routeKind, record, { ...extraValues, automationRuleId: undefined });
+    if (decision) decision.matchedRules = rules;
+  }
   if (!decision) {
     logRouteMiss(routeKind, record, "no_matching_rule", route);
     return routeResult(route, "missed", { reason: "no_matching_rule" });
   }
 
-  if (await heartbeatShouldSkipForBusyAgent(routeKind)) {
+  const onlyPrimaryTargets = decision.matchedRules.every(rule => {
+    try { return rule.agentTarget && resolveAgentDeliveryExecutor(rule.agentTarget, config.agentRecipients) === "primary"; }
+    catch { return false; }
+  });
+  if (onlyPrimaryTargets && await heartbeatShouldSkipForBusyAgent(routeKind)) {
     appendAdapterLogToDir("router", {
       event: "heartbeat_skipped_agent_busy",
       level: "info",
@@ -1104,17 +1126,6 @@ async function forwardMessageToRoute(
       }
     }
   }
-  const messageAgentGroup = options.messageGroup
-    ?? (routeKind === "heartbeat" && messageAgentModeEnabled()
-      ? immediateMessageAgentGroup(routeKind, record, extraValues)
-      : undefined);
-  const useMemoryConsolidationAgent = !remotePersona && memoryConsolidationAgentHandles(
-    routeKind,
-    isManualTriggerRecord(record) ? record.triggerId : undefined,
-    config.codexMemoryConsolidationAgentEnabled,
-    configuredPrimaryAgentAdapter()
-  );
-
   const adapterOutcomes: ForwardAdapterOutcome[] = [];
   const imagePaths = imagePathsForRecord(record);
   let sentPacketCount = 0;
@@ -1137,13 +1148,17 @@ async function forwardMessageToRoute(
         }, roleContext.personaDataDir);
       }
     }
-    packets.push({
+    const replayPacket: DeliveryReplayPacket = {
       routeId: route.id,
       ruleId: rule.id,
       message: packet.message,
       messageSource: packet.messageSource,
-      content: packet.content
-    });
+      content: packet.content,
+      rule: structuredClone(rule),
+      recipients: structuredClone(replayPackets?.find(item => item.ruleId === rule.id)?.recipients ?? config.agentRecipients),
+      ownerFingerprint: replayPackets?.find(item => item.ruleId === rule.id)?.ownerFingerprint ?? deliveryOwnerFingerprint()
+    };
+    packets.push(replayPacket);
 
     appendAgentPacketToDir({
       id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -1153,19 +1168,49 @@ async function forwardMessageToRoute(
     }, roleContext.personaDataDir);
 
     sentPacketCount += 1;
-    adapterOutcomes.push(...(useMemoryConsolidationAgent
-      ? await deliverPacketToMemoryConsolidationAgent(route.id, rule.id, packet.content, packet.messageSource)
-      : messageAgentGroup
-        ? await deliverPacketToMessageAgent(
-          route.id,
-          rule.id,
-          packet.content,
-          packet.messageSource,
-          String(packet.templateValues.replyContextJson || "{}"),
-          roleContext.roleId,
-          messageAgentGroup
-        )
-        : await deliverPacketToPrimaryAgentAdapter(route.id, rule.id, packet.delivery, undefined, imagePaths)));
+    try {
+      const original = replayPackets?.find(item => item.ruleId === rule.id);
+      if (original && rule.agentTarget?.kind !== "session" && original.ownerFingerprint !== deliveryOwnerFingerprint()) {
+        throw new Error("The original Agent binding changed; replay cannot substitute the current recipient.");
+      }
+      packet.delivery.deliveryId = `automation-${createHash("sha256").update(JSON.stringify([route.id, rule.id, routeKind, recordId(record)])).digest("hex")}`;
+      if (original?.delivery) packet.delivery = structuredClone(original.delivery);
+      let selectedTarget = rule.agentTarget;
+      const executor = selectedTarget && resolveAgentDeliveryExecutor(selectedTarget, original?.recipients ?? config.agentRecipients);
+      if (!original && executor === "primary" && isPlanAssistantAgentType(configuredPrimaryAgentAdapter())) {
+        const { binding } = await managedAgentExecution();
+        if (binding) selectedTarget = { kind: "session", agentTargetId: config.primaryAgentTarget,
+          agentAdapter: binding.agentAdapter, sessionId: binding.sessionId, sessionName: binding.sessionName, workspace: binding.workspace };
+      }
+      if (!original && executor === "plan_secretary") {
+        const reply = "replyContext" in record ? record.replyContext as Record<string, unknown> | undefined : undefined;
+        const planId = String(extraValues.planId || reply?.planId || (packet.messageSource.type === "plan" ? packet.messageSource.planId : ""));
+        if (!planId || !roleContext.roleDir) throw new Error("Plan secretary delivery requires an associated local plan.");
+        const binding = getPlan(roleContext.roleDir, planId)?.secretaryBinding;
+        if (!binding) throw new Error("The associated plan has no secretary binding.");
+        const configured = config.codexPlanAssistantSessions?.find(item => item.threadId === binding.sessionId && item.workspace === binding.workspace);
+        const agentTargetId = binding.agentTargetId || configured?.agentTargetId || `local:${binding.agentType}`;
+        selectedTarget = { kind: "session", agentTargetId, agentAdapter: binding.agentType,
+          sessionId: binding.sessionId, sessionName: binding.sessionTitle || binding.sessionId, workspace: binding.workspace };
+      }
+      replayPacket.rule = { ...rule, agentTarget: selectedTarget };
+      replayPacket.delivery = structuredClone(packet.delivery);
+      replayPacket.model = original ? original.model
+        : executor === "plan_secretary" ? config.codexPlanAssistantModel : executor === "primary" ? config.agentModel : undefined;
+      adapterOutcomes.push(...await executeAgentDelivery(selectedTarget, original?.recipients ?? config.agentRecipients, {
+        primary: () => deliverPacketToPrimaryAgentAdapter(route.id, rule.id, packet.delivery, undefined, imagePaths),
+        memory_consolidation: () => deliverPacketToMemoryConsolidationAgent(route.id, rule.id, packet.content, packet.messageSource),
+        message_pool: () => deliverPacketToMessageAgent(route.id, rule.id, packet.content, packet.messageSource,
+          String(packet.templateValues.replyContextJson || "{}"), roleContext.roleId,
+          options.messageGroup ?? immediateMessageAgentGroup(routeKind, record, extraValues)),
+        session: target => deliverPacketToSession(route.id, rule.id, target, packet.delivery, recordId(record), imagePaths,
+          replayPacket.model),
+        plan_secretary: async () => { throw new Error("The original secretary target was not resolved; replay cannot choose a different secretary."); }
+      }));
+    } catch (error) {
+      adapterOutcomes.push({ routeId: route.id, ruleId: rule.id, adapter: rule.agentTarget?.kind === "session" ? rule.agentTarget.agentAdapter : configuredPrimaryAgentAdapter() || "codex",
+        status: "failed", error: error instanceof Error ? error.message : String(error) });
+    }
   }
 
   const failed = adapterOutcomes.some((outcome) => outcome.status === "failed");
@@ -1283,7 +1328,12 @@ export function forwardMessage(
   extraValues: ForwardTemplateValues = {}
 ): void {
   const groupingPolicy = groupingPolicyForRecord(routeKind, record);
-  if (groupingPolicy && messageAgentModeEnabled()) {
+  const matchingRules = routeProfilesForRecord(record).flatMap(route => createRouteDecision(route, routeKind, record, extraValues)?.matchedRules ?? []);
+  const groupSelected = matchingRules.length > 0 && matchingRules.every(rule => {
+    try { return rule.agentTarget && resolveAgentDeliveryExecutor(rule.agentTarget, config.agentRecipients) === "message_pool"; }
+    catch { return false; }
+  });
+  if (groupingPolicy && groupSelected) {
     const input = messageGroupEnqueueInputForForward(
       routeKind,
       record,

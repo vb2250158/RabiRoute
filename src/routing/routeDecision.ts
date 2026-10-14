@@ -137,6 +137,8 @@ export function notificationRuleMatches(
   if (!rule.enabled) {
     return false;
   }
+  if (rule.sourceRouteIds?.length && !rule.sourceRouteIds.includes(process.env.GATEWAY_ID || route.id)) return false;
+  if (rule.triggerIds?.length && (!isManualTriggerRecord(record) || !rule.triggerIds.includes(String(record.triggerId)))) return false;
 
   if (rule.routeKinds.length > 0 && !rule.routeKinds.includes(routeKind)) {
     return false;
@@ -191,9 +193,15 @@ export function createRouteDecision(
     isManualTriggerRecord(record) ? record.triggerId : undefined,
     extraValues
   );
-  const matchedRules = systemRule
-    ? [systemRule]
-    : route.notificationRules.filter((item) => notificationRuleMatches(item, routeKind, record, extraValues, route));
+  const configured = route.notificationRules.filter(item => notificationRuleMatches(item, routeKind, record, extraValues, route)
+    && (!(isManualTriggerRecord(record) && record.triggerId === "memory-consolidation") || item.triggerIds?.includes("memory-consolidation")));
+  const scheduled = route.automationRules?.find(item => item.id === extraValues.automationRuleId);
+  const matchedRules = scheduled
+    ? scheduled.enabled !== false && scheduled.trigger.type === "schedule" && scheduled.trigger.schedule.enabled !== false
+      && (!scheduled.sourceRouteIds?.length || scheduled.sourceRouteIds.includes(process.env.GATEWAY_ID || route.id))
+      && scheduled.action.type === "deliver_agent" && systemRule
+      ? [{ ...systemRule, id: scheduled.id, template: scheduled.action.template ?? "", agentTarget: scheduled.action.target }] : []
+    : systemRule && routeKind === "plan_feedback" ? [{ ...systemRule }] : configured;
   if (matchedRules.length === 0) {
     return null;
   }

@@ -7,7 +7,8 @@ import { buildRoleKnowledgeContextView } from "./roleKnowledgeContext.js";
 import {
   voiceIdentityReviewCapabilityHint,
   needsPlanAssistantHint,
-  needsRemoteAgentHint
+  needsRemoteAgentHint,
+  remoteComputerCapabilityHint
 } from "./agentCapabilityHints.js";
 import { toProjectRelativePath } from "../shared/projectPaths.js";
 import { resolveSpeechRouteProfile } from "../shared/speechControlContract.js";
@@ -1221,6 +1222,7 @@ function buildAgentMessage(
   const voiceIdentityReviewHint = hasLocalPersona
     ? voiceIdentityReviewCapabilityHint(capabilityIntentText, capabilityContext)
     : null;
+  const remoteComputerHint = remoteComputerCapabilityHint(capabilityIntentText, capabilityContext);
   const identityContexts = hasLocalPersona
     ? identityContextsForForward(roleDir, routeKind, record, {
         gatewayId: process.env.GATEWAY_ID,
@@ -1395,6 +1397,9 @@ function buildAgentMessage(
       optionalLine("历史会话归档", values.conversationArchiveDir),
       optionalLine("会话归档索引", values.conversationArchiveIndexPath)
     ]),
+    remoteComputerHint
+      ? section("远端电脑", remoteComputerHint)
+      : "",
     config.messageEndpointTypes.includes("remoteAgent") && needsRemoteAgentHint(capabilityIntentText)
       ? section("远端 Agent 设备", remoteAgentApiHint(values))
       : "",

@@ -16,13 +16,14 @@ export function currentEnvelopeDeliveryId(prompt: string): string {
   const headerEnd = text.indexOf("\n\n[消息内容]\n");
   if (headerEnd < 0) return "";
   const headerId = /^投递 ID：([^\n]+)$/m.exec(text.slice(0, headerEnd))?.[1];
-  if (headerId && validId.test(headerId)) return headerId;
+  if (headerId && (validId.test(headerId) || /^agent-[0-9a-f]{64}$/.test(headerId))) return headerId;
   const parts = text.split("\n\n[回传参数]\n");
   if (parts.length !== 2) return "";
   try {
     const parameters = JSON.parse(parts[1]);
     return (parameters.responsePolicy === "required" || parameters.responsePolicy === "none")
-      && typeof parameters.deliveryId === "string" && validId.test(parameters.deliveryId)
+      && typeof parameters.deliveryId === "string"
+      && (validId.test(parameters.deliveryId) || /^agent-[0-9a-f]{64}$/.test(parameters.deliveryId))
       ? parameters.deliveryId : "";
   } catch { return ""; }
 }
@@ -37,7 +38,7 @@ export function deliveryIdFromPrompt(prompt: string): string {
     const original = currentEnvelopeDeliveryId(prefix);
     if (original) return original;
   }
-  const tail = transportSuffix.exec(prompt)?.[1];
+  const tail = prefix !== undefined ? transportSuffix.exec(prompt)?.[1] : undefined;
   if (tail) return tail;
   const legacyContract = prompt.startsWith("[消息源]\n")
     ? prompt.split("\n\n[Agent 回复合同]\n")[1]

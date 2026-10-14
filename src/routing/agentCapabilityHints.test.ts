@@ -3,10 +3,17 @@ import test from "node:test";
 import {
   voiceIdentityReviewCapabilityHint,
   needsPlanAssistantHint,
-  needsRemoteAgentHint
+  needsRemoteAgentHint,
+  remoteComputerCapabilityHint
 } from "./agentCapabilityHints.js";
 
 const context = { managerPort: "9000", roleId: "Rabi A" };
+
+test("host Agent discovers computer APIs independently of a remote Agent backend", () => {
+  const hint = remoteComputerCapabilityHint("远端 Codex 没启动，查询窗口并使用 PowerShell 排障",context)!.join("\n");
+  assert.match(hint,/\/api\/lan-agent\/instances/);assert.match(hint,/waitMs=25000/);assert.match(hint,/\/computer/);
+  assert.match(hint,/不依赖 Codex/);assert.equal(remoteComputerCapabilityHint("你好",context),null);
+});
 
 test("operation tutorials are selected by current intent instead of installed capabilities", () => {
   for (const text of ["你好", "这个按钮再向下挪一点", "今天吃什么"]) {

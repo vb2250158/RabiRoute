@@ -16,6 +16,23 @@ export function needsRemoteAgentHint(text: string): boolean {
   return REMOTE_AGENT_INTENT_PATTERN.test(text);
 }
 
+export function remoteComputerCapabilityHint(text: string, context: AgentCapabilityHintContext): string[] | null {
+  if (!REMOTE_AGENT_INTENT_PATTERN.test(text) && !/\b(?:cmd|powershell)\b|终端|文件互传|查询窗口/i.test(text)) return null;
+  const base = managerBaseUrl(context);
+  return [
+    "集群由主控 RabiPC 统一拥有人格、计划、记忆、Skill 与流程；远端客户端只提供电脑能力及关联 Agent 的执行入口。",
+    `- 发现电脑：GET ${base}/api/lan-agent/instances；先核对实例名称和 instanceId。`,
+    `- 读取调用合同：GET ${base}/api/lan-agent/capabilities。`,
+    `- 终端列表：GET ${base}/api/lan-agent/instances/<instanceId>/terminals。`,
+    `- 终端操作：POST ${base}/api/lan-agent/instances/<instanceId>/terminals；action=open|list|get|input|resize|close。`,
+    "open 携带稳定 terminalId 和 shell=cmd|powershell；input 携带 terminalId、递增 sequence 和 data，执行命令以 \\r 结尾。",
+    `- 读取输出：GET ${base}/api/lan-agent/instances/<instanceId>/terminals/<terminalId>?after=<nextOutputSequence>&waitMs=25000；返回 terminal、outputEvents、nextOutputSequence、truncated。`,
+    `- 文件与画面：POST ${base}/api/lan-agent/instances/<instanceId>/computer；按 capabilities 中 remote-computer 合同读取分块文件、上传文件、查询窗口和截图。`,
+    "这些接口由远端客户端直接执行，不依赖 Codex、DSH 或其他 Agent 后端启动。客户端及主控连接必须在线。",
+    "超时先查询现有终端和 nextInputSequence，不自动重建或重发输入；输出有界，重要结果应写文件后互传。"
+  ];
+}
+
 function managerBaseUrl(context: AgentCapabilityHintContext): string {
   const rawPort = String(context.managerPort || "").trim();
   if (!/^[1-9]\d{0,4}$/.test(rawPort)) {

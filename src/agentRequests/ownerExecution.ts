@@ -24,9 +24,15 @@ export async function recoverEndpointOwnerReceipt(delivery: PreparedEndpointDeli
   const owner = readCodexDesktopThread(delivery.target.sessionId);
   if (!owner || owner.archived || !owner.rolloutPath) return undefined;
   await assertAuthorized();
+  const { withoutLegacyTransportSuffix } = await import("../shared/deliveryIdentity.js");
   for await (const prompt of readRolloutUserMessages(owner.rolloutPath)) {
     await assertAuthorized();
-    if (deliveryIdFromPrompt(prompt) === delivery.deliveryId && agentDeliveryPromptHash(prompt) === delivery.promptHash) {
+    const prefix = withoutLegacyTransportSuffix(prompt);
+    // Historical Desktop transports added a UUID after the frozen Manager envelope.
+    // Recovery still requires the original structured identity and exact reserved bytes.
+    const exactEvidence = deliveryIdFromPrompt(prompt) === delivery.deliveryId && agentDeliveryPromptHash(prompt) === delivery.promptHash
+      || (prefix !== undefined && deliveryIdFromPrompt(prefix) === delivery.deliveryId && agentDeliveryPromptHash(prefix) === delivery.promptHash);
+    if (exactEvidence) {
       return { deliveryId: delivery.deliveryId, generation: delivery.generation, endpoint: delivery.target, promptHash: delivery.promptHash, executionOptionsHash: delivery.executionOptionsHash,
         accepted: true, action: "receipt_recovered", transport: "desktop-ipc" };
     }

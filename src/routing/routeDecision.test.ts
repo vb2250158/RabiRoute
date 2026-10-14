@@ -169,11 +169,13 @@ test("RouteDecision respects manual trigger rule selection", () => {
   assert.deepEqual(decision.matchedRules.map((rule) => rule.id), ["run"]);
 });
 
-test("memory consolidation is a Manager-owned trigger and does not require a user notification rule", () => {
+test("memory consolidation requires its configured delivery rule", () => {
   const decision = createRouteDecision(routeProfile(), "manual_trigger", manualTrigger());
-
-  assert.ok(decision);
-  assert.deepEqual(decision.matchedRules.map((rule) => rule.id), ["memory-consolidation"]);
+  assert.equal(decision, null);
+  const configured = createRouteDecision(routeProfile({ notificationRules: [{ id: "memory", name: "Memory", enabled: true,
+    routeKinds: ["manual_trigger"], triggerIds: ["memory-consolidation"], template: "",
+    agentTarget: { kind: "recipient", recipientId: "memory-consolidation" } }] }), "manual_trigger", manualTrigger());
+  assert.equal(configured?.matchedRules[0].id, "memory");
 });
 
 test("scheduled persona automation supplies its own Agent template without a heartbeat message rule", () => {
@@ -182,7 +184,9 @@ test("scheduled persona automation supplies its own Agent template without a hea
     rawMessage: "review open plans",
     messageId: "scheduled-review"
   };
-  const decision = createRouteDecision(routeProfile(), "heartbeat", record, {
+  const decision = createRouteDecision(routeProfile({ automationRules: [{ id: "scheduled-review", enabled: true,
+    trigger: { type: "schedule", schedule: { id: "daily", type: "interval", intervalSeconds: 900 } },
+    action: { type: "deliver_agent", template: "report only new blockers", target: { kind: "recipient", recipientId: "primary" } } }] }), "heartbeat", record, {
     automationRuleId: "scheduled-review",
     automationRuleName: "Daily review",
     automationTemplate: "report only new blockers"

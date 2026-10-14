@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { resolveEndpointExecutionOptions } from "../agentRequests/executionOptions.js";
+import { resolveEndpointExecutionOptions, type EndpointExecutionOptions } from "../agentRequests/executionOptions.js";
 import type { AgentThreadRequest, AgentThreadRequestOptions, AgentThreadRemoteSource, AgentThreadSummary } from "../agentThreads.js";
 import type { AgentRequestStore, AgentRequestParty } from "../agentRequests/store.js";
 import type { AgentRequestEndpoint } from "../agentRequests/endpoint.js";
@@ -14,6 +14,23 @@ import type { RabiGlobalConfigStore } from "./globalConfig.js";
 import type { AgentAdapterType } from "../agentAdapters/types.js";
 import { agentIdentityForMessageSource } from "../shared/rabiMessage.js";
 import type { RabiLinkAgentPrincipal } from "./rabiLinkAgentDevices.js";
+import { AgentThreadContractError, completeAgentSessionId, normalizeAgentThreadSourceType } from "../agentRequests/requestValidation.js";
+
+export type AgentServiceSourcePrincipal = {
+  provider: AgentAdapterType;
+  agentId: string;
+  sessionId: string;
+  authorizationIncarnation: string;
+};
+export type AgentServiceEndpointBridge = {
+  owns(endpoint: AgentRequestEndpoint): boolean;
+  resolveSource(request: AgentThreadRequest, principal?: AgentServiceSourcePrincipal): Promise<AgentRequestParty | undefined>;
+  resolveTarget(request: AgentThreadRequest): Promise<AgentRequestParty | undefined>;
+  authorize(endpoint: AgentRequestEndpoint, role?: "source" | "target"): void;
+  refresh?(endpoint: AgentRequestEndpoint, role?: "source" | "target"): Promise<void>;
+  resolveExecutionOptions(request: AgentThreadRequest, target: AgentRequestParty): EndpointExecutionOptions;
+  transport(delivery: PreparedEndpointDelivery, guard: () => void, reconcile: boolean): Promise<EndpointDeliveryReceipt | undefined>;
+};
 
 export type AgentDeviceEndpointBridge = {
   resolveSource(request: AgentThreadRequest, principal?: RabiLinkAgentPrincipal): Promise<AgentRequestParty | undefined>;
@@ -32,12 +49,9 @@ export type AgentEndpointDeliveryContext = {
   readLocal: (provider: AgentAdapterType, sessionId: string, options: AgentThreadRequestOptions) => Promise<AgentThreadSummary>;
   localOptions: (request: AgentThreadRequest) => AgentThreadRequestOptions;
   device?: AgentDeviceEndpointBridge;
+  service?: AgentServiceEndpointBridge;
 };
 const digest = (parts: unknown[]) => createHash("sha256").update(JSON.stringify(parts)).digest("hex");
-const rawId = (id: unknown): string => {
-  if (typeof id !== "string" || !id || id !== id.trim() || id.length > 4096) throw new Error("Complete opaque session ID is required.");
-  return id;
-};
 
 /** Manager owns business records; registry/catalog is discovery, never authorization. */
 export function createAgentEndpointDelivery(context: AgentEndpointDeliveryContext) {
@@ -56,6 +70,10 @@ export function createAgentEndpointDelivery(context: AgentEndpointDeliveryContex
   }
   function authorize(endpoint: AgentRequestEndpoint, role?: "source" | "target"): void {
     if (endpoint.managerInstanceId !== managerInstanceId) throw new Error("Endpoint belongs to another Manager authority.");
+    if (context.service?.owns(endpoint)) {
+      context.service.authorize(endpoint, role);
+      return;
+    }
     if (endpoint.kind === "device") {
       if (!context.device) throw new Error("Device endpoint owner is unavailable.");
       context.device.authorize(endpoint, role);
@@ -72,6 +90,7 @@ export function createAgentEndpointDelivery(context: AgentEndpointDeliveryContex
   async function refreshEndpoints(identities: Pick<PreparedEndpointDelivery, "source" | "target">): Promise<void> {
     for (const role of ["source", "target", "source"] as const) {
       const endpoint = identities[role];
+      if (context.service?.owns(endpoint)) await context.service.refresh?.(Object.freeze({ ...endpoint }), role);
       if (endpoint.kind === "device") {
         if (!context.device) throw new Error("Device endpoint owner is unavailable.");
         await context.device.refresh?.(Object.freeze({ ...endpoint }), role);
@@ -97,6 +116,7 @@ export function createAgentEndpointDelivery(context: AgentEndpointDeliveryContex
   }
   async function transport(delivery: PreparedEndpointDelivery, assertAuthorized: () => void, reconcile: boolean): Promise<EndpointDeliveryReceipt | undefined> {
     assertAuthorized();
+    if (context.service?.owns(delivery.target)) return context.service.transport(delivery, assertAuthorized, reconcile);
     if (delivery.target.kind === "device") {
       if (!context.device) throw new Error("Device endpoint owner is unavailable.");
       return context.device.transport(delivery, assertAuthorized, reconcile);
@@ -113,10 +133,13 @@ export function createAgentEndpointDelivery(context: AgentEndpointDeliveryContex
       beginAttempt: value => receipts.beginAttempt(value), recoverReceipt: recoverEndpointOwnerReceipt,
       send: (value, guard) => executeEndpointOnOwner(value, options, guard) }, reconcile);
   }
-  function options(remoteSource?: AgentThreadRemoteSource, requestAuthority?: () => void, deviceSource?: RabiLinkAgentPrincipal): EndpointDeliveryOptions {
-    if ((remoteSource || deviceSource) && !requestAuthority) throw new Error("Remote source requires original HTTP admission authority.");
-    if (remoteSource && deviceSource) throw new Error("A request cannot assert two authenticated source owners.");
+  function options(remoteSource?: AgentThreadRemoteSource, requestAuthority?: () => void, deviceSource?: RabiLinkAgentPrincipal,
+    serviceSource?: AgentServiceSourcePrincipal, callerExecutionOptions?: EndpointDeliveryOptions["callerExecutionOptions"]): EndpointDeliveryOptions {
+    if ((remoteSource || deviceSource || serviceSource) && !requestAuthority) throw new Error("Remote source requires original HTTP admission authority.");
+    if ([remoteSource, deviceSource, serviceSource].filter(Boolean).length > 1) throw new Error("A request cannot assert two authenticated source owners.");
     const originalDeviceSource = deviceSource ? Object.freeze({ ...deviceSource }) : undefined;
+    const originalServiceSource = serviceSource ? Object.freeze({ ...serviceSource }) : undefined;
+    const originalCallerExecutionOptions = callerExecutionOptions === undefined ? undefined : Object.freeze({ ...callerExecutionOptions });
     requestAuthority?.();
     // Capture once: a fresh catalog/credential must never replace the original caller.
     const originalSource = remoteSource ? remoteEndpoint(remoteSource.nodeId, remoteSource.agentId, remoteSource.sessionId) : undefined;
@@ -124,35 +147,58 @@ export function createAgentEndpointDelivery(context: AgentEndpointDeliveryContex
       requestAuthority?.();
       if (originalSource) authorize(originalSource);
     };
-    return { store: context.store, managerInstanceId, authorize: (endpoint, role) => { assertRequest(); authorize(endpoint, role); },
+    return { store: context.store, managerInstanceId, callerExecutionOptions: originalCallerExecutionOptions,
+      authorize: (endpoint, role) => { assertRequest(); authorize(endpoint, role); },
       refreshEndpoints: async identities => { assertRequest(); await refreshEndpoints(identities); assertRequest(); },
       resolveExecutionOptions: (request, target) => {
         assertRequest();
         const exactRequest = { ...request, agentAdapter: target.agentAdapter, threadId: target.threadId };
+        if (target.endpoint && context.service?.owns(target.endpoint)) return context.service.resolveExecutionOptions(exactRequest, target);
         const defaults = target.endpoint?.kind === "local" ? context.localOptions(exactRequest).codexDefaults : undefined;
         return resolveEndpointExecutionOptions(exactRequest, target.workspace, defaults);
       },
       resolveSource: async request => {
         assertRequest();
-        const id = rawId(request.sourceThreadId);
-        if (!request.sourceAgentType) throw new Error("Source Agent type is required.");
+        const id = completeAgentSessionId(request.sourceThreadId, "sourceThreadId");
+        const sourceAgentType = normalizeAgentThreadSourceType(request.sourceAgentType, true);
+        request = { ...request, sourceAgentType };
         const device = await context.device?.resolveSource(request, originalDeviceSource);
         assertRequest();
         if (device) return device;
         if (originalDeviceSource) throw new Error("Authenticated device source has no exact native owner; source substitution is forbidden.");
         if (remoteSource) {
           if (id !== remoteSource.sessionId) throw new Error("Source does not match ingress-authenticated owner.");
-          return remoteParty(remoteSource.nodeId, remoteSource.agentId, id, request.sourceAgentType);
+          return remoteParty(remoteSource.nodeId, remoteSource.agentId, id, sourceAgentType);
         }
+        const service = await context.service?.resolveSource(request, originalServiceSource);
+        assertRequest();
+        if (service) {
+          if (!service.endpoint || !context.service?.owns(service.endpoint)
+            || (originalServiceSource && (originalServiceSource.provider !== service.agentAdapter || originalServiceSource.sessionId !== service.threadId
+              || originalServiceSource.agentId !== service.endpoint.agentId || originalServiceSource.authorizationIncarnation !== service.endpoint.authorizationIncarnation))) {
+            throw new AgentThreadContractError("Service source does not match the authenticated owner.", "messageSource", "source_verification",
+              "Use the original registered service owner's adapter and session identity.");
+          }
+          return service;
+        }
+        if (originalServiceSource) throw new AgentThreadContractError("Authenticated service source has no exact owner; source substitution is forbidden.",
+          "messageSource", "source_verification", "Restore the original service owner before retrying; do not substitute a Desktop session.");
         const identity = request.messageSource ? agentIdentityForMessageSource(request.messageSource) : undefined;
-        if (!identity || identity.sessionId !== id) throw new Error("Local source identity is required.");
-        const party = await localParty(identity.agentAdapter, id, request.sourceAgentType, request);
+        if (!identity || identity.sessionId !== id) throw new AgentThreadContractError("Local source identity is required.", "messageSource", "source_verification",
+          "Declare an existing Agent source or plan.sourceAgent matching sourceThreadId; system and message_adapter sources cannot establish Agent ownership.");
+        const party = await localParty(identity.agentAdapter, id, sourceAgentType, request);
         assertRequest();
         return party;
       },
       resolveTarget: async request => {
         assertRequest();
-        const id = rawId(request.threadId);
+        const id = completeAgentSessionId(request.threadId, "threadId");
+        const service = await context.service?.resolveTarget(request);
+        assertRequest();
+        if (service) {
+          if (!service.endpoint || !context.service?.owns(service.endpoint)) throw new Error("Service target has no registered owner.");
+          return service;
+        }
         const device = await context.device?.resolveTarget(request);
         assertRequest();
         if (device) return device;

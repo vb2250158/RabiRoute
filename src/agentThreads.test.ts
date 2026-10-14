@@ -608,6 +608,15 @@ test("Agent thread send starts a follow-up turn through the driver", async () =>
   assert.match(sent.prompt, /\[消息内容\]\n补充新证据/);
 });
 
+test("standalone send preserves the caller delivery identity in prompt and receipt", async () => {
+  let prompt = "";
+  const result = await handleAgentThreadRequest({ action: "send", threadId: "019f0000-0000-7000-8000-000000000002",
+    prompt: "identity test", deliveryId: "automation-original", cwd: process.cwd(), messageSource: defaultSystemMessageSource },
+  { allowedWorkspaces: [process.cwd()] }, { read: async () => ({}), create: async () => { throw new Error("must not create"); }, send: async params => { prompt = params.prompt; } });
+  assert.equal((result.data.delivery as Record<string, unknown>).deliveryId, "automation-original");
+  assert.match(prompt, /投递 ID：automation-original/);
+});
+
 test("Agent thread send delegates workspace restrictions to the target AGENTS.md", async (t) => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-threads-"));
   const sampleWorkspace = path.join(tempRoot, "SampleProject");

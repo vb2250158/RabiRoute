@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { userFacingError } from "../userFacingError";
-import { computed, ref } from "vue";
+import { computed, ref, useId, watch } from "vue";
 import type { AgentAdapterType } from "@shared/agentAdapterCapabilities";
 import type { GatewayDefinition } from "@shared/gatewayConfigModel";
 import { AGENT_HOOK_EVENTS, AGENT_HOOK_CONDITIONS, AGENT_HOOK_DESTINATIONS, agentHookRuleErrors,
@@ -9,6 +9,18 @@ import { createAgentCompletionRule, createTtsCompletionRule } from "../persona/a
 
 const props = defineProps<{ modelValue: AgentCompletionDeliveryRule[]; gateways: GatewayDefinition[]; gatewayId: string; agentType?: AgentAdapterType }>();
 const emit = defineEmits<{ "update:modelValue": [value: AgentCompletionDeliveryRule[]] }>();
+const panelId = useId();
+const expanded = ref(new Set<string>());
+watch(() => props.modelValue.map(rule => rule.id), (ids, previous) => {
+  const existing = new Set(previous ?? ids);
+  expanded.value = new Set([...expanded.value].filter(id => ids.includes(id)));
+  for (const id of ids) if (!existing.has(id)) expanded.value.add(id);
+});
+function toggleRule(id: string) {
+  const next = new Set(expanded.value);
+  if (next.has(id)) next.delete(id); else next.add(id);
+  expanded.value = next;
+}
 const projects = ref<string[]>([]);
 const loading = ref(false);
 const error = ref("");
@@ -83,15 +95,20 @@ async function scanProjects() {
     <p class="section-note">选择触发事件和接收消息的消息端。</p>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-3">{{ error }}</v-alert>
     <v-card v-for="(rule, index) in modelValue" :key="rule.id" variant="outlined" class="pa-4 mb-4">
-      <div class="d-flex align-center justify-space-between mb-3">
-        <strong>投递规则 {{ index + 1 }}</strong>
-        <div class="d-flex align-center ga-3">
+      <div class="hook-rule-heading">
+        <button type="button" class="hook-rule-toggle" :aria-expanded="expanded.has(rule.id)"
+          :aria-controls="`${panelId}-${rule.id}`" @click="toggleRule(rule.id)">
+          <v-icon :icon="expanded.has(rule.id) ? 'mdi-chevron-up' : 'mdi-chevron-down'" size="20" />
+          <span><strong>投递规则 {{ index + 1 }}</strong><span class="section-note hook-rule-summary">{{ AGENT_HOOK_EVENTS.find(item => item.value === rule.event)?.title || rule.event }} · {{ AGENT_HOOK_DESTINATIONS.find(item => item.value === rule.destination.channel)?.title || rule.destination.channel }}</span></span>
+        </button>
+        <div class="hook-rule-actions">
           <v-switch :model-value="rule.enabled" :disabled="agentHookRuleErrors(rule).length > 0" label="启用规则" hide-details density="compact" color="primary"
             @update:model-value="value => update(rule, { enabled: value === true })" />
           <v-btn icon="mdi-delete-outline" variant="text" size="small" aria-label="删除投递规则"
             @click="emit('update:modelValue', modelValue.filter(item => item.id !== rule.id))" />
         </div>
       </div>
+      <div :id="`${panelId}-${rule.id}`" v-show="expanded.has(rule.id)">
       <div class="hook-rule-section">
         <div class="hook-rule-label">事件</div>
         <v-select :model-value="rule.event" :items="AGENT_HOOK_EVENTS" label="选择事件" hide-details
@@ -149,6 +166,7 @@ async function scanProjects() {
         </div>
         <p v-if="rule.destination.channel === 'speech'" class="section-note mt-3">任务完成后，使用所选消息路线的人格声线、语音合成与自动播放设置播报结果。启用规则并保存后生效。</p>
       </div>
+      </div>
       <p v-for="message in agentHookRuleErrors(rule)" :key="message" class="section-note text-warning">{{ message }}</p>
     </v-card>
     <div class="hook-delivery-actions">
@@ -161,6 +179,11 @@ async function scanProjects() {
 
 <style scoped>
 .hook-delivery-rules .section-note { font-weight: 400; }
+.hook-rule-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
+.hook-rule-toggle { display: flex; align-items: center; gap: 8px; text-align: left; min-height: 44px; min-width: 0; color: inherit; }
+.hook-rule-toggle:focus-visible { outline: 2px solid rgb(var(--v-theme-primary)); outline-offset: 3px; border-radius: 4px; }
+.hook-rule-summary { display: block; margin-top: 4px; overflow-wrap: anywhere; }
+.hook-rule-actions { display: flex; align-items: center; gap: 12px; margin-left: auto; }
 .hook-delivery-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .hook-rule-section { border-top: 1px solid rgba(var(--v-theme-on-surface), 0.1); padding-top: 16px; margin-top: 16px; }
 .hook-rule-label { font-weight: 600; margin-bottom: 12px; }

@@ -6,6 +6,7 @@ import { AgentReplyStateError } from "./replyError.js";
 import { sameCodexWorkspace } from "../codexTaskIdentity.js";
 import { parseAgentAdapterType, type AgentAdapterType } from "../agentAdapters/types.js";
 import { normalizeRabiMessageContent } from "../shared/rabiMessage.js";
+import { AgentThreadContractError, callerAgentDeliveryId } from "./requestValidation.js";
 import {
   JsonFileAgentRequestPersistence,
   type AgentRequestPersistence
@@ -83,12 +84,14 @@ export type AgentCommunicationPreparation = {
   planId?: string;
 };
 
-export type PrepareAgentCommunicationInput = Omit<AgentCommunicationPreparation, "deliveryId" | "requestId">;
+export type PrepareAgentCommunicationInput = Omit<AgentCommunicationPreparation, "deliveryId" | "requestId"> & { deliveryId?: string };
 
 type AgentRequestStoreFile = {
   version: number;
   requests: Record<string, AgentRequestRecord>;
   deliveries?: Record<string, PreparedEndpointDelivery>;
+  /** Unusable persisted delivery evidence still forbids replay of its original ID. */
+  unavailableDeliveryIds?: string[];
 };
 
 function nowIso(now: () => Date): string {
@@ -175,6 +178,7 @@ function parseRecord(value: unknown): AgentRequestRecord | undefined {
 export class AgentRequestStore {
   private readonly requests = new Map<string, AgentRequestRecord>();
   private readonly deliveries = new Map<string, PreparedEndpointDelivery>();
+  private readonly unavailableDeliveryIds = new Set<string>();
   private readonly persistence: AgentRequestPersistence;
 
   constructor(
@@ -186,23 +190,30 @@ export class AgentRequestStore {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
     const file = raw as Partial<AgentRequestStoreFile>;
     if (!file.requests || typeof file.requests !== "object" || Array.isArray(file.requests)) return;
-    for (const value of Object.values(file.deliveries ?? {})) {
+    for (const id of file.unavailableDeliveryIds ?? []) {
+      if (typeof id === "string" && id && id === id.trim() && id.length <= 100) this.unavailableDeliveryIds.add(id);
+    }
+    for (const [persistedId, value] of Object.entries(file.deliveries ?? {})) {
+      this.unavailableDeliveryIds.add(persistedId);
+      if (typeof value?.deliveryId === "string") this.unavailableDeliveryIds.add(value.deliveryId);
       if (value?.deliveryId && value.preparation?.deliveryId === value.deliveryId
         && value.source && value.target && value.promptHash === agentDeliveryPromptHash(value.prompt)) {
         try {
           normalizeAgentRequestEndpoint(value.source);
           normalizeAgentRequestEndpoint(value.target);
-          if (!value.generation || value.executionOptionsHash !== endpointExecutionOptionsHash(value.executionOptions)
+          if (persistedId !== value.deliveryId || !value.generation || value.executionOptionsHash !== endpointExecutionOptionsHash(value.executionOptions)
             || !["prepared", "dispatching", "committed", "cancelled"].includes(value.state)
             || !sameAgentEndpoint(value.source, value.preparation.source?.endpoint)
             || !sameAgentEndpoint(value.target, value.preparation.target?.endpoint)
             || value.preparation.source.threadId !== value.source.sessionId || value.preparation.target.threadId !== value.target.sessionId) continue;
+          if (value.callerDeliveryId !== undefined && (!callerAgentDeliveryId(value.callerDeliveryId) || !/^[a-f0-9]{64}$/.test(value.requestHash || ""))) continue;
           if (value.state === "committed" && !value.receipt) continue;
           if (value.receipt && (value.receipt.accepted !== true || value.receipt.deliveryId !== value.deliveryId
             || value.receipt.generation !== value.generation || value.receipt.promptHash !== value.promptHash
             || value.receipt.executionOptionsHash !== value.executionOptionsHash
             || !sameAgentEndpoint(value.receipt.endpoint, value.target))) continue;
           this.deliveries.set(value.deliveryId, structuredClone(value));
+          this.unavailableDeliveryIds.delete(value.deliveryId);
         } catch { /* Malformed evidence cannot be used for recovery. */ }
       }
     }
@@ -216,7 +227,8 @@ export class AgentRequestStore {
     this.persistence.write({
       version: AGENT_REQUEST_SCHEMA_VERSION,
       requests: Object.fromEntries([...this.requests.entries()].sort(([left], [right]) => left.localeCompare(right))),
-      deliveries: Object.fromEntries(this.deliveries)
+      deliveries: Object.fromEntries(this.deliveries),
+      ...(this.unavailableDeliveryIds.size ? { unavailableDeliveryIds: [...this.unavailableDeliveryIds].sort() } : {})
     } satisfies AgentRequestStoreFile);
   }
 
@@ -270,6 +282,14 @@ export class AgentRequestStore {
 
   listEndpointDeliveries(): PreparedEndpointDelivery[] {
     return [...this.deliveries.values()].map(value => structuredClone(value));
+  }
+
+  hasEndpointDeliveryReservation(deliveryId: string): boolean {
+    if (this.deliveries.has(deliveryId) || this.unavailableDeliveryIds.has(deliveryId)) return true;
+    for (const record of this.requests.values()) {
+      if (record.deliveryId === deliveryId || record.pendingResponseDeliveryId === deliveryId || record.response?.deliveryId === deliveryId) return true;
+    }
+    return false;
   }
 
   assertEndpointDeliveryActive(deliveryId: string): void {
@@ -436,7 +456,10 @@ export class AgentRequestStore {
   prepare(input: PrepareAgentCommunicationInput): AgentCommunicationPreparation {
     const source = normalizedParty(input.source);
     const target = normalizedParty(input.target);
-    if (sameAgentParty(source, target)) throw new Error("Agent request source and target task must be different.");
+    if (source.endpoint && target.endpoint ? sameAgentEndpoint(source.endpoint, target.endpoint) : sameAgentParty(source, target)) {
+      throw new AgentThreadContractError("Agent request source and target task must be different.", "threadId", "validation",
+        "Select a different complete target owner; changing the Agent role does not create a different session.");
+    }
     const responsePolicy = input.responsePolicy;
     if (responsePolicy !== "required" && responsePolicy !== "none") {
       throw new Error("responsePolicy must be required or none.");
@@ -448,7 +471,11 @@ export class AgentRequestStore {
     const inReplyToRequestId = cleanText(input.inReplyToRequestId, 100) || undefined;
     const result = cleanMessageResult(input.result) || undefined;
     const nextAction = cleanText(input.nextAction, 4_000) || undefined;
-    const deliveryId = randomUUID();
+    const deliveryId = callerAgentDeliveryId(input.deliveryId) ?? randomUUID();
+    if (input.deliveryId !== undefined && this.hasEndpointDeliveryReservation(deliveryId)) {
+      throw new AgentThreadContractError("Original delivery reservation already exists; automatic replay is forbidden.", "deliveryId", "validation",
+        "Reconcile the original delivery; do not create another request when its endpoint evidence is unavailable.", "AGENT_DELIVERY_RESERVATION_EXISTS");
+    }
     let repliedRequest: AgentRequestRecord | undefined;
     let repliedBefore: AgentRequestRecord | undefined;
     if (inReplyToRequestId) {
