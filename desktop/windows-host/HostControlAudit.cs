@@ -91,10 +91,36 @@ internal static class HostControlPeerInspector
         if (!string.Equals(peer.ClientSidHash, HostIdentity.CurrentUserKey(), StringComparison.Ordinal))
             return "unresolved";
         var hostImage = Environment.ProcessPath;
-        return !string.IsNullOrWhiteSpace(hostImage)
-            && string.Equals(Path.GetFullPath(peer.ClientImagePath), Path.GetFullPath(hostImage), StringComparison.OrdinalIgnoreCase)
+        return !string.IsNullOrWhiteSpace(hostImage) && IsSameExecutable(peer.ClientImagePath, hostImage)
             ? "host-cli"
             : "same-user-unknown";
+    }
+
+    // QueryFullProcessImageName reports the reparse-resolved image path, while
+    // Environment.ProcessPath keeps the launch path. When the package lives
+    // behind a junction or symlink the strings differ for the very same file,
+    // so fall back to comparing the volume serial number and file index.
+    internal static bool IsSameExecutable(string left, string right)
+    {
+        if (string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase))
+            return true;
+        return TryGetFileIdentity(left, out var leftId) && TryGetFileIdentity(right, out var rightId) && leftId == rightId;
+    }
+
+    private static bool TryGetFileIdentity(string path, out (uint Volume, ulong Index) identity)
+    {
+        identity = default;
+        try
+        {
+            using var handle = File.OpenHandle(Path.GetFullPath(path), FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (!NativePeerMethods.GetFileInformationByHandle(handle, out var info)) return false;
+            identity = (info.VolumeSerialNumber, ((ulong)info.FileIndexHigh << 32) | info.FileIndexLow);
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return false;
+        }
     }
 
     private static void CaptureProcess(
@@ -210,6 +236,25 @@ internal static class HostControlPeerInspector
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool ProcessIdToSessionId(uint processId, out uint sessionId);
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct ByHandleFileInformation
+        {
+            internal uint FileAttributes;
+            internal FileTime CreationTime;
+            internal FileTime LastAccessTime;
+            internal FileTime LastWriteTime;
+            internal uint VolumeSerialNumber;
+            internal uint FileSizeHigh;
+            internal uint FileSizeLow;
+            internal uint NumberOfLinks;
+            internal uint FileIndexHigh;
+            internal uint FileIndexLow;
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool GetFileInformationByHandle(SafeFileHandle file, out ByHandleFileInformation information);
 
         [DllImport("kernel32.dll", SetLastError = true)]
         internal static extern SafeFileHandle CreateToolhelp32Snapshot(uint flags, uint processId);
