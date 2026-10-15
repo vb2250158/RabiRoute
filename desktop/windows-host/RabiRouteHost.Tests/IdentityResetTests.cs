@@ -147,7 +147,15 @@ internal static class IdentityResetTests
         await connection;
         var handler = (Task)typeof(HostRuntime).GetMethod("HandleControlConnectionAsync", Private)!.Invoke(runtime, new object[] { server, slots, timeout.Token })!;
         var commands = (Channel<QueuedCommand>)typeof(HostRuntime).GetField("_commands", Private)!.GetValue(runtime)!;
-        var command = await commands.Reader.ReadAsync(timeout.Token);
+        var queued = commands.Reader.ReadAsync(timeout.Token).AsTask();
+        if (await Task.WhenAny(queued, responseTask) != queued)
+        {
+            var early = await responseTask;
+            check(false, $"real Host pipe queued the identity reset instead of answering early ({early?.Message ?? "no response"})");
+            await handler;
+            return;
+        }
+        var command = await queued;
         var transition = ExecuteAsync(runtime, command);
         var response = await responseTask;
         check(response is { Ok: true, State: "queued", AuditPersisted: true } && response.OperationId == request.OperationId,

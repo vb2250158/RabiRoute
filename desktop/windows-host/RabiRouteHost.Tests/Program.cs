@@ -21,6 +21,25 @@ await ShortcutRecoveryTests.RunAsync(Check);
 await IdentityResetTests.RunAsync(Check);
 EnvironmentBlockTests.Run(Check);
 
+var hostImagePath = Environment.ProcessPath!;
+Check(HostControlPeerInspector.IsSameExecutable(hostImagePath, hostImagePath.ToUpperInvariant()), "peer image comparison ignores path case");
+Check(!HostControlPeerInspector.IsSameExecutable(hostImagePath, typeof(HostRuntime).Assembly.Location), "peer image comparison rejects a different file");
+var junctionRoot = Path.Combine(Path.GetTempPath(), "rabiroute-peer-junction-" + Guid.NewGuid().ToString("N"));
+try
+{
+    var junction = Path.Combine(junctionRoot, "link");
+    Directory.CreateDirectory(junctionRoot);
+    using var mklink = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{junction}\" \"{Path.GetDirectoryName(hostImagePath)}\"") { UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true })!;
+    mklink.WaitForExit();
+    var viaJunction = Path.Combine(junction, Path.GetFileName(hostImagePath));
+    Check(mklink.ExitCode == 0 && HostControlPeerInspector.IsSameExecutable(viaJunction, hostImagePath), "peer image comparison resolves the same Host executable through a junction");
+}
+finally
+{
+    if (Directory.Exists(Path.Combine(junctionRoot, "link"))) Directory.Delete(Path.Combine(junctionRoot, "link"));
+    if (Directory.Exists(junctionRoot)) Directory.Delete(junctionRoot, recursive: false);
+}
+
 Check(NativeChildProcess.QuoteWindowsArgument("plain") == "plain", "plain argument quoting");
 Check(NativeChildProcess.QuoteWindowsArgument("two words") == "\"two words\"", "space argument quoting");
 Check(NativeChildProcess.QuoteWindowsArgument("C:\\trailing slash\\") == "\"C:\\trailing slash\\\\\"", "trailing slash quoting");
