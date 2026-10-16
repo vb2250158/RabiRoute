@@ -40,6 +40,17 @@ test("focused packets render one required item and gate optional remote instruct
       extraValues: {}, matchedRules: [rule], routeVariables: {}, routeText: rawMessage
     }, rule, { roleId: "TestRole", roleDir, rolePath: path.join(roleDir, "persona.md"), dataDir: roleDir }, { roleKnowledge: knowledge });
     const ordinary = build("你好").content;
+    const directRule: NotificationRule = { ...rule, template: "{message}", agentTarget: {
+      kind: "session", agentAdapter: "grokBot", agentTargetId: "local:grokBot", sessionId: "example-group",
+      sessionName: "Example group", workspace: "", deliveryType: "group", sendMode: "identity",
+      senderAgentId: "example-sender", senderAgentName: "Example sender" } };
+    const direct = buildPublishedAgentPacket({ route, routeKind: "manual_trigger",
+      record: { time: 1, source: "manual", rawMessage: "Example(123) : hello" }, extraValues: {},
+      matchedRules: [directRule], routeVariables: {}, routeText: "Example(123) : hello" }, directRule,
+      { roleId: "TestRole", roleDir, rolePath: path.join(roleDir, "persona.md"), dataDir: roleDir }, { roleKnowledge: knowledge });
+    assert.equal(direct.delivery.messageContent, "Example(123) : hello");
+    assert.equal(direct.delivery.contextBlocks, undefined);
+    assert.equal(direct.delivery.controlBlocks, undefined);
     assert.equal(ordinary.split("唯一召回标题").length - 1, 1);
     assert.equal(ordinary.split("唯一召回摘要").length - 1, 1);
     assert.match(ordinary, /GET \/api\/roles\/TestRole\/memory\/recent\/memory-example/);

@@ -1477,6 +1477,12 @@ export function buildAgentPacket(
     personaDataDirFor(roleContext),
     options
   );
+  if (rule.agentTarget?.kind === "session" && rule.agentTarget.agentAdapter === "grokBot" && rule.agentTarget.deliveryType) {
+    const messageContent = userTemplateText || decision.routeText;
+    if (!messageContent.trim()) throw new Error("Grok direct delivery requires message text.");
+    return { rule, templateValues, messageSource: built.messageSource,
+      delivery: { messageSource: built.messageSource, messageContent }, content: messageContent, message: messageContent };
+  }
   return {
     rule,
     templateValues,

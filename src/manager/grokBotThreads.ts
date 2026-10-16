@@ -1,5 +1,7 @@
 import type { AgentThreadRequest, AgentThreadRequestResult } from "../agentThreads.js";
+import path from "node:path";
 import { GrokBotClient, GrokBotError, decodeGrokBotSessionId } from "../agentAdapters/grokBotClient.js";
+import { deliverWithTransportReceipt } from "../agentAdapters/grokBotAdapter.js";
 import { discoverGrokBotAgent, grokBotActionableError } from "../agentAdapters/grokBotDiscovery.js";
 import { readGrokBotNativeOwner, type GrokBotEndpointConfiguration, type GrokBotNativeOwner } from "./grokBotEndpointBridge.js";
 
@@ -10,6 +12,7 @@ function nativeUpdatedAt(owner: GrokBotNativeOwner): string | undefined {
 function summary(owner: GrokBotNativeOwner) {
   return { id: owner.id, title: owner.bot.name, updatedAt: nativeUpdatedAt(owner), archived: false, status: "available",
     owner: "grok_bot_cloud", nativeAgentId: owner.agentId, nativeSessionId: owner.sessionId,
+    kind: owner.bot.kind, memberAgentIds: owner.bot.memberAgentIds,
     ...(owner.defaultMain ? { defaultMain: true } : {}) };
 }
 function unsupported(action: string): AgentThreadRequestResult {
@@ -18,14 +21,25 @@ function unsupported(action: string): AgentThreadRequestResult {
       message: `Grok Bot native owner does not expose ${action}; no alternate owner or session was created.` } } };
 }
 
-/** Discovery/read stay on the native cloud owner. All sends use the shared endpoint ledger. */
-export async function handleGrokBotThreadRequest(request: AgentThreadRequest, configuration: GrokBotEndpointConfiguration = {},
+/** Discovery/read stay on the native cloud owner. Explicit native delivery reuses the adapter transport journal. */
+export async function handleGrokBotThreadRequest(request: AgentThreadRequest, configuration: GrokBotEndpointConfiguration & { dataDir?: string } = {},
   client?: GrokBotClient): Promise<AgentThreadRequestResult | undefined> {
-  if (request.agentAdapter !== "grokBot" || request.action === "send" || request.action === "reconcile_delivery") return undefined;
+  if (request.agentAdapter !== "grokBot" || (!request.grokBotDelivery && (request.action === "send" || request.action === "reconcile_delivery"))) return undefined;
   const action = request.action ?? "list";
   if (["open", "create", "rename"].includes(action)) return unsupported(action);
   try {
     client ??= new GrokBotClient(configuration);
+    if (action === "send" || action === "reconcile_delivery") {
+      if (!request.threadId) throw new GrokBotError("GROK_BOT_SESSION_REQUIRED");
+      if (!request.deliveryId) throw new GrokBotError("GROK_BOT_DELIVERY_ID_REQUIRED");
+      if (request.imagePaths?.length) throw new GrokBotError("GROK_BOT_IMAGES_UNSUPPORTED");
+      const bound = { ...decodeGrokBotSessionId(request.threadId), id: request.threadId };
+      const receipt = await deliverWithTransportReceipt(client, configuration.dataDir || process.env.DATA_DIR || path.join(process.cwd(), "data"),
+        bound, request.deliveryId, request.prompt, { grokBotDelivery: request.grokBotDelivery, reconcileOnly: action === "reconcile_delivery" });
+      return { statusCode: 200, data: { action, agentAdapter: "grokBot", ok: true, status: "delivered", threadId: request.threadId, targetThreadId: request.threadId,
+        delivery: { status: "delivered", deliveryId: request.deliveryId, targetThreadId: request.threadId,
+          messageId: receipt.messageId, recovered: receipt.recovered, duplicate: receipt.duplicate } } };
+    }
     if (action === "list") {
       const limit = request.limit ?? 100, offset = request.offset ?? 0;
       if (!Number.isInteger(limit) || limit < 1 || limit > 200 || !Number.isInteger(offset) || offset < 0) throw new GrokBotError("GROK_BOT_PAGE_INVALID");
@@ -36,6 +50,7 @@ export async function handleGrokBotThreadRequest(request: AgentThreadRequest, co
       return { statusCode: 200, data: { action, agentAdapter: "grokBot", ok: true, status: "listed",
         threads: discovery.sessions.map(row => ({ id: row.id, title: row.name, updatedAt: row.updatedAt, archived: false,
           status: "available", owner: "grok_bot_cloud", nativeAgentId: row.agentId, nativeSessionId: row.sessionId,
+          kind: row.kind, memberAgentIds: row.memberAgentIds,
           ...(row.defaultMain ? { defaultMain: true } : {}) })),
         pagination: discovery.sessionPage, warnings: discovery.warnings } };
     }
@@ -51,7 +66,8 @@ export async function handleGrokBotThreadRequest(request: AgentThreadRequest, co
     return { statusCode: 200, data: { action, agentAdapter: "grokBot", ok: true, status: "read", thread: { ...thread, transcript } } };
   } catch (error) {
     const code = error instanceof GrokBotError ? error.code : "GROK_BOT_OWNER_UNAVAILABLE";
-    return { statusCode: code === "GROK_BOT_SESSION_NOT_FOUND" ? 404 : 400, data: { action, agentAdapter: "grokBot", ok: false, status: "failed",
+    const uncertain = error instanceof GrokBotError && error.uncertain;
+    return { statusCode: uncertain ? 202 : code === "GROK_BOT_SESSION_NOT_FOUND" || code === "GROK_BOT_DELIVERY_NOT_FOUND" ? 404 : 400, data: { action, agentAdapter: "grokBot", ok: false, status: uncertain ? "delivery_unconfirmed" : "failed",
       error: { code, stage: "validation", retryable: false, field: action === "list" ? "query" : "threadId", message: grokBotActionableError(error) } } };
   }
 }

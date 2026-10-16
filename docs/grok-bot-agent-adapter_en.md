@@ -109,6 +109,20 @@ For a formal Bot reply, choose `responsePolicy=required` and supply `responseIns
 
 ## Session reuse and unknown outcomes
 
+### Private chats, groups and sender identities in rule actions
+
+Status: source implementation. The installed application needs a compatible hot patch and runtime acceptance first. When an older version lacks support, do not migrate active rules or bypass patch compatibility checks.
+
+Choose a custom target, then configure: Grok Bot Agent → delivery type (private / group) → destination session or group → send mode (direct / specified identity) → identity. Groups and identities come from the current account's native roster; names do not replace IDs.
+
+`action.target` retains `kind=session`, `agentTargetId`, `agentAdapter=grokBot`, the complete `sessionId`, `sessionName` and an empty `workspace`. It adds `deliveryType=private|group` and `sendMode=direct|identity`. Identity mode also saves `senderAgentId` and `senderAgentName`; direct mode retains neither. Recheck the identity after changing the destination or type.
+
+This explicit mode sends the rendered rule template as the message body, without persona prompts or control blocks. For example, `{sender}({userId}) : {message}` produces `Example(123) : hello`. Identity mode uses `SendGrokBotAgentMessage` to address the group directly, not the Bot's default private chat. Invalid destinations, identities and uncertain results never fall back to default sessions.
+
+`POST /api/agent/threads` requests for `send` / `reconcile_delivery` carry `grokBotDelivery: {deliveryType, sendMode, senderAgentId?}`, the original `threadId` and a stable `deliveryId`. Reconcile uncertain outcomes without replacing the key. Verify configuration persistence, service acceptance and actual target-group display separately. Real bidirectional delivery remains experimental until accepted.
+
+Reverse messages use the existing NapCat channel with the QQ group destination. These options do not create a Grok inbound subscription. Verify the Grok source, group filter, QQ target and loop prevention separately; private-chat relay instructions are not direct delivery.
+
 Reuse a valid session ID directly. Record session creation, message acceptance and answer completion separately. A first-turn timeout does not justify a replacement session. Repeated requests retain the original delivery ID and full payload; a changed payload with the same ID must be rejected.
 
 HTTP 202 or `delivery_unconfirmed` retains the original request. Use `reconcile_delivery` to inspect its evidence on the same owner instead of starting another Bot turn. If evidence cannot be read, keep the outcome unconfirmed.

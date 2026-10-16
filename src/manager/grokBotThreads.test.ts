@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { GrokBotClient, GrokBotError, encodeGrokBotSessionId } from "../agentAdapters/grokBotClient.js";
 import { handleGrokBotThreadRequest } from "./grokBotThreads.js";
 
@@ -45,6 +48,44 @@ test("native cloud list exposes canonical IDs and real names with query and pagi
   assert.equal((queried.data.threads as Array<{ title: string }>)[0].title, "Native Beta");
   const invalid = (await handleGrokBotThreadRequest({ action: "list", agentAdapter: "grokBot", limit: 0 }, {}, f.client))!;
   assert.equal((invalid.data.error as { code: string }).code, "GROK_BOT_PAGE_INVALID");
+});
+
+test("room summaries expose native kind and members without confusing session kind", async () => {
+  const f = fixture(true);
+  f.client.listBots = async () => ({ bots: [{ agentId: "bot-a", name: "Room", kind: 2, memberAgentIds: ["bot-b"] }], truncated: false });
+  const listed = (await handleGrokBotThreadRequest({ action: "list", agentAdapter: "grokBot" }, {}, f.client))!;
+  const thread = (listed.data.threads as Array<Record<string, unknown>>)[0];
+  assert.equal(thread.kind, 2);
+  assert.equal(thread.nativeAgentId, "bot-a");
+  assert.deepEqual(thread.memberAgentIds, ["bot-b"]);
+  const resolved = (await handleGrokBotThreadRequest({ action: "resolve", agentAdapter: "grokBot", threadId: f.id }, {}, f.client))!;
+  assert.equal((resolved.data.thread as Record<string, unknown>).kind, 2);
+});
+
+test("explicit delivery sends a plain prompt through shared transport and reconciles without resend", async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "grokbot-thread-fixture-"));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const f = fixture(true);
+  const sends: unknown[] = [];
+  f.client.sendNative = async input => { sends.push(input); return { ...input, accepted: true, duplicate: false, recovered: false }; };
+  const request = { action: "send" as const, agentAdapter: "grokBot" as const, threadId: f.id, deliveryId: "caller-original-key", prompt: "One plain line",
+    grokBotDelivery: { deliveryType: "group" as const, sendMode: "direct" as const } };
+  const sent = (await handleGrokBotThreadRequest(request, { dataDir }, f.client))!;
+  assert.equal(sent.statusCode, 200);
+  assert.equal((sent.data.delivery as Record<string, unknown>).status, "delivered");
+  assert.equal((sent.data.delivery as Record<string, unknown>).deliveryId, request.deliveryId);
+  assert.equal(sent.data.targetThreadId, f.id);
+  assert.equal(sent.data.threadId, f.id);
+  assert.equal((sends[0] as Record<string, unknown>).text, request.prompt);
+  assert.equal("fromAgentId" in (sends[0] as object), false);
+  const reconciled = (await handleGrokBotThreadRequest({ ...request, action: "reconcile_delivery", prompt: undefined }, { dataDir }, f.client))!;
+  assert.equal(reconciled.statusCode, 200);
+  assert.equal(sends.length, 1);
+  const invalid = (await handleGrokBotThreadRequest({ ...request, deliveryId: "other", grokBotDelivery: { deliveryType: "group", sendMode: "identity" } }, { dataDir }, f.client))!;
+  assert.equal((invalid.data.error as Record<string, unknown>).code, "GROK_BOT_DELIVERY_OPTIONS_INVALID");
+  const missing = (await handleGrokBotThreadRequest({ ...request, action: "reconcile_delivery", deliveryId: "missing" }, { dataDir }, f.client))!;
+  assert.equal(missing.statusCode, 404);
+  assert.equal(sends.length, 1);
 });
 
 test("read and resolve use the exact native session without creating replacements", async () => {

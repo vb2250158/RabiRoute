@@ -109,6 +109,20 @@ Codex → Bot 的精确投递示例：
 
 ## 会话复用与未知结果
 
+### 规则动作中的私聊、群与发送身份
+
+状态：源码实现；安装版须完成兼容热补丁及运行验收后才能使用。旧版本不支持时，不先迁移生效规则或绕过补丁兼容检查。
+
+选择“自定义”投递目标后，配置顺序为：Grok Bot Agent → 投递类型（私聊 / 群）→ 目标会话或群 → 发送方式（直接发送 / 通过指定身份发送）→ 身份。群和身份均来自当前账号原生目录；名称不替代 ID。
+
+`action.target` 保持 `kind=session`、`agentTargetId`、`agentAdapter=grokBot`、完整 `sessionId`、`sessionName` 和空 `workspace`，增加 `deliveryType=private|group`、`sendMode=direct|identity`。指定身份额外保存 `senderAgentId`、`senderAgentName`；直接发送不保留身份字段。切换类型或目标后重新核对身份。
+
+此显式模式把规则模板渲染结果作为正文，不附加人格提示词或控制块。例如 `{sender}({userId}) : {message}` 生成 `Example(123) : hello`。指定身份通过 `SendGrokBotAgentMessage` 直接寻址目标群，不先通知 Bot 默认私聊。缺少目标、身份失效或结果未知时不回退默认会话。
+
+`POST /api/agent/threads` 的 `send` / `reconcile_delivery` 请求携带 `grokBotDelivery: {deliveryType, sendMode, senderAgentId?}`、原 `threadId` 和稳定 `deliveryId`。结果未知时核对原回执，不换键重发。保存、服务受理及目标群显示分别验收；真实双向链路未验收前保持实验状态。
+
+反向消息使用已有 NapCat 渠道的 QQ 群目标。上述选项不会自动创建 Grok 入站订阅；必须另行核对 Grok 来源、群过滤、QQ 目标及防回环，不能用 Bot 私聊转发指令代替直通。
+
 有效会话 ID直接复用。创建、消息受理和回答完成分别记录，不因第一轮投递超时创建替代会话。重复请求保留原投递 ID及完整载荷；同 ID不同载荷应拒绝。
 
 HTTP 202 或 `delivery_unconfirmed` 保留原请求。调用 `reconcile_delivery` 查询同一 owner 的原投递证据，不再次启动 Bot turn。无可读取证据时保留未确认状态。

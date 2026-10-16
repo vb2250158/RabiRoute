@@ -5,7 +5,7 @@ import { renderRabiDelivery, type RabiDeliveryEnvelope } from "../shared/rabiMes
 import type { AgentAdapter } from "./contracts.js";
 import { reportAgentState } from "./stateReporter.js";
 import { decodeGrokBotSessionId, encodeGrokBotSessionId, grokBotMessageId, GrokBotClient, GrokBotError,
-  type GrokBotClientOptions, type GrokBotSendReceipt } from "./grokBotClient.js";
+  type GrokBotClientOptions, type GrokBotDeliveryOptions, type GrokBotSendReceipt } from "./grokBotClient.js";
 
 export type GrokBotAdapterConfiguration = GrokBotClientOptions & {
   agentId?: string;
@@ -44,7 +44,7 @@ async function writeGrokBotState(dataDir: string, state: Record<string, unknown>
     await fs.rename(temporary, file);
   } finally { await fs.rm(temporary, { force: true }); }
 }
-type TransportAttempt = { version: 1; messageId: string; promptHash: string; accountScope: string; attemptedAt: string };
+type TransportAttempt = { version: 1; messageId: string; promptHash: string; accountScope: string; attemptedAt: string; deliveryOptionsHash?: string };
 type TransportReceipt = TransportAttempt & { status: "accepted" | "rejected"; completedAt: string; recovered?: boolean; duplicate?: boolean; echoEntryId?: string };
 const transportLockKey = Symbol.for("rabi.grokBot.transport-receipt-locks.v1");
 const transportGlobals = globalThis as unknown as Record<symbol, Map<string, Promise<void>>>;
@@ -72,6 +72,7 @@ async function readTransportRecord(file: string): Promise<TransportAttempt | Tra
 function verifyTransportRecord(value: TransportAttempt, expected: TransportAttempt): void {
   if (value.version !== 1 || value.messageId !== expected.messageId || typeof value.attemptedAt !== "string") throw new GrokBotError("GROK_BOT_JOURNAL_UNAVAILABLE");
   if (value.promptHash !== expected.promptHash) throw new GrokBotError("GROK_BOT_DELIVERY_ID_CONFLICT");
+  if (value.deliveryOptionsHash !== expected.deliveryOptionsHash) throw new GrokBotError("GROK_BOT_DELIVERY_ID_CONFLICT");
   if (value.accountScope !== expected.accountScope) throw new GrokBotError("GROK_BOT_ACCOUNT_CHANGED");
 }
 async function reserveTransportAttempt(file: string, attempt: TransportAttempt): Promise<boolean> {
@@ -101,43 +102,58 @@ async function commitTransportReceipt(file: string, attemptFile: string, receipt
 }
 /** Immutable attempts survive crashes. Compact terminal receipts have direct ID lookup;
  * unresolved attempts are retained until an authoritative native result arrives. */
-async function deliverWithTransportReceipt(client: NonNullable<GrokBotAdapterDependencies["client"]>, dataDir: string,
-  bound: ReturnType<typeof resolveGrokBotConfiguredSession>, deliveryId: string, text: string): Promise<GrokBotSendReceipt> {
+export async function deliverWithTransportReceipt(client: NonNullable<GrokBotAdapterDependencies["client"]>, dataDir: string,
+  bound: ReturnType<typeof resolveGrokBotConfiguredSession>, deliveryId: string, text: string | undefined,
+  options: { grokBotDelivery?: GrokBotDeliveryOptions; reconcileOnly?: boolean } = {}): Promise<GrokBotSendReceipt> {
+  if (typeof deliveryId !== "string" || !deliveryId.trim()) throw new GrokBotError("GROK_BOT_DELIVERY_ID_REQUIRED");
+  const delivery = options.grokBotDelivery;
+  if (delivery && (!["private", "group"].includes(delivery.deliveryType) || !["direct", "identity"].includes(delivery.sendMode)
+    || (delivery.sendMode === "identity" ? typeof delivery.senderAgentId !== "string" || !delivery.senderAgentId.trim() : delivery.senderAgentId !== undefined))) {
+    throw new GrokBotError("GROK_BOT_DELIVERY_OPTIONS_INVALID");
+  }
+  if (!options.reconcileOnly && (typeof text !== "string" || !text.trim())) throw new GrokBotError("GROK_BOT_MESSAGE_REQUIRED");
   const messageId = grokBotMessageId(deliveryId, bound.id);
   const directory = path.join(dataDir, "grokbot-transport-receipts", messageId.slice(0, 2));
   const attemptFile = path.join(directory, messageId + ".attempt.json");
   const receiptFile = path.join(directory, messageId + ".receipt.json");
   return withTransportLock(path.resolve(attemptFile), async () => {
     const account = await client.profileStatus();
+    const terminal = await readTransportRecord(receiptFile) as TransportReceipt | undefined;
+    const prior = terminal ? undefined : await readTransportRecord(attemptFile);
     const expected: TransportAttempt = { version: 1, messageId, accountScope: account.accountScope,
-      promptHash: createHash("sha256").update(text).digest("hex"), attemptedAt: new Date().toISOString() };
+      promptHash: text === undefined && options.reconcileOnly ? (terminal || prior)?.promptHash || "" : createHash("sha256").update(text!).digest("hex"),
+      ...(delivery ? { deliveryOptionsHash: createHash("sha256").update(JSON.stringify([delivery.deliveryType, delivery.sendMode, delivery.senderAgentId ?? null])).digest("hex") } : {}),
+      attemptedAt: new Date().toISOString() };
     const toReceipt = (value: TransportReceipt): GrokBotSendReceipt => ({ accepted: true, agentId: bound.agentId,
       sessionId: bound.sessionId, messageId, duplicate: true, recovered: value.recovered === true, echoEntryId: value.echoEntryId });
-    const terminal = await readTransportRecord(receiptFile) as TransportReceipt | undefined;
     if (terminal) {
       verifyTransportRecord(terminal, expected);
       if (terminal.status === "rejected") throw new GrokBotError("GROK_BOT_DELIVERY_REJECTED");
       if (terminal.status !== "accepted") throw new GrokBotError("GROK_BOT_JOURNAL_UNAVAILABLE");
       return toReceipt(terminal);
     }
-    const prior = await readTransportRecord(attemptFile);
+    if (options.reconcileOnly && !prior) throw new GrokBotError("GROK_BOT_DELIVERY_NOT_FOUND");
     if (prior || !await reserveTransportAttempt(attemptFile, expected)) {
       const attempt = prior || await readTransportRecord(attemptFile);
       if (!attempt) throw new GrokBotError("GROK_BOT_JOURNAL_UNAVAILABLE");
       verifyTransportRecord(attempt, expected);
       let status;
-      try { status = await client.getSendStatus(bound.agentId, bound.sessionId, messageId, account.accountScope, { defaultMain: bound.defaultMain }); }
+      try {
+        status = await client.getSendStatus(bound.agentId, bound.sessionId, messageId, account.accountScope, { defaultMain: bound.defaultMain });
+        if ((await client.profileStatus()).accountScope !== account.accountScope) throw new GrokBotError("GROK_BOT_ACCOUNT_CHANGED");
+      }
       catch { throw new GrokBotError("GROK_BOT_DELIVERY_UNCONFIRMED", { uncertain: true }); }
       if (status.status === "accepted" || status.status === "rejected") {
         const recovered: TransportReceipt = { ...attempt, status: status.status, completedAt: new Date().toISOString(), recovered: true, echoEntryId: status.echoEntryId };
-        await commitTransportReceipt(receiptFile, attemptFile, recovered);
+        if (!options.reconcileOnly) await commitTransportReceipt(receiptFile, attemptFile, recovered);
         if (status.status === "rejected") throw new GrokBotError("GROK_BOT_DELIVERY_REJECTED");
         return toReceipt(recovered);
       }
       throw new GrokBotError("GROK_BOT_DELIVERY_UNCONFIRMED", { uncertain: true });
     }
     let accepted: GrokBotSendReceipt;
-    try { accepted = await client.sendNative({ agentId: bound.agentId, sessionId: bound.sessionId, defaultMain: bound.defaultMain, messageId, text }, account.accountScope); }
+    try { accepted = await client.sendNative({ agentId: bound.agentId, sessionId: bound.sessionId, defaultMain: bound.defaultMain, messageId, text: text!,
+      ...(delivery ? { deliveryType: delivery.deliveryType, ...(delivery.sendMode === "identity" ? { fromAgentId: delivery.senderAgentId } : {}) } : {}) }, account.accountScope); }
     catch (error) {
       if (error instanceof GrokBotError) throw error;
       throw new GrokBotError("GROK_BOT_DELIVERY_UNCONFIRMED", { uncertain: true });

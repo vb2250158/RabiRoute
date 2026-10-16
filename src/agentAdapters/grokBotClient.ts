@@ -57,6 +57,8 @@ export type GrokBotClientOptions = {
 export type GrokBotNativeBot = {
   agentId: string;
   name: string;
+  kind?: string | number;
+  memberAgentIds?: string[];
   harness?: string;
   viewerSessionId?: string;
   updatedAtMs?: string;
@@ -77,7 +79,9 @@ export type GrokBotTranscriptPage = {
   cloudAgentPeerIds: string[];
   cloudAgentPeerIdsKnown: boolean;
 };
-export type GrokBotSendInput = { agentId: string; sessionId: string; defaultMain?: true; messageId: string; text: string };
+export type GrokBotDeliveryOptions = { deliveryType: "private" | "group"; sendMode: "direct" | "identity"; senderAgentId?: string };
+export type GrokBotSendInput = { agentId: string; sessionId: string; defaultMain?: true; messageId: string; text: string;
+  fromAgentId?: string; replyToId?: string; deliveryType?: "private" | "group" };
 export type GrokBotSendStatus = {
   status: "accepted" | "rejected" | "pending" | "not-found" | "unknown-durability";
   echoEntryId?: string;
@@ -92,7 +96,17 @@ export type GrokBotSendReceipt = {
   duplicate: boolean;
   recovered: boolean;
   echoEntryId?: string;
+  targetAgentId?: string;
+  targetName?: string;
+  workflowId?: string;
 };
+
+export function isGrokBotRoom(bot: GrokBotNativeBot): boolean {
+  return ["2", "ROOM", "GROK_BOT_AGENT_KIND_ROOM"].includes(String(bot.kind));
+}
+function isGrokBotAgent(bot: GrokBotNativeBot): boolean {
+  return ["1", "AGENT", "GROK_BOT_AGENT_KIND_AGENT"].includes(String(bot.kind));
+}
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new GrokBotError("GROK_BOT_RESPONSE_INVALID");
@@ -345,7 +359,7 @@ export class GrokBotClient {
       const text = await response.text();
       if (text.length > 4 * 1024 * 1024) throw new Error();
       const result = record(JSON.parse(text));
-      if (method === "SendGrokBotUserMessage") {
+      if (method === "SendGrokBotUserMessage" || method === "SendGrokBotAgentMessage") {
         let current: GrokBotCredentials;
         try { current = await this.credentials(); }
         catch { throw new GrokBotError("GROK_BOT_OWNER_CHECK_UNCONFIRMED", { uncertain: true }); }
@@ -364,7 +378,11 @@ export class GrokBotClient {
     const bots = agents.map(value => {
       const bot = record(value);
       if (typeof bot.name !== "string" || !bot.name.trim()) throw new GrokBotError("GROK_BOT_RESPONSE_INVALID");
-      return { agentId: opaque(bot.agentId), name: bot.name, harness: typeof bot.harness === "string" ? bot.harness : undefined,
+      if (bot.memberAgentIds !== undefined && !Array.isArray(bot.memberAgentIds)) throw new GrokBotError("GROK_BOT_RESPONSE_INVALID");
+      return { agentId: opaque(bot.agentId), name: bot.name,
+        kind: typeof bot.kind === "string" || typeof bot.kind === "number" ? bot.kind : undefined,
+        memberAgentIds: Array.isArray(bot.memberAgentIds) ? bot.memberAgentIds.map(opaque) : undefined,
+        harness: typeof bot.harness === "string" ? bot.harness : undefined,
         viewerSessionId: typeof bot.viewerSessionId === "string" && bot.viewerSessionId ? bot.viewerSessionId : undefined, updatedAtMs: int64(bot.updatedAtMs) };
     });
     if (new Set(bots.map(bot => bot.agentId)).size !== bots.length) throw new GrokBotError("GROK_BOT_DUPLICATE_OWNER_ID");
@@ -373,6 +391,9 @@ export class GrokBotClient {
   async listSessions(agentId: string, expectedAccountScope?: string): Promise<GrokBotNativeSession[]> {
     opaque(agentId);
     const scope = expectedAccountScope || (await this.profileStatus()).accountScope;
+    const bots = (await this.listBots(scope)).bots.filter(bot => bot.agentId === agentId);
+    if (bots.length !== 1) throw new GrokBotError("GROK_BOT_SESSION_NOT_FOUND");
+    if (isGrokBotRoom(bots[0])) return [{ agentId, sessionId: "", defaultMain: true, kind: "MAIN" }];
     const response = await this.call("ListGrokBotAgentSessions", { agentId }, scope);
     const sessions = response.sessions ?? [];
     if (!Array.isArray(sessions)) throw new GrokBotError("GROK_BOT_RESPONSE_INVALID");
@@ -383,8 +404,6 @@ export class GrokBotClient {
       return [{ agentId, sessionId: opaque(session.sessionId), kind: typeof session.kind === "string" || typeof session.kind === "number" ? session.kind : undefined,
         createdAtMs: int64(session.createdAtMs), updatedAtMs: int64(session.updatedAtMs), lastActivityAtMs: int64(session.lastActivityAtMs) }];
     });
-    const bots = (await this.listBots(scope)).bots.filter(bot => bot.agentId === agentId);
-    if (bots.length !== 1) throw new GrokBotError("GROK_BOT_SESSION_NOT_FOUND");
     if (bots[0].harness === "temporal") {
       // Temporal's existing main transcript uses the native empty address. The
       // canonical marker is emitted only after owner roster and transcript proof.
@@ -419,6 +438,38 @@ export class GrokBotClient {
     if (!input.text.trim()) throw new GrokBotError("GROK_BOT_MESSAGE_REQUIRED");
     const account = await this.profileStatus();
     if (expectedAccountScope && account.accountScope !== expectedAccountScope) throw new GrokBotError("GROK_BOT_ACCOUNT_CHANGED");
+    const roster = await this.listBots(account.accountScope);
+    const target = roster.bots.find(bot => bot.agentId === agentId);
+    if (!target) throw new GrokBotError("GROK_BOT_SESSION_NOT_FOUND");
+    const room = isGrokBotRoom(target);
+    if (input.deliveryType && input.deliveryType !== (room ? "group" : "private")) throw new GrokBotError("GROK_BOT_TARGET_KIND_MISMATCH");
+    const fromAgentId = input.fromAgentId === undefined ? undefined : opaque(input.fromAgentId);
+    if (fromAgentId !== undefined) {
+      const sender = roster.bots.find(bot => bot.agentId === fromAgentId);
+      if (!sender || !isGrokBotAgent(sender)) throw new GrokBotError("GROK_BOT_SENDER_NOT_FOUND");
+      if (room && !target.memberAgentIds?.includes(fromAgentId)) throw new GrokBotError("GROK_BOT_SENDER_NOT_MEMBER");
+    }
+    if (fromAgentId !== undefined) {
+      if (!input.defaultMain || sessionId !== "") throw new GrokBotError("GROK_BOT_NATIVE_TARGET_REQUIRES_MAIN");
+      const replyToId = input.replyToId === undefined ? undefined : opaque(input.replyToId);
+      let nativeResponse: Record<string, unknown>;
+      try {
+        nativeResponse = await this.call("SendGrokBotAgentMessage", { toAgentId: agentId, messageId, text: input.text,
+          sentAtMs: String(Date.now()), ...(fromAgentId === undefined ? {} : { fromAgentId }), ...(replyToId === undefined ? {} : { replyToId }) }, account.accountScope);
+      } catch (error) {
+        if (!(error instanceof GrokBotError) || !error.uncertain) throw error;
+        throw new GrokBotError("GROK_BOT_DELIVERY_UNCONFIRMED", { uncertain: true });
+      }
+      const delivery = String(nativeResponse.delivery ?? 0).replace(/^GROK_BOT_AGENT_MESSAGE_DELIVERY_/, "");
+      if (["4", "5", "6", "7", "8", "TARGET_NOT_FOUND", "FORBIDDEN", "BOX_UNREACHABLE", "TEMPORAL_UNAVAILABLE", "INVALID_TARGET"].includes(delivery)) {
+        throw new GrokBotError("GROK_BOT_DELIVERY_REJECTED");
+      }
+      if (!["1", "2", "3", "DELIVERED_TEMPORAL", "DELIVERED_BOX", "DUPLICATE"].includes(delivery)) throw new GrokBotError("GROK_BOT_DELIVERY_UNCONFIRMED", { uncertain: true });
+      if (nativeResponse.targetAgentId !== agentId) throw new GrokBotError("GROK_BOT_RECEIPT_OWNER_MISMATCH", { uncertain: true });
+      return { accepted: true, agentId, sessionId, messageId, duplicate: delivery === "3" || delivery === "DUPLICATE", recovered: false,
+        targetAgentId: agentId, targetName: typeof nativeResponse.targetName === "string" ? nativeResponse.targetName : undefined,
+        workflowId: typeof nativeResponse.workflowId === "string" ? nativeResponse.workflowId : undefined };
+    }
     const sessions = await this.listSessions(agentId, account.accountScope);
     if (!sessions.some(session => session.sessionId === sessionId && session.defaultMain === input.defaultMain)) throw new GrokBotError("GROK_BOT_SESSION_NOT_FOUND");
     let response: Record<string, unknown>;

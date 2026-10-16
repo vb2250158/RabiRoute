@@ -306,10 +306,114 @@ test("account switch between session verification and send never uses the new ac
     request: async input => {
       calls.push(String(input).split("/").at(-1)!);
       switched = true;
-      return Response.json({ sessions: [session] });
+      return Response.json({ agents: [{ agentId: session.agentId, name: "Fixture Bot" }] });
     } });
   await assert.rejects(client.sendNative(send, "original"), /GROK_BOT_ACCOUNT_CHANGED/);
-  assert.deepEqual(calls, ["ListGrokBotAgentSessions"]);
+  assert.deepEqual(calls, ["ListGrokBotAgents"]);
+});
+
+const roomRoster = [{ agentId: "fixture-room", name: "Fixture Room", kind: "GROK_BOT_AGENT_KIND_ROOM", memberAgentIds: ["fixture-sender"] },
+  { agentId: "fixture-sender", name: "Fixture Sender", kind: "AGENT" }, { agentId: "fixture-other", name: "Other", kind: 1 }];
+const roomSend = { agentId: "fixture-room", sessionId: "", defaultMain: true as const, messageId: "fixture-room-message", text: "One line." };
+
+test("room roster retains native metadata and exposes only a roster-backed default-main address", async () => {
+  const { client, calls } = fixtureClient(method => {
+    assert.equal(method, "ListGrokBotAgents");
+    return { agents: roomRoster };
+  });
+  assert.deepEqual((await client.listBots()).bots[0].memberAgentIds, ["fixture-sender"]);
+  assert.equal((await client.listBots()).bots[0].kind, "GROK_BOT_AGENT_KIND_ROOM");
+  assert.deepEqual(await client.listSessions("fixture-room"), [{ agentId: "fixture-room", sessionId: "", defaultMain: true, kind: "MAIN" }]);
+  assert.equal(calls.every(call => call.method === "ListGrokBotAgents"), true);
+  await assert.rejects(client.listSessions("missing-room"), /GROK_BOT_SESSION_NOT_FOUND/);
+});
+
+test("native room direct and identity sends target the room without private relay", async () => {
+  const { client, calls } = fixtureClient(method => method === "ListGrokBotAgents" ? { agents: roomRoster }
+    : method === "SendGrokBotUserMessage" ? { delivery: "GROK_BOT_USER_MESSAGE_DELIVERY_ACCEPTED_TEMPORAL" }
+    : { delivery: "GROK_BOT_AGENT_MESSAGE_DELIVERY_DELIVERED_TEMPORAL", targetAgentId: "fixture-room", targetName: "Fixture Room", workflowId: "fixture-workflow" });
+  assert.equal((await client.sendNative({ ...roomSend, deliveryType: "group" })).accepted, true);
+  assert.equal((await client.sendNative({ ...roomSend, messageId: "second", fromAgentId: "fixture-sender", replyToId: "original" })).workflowId, "fixture-workflow");
+  const sends = calls.filter(call => call.method === "SendGrokBotAgentMessage");
+  assert.equal(sends.length, 1);
+  assert.equal(sends[0].body.toAgentId, "fixture-room");
+  assert.equal(sends[0].body.fromAgentId, "fixture-sender");
+  assert.equal("sessionId" in sends[0].body, false);
+  assert.equal(sends[0].body.replyToId, "original");
+  const direct = calls.filter(call => call.method === "SendGrokBotUserMessage");
+  assert.equal(direct.length, 1);
+  assert.equal(direct[0].body.agentId, "fixture-room");
+  assert.equal(direct[0].body.sessionId, "");
+  assert.equal(direct[0].body.messageId, roomSend.messageId);
+  assert.equal(direct[0].body.text, roomSend.text);
+  assert.equal("fromAgentId" in direct[0].body, false);
+  assert.equal("toAgentId" in direct[0].body, false);
+  assert.equal(calls.some(call => call.method === "ListGrokBotAgentSessions"), false);
+});
+
+test("direct room refusal and unknown delivery never fall back or send twice", async () => {
+  for (const delivery of ["GROK_BOT_USER_MESSAGE_DELIVERY_REFUSED", "UNSPECIFIED"]) {
+    const { client, calls } = fixtureClient(method => method === "ListGrokBotAgents" ? { agents: roomRoster } : { delivery });
+    await assert.rejects(client.sendNative({ ...roomSend, deliveryType: "group" }), (error: unknown) => error instanceof GrokBotError
+      && error.code === (delivery.endsWith("REFUSED") ? "GROK_BOT_DELIVERY_REJECTED" : "GROK_BOT_DELIVERY_UNCONFIRMED")
+      && error.uncertain === !delivery.endsWith("REFUSED"));
+    assert.equal(calls.filter(call => call.method === "SendGrokBotUserMessage").length, 1);
+    assert.equal(calls.some(call => call.method === "SendGrokBotAgentMessage" || call.method === "GetGrokBotSendStatus"), false);
+  }
+});
+
+test("direct room timeout reads original room/message status without resend or identity fallback", async () => {
+  for (const status of ["ACCEPTED", "REJECTED", "UNKNOWN_DURABILITY", "unavailable"]) {
+    const { client, calls } = fixtureClient(method => {
+      if (method === "ListGrokBotAgents") return { agents: roomRoster };
+      if (method === "SendGrokBotUserMessage") throw new DOMException("Fixture timeout", "TimeoutError");
+      assert.equal(method, "GetGrokBotSendStatus");
+      if (status === "unavailable") throw new Error("Fixture status unavailable");
+      return { status, echoEntryId: "fixture-room-echo" };
+    });
+    if (status === "ACCEPTED") {
+      const receipt = await client.sendNative(roomSend);
+      assert.equal(receipt.recovered, true);
+      assert.equal(receipt.agentId, roomSend.agentId);
+      assert.equal(receipt.sessionId, "");
+      assert.equal(receipt.echoEntryId, "fixture-room-echo");
+    } else {
+      await assert.rejects(client.sendNative(roomSend), (error: unknown) => error instanceof GrokBotError
+        && error.code === (status === "REJECTED" ? "GROK_BOT_DELIVERY_REJECTED" : "GROK_BOT_DELIVERY_UNCONFIRMED")
+        && error.uncertain === (status !== "REJECTED"));
+    }
+    assert.equal(calls.filter(call => call.method === "SendGrokBotUserMessage").length, 1);
+    assert.equal(calls.some(call => call.method === "SendGrokBotAgentMessage"), false);
+    assert.deepEqual(calls.at(-1), { method: "GetGrokBotSendStatus", body: { agentId: roomSend.agentId, sessionId: "", messageId: roomSend.messageId } });
+  }
+});
+
+test("native sender must be a real agent and a member of a room; kind and session mismatches fail closed", async () => {
+  const { client, calls } = fixtureClient(() => ({ agents: roomRoster }));
+  for (const sender of ["missing", "fixture-room"]) await assert.rejects(client.sendNative({ ...roomSend, fromAgentId: sender }), /GROK_BOT_SENDER_NOT_FOUND/);
+  await assert.rejects(client.sendNative({ ...roomSend, fromAgentId: "fixture-other" }), /GROK_BOT_SENDER_NOT_MEMBER/);
+  await assert.rejects(client.sendNative({ ...roomSend, deliveryType: "private" }), /GROK_BOT_TARGET_KIND_MISMATCH/);
+  await assert.rejects(client.sendNative({ ...roomSend, sessionId: "unrelated", defaultMain: undefined, fromAgentId: "fixture-sender" }), /GROK_BOT_NATIVE_TARGET_REQUIRES_MAIN/);
+  await assert.rejects(client.sendNative({ ...roomSend, sessionId: "unrelated", defaultMain: undefined }), /GROK_BOT_SESSION_NOT_FOUND/);
+  assert.equal(calls.some(call => call.method.startsWith("Send")), false);
+});
+
+test("native agent delivery validates target receipts and never retries or falls back on refusal or uncertainty", async () => {
+  for (const response of [{ delivery: "GROK_BOT_AGENT_MESSAGE_DELIVERY_FORBIDDEN" }, { delivery: "DELIVERED_BOX", targetAgentId: "other" }, { delivery: "UNSPECIFIED" }, new Response("private", { status: 503 })]) {
+    const { client, calls } = fixtureClient(method => method === "ListGrokBotAgents" ? { agents: roomRoster } : response);
+    await assert.rejects(client.sendNative({ ...roomSend, fromAgentId: "fixture-sender" }), GrokBotError);
+    assert.equal(calls.filter(call => call.method === "SendGrokBotAgentMessage").length, 1);
+    assert.equal(calls.some(call => call.method === "SendGrokBotUserMessage"), false);
+  }
+});
+
+test("explicit native identity can target a private bot main without adding identity to SendUserMessage", async () => {
+  const { client, calls } = fixtureClient(method => method === "ListGrokBotAgents" ? { agents: roomRoster }
+    : { delivery: 3, targetAgentId: "fixture-other", targetName: "Other" });
+  const receipt = await client.sendNative({ ...roomSend, agentId: "fixture-other", fromAgentId: "fixture-sender", deliveryType: "private" });
+  assert.equal(receipt.duplicate, true);
+  assert.equal(calls.at(-1)?.method, "SendGrokBotAgentMessage");
+  assert.equal(calls.at(-1)?.body.toAgentId, "fixture-other");
 });
 function snapshot(nowMs: number, expiresInSeconds = 60, subject = "fixture-user"): { profile: GrokBotProfileSnapshot; token: string } {
   const payload = { sub: subject, exp: Math.floor(nowMs / 1000) + expiresInSeconds };

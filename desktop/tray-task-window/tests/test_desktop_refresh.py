@@ -217,10 +217,6 @@ class _ApiManager:
             "consolidated": [],
         }
 
-    def role_panel_messages_snapshot(self, role_id: str) -> list[dict]:
-        self.calls.append(("messages", role_id))
-        return [{"id": "message-1"}]
-
     def role_avatar(self, role_id: str) -> bytes | None:
         self.calls.append(("avatar", role_id))
         return b"avatar-bytes"
@@ -301,7 +297,6 @@ class DesktopRefreshServiceTest(unittest.TestCase):
         self.assertEqual(discussion_plan and discussion_plan.display_tone, "discussion")
         self.assertEqual(discussion_plan and discussion_plan.display_status_level, 1)
         self.assertEqual(result.context_snapshot and result.context_snapshot.recent_memory[0].title, "API memory")
-        self.assertEqual(result.role_messages, [{"id": "message-1"}])
         self.assertEqual(result.context_snapshot and result.context_snapshot.avatar_data, b"avatar-bytes")
         self.assertEqual(
             manager.calls,
@@ -309,7 +304,6 @@ class DesktopRefreshServiceTest(unittest.TestCase):
                 ("snapshot", ""),
                 ("plans", "Rabi"),
                 ("memory", "Rabi"),
-                ("messages", "Rabi"),
                 ("avatar", "Rabi"),
             ],
         )
@@ -324,7 +318,6 @@ class DesktopRefreshServiceTest(unittest.TestCase):
             include_role_details=False,
         )
 
-        self.assertIsNone(result.role_messages)
         self.assertIsNone(result.plan_snapshot)
         self.assertIsNone(result.context_snapshot)
         self.assertEqual(manager.calls, [("snapshot", "")])

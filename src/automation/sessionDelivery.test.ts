@@ -38,3 +38,15 @@ test("remote calls omit local target identity and wrong-session receipts fail", 
   }, { remote: true });
   await assert.rejects(sendAutomationSession(target, envelope, "delivery-one", async () => ({ delivery: { ...receipt("delivery-one").delivery, targetThreadId: "other" } })), /no confirmed receipt/);
 });
+
+test("Grok direct delivery freezes the group and identity without PC execution options", async () => {
+  const group: AgentSessionDestination = { ...target, agentAdapter: "grokBot", agentTargetId: "local:grokBot",
+    deliveryType: "group", sendMode: "identity", senderAgentId: "example-bot", senderAgentName: "Example" };
+  await sendAutomationSession(group, { ...envelope, messageContent: "Example(123) : hello" }, "group-delivery", async payload => {
+    assert.equal(payload.cwd, undefined);
+    assert.equal(payload.model, undefined);
+    assert.equal(payload.prompt, "Example(123) : hello");
+    assert.deepEqual(payload.grokBotDelivery, { deliveryType: "group", sendMode: "identity", senderAgentId: "example-bot" });
+    return receipt("group-delivery");
+  }, { model: "local-only" });
+});
