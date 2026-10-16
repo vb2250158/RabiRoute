@@ -20,6 +20,7 @@ await SourcePatchTests.RunAsync(Check);
 await ShortcutRecoveryTests.RunAsync(Check);
 await IdentityResetTests.RunAsync(Check);
 EnvironmentBlockTests.Run(Check);
+ManagerEndpointCacheTests.Run(Check);
 
 var hostImagePath = Environment.ProcessPath!;
 Check(HostControlPeerInspector.IsSameExecutable(hostImagePath, hostImagePath.ToUpperInvariant()), "peer image comparison ignores path case");

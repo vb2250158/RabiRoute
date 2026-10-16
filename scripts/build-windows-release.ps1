@@ -81,6 +81,7 @@ $requiredPortableRuntimeFiles = @(
     "packages/rabi-companion/presets.json",
     "packages/rabi-companion/scene-rules.json",
     "scripts/Resolve-RabiRouteManagerUrl.ps1",
+    "scripts/resolve-manager.mjs",
     "scripts/lib/discover-manager-url.mjs",
     "apps/rabi-agent/lib/manager-client.mjs",
     "apps/rabi-agent/lib/manager-cli.mjs",

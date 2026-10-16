@@ -1,15 +1,67 @@
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSync, execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
 function loopbackManagerUrl(value) {
   const url = new URL(String(value || "").trim());
-  const hostname = url.hostname.toLowerCase();
+  const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (url.protocol !== "http:" || !["127.0.0.1", "localhost", "::1"].includes(hostname) || url.username || url.password) {
     throw new Error("Manager URL must be an HTTP loopback URL without credentials.");
   }
   return url.origin;
+}
+
+/** Address-free local Agent discovery. The cache is only a hint; /meta proves identity. */
+export async function discoverManagerIdentity(options = {}) {
+  const env = options.env || process.env;
+  const platform = options.platform || process.platform;
+  const timeoutMs = options.timeoutMs ?? 5000;
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000) throw new Error("Manager discovery requires bounded timeoutMs.");
+  const signal = AbortSignal.timeout(timeoutMs);
+  const fetchImpl = options.fetch || fetch;
+  async function verify(candidate, requireIdentity) {
+    if (requireIdentity && (!candidate?.applicationGenerationId?.trim() || !candidate?.managerInstanceId?.trim())) throw new Error("Manager discovery identity is incomplete.");
+    const managerBaseUrl = loopbackManagerUrl(candidate.managerBaseUrl);
+    const response = await fetchImpl(`${managerBaseUrl}/meta`, { redirect: "error", signal, headers: { accept: "application/json" } });
+    if (!response.ok) throw new Error(`Manager identity query failed (HTTP ${response.status}).`);
+    const meta = await response.json();
+    if (!meta.applicationGenerationId || !meta.managerInstanceId
+      || (requireIdentity && (meta.applicationGenerationId !== candidate.applicationGenerationId || meta.managerInstanceId !== candidate.managerInstanceId))
+      || loopbackManagerUrl(meta.managerBaseUrl) !== managerBaseUrl) throw new Error("Manager identity mismatch; rediscovery required.");
+    if (meta.health?.live !== true || meta.health?.requiredReady !== true || !["healthy", "degraded"].includes(meta.health?.state)) throw new Error("Manager is not ready for business requests.");
+    return { managerBaseUrl, applicationGenerationId: meta.applicationGenerationId, managerInstanceId: meta.managerInstanceId };
+  }
+  const explicit = options.explicit || env.RABIROUTE_MANAGER_URL || env.GATEWAY_MANAGER_URL;
+  if (explicit) return verify({ managerBaseUrl: explicit }, false);
+  const cachePath = env.RABIROUTE_MANAGER_ENDPOINT_FILE || (platform === "win32" && env.LOCALAPPDATA
+    ? path.join(path.dirname(installedHostExecutable(env)), "manager-endpoint.json") : "");
+  if (cachePath) {
+    try {
+      const raw = await (options.readFile || fs.promises.readFile)(cachePath, "utf8");
+      if (raw.length > 65536) throw new Error("Manager discovery cache is too large.");
+      const cached = JSON.parse(raw.replace(/^\uFEFF/, ""));
+      if (cached.schemaVersion !== 1) throw new Error("Unsupported Manager discovery cache.");
+      return await verify(cached, true);
+    } catch { /* Missing/stale cache: ask the sole lifecycle owner once, never scan ports. */ }
+  }
+  let executable; let args;
+  if (platform === "win32") {
+    executable = installedHostExecutable(env);
+    args = ["--command", "status", "--json"];
+  } else if (platform === "linux") {
+    executable = process.execPath;
+    args = [fileURLToPath(new URL("../linux-host.mjs", import.meta.url)), "--command", "status", "--json"];
+  } else throw new Error("No local Host discovery is available on this platform.");
+  if (!executable) throw new Error("RabiRoute Host is not installed.");
+  // execFile waits and captures redirected stdout even for a Windows GUI executable.
+  const result = await (options.execFile || promisify(execFile))(executable, args, {
+    windowsHide: true, encoding: "utf8", timeout: timeoutMs, signal, maxBuffer: 65536, env
+  });
+  const status = JSON.parse(String(result.stdout || "").replace(/^\uFEFF/, ""));
+  if (status.ok !== true) throw new Error("RabiRoute Host status is unavailable.");
+  return verify(status, true);
 }
 
 function installedHostExecutable(env) {
