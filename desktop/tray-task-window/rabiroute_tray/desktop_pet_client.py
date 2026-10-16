@@ -9,6 +9,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urljoin
 from urllib.request import Request, urlopen
 
+from .desktop_pet_dialogue import DesktopPetDialogue, parse_desktop_pet_dialogue
+
 
 @dataclass(frozen=True)
 class DesktopPetState:
@@ -292,6 +294,26 @@ class DesktopPetClient:
         self.persona_id = persona_id
         self.timeout_seconds = timeout_seconds
         self.asset_interval_seconds = max(0.0, asset_interval_seconds)
+
+    def dialogue(self) -> DesktopPetDialogue:
+        role_id = quote(self.persona_id, safe="")
+        request = Request(f"{self.manager_url}/api/desktop-pet/roles/{role_id}/dialogue")
+        with urlopen(request, timeout=5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        return parse_desktop_pet_dialogue(payload, self.persona_id)
+
+    def record_speech(self, job: dict) -> None:
+        if job.get("voice") != self.persona_id:
+            raise ValueError("Desktop pet speech belongs to a different persona.")
+        body = dict(personaId=self.persona_id, voice=self.persona_id, kind="tts", id=job.get("id"),
+                    text=job.get("text"), time=job.get("started_at", job.get("startedAt")))
+        role_id = quote(self.persona_id, safe="")
+        request = Request(f"{self.manager_url}/api/desktop-pet/roles/{role_id}/transcripts", method="POST",
+                          data=json.dumps(body).encode("utf-8"), headers={"content-type": "application/json"})
+        with urlopen(request, timeout=5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        if payload.get("code") != 0 or payload.get("data", {}).get("personaId") != self.persona_id:
+            raise ValueError("Manager did not confirm the desktop pet transcript.")
 
     def packs(self) -> tuple[DesktopPetPack, ...]:
         role_id = quote(self.persona_id, safe="")

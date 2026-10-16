@@ -1044,10 +1044,19 @@ test("mobile PCM speech ingress reaches only its RabiLink persona with a stable 
     assert.deepEqual(deliveredRuntimeRoutes, ["MobileRuntime"]);
     assert.equal(ingressStore.list().length, 1);
     assert.equal(fs.existsSync(path.join(voiceRoleDir, "voice-transcripts.jsonl")), false);
+    assert.equal(fs.existsSync(path.join(voiceRoleDir, "desktop-pet", "transcripts")), false);
+    const transcriptRoot = path.join(mobileRoleDir, "desktop-pet", "transcripts");
+    const transcriptFiles = fs.readdirSync(transcriptRoot, { recursive: true }).map(String).filter(name => name.endsWith(".json"));
+    assert.equal(transcriptFiles.length, 1);
+    const petTranscript = JSON.parse(fs.readFileSync(path.join(transcriptRoot, transcriptFiles[0]), "utf8"));
+    assert.equal(petTranscript.personaId, "Ilias");
+    assert.equal(petTranscript.kind, "asr");
+    assert.equal(petTranscript.id, "mobile-audio-one");
 
     const voiceRows = fs.readFileSync(path.join(mobileRoleDir, "voice-transcripts.jsonl"), "utf8")
       .trim().split(/\r?\n/).map(line => JSON.parse(line) as Record<string, unknown>);
     assert.equal(voiceRows.length, 1);
+    assert.equal(petTranscript.text, voiceRows[0].rawMessage);
     assert.equal(voiceRows[0].adapterType, "rabilink");
     assert.equal(voiceRows[0].sourceDeviceId, "phone-one");
     assert.equal(voiceRows[0].sourceStreamId, "phone-one-audio-stream-7");

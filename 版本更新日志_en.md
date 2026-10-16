@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.37 - 2026-10-17
+
+- Fix companion openers borrowing another persona's cat-style dialogue. Each persona owns `desktop-pet/dialogue.json`, with neutral defaults for missing configuration. Add persona-scoped TTS/ASR text records, idempotent persistence and isolation tests. See [pet bubbles and speech](docs/desktop-pet-bubbles_en.md) for configuration and API details. This is a source change; installed-machine acceptance is separate.
+
 ## 2026-10-14 — Source work log
 
 - Remote client enrollment defaults to no associated Agent. First ticket exchange and normal configuration loading no longer require a Codex task ID; only explicit association discovers a host task. Existing node and Agent bindings are retained. A real CLI child with an empty Agent catalog passed first enrollment, CMD, chunked file and screenshot checks; installed and two-computer acceptance remain pending.

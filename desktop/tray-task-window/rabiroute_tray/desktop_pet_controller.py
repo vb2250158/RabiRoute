@@ -14,6 +14,7 @@ from .desktop_pet_client import DesktopPetBinding, DesktopPetClient, DesktopPetI
 from .desktop_pet_events import DesktopPetEventStream
 from .desktop_pet_companion import DesktopPetCompanion
 from .desktop_pet_speech import DesktopPetSpeech
+from .desktop_pet_dialogue import DesktopPetDialogue
 from .desktop_pet_bubble_settings import DesktopPetBubbleSettings
 from .desktop_pet_fullscreen import is_foreground_fullscreen
 from .desktop_pet_idle import DesktopPetIdleScheduler
@@ -86,6 +87,9 @@ class DesktopPetController(QObject):
             self._application.screenRemoved.connect(self._screen_removed)
         self._open_persona = open_persona
         self._client = DesktopPetClient(manager_url, persona_id)
+        self._dialogue = DesktopPetDialogue()
+        self._dialogue_task: QtAsyncTask | None = None
+        self._dialogue_reload_pending = False
         self._events = event_stream or DesktopPetEventStream(manager_url)
         self._speech_events = speech_event_stream or DesktopPetEventStream(manager_url, path="/api/speech/events")
         self._owns_speech_events = speech_event_stream is None
@@ -97,7 +101,7 @@ class DesktopPetController(QObject):
         self._companion_session: dict = {}
         self._companion = DesktopPetCompanion(manager_url, persona_id, self)
         self._companion.changed.connect(self._companion_changed)
-        self._companion.failed.connect(lambda message: self.window.show_bubble(f"陪伴模式：{message}"))
+        self._companion.failed.connect(lambda message: self.window.show_bubble(self._dialogue.line("fallbacks", "companionFailed")))
         self._events.companion_changed.connect(self._companion_changed)
         self._events.companion_reaction.connect(self._companion_reaction)
         self._events.connection_changed.connect(self._event_connection_changed)
@@ -160,6 +164,7 @@ class DesktopPetController(QObject):
         if self._owns_speech_events:
             self._speech_events.start()
         self._speech.reconnect()
+        self._load_dialogue()
         # Shared streams may already be connected before the roster creates this controller.
         self._companion.reconnect()
 
@@ -340,7 +345,7 @@ class DesktopPetController(QObject):
         if self.window.active_state:
             self._requested_state = self.window.active_state
             self._idle_scheduler.state_started(self._requested_state)
-            self.window.show_bubble("这个动作暂时不可用")
+            self.window.show_bubble(self._dialogue.line("fallbacks", "actionUnavailable"))
         else:
             self.window.show_placeholder(f"{self.persona_name}\n素材暂不可用")
 
@@ -498,6 +503,27 @@ class DesktopPetController(QObject):
         previous = self._pack.states.get(next_state) if self._pack else None
         self._resume_context(next_state if previous and previous.loop else "idle")
 
+    def _load_dialogue(self) -> None:
+        if self._closed:
+            return
+        self._dialogue = DesktopPetDialogue()
+        if self._dialogue_task is not None:
+            self._dialogue_reload_pending = True
+            return
+        self._dialogue_reload_pending = False
+
+        def completed(task: QtAsyncTask, result: object) -> None:
+            if self._dialogue_task is not task:
+                return
+            self._dialogue_task = None
+            if self._dialogue_reload_pending:
+                self._load_dialogue()
+                return
+            if not self._closed and isinstance(result, DesktopPetDialogue):
+                self._dialogue = result
+
+        self._dialogue_task = start_qt_task(self._client.dialogue, completed, on_error=lambda error: error)
+
     def _load_binding(self) -> None:
         if self._binding_task is not None:
             return
@@ -596,9 +622,9 @@ class DesktopPetController(QObject):
                 if not self._closed and "bubbleStyle" in outgoing:
                     if isinstance(result, DesktopPetBinding):
                         self._apply_binding(result)
-                        self.window.show_bubble("气泡样式已保存")
+                        self.window.show_bubble(self._dialogue.line("fallbacks", "bubbleStyleSaved"))
                     else:
-                        self.window.show_bubble("气泡样式未保存，请稍后重试")
+                        self.window.show_bubble(self._dialogue.line("fallbacks", "bubbleStyleFailed"))
                 if self._pending_settings_patch:
                     self._persist({})
 
@@ -651,11 +677,10 @@ class DesktopPetController(QObject):
         kind = session.get("activityKind")
         if self.visible and time.monotonic() >= self._muted_until:
             if kind != previous.get("activityKind") and kind in ("watch", "play", "work"):
-                self.window.show_bubble({"watch": "我陪你看，喵。", "play": "我在旁边陪你玩，喵。",
-                                         "work": "陪你工作，喵。有需要再叫我。"}[kind])
+                self.window.show_bubble(self._dialogue.line("openers", kind))
             error = (session.get("review") or {}).get("error")
             if error and error != (previous.get("review") or {}).get("error"):
-                self.window.show_bubble("陪伴连接暂时中断，正在自动恢复")
+                self.window.show_bubble(self._dialogue.line("fallbacks", "companionInterrupted"))
 
     def _companion_reaction(self, payload: object) -> None:
         event = payload if isinstance(payload, dict) else {}
@@ -678,6 +703,7 @@ class DesktopPetController(QObject):
         if connected:
             self._companion.reconnect()
             self._load_binding()
+            self._load_dialogue()
             if self.visible and self._requested_state == "concerned":
                 self.set_state("idle")
             return
@@ -689,7 +715,7 @@ class DesktopPetController(QObject):
         if self.visible and time.monotonic() >= self._muted_until:
             if not self._passive_action_blocked():
                 self._request_reaction("concerned")
-            self.window.show_bubble("Rabi Manager 连接暂时中断")
+            self.window.show_bubble(self._dialogue.line("fallbacks", "managerInterrupted"))
 
     def _desktop_settings_changed(self, payload: object) -> None:
         event = payload if isinstance(payload, dict) else {}
@@ -697,6 +723,7 @@ class DesktopPetController(QObject):
         if event_persona_id and event_persona_id != self.persona_id:
             return
         self._load_binding()
+        self._load_dialogue()
 
     def _reconcile_fullscreen_visibility(self) -> None:
         self._fullscreen_timer.start(1500)

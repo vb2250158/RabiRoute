@@ -1,4 +1,6 @@
 import { errorResponsePresentation } from "../shared/errorPresentation.js";
+import { readDesktopPetDialogue } from "./desktopPetDialogue.js";
+import { appendDesktopPetTranscript } from "../desktopPetTranscript.js";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { managerReadWorkerPool } from "./managerReadWorkerPool.js";
@@ -424,6 +426,36 @@ export function handleDesktopPetApi(
   publishEvent?: DesktopPetEventPublisher
 ): boolean {
   if (handleDesktopPetMotion(request, requestUrl, response, settings, publishEvent)) return true;
+  const dialogueMatch = requestUrl.pathname.match(/^\/api\/desktop-pet\/roles\/([^/]+)\/dialogue$/);
+  const transcriptMatch = requestUrl.pathname.match(/^\/api\/desktop-pet\/roles\/([^/]+)\/transcripts$/);
+  if (dialogueMatch || transcriptMatch) {
+    const roleId = sanitizeRoleId(decodeURIComponent((dialogueMatch ?? transcriptMatch)![1]));
+    if (!roleId) {
+      jsonResponse(response, 400, { code: -1, message: "Invalid role id." });
+      return true;
+    }
+    if (request.method !== (dialogueMatch ? "GET" : "POST")) {
+      jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
+      return true;
+    }
+    void Promise.resolve().then(async () => {
+      const roleDir = resolveRoleDir(roleId);
+      if (dialogueMatch) {
+        const dialogue = await readDesktopPetDialogue(roleId, roleDir);
+        jsonResponse(response, 200, { code: 0, data: { personaId: roleId, dialogue } });
+      } else {
+        const body = objectValue(await readJsonBody(request));
+        if (body.personaId !== roleId || body.voice !== roleId || body.kind !== "tts") {
+          throw new Error("Desktop pet speech must belong to the requested persona.");
+        }
+        const appended = appendDesktopPetTranscript(roleId, roleDir, {
+          kind: "tts", id: body.id, text: body.text, time: body.time, source: "host-playback"
+        });
+        jsonResponse(response, 200, { code: 0, data: { personaId: roleId, appended } });
+      }
+    }).catch(error => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    return true;
+  }
   const bindingMatch = requestUrl.pathname.match(/^\/api\/desktop-pet\/roles\/([^/]+)$/);
   const importMatch = requestUrl.pathname.match(/^\/api\/desktop-pet\/roles\/([^/]+)\/packs\/import$/);
   const cacheMatch = requestUrl.pathname.match(/^\/api\/desktop-pet\/roles\/([^/]+)\/packs\/([^/]+)\/cache$/);
