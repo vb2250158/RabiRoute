@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.38 - 2026-10-17
+
+- Replace the tray chat view with a persona configuration shortcut, remove retired composer and refresh paths, and retain plan approvals.
+
 ## 0.3.37 - 2026-10-17
 
 - Publish a credential-free Host endpoint hint and verify live Manager identity; fall back to captured Host status when the hint is stale.

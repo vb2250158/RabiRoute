@@ -15,7 +15,6 @@ class DesktopRefreshResult:
     selected_gateway: dict | None
     plan_snapshot: PlanSnapshot | None
     context_snapshot: RoleContextSnapshot | None
-    role_messages: list[dict] | None
 
 
 class DesktopRefreshService:
@@ -43,16 +42,15 @@ class DesktopRefreshService:
                 or manager_snapshot.selected_gateway
             )
             if selected_gateway is None:
-                return DesktopRefreshResult(manager_snapshot, None, None, None, None)
+                return DesktopRefreshResult(manager_snapshot, None, None, None)
 
             if not include_role_details:
-                return DesktopRefreshResult(manager_snapshot, selected_gateway, None, None, None)
+                return DesktopRefreshResult(manager_snapshot, selected_gateway, None, None)
 
             role_id = role_id_from_gateway(selected_gateway)
             try:
                 raw_plans = self.manager.role_plans(role_id)
                 raw_memory = self.manager.role_memory(role_id)
-                role_messages = self.manager.role_panel_messages_snapshot(role_id)
                 avatar_data = self.manager.role_avatar(role_id)
             except Exception as error:
                 return DesktopRefreshResult(
@@ -60,7 +58,6 @@ class DesktopRefreshService:
                     selected_gateway=selected_gateway,
                     plan_snapshot=None,
                     context_snapshot=None,
-                    role_messages=None,
                 )
             return DesktopRefreshResult(
                 manager=manager_snapshot,
@@ -73,7 +70,6 @@ class DesktopRefreshService:
                     raw_memory,
                     avatar_data,
                 ),
-                role_messages=role_messages,
             )
         except Exception as error:
             return self.unexpected_failure(error)
@@ -90,7 +86,6 @@ class DesktopRefreshService:
             selected_gateway=None,
             plan_snapshot=None,
             context_snapshot=None,
-            role_messages=None,
         )
 
 
