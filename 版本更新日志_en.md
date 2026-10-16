@@ -6,6 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## Unreleased — companion changes
+
+- Discussions load the persona's prompt, growth, recent memory summaries and historical activity, with additional per-mode templates. Missing required persona sources fail explicitly instead of falling back to generic phrasing.
+- Existing save consent governs interaction/progress checkpoints and serialized final summaries. Frames, window titles and subtitles are not persisted; no memories or plans are created automatically. See [companion mode](docs/companion-mode_en.md).
+- Role-panel and plan-feedback message text enters the original Route through bounded stdin, avoiding Windows command-line limits after URL encoding Chinese prompts.
+- Source changes and automated checks do not update installed builds. Installed runtime and real Agent/speech acceptance remain separate.
+
 ## 0.3.41 - 2026-10-17
 
 - Include the address-free discovery entry in the portable release contract regression and require its distribution alongside the Host endpoint hint.

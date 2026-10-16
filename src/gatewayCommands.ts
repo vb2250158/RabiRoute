@@ -23,6 +23,7 @@ import {
 import { replayDeliveryAttempts } from "./deliveryReplay.js";
 import { rolePanelDeliveryExitCode } from "./rolePanelDelivery.js";
 import { personaMessageSenderName } from "./shared/rolePanelMessage.js";
+import { readLocalMessageText } from "./localMessageInput.js";
 import {
   buildWearableHealthAlertRecord,
   wearableHealthAlertTemplateValues,
@@ -233,7 +234,9 @@ export async function runGatewayCommand(argv: readonly string[] = process.argv):
     const profileArg = argv.find((arg) => arg.startsWith(`${argumentPrefix}route-profile=`));
     const attachmentArg = argv.find((arg) => arg.startsWith(`${argumentPrefix}attachments=`));
     const replyContextArg = argv.find((arg) => arg.startsWith(`${argumentPrefix}reply-context=`));
-    const text = messageArg ? decodeURIComponent(messageArg.slice(`${argumentPrefix}text=`.length)) : "";
+    const text = argv.includes(`${argumentPrefix}text-stdin`)
+      ? await readLocalMessageText(process.stdin)
+      : messageArg ? decodeURIComponent(messageArg.slice(`${argumentPrefix}text=`.length)) : "";
     const roleId = roleArg ? decodeURIComponent(roleArg.slice(`${argumentPrefix}role=`.length)) : config.agentRoleId;
     const gatewayId = gatewayArg ? decodeURIComponent(gatewayArg.slice(`${argumentPrefix}gateway=`.length)) : process.env.GATEWAY_ID;
     const routeProfileId = profileArg ? decodeURIComponent(profileArg.slice(`${argumentPrefix}route-profile=`.length)) : undefined;

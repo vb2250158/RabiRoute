@@ -4,7 +4,7 @@ import { promises as fs, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { readCompanionSceneRules } from "./companionScene.js";
-import { CompanionActivity, lastCompanionSummary, readCompanionPresets, saveCompanionSummary, type CompanionPorts } from "./companionActivity.js";
+import { CompanionActivity, lastCompanionSummary, readCompanionPresets, recordCompanionInteraction, saveCompanionSummary, type CompanionPorts } from "./companionActivity.js";
 const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString("base64");
 const start = { requestId: "request-first", gatewayId: "route", presetId: "adaptive", title: "", autoReview: false, voice: true, saveSummary: false, observationOwner: "desktop" as const };
 const catalog = readCompanionPresets(JSON.parse(readFileSync("packages/rabi-companion/presets.json", "utf8")));
@@ -12,7 +12,7 @@ function fixture(t: import("node:test").TestContext, overrides: Partial<Companio
   let now = 1_000_000;
   const cancelled: string[] = [], spoken: string[] = [], delivered: string[] = [];
   const service = new CompanionActivity({ presets: readCompanionPresets({ presets: [{ id: "adaptive", label: "自适应", labelEn: "Adaptive", reviewSeconds: 25, replyAgeSeconds: 30, guidance: "observe" }] }),
-    now: () => now, changed: () => {}, reaction: () => {}, save: async () => {}, cancelSpeech: async scope => { cancelled.push(scope); },
+    now: () => now, changed: () => {}, reaction: () => {}, context: async () => "fixture persona", save: async () => {}, cancelSpeech: async scope => { cancelled.push(scope); },
     speak: async (_s, text) => { spoken.push(text); }, deliver: async (_s, review) => { delivered.push(review.text); }, ...overrides });
   t.after(() => service.dispose());
   const observe = (sequence = 1, frame = jpeg) => { const s = service.snapshot("one").session!; return service.observe("one", s.id, s.revision,
@@ -112,6 +112,98 @@ test("opt-in summary survives restart without raw frame persistence", async t =>
   assert.equal(last!.status, "ended"); assert.equal("jpeg" in last!, false);
   assert.equal((await fs.readdir(path.join(root, "companion", "sessions"))).length, 1);
   assert.equal((await fs.readFile(path.join(root, "companion", "sessions", `${last!.id}.json`), "utf8")).includes(jpeg), false);
+});
+
+test("each review loads fresh persona context and missing context never dispatches generic guidance", async t => {
+  let persona = "specific persona version one";
+  const f = fixture(t, { context: async () => persona });
+  const session = (await f.service.start("one", start)).session!;
+  f.observe();
+  await f.service.review("one", session.id, session.revision, "");
+  assert.match(f.delivered[0], /specific persona version one/);
+  persona = "specific persona version two";
+  await f.service.review("one", session.id, session.revision, "");
+  assert.match(f.delivered[1], /specific persona version two/);
+  persona = "";
+  const failed = await f.service.review("one", session.id, session.revision, "");
+  assert.equal(failed.session!.review!.status, "failed");
+  assert.match(failed.session!.review!.error!, /人格上下文为空/);
+  assert.equal(f.delivered.length, 2);
+});
+
+test("a mode switch or stop during persona loading cannot deliver the previous review", async t => {
+  for (const action of ["set-mode", "stop"] as const) {
+    let release!: (text: string) => void;
+    const loading = new Promise<string>(resolve => { release = resolve; });
+    const f = fixture(t, { presets: catalog, context: async () => loading });
+    const session = (await f.service.start("one", start)).session!;
+    f.observe();
+    const pending = f.service.review("one", session.id, session.revision, "");
+    await f.service.command("one", { sessionId: session.id, revision: session.revision, action, presetId: "watch" });
+    release("old persona context");
+    await pending;
+    assert.equal(f.delivered.length, 0);
+    assert.equal(f.service.snapshot("one").session!.review, null);
+  }
+});
+
+test("opt-in interaction checkpoints and final summaries survive reload without observation data", async t => {
+  const root = await fs.mkdtemp(path.resolve(".cache/companion-state-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const f = fixture(t, { record: session => recordCompanionInteraction(root, session), save: session => saveCompanionSummary(root, session) });
+  const session = (await f.service.start("one", { ...start, saveSummary: true, voice: false })).session!;
+  assert.equal((await fs.readdir(path.join(root, "companion/sessions"))).length, 1);
+  assert.equal(await lastCompanionSummary(root), null);
+  f.observe();
+  f.advance(1000);
+  const discussed = await f.service.review("one", session.id, session.revision, "A question");
+  const reply = { sessionId: session.id, revision: discussed.session!.revision, reviewId: discussed.session!.review!.id, text: "A personal answer" };
+  f.advance(1000);
+  await f.service.reply("one", reply);
+  const state = JSON.parse(await fs.readFile(path.join(root, "companion/state.json"), "utf8"));
+  assert.equal(state.lastInteractionAt, 1_002_000);
+  const checkpoint = JSON.parse(await fs.readFile(path.join(root, `companion/sessions/${session.id}.json`), "utf8"));
+  assert.equal(checkpoint.notes.length, 2);
+  assert.equal(checkpoint.subtitle, "");
+  assert.equal(checkpoint.window, null);
+  assert.equal(checkpoint.review, null);
+  await f.service.reply("one", reply);
+  await f.command("stop");
+  const restored = await lastCompanionSummary(root);
+  assert.equal(restored!.status, "ended");
+  assert.equal(restored!.notes.length, 2);
+  assert.equal(restored!.lastInteractionAt, 1_002_000);
+});
+
+test("summary opt-out performs no writes and a failed checkpoint stays visible without blocking replies", async t => {
+  let writes = 0;
+  const f = fixture(t, { record: async () => { writes++; throw new Error("disk unavailable"); }, save: async () => { writes++; } });
+  const session = (await f.service.start("one", start)).session!;
+  f.observe();
+  const reviewed = await f.service.review("one", session.id, session.revision, "question");
+  await f.service.reply("one", { sessionId: session.id, revision: reviewed.session!.revision, reviewId: reviewed.session!.review!.id, text: "answer" });
+  await f.command("stop");
+  assert.equal(writes, 0);
+  const saving = await f.service.start("one", { ...start, requestId: "second-start", saveSummary: true });
+  assert.match(saving.session!.error, /disk unavailable/);
+});
+
+test("queued checkpoints cannot overwrite a stopped session", async t => {
+  const statuses: string[] = [];
+  let release!: () => void;
+  let delay = false;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const f = fixture(t, { record: async session => { if (delay) await gate; statuses.push(session.status); }, save: async session => { statuses.push(session.status); } });
+  const session = (await f.service.start("one", { ...start, saveSummary: true, voice: false })).session!;
+  f.observe();
+  await f.service.review("one", session.id, session.revision, "");
+  delay = true;
+  const pending = f.service.reply("one", { sessionId: session.id, revision: session.revision, reviewId: f.service.snapshot("one").session!.review!.id, text: "answer" });
+  const stopped = f.command("stop");
+  release();
+  await Promise.all([pending, stopped]);
+  assert.equal(statuses.at(-1), "ended");
+  assert.deepEqual(f.spoken, []);
 });
 
 test("a slow Agent still classifies the current window without playing an old comment", async t => {

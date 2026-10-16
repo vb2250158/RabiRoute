@@ -19,6 +19,7 @@ export type CompanionNote = { at: number; speaker: "user" | "assistant"; text: s
 export type CompanionSession = {
   id: string; roleId: string; gatewayId: string; presetId: string; title: string;
   status: "active" | "paused" | "ended"; revision: number; startedAt: number; endedAt?: number;
+  lastInteractionAt?: number;
   pauseReason?: "capture_lost" | "user";
   lastObservationAt: number | null; positionSeconds: number | null; subtitle: string;
   autoReview: boolean; voice: boolean; saveSummary: boolean; notes: CompanionNote[];

@@ -43,13 +43,36 @@ When browser tabs change, Manager invalidates the previous review and updates th
 
 ## All-day recording
 
-If all-day recording is already enabled for the persona, ending companionship saves an activity summary and timeline entry without duplicating raw companion frames. Capture sources and recording settings are preserved. Otherwise the menu activity remains ephemeral. Turning recording off before ending also suppresses summary persistence. The persona's **Shared activities** page can explicitly opt into saving progress and discussion.
+If all-day recording is already enabled for the persona, starting, user discussion, Agent replies and mode/pause changes checkpoint progress; ending saves a summary and timeline entry. Raw frames, window titles and subtitles are not saved. Capture sources and recording settings are preserved. Otherwise the menu activity remains ephemeral. Turning recording off stops subsequent checkpoints and summaries but does not delete existing records. The persona's **Shared activities** page can explicitly opt into saving progress and discussion.
 
 The optional local-video player accepts WebVTT subtitles and synchronizes current position and active subtitle cues. Future subtitle content is not sent to the Agent. The manual speech button records at most 30 seconds through the existing ASR service, then submits the transcript as user speech. It does not listen continuously or transcribe media audio.
 
 ## Validation and limitations
 
 Automated checks cover bounded delivery, reply expiration, window-switch invalidation, settings restoration, menu admission, summary persistence and scoped speech cancellation. Actual games, player compatibility, exclusive fullscreen/protected capture, Agent timing and audible output require separate on-device acceptance. Black or unreadable frames must be reported honestly. Visual inference does not precisely determine dialogue start/end times.
+
+## Persona companionship configuration
+
+Each discussion reloads `persona.md` (or the Route's configured persona file), `prompts/companionship.md`, optional `growth.md` and `skills/companionship-response.md` from the current persona directory. A missing response Skill does not prevent loading an existing companionship prompt. Missing, empty or invalid required persona/prompt files fail delivery instead of using generic comfort text. Global mode presets govern observation timing, behavior and replies, not persona voice.
+
+Use the persona's `personaConfig.json` to select its own prompt and additional mode templates. Without configuration, the existing `prompts/companionship.md` is loaded without migration:
+
+```json
+{
+  "companion": {
+    "promptFile": "prompts/companionship.md",
+    "templates": { "watch": "prompts/companionship-watch.md" }
+  }
+}
+```
+
+Paths must stay inside the persona directory, including junction targets. Templates support `{roleId}`, `{presetId}` and `{activityKind}`. Mode templates follow the base prompt and cannot override mode/reply constraints. See `examples/data/roles/Rabi/`.
+
+Manager sends role-panel and plan-feedback message text through child stdin (up to 256 KiB UTF-8), avoiding Windows command-line limits after URL-encoding Chinese context. CLI `--role-panel-text=` / `--plan-feedback-text=` remain for existing external callers, but Manager no longer uses them. Messages still follow the same Route and bound Agent, without a fallback execution owner.
+
+Persona context is limited to 28,000 characters: at most 6,000 each for persona/base prompt, 3,000 each for mode/growth, and 1,500 for the response Skill. Recent memory includes only the three newest unarchived summaries and detail endpoints from Manager's published catalog, without bodies or directory scans. An unavailable catalog fails delivery until a subsequent normal attempt. Historical summaries include at most four discussion notes; historical window hints are limited to 1,500 characters. Longer sources are read only when relevant. History is explicitly background, never live evidence or operational instructions.
+
+With saving enabled, `companion/sessions/<activityId>.json` updates a stable activity file. `companion/state.json` records the latest activity and `lastInteractionAt`: the start or most recent user discussion/accepted text response, not automatic captures or silent classification. `companion/last.json` points only to the latest ended, saved summary, so starting a new activity preserves access to the previous summary. Serialized writes prevent older asynchronous checkpoints from overwriting the ended summary. Reading history never restores an activity; recovery still revalidates the original Route.
 
 ## API
 
@@ -62,6 +85,6 @@ Discover `managerBaseUrl` from the current Host `status --json`, then verify gen
 - `POST .../review`: session/revision and optional user `text`.
 - `GET .../frame?reviewId=...`: frozen review frame, unavailable after expiry.
 - `POST .../reply`: `sessionId`, `revision`, `reviewId`, `text`, optional `state` and `activityKind` (play/watch/work/other/uncertain). Empty text means silence.
-- `GET .../last`: latest opted-in summary; never starts or resumes a session.
+- `GET .../last`: latest ended, opted-in summary; never starts or resumes a session.
 
 The companion module does not automatically create memories or plans. Reduced frames and text delivered to the Agent may still be retained by the existing Route as attachments, chat history or caches under its existing retention policy; disabling activity summaries does not delete Agent history. Summaries use atomic writes and stable activity IDs. Manager owns live session state. Agents must return fenced replies; an expired 409 ends silently without task announcements or external messages.
