@@ -96,7 +96,7 @@ test("Manager publishes its fenced READY identity before starting the plan-stora
   assert.doesNotMatch(controlPlane, /[A-Za-z0-9_]*BeforeReady[A-Za-z0-9_]*/);
   assert.doesNotMatch(controlPlane, /\bmigrateRolePlanLayout\b|runPlanStorageStartupGate|recoverPlanLifecycleTransitions|recoverPlanFeedbackStoreTransactions|recoverStoredPlanPackages/);
 
-  const child = source(path.join("manager", "planStorageStartupChild.ts"));
+  const child = source(path.join("manager", "storageStartupChild.ts"));
   assert.match(child, /\bmigrateRolePlanLayoutAtStartup\b/);
   assert.match(child, /runPlanStorageStartupGate/);
   assert.match(child, /recoverPlanLifecycleTransitions/);

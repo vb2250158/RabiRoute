@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.37 - 2026-10-17
+
+- Manager now loads Route/persona catalogs and plan recovery through lightweight enumeration and small, concurrency-limited batches with item and batch deadlines. Successful results become usable immediately; failures degrade and retry with background backoff instead of waiting for a slow NAS tree-wide cold read. Incomplete catalogs cannot be mutated as a whole, while recovered roles can write plans individually. Unconfirmed child termination stops retries. Storage configuration and connection permissions are unchanged. Added slow/hanging storage, partial-recovery, and real local child-process regressions; installed-build and real NAS acceptance remain separate. See [maintenance](docs/rabi-maintenance_en.md#route-catalog-startup-recovery).
+
 ## 2026-10-14 — Source work log
 
 - Remote client enrollment defaults to no associated Agent. First ticket exchange and normal configuration loading no longer require a Codex task ID; only explicit association discovers a host task. Existing node and Agent bindings are retained. A real CLI child with an empty Agent catalog passed first enrollment, CMD, chunked file and screenshot checks; installed and two-computer acceptance remain pending.

@@ -18,7 +18,8 @@ export function publicPlanStorageStartupSnapshot(snapshot: PlanStorageStartupLif
       migrated: snapshot.summary.migrated,
       reconciled: snapshot.summary.reconciled,
       failureCount: snapshot.summary.failures.length,
-      skipped: snapshot.summary.skipped
+      skipped: snapshot.summary.skipped,
+      readyRoles: snapshot.summary.readyRoleIds?.length ?? 0
     }) : undefined
   });
 }
@@ -37,6 +38,15 @@ export function planStorageStartupUnavailable(
   snapshot: PlanStorageStartupLifecycleSnapshot | undefined
 ): Readonly<{ statusCode: 503; retryAfterSeconds: number; body: Record<string, unknown> }> | null {
   if (!isPlanStorageMutationRequest(method, pathname) || snapshot?.state === "ready") return null;
+  const match = /^\/(?:api\/)?roles\/([^/]+)\//.exec(pathname);
+  let roleId: string | undefined;
+  try {
+    roleId = match ? decodeURIComponent(match[1]) : undefined;
+  } catch {
+    roleId = undefined;
+  }
+  if (snapshot && ["running", "degraded"].includes(snapshot.state)
+    && roleId && snapshot.summary?.readyRoleIds?.includes(roleId)) return null;
   const retryAfterSeconds = snapshot?.nextRetryAt
     ? Math.max(1, Math.ceil((Date.parse(snapshot.nextRetryAt) - Date.now()) / 1_000))
     : 1;

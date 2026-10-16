@@ -80,7 +80,7 @@ test("plan-storage commands validate the active generation without blocking the 
     .map(filePath => path.relative(sourceRoot, filePath).replace(/\\/g, "/"))
     .sort();
   assert.deepEqual(migrationImporters, ["manager/planStorageStartupMigration.ts"]);
-  assert.match(read("src/manager/planStorageStartupChild.ts"), /migrateRolePlanLayoutAtStartup/);
+  assert.match(read("src/manager/storageStartupChild.ts"), /migrateRolePlanLayoutAtStartup/);
 });
 
 test("Xiaomi Home event children verify the READY generation before reading or delivering an event", () => {

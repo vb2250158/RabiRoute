@@ -4,12 +4,12 @@ import test from "node:test";
 import { withTestDeadline } from "../testFiniteDeadline.js";
 import { fileURLToPath } from "node:url";
 import {
-  createPlanStorageStartupAttempt,
   PlanStorageStartupLifecycle,
   type PlanStorageStartupAttempt,
   type PlanStorageStartupLifecycleSnapshot
 } from "./planStorageStartupLifecycle.js";
 import type { PlanStorageStartupGateSummary } from "./planStorageStartupGate.js";
+import { ProgressivePlanStorageStartup } from "./progressivePlanStorageStartup.js";
 
 const SUCCESS_SUMMARY: PlanStorageStartupGateSummary = Object.freeze({
   roles: 2,
@@ -20,18 +20,19 @@ const SUCCESS_SUMMARY: PlanStorageStartupGateSummary = Object.freeze({
 });
 
 test("real startup child skips a read-only snapshot without probing the roles root", async () => {
-  const attempt = createPlanStorageStartupAttempt({
+  const attempt = new ProgressivePlanStorageStartup({
     rolesRoot: "Q:\\example-path-must-not-be-probed\\roles",
     readOnly: true,
     terminateTimeoutMs: 2_000
-  });
+  }).attempt(() => {});
   const summary = await attempt.result;
   assert.deepEqual(summary, {
     roles: 0,
     migrated: 0,
     reconciled: 0,
     failures: [],
-    skipped: true
+    skipped: true,
+    readyRoleIds: []
   });
 });
 
@@ -277,8 +278,9 @@ test("stop suppresses late attempt completion and emits no state after stopped",
 
 test("plan startup child diagnostics remain opaque outside the child boundary", () => {
   const source = fs.readFileSync(fileURLToPath(new URL("./planStorageStartupLifecycle.ts", import.meta.url)), "utf8");
-  assert.doesNotMatch(source, /diagnosticTail|diagnostics=/);
-  assert.doesNotMatch(source, /message\?\.error|reject\(error\)/);
-  assert.match(source, /diagnosticBytes/);
+  const processSource = fs.readFileSync(fileURLToPath(new URL("./storageStartupProcess.ts", import.meta.url)), "utf8");
+  assert.doesNotMatch(processSource, /diagnosticTail|diagnostics=/);
+  assert.doesNotMatch(processSource, /message\?\.error|reject\(error\)/);
+  assert.match(processSource, /diagnosticBytes/);
   assert.match(source, /Plan storage startup gate failed\./);
 });
