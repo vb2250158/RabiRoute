@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.41 - 2026-10-17
+
+- Include the address-free discovery entry in the portable release contract regression and require its distribution alongside the Host endpoint hint.
+
 ## 0.3.40 - 2026-10-17
 
 - Preserve admitted storage mutations after caller disconnect, bound catalog warmup with a longer budget, retain test delivery IDs, share exact QQ reads and quote evidence validation, and document address-free discovery.
