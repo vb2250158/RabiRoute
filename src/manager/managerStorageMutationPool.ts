@@ -712,8 +712,14 @@ export class ManagerStorageMutationPool {
       }
       try {
         assertManagerStorageMutationAuthorized(active.pending);
-        // Irreversible commit admission: a later revoke does not undo an allow.
+        // Irreversible commit admission: a later revoke or caller disconnect does
+        // not undo an allow. The operation keeps its independent business
+        // deadline so a stuck worker still terminates through the bounded pool.
         active.admission = "allowed";
+        if (active.abortListener) {
+          active.pending.signal?.removeEventListener("abort", active.abortListener);
+          active.abortListener = undefined;
+        }
       } catch {
         active.admission = "denied";
       }

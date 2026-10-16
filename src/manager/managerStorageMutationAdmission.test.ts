@@ -14,7 +14,8 @@ import {
   type ManagerStorageMutationResponse
 } from "./managerStorageMutationProtocol.js";
 import { readDurableDeliveryReceipt } from "./durableDeliveryIdempotency.js";
-import { readPlanStoragePackage } from "../planStorageRepository.js";
+import { readPlanStoragePackage, withPlanStorageLeaseAsync } from "../planStorageRepository.js";
+import { storageInventoryRevisionToken } from "../shared/storageRevision.js";
 
 function request(): ManagerStorageMutationRequest {
   return {
@@ -209,6 +210,127 @@ test("parent admission allow is irreversible for the operation and uses a fresh 
   assert.notEqual(next.admissionNonce, sent.admissionNonce);
   child.emit("message", admission(sent));
   await replayFailure;
+});
+
+test("caller disconnect after irreversible admission does not terminate the accepted mutation", async t => {
+  const child = new AdmissionChild();
+  const pool = poolFixture(t, child);
+  const controller = new AbortController();
+  const pending = pool.execute("FixtureRole", "fixture-plan", task, {
+    ...operation,
+    authorize: () => {},
+    signal: controller.signal
+  });
+  const sent = child.requests[0];
+  child.emit("message", admission(sent));
+  assert.equal((child.decisions[0] as { allowed: boolean }).allowed, true);
+
+  controller.abort(new Error("HTTP client disconnected"));
+  await Promise.resolve();
+  assert.equal(child.signalCode, null);
+  assert.equal(pool.status().active, 1);
+
+  child.complete(sent, { id: "fixture-plan", committed: true });
+  assert.deepEqual(await pending, { id: "fixture-plan", committed: true });
+  assert.equal(pool.status().active, 0);
+});
+
+test("real admitted 41-step plan update survives caller disconnect and same-key replay stays single-write", { timeout: 30_000 }, async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "storage-admission-disconnect-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const roleDir = path.join(root, "FixtureRole");
+  fs.mkdirSync(roleDir);
+  const pool = new ManagerStorageMutationPool({
+    rolesRoot: root,
+    applicationGenerationId: "generation",
+    managerInstanceId: "manager"
+  });
+  t.after(() => pool.stop());
+  const planId = "large-admitted-plan";
+  const steps = Array.from({ length: 41 }, (_, index) => ({
+    id: `step-${String(index + 1).padStart(2, "0")}`,
+    title: `Step ${index + 1}`,
+    ...(index === 0 ? { status: "进行中" } : {})
+  }));
+  const createStartedAt = Date.now();
+  await pool.createPlan("FixtureRole", planId, {
+    title: "Large admitted plan",
+    focus: "Verify request lifetime is independent after commit admission",
+    status: "分析中",
+    currentStepId: steps[0].id,
+    steps,
+    attachments: [{
+      name: "evidence.txt",
+      mimeType: "text/plain",
+      contentBase64: Buffer.from("isolated fixture evidence", "utf8").toString("base64")
+    }],
+    keywords: ["admission", "disconnect"]
+  }, {
+    idempotencyKey: "large-admitted-create",
+    expectedRevision: null,
+    timeoutMs: 20_000,
+    authorize: () => {}
+  });
+  const createDurationMs = Date.now() - createStartedAt;
+  const before = readPlanStoragePackage(roleDir, planId, "active");
+  const expectedRevision = storageInventoryRevisionToken(before.inventoryHash);
+  let releaseLease!: () => void;
+  let leaseAcquired!: () => void;
+  const acquired = new Promise<void>(resolve => { leaseAcquired = resolve; });
+  const release = new Promise<void>(resolve => { releaseLease = resolve; });
+  const heldLease = withPlanStorageLeaseAsync(roleDir, planId, async () => {
+    leaseAcquired();
+    await release;
+  });
+  await acquired;
+
+  const controller = new AbortController();
+  let authorizationChecks = 0;
+  const patch = { nextAction: "Commit after the caller disconnects" };
+  const updateOptions = {
+    idempotencyKey: "large-admitted-update",
+    expectedRevision,
+    timeoutMs: 20_000,
+    authorize: () => { authorizationChecks += 1; },
+    signal: controller.signal
+  };
+  const pending = pool.updatePlan("FixtureRole", planId, patch, updateOptions);
+  const admissionDeadline = Date.now() + 10_000;
+  while (authorizationChecks < 3 && Date.now() < admissionDeadline) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.equal(authorizationChecks, 3, "real worker did not reach irreversible commit admission");
+
+  controller.abort(new Error("HTTP client disconnected"));
+  await new Promise(resolve => setTimeout(resolve, 25));
+  assert.equal(pool.status().active, 1);
+  releaseLease();
+  await heldLease;
+
+  const updateStartedAt = Date.now();
+  const committed = await pending;
+  const updateAfterReleaseDurationMs = Date.now() - updateStartedAt;
+  assert.equal(committed.nextAction, patch.nextAction);
+  assert.equal(committed.steps.length, 41);
+  assert.equal(committed.attachments.length, 1);
+  assert.equal(committed.storageMutationRequestId, updateOptions.idempotencyKey);
+  const historyPath = path.join(roleDir, "plans", "active", planId, "history.jsonl");
+  assert.equal(fs.readFileSync(historyPath, "utf8").split(/\r?\n/).filter(Boolean).length, 2);
+
+  const replayStartedAt = Date.now();
+  const replay = await pool.updatePlan("FixtureRole", planId, patch, {
+    ...updateOptions,
+    signal: undefined
+  });
+  const replayDurationMs = Date.now() - replayStartedAt;
+  assert.deepEqual(replay, committed);
+  assert.equal(fs.readFileSync(historyPath, "utf8").split(/\r?\n/).filter(Boolean).length, 2);
+  assert.equal(readDurableDeliveryReceipt(
+    path.join(roleDir, "runtime"),
+    MANAGER_STORAGE_MUTATION_RECEIPT_NAMESPACE,
+    updateOptions.idempotencyKey
+  )?.state, "completed");
+  t.diagnostic(JSON.stringify({ createDurationMs, updateAfterReleaseDurationMs, replayDurationMs }));
 });
 
 for (const mode of ["premature-final", "duplicate-admission", "wrong-sequence", "decision-as-request", "wrong-fence", "denied-success", "allow-send-failure"] as const) {

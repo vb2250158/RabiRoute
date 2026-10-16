@@ -14,6 +14,49 @@ export type QqMessageRoutesContext = {
 };
 const activeReads = new WeakMap<QqMessageRoutesContext, number>();
 
+/** One exact current-message read owner for both public QQ reads and outbound quote validation. */
+export async function readExactQqMessage(input: {
+  endpoint: { httpUrl: string; accessToken: string };
+  kind: "group" | "private";
+  target: string;
+  messageId: string;
+  signal: AbortSignal;
+  current: () => void;
+  transport?: typeof fetch;
+}): Promise<QqMessage> {
+  const historyPage = async () => {
+    input.current();
+    const data = await qqRead(input.endpoint, input.kind === "group" ? "get_group_msg_history" : "get_friend_msg_history", {
+      [input.kind === "group" ? "group_id" : "user_id"]: input.target,
+      count: 10,
+      message_seq: input.messageId,
+      reverseOrder: true,
+      disable_get_url: true,
+      parse_mult_msg: false
+    }, input.signal, input.transport);
+    input.current();
+    if (!Array.isArray(data.messages)) throw new QqReadError(503, "QQ_HISTORY_INVALID_RESPONSE");
+    if (data.messages.some(row => !qqMessageMatches(row, input.kind, input.target))) {
+      throw new QqReadError(409, "QQ_MESSAGE_TARGET_MISMATCH");
+    }
+    const found = (data.messages as QqMessage[]).find(item => String(item.message_id) === input.messageId);
+    if (!found) throw new QqReadError(404, "QQ_MESSAGE_NOT_IN_PAGE");
+    return found;
+  };
+  input.current();
+  try {
+    const value = await qqRead(input.endpoint, "get_msg", { message_id: input.messageId }, input.signal, input.transport);
+    input.current();
+    if (!qqMessageMatches(value, input.kind, input.target) || String(value.message_id) !== input.messageId) {
+      throw new QqReadError(409, "QQ_MESSAGE_TARGET_MISMATCH");
+    }
+    return value;
+  } catch (error) {
+    if (error instanceof QqReadError && error.code !== "QQ_UPSTREAM_UNAVAILABLE") throw error;
+    return historyPage();
+  }
+}
+
 /** Public bounded reads share authenticated Agent authority and retain upstream/object safety. */
 export function handleQqMessageRoutes(request: http.IncomingMessage, url: URL, response: http.ServerResponse,
   context: QqMessageRoutesContext, track: <T>(operation: Promise<T>) => Promise<T>): boolean {
@@ -95,18 +138,15 @@ export function handleQqMessageRoutes(request: http.IncomingMessage, url: URL, r
       return;
     }
     const messageId = match![1];
-    let row: QqMessage;
-    try {
-      const value = await qqRead(endpoint, "get_msg", { message_id: messageId }, controller.signal, context.transport);
-      if (!qqMessageMatches(value, kind, target) || String(value.message_id) !== messageId) throw new QqReadError(409, "QQ_MESSAGE_TARGET_MISMATCH");
-      row = value;
-    } catch (error) {
-      if (error instanceof QqReadError && error.code !== "QQ_UPSTREAM_UNAVAILABLE") throw error;
-      const rows = await page(messageId, 10);
-      const found = rows.find(item => String(item.message_id) === messageId);
-      if (!found) throw new QqReadError(404, "QQ_MESSAGE_NOT_IN_PAGE");
-      row = found;
-    }
+    const row = await readExactQqMessage({
+      endpoint,
+      kind: kind as "group" | "private",
+      target,
+      messageId,
+      signal: controller.signal,
+      current,
+      transport: context.transport
+    });
     current();
     if (match![2] === undefined) { context.json(response, 200, { code: 0, data: { routeId, instanceId: instance.id, ...project(row) } }); return; }
     const attachment = qqMessageMedia(row.message ?? row.raw_message)[Number(match![2])];
