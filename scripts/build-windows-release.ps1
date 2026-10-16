@@ -353,6 +353,15 @@ foreach ($relative in @("dist", "ribiwebgui\dist")) {
 Get-ChildItem -LiteralPath (Join-Path $payload "dist") -Recurse -File -Filter "*.test.js" |
     Remove-Item -Force
 
+# dist/web-patches holds source-mode Web hot patch candidates produced by
+# `npm run build`. They are not release runtime assets, and their hashed
+# directory names push staged install paths past MAX_PATH (Expand-Archive then
+# fails closed during Setup). Ship the directory empty.
+$webPatchCandidates = Join-Path $payload "dist\web-patches"
+if (Test-Path -LiteralPath $webPatchCandidates -PathType Container) {
+    Get-ChildItem -LiteralPath $webPatchCandidates -Force | Remove-Item -Recurse -Force
+}
+
 $versionLogBaseName = -join @(
     [char]0x7248,
     [char]0x672C,
