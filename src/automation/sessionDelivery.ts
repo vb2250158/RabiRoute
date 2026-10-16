@@ -27,9 +27,12 @@ export function deliverSessionOnce(
       fs.renameSync(temporary, statePath);
     };
     if (existing?.status === "pending") {
-      const readback = await request({ action: "read", agentAdapter: target.agentAdapter, threadId: target.sessionId,
+      const readback = await request({ action: target.deliveryType ? "reconcile_delivery" : "read", agentAdapter: target.agentAdapter, threadId: target.sessionId,
+        ...(target.deliveryType ? { grokBotDelivery: { deliveryType: target.deliveryType, sendMode: target.sendMode,
+          ...(target.sendMode === "identity" ? { senderAgentId: target.senderAgentId } : {}) } } : {}),
         ...(options.remote ? {} : { agentTargetId: target.agentTargetId }), deliveryId });
-      if (readback.threadId === target.sessionId && readback.delivery?.deliveryId === deliveryId && readback.delivery.state === "accepted") {
+      if (readback.threadId === target.sessionId && readback.delivery?.deliveryId === deliveryId
+        && (readback.delivery.state === "accepted" || readback.delivery.status === "delivered")) {
         save("delivered"); return;
       }
       throw new Error("Original delivery remains unconfirmed; no duplicate message was sent.");
@@ -71,14 +74,18 @@ export async function sendAutomationSession(
   options: { remote?: boolean; imagePaths?: string[]; model?: string } = {}
 ): Promise<void> {
   const identity = { agentAdapter: target.agentAdapter, threadId: target.sessionId,
-    ...(options.remote ? {} : { agentTargetId: target.agentTargetId }), deliveryId };
+    ...(options.remote ? {} : { agentTargetId: target.agentTargetId }), deliveryId,
+    ...(target.agentAdapter === "grokBot" && target.deliveryType ? { grokBotDelivery: {
+      deliveryType: target.deliveryType, sendMode: target.sendMode,
+      ...(target.sendMode === "identity" ? { senderAgentId: target.senderAgentId } : {})
+    } } : {}) };
   const confirmed = (result: Record<string, any>) => result.delivery?.status === "delivered"
     && result.delivery.targetThreadId === target.sessionId && result.delivery.deliveryId === deliveryId;
   try {
-    const result = await request({ ...identity, action: "send", cwd: target.workspace, createIfMissing: false,
+    const result = await request({ ...identity, action: "send", ...(target.agentAdapter === "grokBot" ? {} : { cwd: target.workspace }), createIfMissing: false,
       prompt: envelope.messageContent, messageSource: envelope.messageSource,
       contextBlocks: envelope.contextBlocks, controlBlocks: envelope.controlBlocks,
-      imagePaths: options.imagePaths ?? [], model: options.model, responsePolicy: "none" });
+      imagePaths: options.imagePaths ?? [], ...(target.agentAdapter === "grokBot" ? {} : { model: options.model }), responsePolicy: "none" });
     if (!confirmed(result)) throw new Error("Agent delivery has no confirmed receipt for the selected session.");
   } catch (error) {
     // A timeout may follow successful acceptance. Reconcile the same identity; never resend here.

@@ -14,7 +14,8 @@ import {
   type ManagerStorageMutationResponse
 } from "./managerStorageMutationProtocol.js";
 import { readDurableDeliveryReceipt } from "./durableDeliveryIdempotency.js";
-import { readPlanStoragePackage } from "../planStorageRepository.js";
+import { readPlanStoragePackage, withPlanStorageLeaseAsync } from "../planStorageRepository.js";
+import { storageInventoryRevisionToken } from "../shared/storageRevision.js";
 
 function request(): ManagerStorageMutationRequest {
   return {
@@ -209,6 +210,29 @@ test("parent admission allow is irreversible for the operation and uses a fresh 
   assert.notEqual(next.admissionNonce, sent.admissionNonce);
   child.emit("message", admission(sent));
   await replayFailure;
+});
+
+test("caller disconnect after irreversible admission does not terminate the accepted mutation", async t => {
+  const child = new AdmissionChild();
+  const pool = poolFixture(t, child);
+  const controller = new AbortController();
+  const pending = pool.execute("FixtureRole", "fixture-plan", task, {
+    ...operation,
+    authorize: () => {},
+    signal: controller.signal
+  });
+  const sent = child.requests[0];
+  child.emit("message", admission(sent));
+  assert.equal((child.decisions[0] as { allowed: boolean }).allowed, true);
+
+  controller.abort(new Error("HTTP client disconnected"));
+  await Promise.resolve();
+  assert.equal(child.signalCode, null);
+  assert.equal(pool.status().active, 1);
+
+  child.complete(sent, { id: "fixture-plan", committed: true });
+  assert.deepEqual(await pending, { id: "fixture-plan", committed: true });
+  assert.equal(pool.status().active, 0);
 });
 
 for (const mode of ["premature-final", "duplicate-admission", "wrong-sequence", "decision-as-request", "wrong-fence", "denied-success", "allow-send-failure"] as const) {

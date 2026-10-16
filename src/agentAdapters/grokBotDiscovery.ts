@@ -3,7 +3,8 @@ import path from "node:path";
 import { DEFAULT_GROK_BOT_BACKEND_URL, encodeGrokBotSessionId, GrokBotClient, GrokBotError, grokBotProfilePath,
   type GrokBotClientOptions, type GrokBotNativeBot, type GrokBotNativeSession } from "./grokBotClient.js";
 
-export type GrokBotDiscoveredSession = GrokBotNativeSession & { id: string; name: string; updatedAt?: string };
+export type GrokBotDiscoveredSession = GrokBotNativeSession & { id: string; name: string; updatedAt?: string;
+  nativeAgentId: string; memberAgentIds?: string[] };
 export type GrokBotDiscoveryOptions = GrokBotClientOptions & {
   client?: GrokBotClient;
   agentId?: string;
@@ -34,6 +35,12 @@ export function grokBotActionableError(error: unknown): string {
     GROK_BOT_ACCOUNT_CHANGED: "读取期间 Grok Bot 账号已切换，请重新扫描当前账号。",
     GROK_BOT_BACKEND_MISMATCH: "配置的服务地址与当前 Grok Bot 登录来源不一致，请恢复真实原生服务地址。",
     GROK_BOT_SESSION_NOT_FOUND: "绑定的 Grok Bot 会话已不可用，请重新选择原 Bot 的真实会话。",
+    GROK_BOT_TARGET_KIND_MISMATCH: "所选目标与群聊/私聊类型不一致，请刷新并重新选择。",
+    GROK_BOT_SENDER_NOT_FOUND: "指定的发送身份不在当前账号的原生 Agent 列表中，请重新选择。",
+    GROK_BOT_SENDER_NOT_MEMBER: "指定的发送身份不是目标群成员，请选择该群已有的 Agent 成员。",
+    GROK_BOT_NATIVE_TARGET_REQUIRES_MAIN: "原生群聊或指定身份投递只支持目标默认主会话，不能投递到其它子会话。",
+    GROK_BOT_DELIVERY_OPTIONS_INVALID: "请明确选择群聊/私聊和直接/指定身份模式；指定身份模式必须选择发送 Agent。",
+    GROK_BOT_DELIVERY_NOT_FOUND: "未找到原投递记录；核销不会创建或发送消息。",
     GROK_BOT_OWNER_REFUSED: "Grok Bot 服务拒绝了本次读取，请核对当前账号和 Bot 归属。",
     GROK_BOT_PLATFORM_UNSUPPORTED: "当前登录发现支持 Windows，请显式提供已验证的 owner 连接。",
     GROK_BOT_CREDENTIAL_UNREADABLE: "无法读取 Grok Bot 受保护登录资料，请使用原 Windows 用户登录。",
@@ -79,6 +86,7 @@ export async function discoverGrokBotAgent(options: GrokBotDiscoveryOptions = {}
     }));
     if ((await client.profileStatus()).accountScope !== account.accountScope) throw new GrokBotError("GROK_BOT_ACCOUNT_CHANGED");
     const sessions = bots.flatMap(bot => (pages.get(bot.agentId) || []).map(session => ({ ...session,
+      kind: bot.kind, memberAgentIds: bot.memberAgentIds, nativeAgentId: bot.agentId,
       id: encodeGrokBotSessionId(bot.agentId, session.sessionId, session), name: session.defaultMain ? bot.name + " · 默认会话" : bot.name,
       updatedAt: nativeTime(session.lastActivityAtMs || session.updatedAtMs) })));
     const query = options.query?.trim().toLocaleLowerCase();

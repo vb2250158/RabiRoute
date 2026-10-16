@@ -215,20 +215,6 @@ class ManagerClient:
         except (OSError, URLError, TimeoutError, json.JSONDecodeError) as error:
             return ManualTriggerResult(ok=False, message=str(error))
 
-    def role_panel_messages(self, role_id: str, limit: int = 120) -> list[dict[str, Any]]:
-        try:
-            return self.role_panel_messages_snapshot(role_id, limit)
-        except (OSError, URLError, TimeoutError, json.JSONDecodeError, ValueError):
-            return []
-
-    def role_panel_messages_snapshot(self, role_id: str, limit: int = 120) -> list[dict[str, Any]]:
-        encoded_role_id = quote(role_id, safe="")
-        payload = self._get_json(f"/api/roles/{encoded_role_id}/role-panel/messages?limit={limit}")
-        messages = payload.get("messages", [])
-        if not isinstance(messages, list):
-            raise ValueError("Manager role-panel response does not contain a messages list.")
-        return [item for item in messages if isinstance(item, dict)]
-
     def role_plans(self, role_id: str) -> list[dict[str, Any]]:
         encoded_role_id = quote(role_id, safe="")
         payload = self._get_json(f"/api/roles/{encoded_role_id}/plans")

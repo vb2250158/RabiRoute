@@ -3,13 +3,50 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createGrokBotAdapter, resolveGrokBotConfiguredSession } from "./grokBotAdapter.js";
+import { createGrokBotAdapter, deliverWithTransportReceipt, resolveGrokBotConfiguredSession } from "./grokBotAdapter.js";
 import { encodeGrokBotSessionId, GrokBotError, type GrokBotSendInput, type GrokBotSendReceipt, type GrokBotSendStatus } from "./grokBotClient.js";
 import type { RabiDeliveryEnvelope } from "../shared/rabiMessage.js";
 
 const configuration = { agentId: "fixture-owner", sessionId: "fixture-session" };
 const envelope: RabiDeliveryEnvelope = { messageSource: { type: "system", eventType: "fixture", eventName: "Fixture delivery", eventId: "fixture-event" },
   messageContent: "Fixture content", contextBlocks: ["Fixture context"], controlBlocks: ["Fixture reply contract"], deliveryId: "fixture-delivery", sentAt: "2026-10-14T00:00:00Z" };
+
+test("exported transport preserves plain prompt, identity and caller journal key across retries and read-only reconciliation", async t => {
+  const config = await fixtureConfiguration(t);
+  const bound = resolveGrokBotConfiguredSession(config);
+  const sends: GrokBotSendInput[] = [];
+  const client = fixtureClient(async input => { sends.push(input); return { ...input, accepted: true, duplicate: false, recovered: false }; });
+  const grokBotDelivery = { deliveryType: "private" as const, sendMode: "identity" as const, senderAgentId: "sender" };
+  await deliverWithTransportReceipt(client, config.dataDir, bound, "caller-key", "Plain text", { grokBotDelivery });
+  assert.equal(sends[0].text, "Plain text");
+  assert.equal(sends[0].fromAgentId, "sender");
+  const before = await fs.readdir(config.dataDir, { recursive: true });
+  await deliverWithTransportReceipt(client, config.dataDir, bound, "caller-key", undefined, { grokBotDelivery, reconcileOnly: true });
+  assert.deepEqual(await fs.readdir(config.dataDir, { recursive: true }), before);
+  assert.equal(sends.length, 1);
+  await assert.rejects(deliverWithTransportReceipt(client, config.dataDir, bound, "caller-key", "Plain text",
+    { grokBotDelivery: { ...grokBotDelivery, senderAgentId: "other" } }), /GROK_BOT_DELIVERY_ID_CONFLICT/);
+  await assert.rejects(deliverWithTransportReceipt(client, config.dataDir, bound, "missing-key", undefined,
+    { grokBotDelivery, reconcileOnly: true }), /GROK_BOT_DELIVERY_NOT_FOUND/);
+  assert.equal(sends.length, 1);
+});
+
+test("reconcile reads unresolved attempt and native status without sending or changing journal files", async t => {
+  const config = await fixtureConfiguration(t), bound = resolveGrokBotConfiguredSession(config);
+  let sends = 0, queries = 0;
+  const client = fixtureClient(async () => { sends += 1; throw new GrokBotError("GROK_BOT_DELIVERY_UNCONFIRMED", { uncertain: true }); },
+    async () => { queries += 1; return { status: "accepted" }; });
+  const options = { grokBotDelivery: { deliveryType: "group" as const, sendMode: "direct" as const } };
+  await assert.rejects(deliverWithTransportReceipt(client, config.dataDir, bound, "key", "Plain text", options));
+  const files = await fs.readdir(config.dataDir, { recursive: true });
+  const attempt = files.find(file => file.endsWith(".attempt.json"))!;
+  const before = await fs.readFile(path.join(config.dataDir, attempt), "utf8");
+  const receipt = await deliverWithTransportReceipt(client, config.dataDir, bound, "key", undefined, { ...options, reconcileOnly: true });
+  assert.equal(receipt.recovered, true);
+  assert.equal(sends, 1); assert.equal(queries, 1);
+  assert.deepEqual(await fs.readdir(config.dataDir, { recursive: true }), files);
+  assert.equal(await fs.readFile(path.join(config.dataDir, attempt), "utf8"), before);
+});
 async function fixtureConfiguration(t: TestContext) {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "grokbot-route-fixture-"));
   t.after(() => fs.rm(dataDir, { recursive: true, force: true }));

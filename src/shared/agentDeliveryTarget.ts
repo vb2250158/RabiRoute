@@ -9,6 +9,10 @@ export type AgentSessionDestination = {
   sessionId: string;
   sessionName: string;
   workspace: string;
+  deliveryType?: "private" | "group";
+  sendMode?: "direct" | "identity";
+  senderAgentId?: string;
+  senderAgentName?: string;
 };
 export type AgentDeliveryTarget = { kind: "recipient"; recipientId: string } | AgentSessionDestination;
 
@@ -33,8 +37,19 @@ export function normalizeAgentDeliveryTarget(value: unknown): AgentDeliveryTarge
   const text = (key: string) => typeof raw[key] === "string" ? (raw[key] as string).trim() : "";
   if (raw.kind === "recipient" && text("recipientId")) return { kind: "recipient", recipientId: text("recipientId") };
   if (raw.kind === "session" && isAgentAdapterType(raw.agentAdapter)) {
+    const delivery: Partial<AgentSessionDestination> = {};
+    if (raw.deliveryType !== undefined || raw.sendMode !== undefined || raw.senderAgentId !== undefined || raw.senderAgentName !== undefined) {
+      if (raw.agentAdapter !== "grokBot" || !["private", "group"].includes(String(raw.deliveryType))
+        || !["direct", "identity"].includes(String(raw.sendMode))) throw new Error("Invalid Grok delivery type or send mode.");
+      delivery.deliveryType = raw.deliveryType as "private" | "group";
+      delivery.sendMode = raw.sendMode as "direct" | "identity";
+      if (raw.sendMode === "identity") {
+        delivery.senderAgentId = text("senderAgentId");
+        delivery.senderAgentName = text("senderAgentName");
+      } else if (text("senderAgentId") || text("senderAgentName")) throw new Error("Direct delivery cannot retain a sender identity.");
+    }
     return { kind: "session", agentTargetId: text("agentTargetId"), agentAdapter: raw.agentAdapter,
-      sessionId: text("sessionId"), sessionName: text("sessionName"), workspace: text("workspace") };
+      sessionId: text("sessionId"), sessionName: text("sessionName"), workspace: text("workspace"), ...delivery };
   }
   throw new Error("Select an Agent recipient or a complete Agent/session binding.");
 }
@@ -42,6 +57,9 @@ export function normalizeAgentDeliveryTarget(value: unknown): AgentDeliveryTarge
 export function validateAgentDeliveryTarget(target: AgentDeliveryTarget): void {
   if (target.kind === "session" && (!target.agentTargetId || !target.sessionId || !target.sessionName)) {
     throw new Error("Select an Agent instance and target session before saving.");
+  }
+  if (target.kind === "session" && target.sendMode === "identity" && (!target.senderAgentId || !target.senderAgentName)) {
+    throw new Error("Select the Grok sender identity before saving.");
   }
 }
 

@@ -5,6 +5,7 @@ import sys
 import tempfile
 import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -44,7 +45,6 @@ from rabiroute_tray.qt_async import wait_for_qt_tasks
 from rabiroute_tray.task_window import (
     ExpandableCard,
     KeywordPanel,
-    MessageComposer,
     STYLESHEET,
     TaskWindow,
     VIEW_LABELS,
@@ -121,7 +121,7 @@ class TaskWindowLayoutTest(unittest.TestCase):
             status_lines=["NapCat 已连接：True"],
         )
         self.window = TaskWindow(plugin_manager_factory=_EmptyPluginManager)
-        self.window.render(self.manager, gateway, self.plans, self.context, [])
+        self.window.render(self.manager, gateway, self.plans, self.context)
         self.window.show()
         self.app.processEvents()
 
@@ -157,75 +157,35 @@ class TaskWindowLayoutTest(unittest.TestCase):
         right_edge = max(button.geometry().right() for button in self.window.view_buttons.values())
         self.assertLessEqual(right_edge, self.window.view_bar.contentsRect().right())
 
-    def test_chat_composer_is_visible_only_for_chat(self) -> None:
-        for view_key, _label in VIEW_LABELS:
-            self.window.set_view(view_key)
-            self.app.processEvents()
-            self.assertEqual(self.window.chat_input_frame.isVisible(), view_key == "chat")
+    def test_persona_opens_selected_route_without_chat(self) -> None:
+        from unittest.mock import patch
+        self.window.selected_gateway = {"id": "route /name"}
+        with patch("rabiroute_tray.task_window.QDesktopServices.openUrl") as opened:
+            self.window.set_view("persona")
+            self.assertEqual(bytes(opened.call_args.args[0].toEncoded()).decode(), self.manager.manager_url + "/#/routes/route%20%2Fname/persona")
+        self.assertEqual(self.window.active_view, "current")
+        self.assertFalse(hasattr(self.window, "message_input"))
+        self.assertEqual([key for key, _ in VIEW_LABELS], ["persona", "current", "plans", "recent_memory", "archived", "status"])
 
-    def test_chat_groups_messages_under_one_separator_per_day(self) -> None:
-        self.window.role_messages = [
-            {"direction": "assistant", "sender": "Agent", "text": "第一条", "time": 1_768_579_200},
-            {"direction": "user", "sender": "本地用户", "text": "第二条", "time": 1_768_579_260},
-        ]
-        self.window.set_view("chat")
-        self.app.processEvents()
+    def test_persona_shortcut_uses_latest_manager_and_route(self) -> None:
+        from unittest.mock import patch
+        self.window.manager = replace(self.manager, manager_url="http://localhost:43210")
+        self.window.selected_gateway = {"id": "second-route"}
+        with patch("rabiroute_tray.task_window.QDesktopServices.openUrl") as opened:
+            self.window.view_buttons["persona"].click()
+            self.assertEqual(opened.call_args.args[0].toString(), "http://localhost:43210/#/routes/second-route/persona")
+        self.assertFalse(self.window.view_buttons["persona"].isChecked())
+        self.assertTrue(self.window.view_buttons["current"].isChecked())
 
-        separators = self.window.content_body.findChildren(QLabel, "timeSeparator")
-        times = self.window.content_body.findChildren(QLabel, "chatTime")
-        self.assertEqual(len(separators), 1)
-        self.assertEqual(len(times), 2)
-        self.assertTrue(all(len(label.text()) == 5 for label in times))
-
-    def test_chat_attachment_uses_compact_file_row(self) -> None:
-        attachment = self.window._attachment_widget({"name": "report.zip", "size": 1_572_864})
-        self.assertEqual(attachment.objectName(), "chatAttachment")
-        self.assertEqual(attachment.findChild(QLabel, "chatAttachmentName").text(), "report.zip")
-        self.assertEqual(attachment.findChild(QLabel, "chatAttachmentSize").text(), "1.5 MB")
-        attachment.close()
-
-    def test_message_composer_sends_on_enter_and_keeps_shift_enter_for_newline(self) -> None:
-        composer = MessageComposer()
-        send_count = 0
-
-        def record_send() -> None:
-            nonlocal send_count
-            send_count += 1
-
-        composer.send_requested.connect(record_send)
-        composer.show()
-        QTest.keyClick(composer, Qt.Key_Return)
-        self.assertEqual(send_count, 1)
-        QTest.keyClick(composer, Qt.Key_Return, Qt.ShiftModifier)
-        self.assertEqual(send_count, 1)
-        self.assertIn("\n", composer.toPlainText())
-        composer.close()
-
-    def test_pending_send_keeps_draft_and_prevents_duplicate_submit(self) -> None:
-        sent: list[tuple[str, list[dict]]] = []
-        self.window.send_message_requested.connect(lambda text, attachments: sent.append((text, attachments)))
-        self.window.message_input.setPlainText("耗时投递")
-
-        self.window._send_message()
-        self.window.set_message_send_pending(True)
-        self.window._send_message()
-
-        self.assertEqual(sent, [("耗时投递", [])])
-        self.assertEqual(self.window.message_input.toPlainText(), "耗时投递")
-        self.assertFalse(self.window.send_button.isEnabled())
-        self.assertIn("正在投递", self.window.footer_label.text())
-
-        self.window.complete_message_send(True)
-        self.assertEqual(self.window.message_input.toPlainText(), "")
-        self.assertTrue(self.window.send_button.isEnabled())
-
-    def test_failed_send_restores_composer_without_clearing_draft(self) -> None:
-        self.window.message_input.setPlainText("请保留这条消息")
-        self.window.set_message_send_pending(True)
-        self.window.complete_message_send(False)
-
-        self.assertEqual(self.window.message_input.toPlainText(), "请保留这条消息")
-        self.assertTrue(self.window.send_button.isEnabled())
+    def test_persona_shortcut_does_not_open_when_disconnected_or_route_missing(self) -> None:
+        from unittest.mock import patch
+        with patch("rabiroute_tray.task_window.QDesktopServices.openUrl") as opened:
+            self.window.selected_gateway = None
+            self.window.set_view("persona")
+            self.window.selected_gateway = {"id": "route"}
+            self.window.manager = replace(self.manager, connected=False)
+            self.window.set_view("persona")
+            opened.assert_not_called()
 
     def test_current_view_separates_plans_and_recent_memory(self) -> None:
         self.window.set_view("current")

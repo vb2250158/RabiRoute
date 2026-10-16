@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { executeAgentDelivery, type AgentDeliveryHandlers } from "./agentDelivery.js";
-import { defaultAgentRecipients, normalizeAgentDeliveryTarget } from "../shared/agentDeliveryTarget.js";
+import { defaultAgentRecipients, normalizeAgentDeliveryTarget, validateAgentDeliveryTarget } from "../shared/agentDeliveryTarget.js";
 import { normalizePersonaAutomationRules, notificationRulesFromPersonaAutomations } from "../shared/gatewayConfigModel.js";
 
 test("the selected recipient alone decides execution, including data-defined recipient IDs", async () => {
@@ -36,4 +36,18 @@ test("normalization and rule projection preserve the target and route scope", ()
   assert.deepEqual(projected.agentTarget, target);
   assert.deepEqual(projected.sourceRouteIds, ["route-a"]);
   assert.throws(() => normalizeAgentDeliveryTarget({ kind: "session" }), /complete/);
+});
+
+test("Grok delivery choices round-trip and reject incomplete or stale sender identities", () => {
+  const group = { kind: "session", agentAdapter: "grokBot", agentTargetId: "local:grokBot", sessionId: "group-address",
+    sessionName: "Example group", workspace: "", deliveryType: "group", sendMode: "identity",
+    senderAgentId: "example-bot", senderAgentName: "Example" };
+  const target = normalizeAgentDeliveryTarget(group);
+  assert.deepEqual(target, group);
+  validateAgentDeliveryTarget(target);
+  const rules = normalizePersonaAutomationRules([{ id: "group-bridge", trigger: { type: "message", routeKinds: ["group_message"] }, action: { type: "deliver_agent", target } }]);
+  assert.deepEqual(notificationRulesFromPersonaAutomations(rules)[0].agentTarget, target);
+  assert.throws(() => validateAgentDeliveryTarget(normalizeAgentDeliveryTarget({ ...group, senderAgentId: "" })), /sender identity/);
+  assert.throws(() => normalizeAgentDeliveryTarget({ ...group, sendMode: "direct" }), /retain a sender/);
+  assert.throws(() => normalizeAgentDeliveryTarget({ ...group, agentAdapter: "codex" }), /Invalid Grok/);
 });

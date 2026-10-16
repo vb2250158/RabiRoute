@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime
-from pathlib import Path
+from urllib.parse import quote
 
 from PySide6.QtCore import QPoint, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QFont, QIcon, QKeyEvent, QMouseEvent, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
-    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -43,7 +41,7 @@ from .theme import apply_rabi_menu_theme, normalize_theme, theme_stylesheet
 
 
 VIEW_LABELS = (
-    ("chat", "聊天"),
+    ("persona", "人格配置"),
     ("current", "当前"),
     ("plans", "计划"),
     ("recent_memory", "近期记忆"),
@@ -91,31 +89,6 @@ class ClickableHeader(QFrame):
             event.accept()
             return
         super().keyPressEvent(event)
-
-
-class MessageComposer(QTextEdit):
-    send_requested = Signal()
-    MIN_HEIGHT = 48
-    MAX_HEIGHT = 120
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.setAcceptRichText(False)
-        self.document().contentsChanged.connect(self._sync_height)
-        QTimer.singleShot(0, self._sync_height)
-
-    def keyPressEvent(self, event: QKeyEvent) -> None:
-        if event.key() in (Qt.Key_Return, Qt.Key_Enter) and not event.modifiers() & Qt.ShiftModifier:
-            self.send_requested.emit()
-            event.accept()
-            return
-        super().keyPressEvent(event)
-
-    def _sync_height(self) -> None:
-        document_height = int(self.document().documentLayout().documentSize().height())
-        target = min(self.MAX_HEIGHT, max(self.MIN_HEIGHT, document_height + 18))
-        self.setFixedHeight(target)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded if target == self.MAX_HEIGHT else Qt.ScrollBarAlwaysOff)
 
 
 class KeywordPanel(QFrame):
@@ -1042,7 +1015,6 @@ class StatusTable(QFrame):
 
 class TaskWindow(QWidget):
     route_selected = Signal(str)
-    send_message_requested = Signal(str, object)
     plan_feedback_requested = Signal(str, str, str, str)
 
     def __init__(
@@ -1063,14 +1035,11 @@ class TaskWindow(QWidget):
         self._plan_approval_panels: dict[str, PlanApprovalPanel] = {}
         self._plan_feedback_ledger = feedback_ledger or PlanFeedbackLedger.durable_default()
 
-        self.active_view = "chat"
+        self.active_view = "current"
         self.manager: ManagerSnapshot | None = None
         self.selected_gateway: dict | None = None
         self.plans: PlanSnapshot | None = None
         self.context: RoleContextSnapshot | None = None
-        self.role_messages: list[dict] = []
-        self.pending_attachments: list[dict] = []
-        self._message_send_pending = False
         self._sidebar_collapsed = False
         self.theme = normalize_theme(theme)
         self._desktop_extensions = extension_registry or create_builtin_desktop_extension_registry()
@@ -1197,35 +1166,7 @@ class TaskWindow(QWidget):
         self.content_body.setLayout(self.content_layout)
         self.content.setWidget(self.content_body)
 
-        self.chat_input_frame = QFrame()
-        self.chat_input_frame.setObjectName("chatInput")
-        chat_input_layout = QHBoxLayout()
-        chat_input_layout.setContentsMargins(8, 8, 8, 8)
-        chat_input_layout.setSpacing(8)
-        self.message_input = MessageComposer()
-        self.message_input.setObjectName("messageInput")
-        self.message_input.setPlaceholderText("输入消息，发送给当前航线绑定的 Agent")
-        self.message_input.send_requested.connect(self._send_message)
-        self.attach_button = QPushButton("")
-        self.attach_button.setObjectName("actionButton")
-        self.attach_button.setFixedSize(44, 44)
-        self.attach_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
-        self.attach_button.setToolTip("添加文件")
-        self.attach_button.setAccessibleName("添加文件")
-        self.attach_button.clicked.connect(self._choose_attachment)
-        self.send_button = QPushButton("")
-        self.send_button.setObjectName("sendButton")
-        self.send_button.setFixedSize(44, 44)
-        self.send_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowForward))
-        self.send_button.setToolTip("发送消息")
-        self.send_button.setAccessibleName("发送消息")
-        self.send_button.clicked.connect(self._send_message)
-        chat_input_layout.addWidget(self.message_input, 1)
-        chat_input_layout.addWidget(self.attach_button)
-        chat_input_layout.addWidget(self.send_button)
-        self.chat_input_frame.setLayout(chat_input_layout)
-
-        self.footer_label = QLabel("聊天记录按角色保存；计划和记忆视图只读展示。")
+        self.footer_label = QLabel("计划主体和记忆只读；需审批计划可提交建议。")
         self.footer_label.setObjectName("footer")
         self.refresh_button = QPushButton("")
         self.refresh_button.setObjectName("primaryButton")
@@ -1253,7 +1194,6 @@ class TaskWindow(QWidget):
         right_layout.addWidget(self.header)
         right_layout.addWidget(self.view_bar)
         right_layout.addWidget(self.content, 1)
-        right_layout.addWidget(self.chat_input_frame)
         right_layout.addWidget(self.footer_frame)
         self.right_pane.setLayout(right_layout)
 
@@ -1279,6 +1219,10 @@ class TaskWindow(QWidget):
             self._render_active_view()
 
     def set_view(self, view_key: str) -> None:
+        if view_key == "persona":
+            self._open_persona_configuration()
+            self._sync_buttons()
+            return
         self.active_view = view_key
         self._sync_buttons()
         self._render_active_view()
@@ -1316,7 +1260,6 @@ class TaskWindow(QWidget):
         selected_gateway: dict | None,
         plans: PlanSnapshot,
         context: RoleContextSnapshot,
-        role_messages: list[dict] | None = None,
     ) -> None:
         scroll_bar = self.content.verticalScrollBar()
         scroll_value = scroll_bar.value()
@@ -1329,7 +1272,6 @@ class TaskWindow(QWidget):
         self.selected_gateway = selected_gateway or manager.selected_gateway
         self.plans = plans
         self.context = context
-        self.role_messages = role_messages or []
 
         gateway = self.selected_gateway
         role_id = str(gateway.get("agentRoleId") or plans.role_id) if gateway else plans.role_id
@@ -1352,12 +1294,6 @@ class TaskWindow(QWidget):
         if self.active_view == "status":
             self._refresh_plugin_surfaces()
         QTimer.singleShot(0, lambda value=scroll_value: self._restore_scroll(value))
-
-    def _persona_avatar_pixmap(self, size: int) -> QPixmap:
-        pixmap = self._persona_avatar_source_pixmap()
-        if not pixmap.isNull():
-            return pixmap.scaled(size, size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-        return self._default_icon_pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation) if not self._default_icon_pixmap.isNull() else QPixmap()
 
     def _apply_persona_avatar(self, role_id: str) -> None:
         pixmap = self._persona_avatar_source_pixmap()
@@ -1431,49 +1367,12 @@ class TaskWindow(QWidget):
             return "未选择航线"
         return route_status_label(gateway)
 
-    def _choose_attachment(self) -> None:
-        paths, _selected_filter = QFileDialog.getOpenFileNames(self, "选择发送文件")
-        for raw_path in paths:
-            path_obj = Path(raw_path)
-            self.pending_attachments.append({
-                "kind": "file",
-                "name": path_obj.name,
-                "path": str(path_obj),
-            })
-        self._update_attachment_button()
-
-    def _update_attachment_button(self) -> None:
-        count = len(self.pending_attachments)
-        self.attach_button.setText(str(count) if count else "")
-        self.attach_button.setToolTip(f"已添加 {count} 个文件" if count else "添加文件")
-
-    def _send_message(self) -> None:
-        if self._message_send_pending:
+    def _open_persona_configuration(self) -> None:
+        gateway_id = str((self.selected_gateway or {}).get("id") or "")
+        if self.manager is None or not self.manager.connected or not gateway_id:
             return
-        text = self.message_input.toPlainText().strip()
-        if not text and not self.pending_attachments:
-            return
-        attachments = list(self.pending_attachments)
-        self.send_message_requested.emit(text, attachments)
-
-    def set_message_send_pending(self, pending: bool) -> None:
-        self._message_send_pending = pending
-        self.message_input.setEnabled(not pending)
-        self.attach_button.setEnabled(not pending)
-        self.send_button.setEnabled(not pending)
-        self.send_button.setToolTip("正在投递给 Agent" if pending else "发送消息")
-        self.footer_label.setText(
-            "正在投递给 Agent；窗口仍可切换和查看其它内容。"
-            if pending
-            else "计划主体和记忆只读；需审批计划可通过 Manager 提交建议。"
-        )
-
-    def complete_message_send(self, succeeded: bool) -> None:
-        if succeeded:
-            self.pending_attachments.clear()
-            self._update_attachment_button()
-            self.message_input.clear()
-        self.set_message_send_pending(False)
+        url = self.manager.manager_url.rstrip("/") + "/#/routes/" + quote(gateway_id, safe="") + "/persona"
+        QDesktopServices.openUrl(QUrl(url))
 
     def set_plan_feedback_pending(self, plan_id: str, pending: bool) -> None:
         panel = self._plan_approval_panels.get(plan_id)
@@ -1495,7 +1394,6 @@ class TaskWindow(QWidget):
 
     def _render_active_view(self) -> None:
         self._clear_content()
-        self.chat_input_frame.setVisible(self.active_view == "chat")
         if not self.manager or not self.plans or not self.context:
             self._add_section_header("加载中", "正在读取计划、记忆和路由状态。")
             self._add_info_card("状态", "正在读取计划、记忆和路由状态。", [], "neutral")
@@ -1503,7 +1401,6 @@ class TaskWindow(QWidget):
             return
 
         renderers = {
-            "chat": self._render_chat,
             "current": self._render_current,
             "plans": self._render_plans,
             "recent_memory": lambda: self._render_context_group("近期记忆", self.context.recent_memory),
@@ -1512,130 +1409,6 @@ class TaskWindow(QWidget):
         }
         renderers.get(self.active_view, self._render_current)()
         self.content_layout.addStretch(1)
-
-    def _render_chat(self) -> None:
-        if not self.role_messages:
-            self._add_info_card("聊天", "还没有角色面板对话。", [("提示", "在下方输入消息，发送给当前航线绑定的 Agent。")], "empty")
-            return
-        last_day = ""
-        for message in self.role_messages:
-            day = self._message_day(message)
-            if day and day != last_day:
-                self._add_time_separator(day)
-                last_day = day
-            self._add_chat_bubble(message)
-
-    def _message_datetime(self, message: dict) -> datetime | None:
-        value = message.get("time")
-        try:
-            seconds = float(value)
-            if seconds > 10_000_000_000:
-                seconds /= 1000
-            return datetime.fromtimestamp(seconds)
-        except Exception:
-            return None
-
-    def _message_day(self, message: dict) -> str:
-        timestamp = self._message_datetime(message)
-        return timestamp.strftime("%Y-%m-%d") if timestamp is not None else ""
-
-    def _message_time(self, message: dict) -> str:
-        timestamp = self._message_datetime(message)
-        return timestamp.strftime("%H:%M") if timestamp is not None else ""
-
-    def _add_time_separator(self, text: str) -> None:
-        label = QLabel(text)
-        label.setObjectName("timeSeparator")
-        label.setAlignment(Qt.AlignCenter)
-        self.content_layout.addWidget(label)
-
-    def _add_chat_bubble(self, message: dict) -> None:
-        direction = str(message.get("direction") or "user")
-        bubble = QFrame()
-        bubble.setObjectName("chatBubble")
-        bubble.setProperty("direction", "out" if direction == "user" else "in" if direction == "assistant" else "system")
-        outer = QHBoxLayout()
-        outer.setContentsMargins(4, 2, 4, 2)
-        if direction == "user":
-            outer.addStretch(1)
-        elif direction == "assistant":
-            avatar = QLabel()
-            avatar.setObjectName("chatAvatar")
-            avatar.setFixedSize(32, 32)
-            avatar.setAlignment(Qt.AlignCenter)
-            pixmap = self._persona_avatar_pixmap(28)
-            if not pixmap.isNull():
-                avatar.setPixmap(pixmap)
-            else:
-                avatar.setText((str(message.get("sender") or "R")[:1]).upper())
-            outer.addWidget(avatar, 0, Qt.AlignTop)
-        body = QFrame()
-        body.setObjectName("chatBubbleBody")
-        body.setMaximumWidth(max(360, int(self.content.viewport().width() * 0.72)))
-        body_layout = QVBoxLayout()
-        body_layout.setContentsMargins(12, 9, 12, 9)
-        body_layout.setSpacing(6)
-        meta_row = QHBoxLayout()
-        meta_row.setContentsMargins(0, 0, 0, 0)
-        meta_row.setSpacing(10)
-        sender = QLabel(str(message.get("sender") or ("我" if direction == "user" else "Agent")))
-        sender.setObjectName("chatSender")
-        message_time = QLabel(self._message_time(message))
-        message_time.setObjectName("chatTime")
-        meta_row.addWidget(sender)
-        meta_row.addStretch(1)
-        if message_time.text():
-            meta_row.addWidget(message_time)
-        body_layout.addLayout(meta_row)
-        text = str(message.get("text") or "")
-        if text:
-            text_label = QLabel(text)
-            text_label.setObjectName("chatText")
-            text_label.setWordWrap(True)
-            text_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            body_layout.addWidget(text_label)
-        for attachment in message.get("attachments") or []:
-            if isinstance(attachment, dict):
-                body_layout.addWidget(self._attachment_widget(attachment))
-        body.setLayout(body_layout)
-        outer.addWidget(body, 0)
-        if direction != "user":
-            outer.addStretch(1)
-        bubble.setLayout(outer)
-        self.content_layout.addWidget(bubble)
-
-    def _attachment_widget(self, attachment: dict) -> QWidget:
-        name = str(attachment.get("name") or attachment.get("path") or attachment.get("url") or "附件")
-        size = attachment.get("size")
-        detail = self._format_file_size(size) if isinstance(size, int) and size > 0 else "文件"
-        row = QFrame()
-        row.setObjectName("chatAttachment")
-        layout = QHBoxLayout()
-        layout.setContentsMargins(8, 6, 8, 6)
-        layout.setSpacing(8)
-        icon = QLabel()
-        icon.setObjectName("chatAttachmentIcon")
-        icon.setPixmap(self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon).pixmap(16, 16))
-        title = QLabel(name)
-        title.setObjectName("chatAttachmentName")
-        title.setMinimumWidth(0)
-        title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-        title.setToolTip(str(attachment.get("path") or attachment.get("url") or name))
-        size_label = QLabel(detail)
-        size_label.setObjectName("chatAttachmentSize")
-        layout.addWidget(icon)
-        layout.addWidget(title, 1)
-        layout.addWidget(size_label)
-        row.setLayout(layout)
-        return row
-
-    def _format_file_size(self, size: int) -> str:
-        value = float(size)
-        for unit in ("B", "KB", "MB", "GB"):
-            if value < 1024 or unit == "GB":
-                return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
-            value /= 1024
-        return f"{size} B"
 
     def _render_current(self) -> None:
         assert self.plans is not None
@@ -1923,6 +1696,8 @@ class TaskWindow(QWidget):
             item = self.content_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                widget.hide()
+                widget.setParent(None)
                 widget.deleteLater()
 
     def _set_card_expanded(self, key: str, expanded: bool) -> None:
@@ -2140,99 +1915,6 @@ QPushButton#viewButton {
     padding: 3px 8px;
     font-weight: 800;
 }
-QPushButton#sendButton {
-    background: #102a43;
-    border: 1px solid #102a43;
-    border-radius: 8px;
-    color: #ffffff;
-    min-width: 44px;
-    max-width: 44px;
-    min-height: 44px;
-    max-height: 44px;
-    padding: 0;
-    font-weight: 800;
-}
-QPushButton#sendButton:hover {
-    background: #194466;
-    border-color: #194466;
-}
-QPushButton#sendButton:focus {
-    border: 2px solid #19bfc1;
-}
-QFrame#chatInput {
-    background: #ffffff;
-    border-top: 1px solid #dbe5ea;
-    border-radius: 0;
-}
-QTextEdit#messageInput {
-    background: #fbfdff;
-    border: 1px solid #cad8e0;
-    border-radius: 8px;
-    color: #112033;
-    padding: 8px;
-    selection-background-color: #bdeced;
-    selection-color: #0c2a4a;
-}
-QTextEdit#messageInput:focus {
-    border: 2px solid #19bfc1;
-}
-QFrame#chatBubble {
-    background: transparent;
-    border: 0;
-}
-QFrame#chatBubbleBody {
-    background: #ffffff;
-    border: 1px solid #d6e2e8;
-    border-radius: 8px;
-}
-QFrame#chatBubble[direction="out"] QFrame#chatBubbleBody {
-    background: #e9f8f9;
-    border-color: #bde4e6;
-}
-QFrame#chatBubble[direction="in"] QFrame#chatBubbleBody {
-    background: #ffffff;
-}
-QLabel#chatSender {
-    color: #0f8b8d;
-    font-size: 11px;
-    font-weight: 800;
-}
-QLabel#chatTime {
-    color: #8491a0;
-    font-size: 10px;
-    font-weight: 650;
-}
-QLabel#chatText {
-    color: #112033;
-    font-size: 14px;
-    line-height: 1.45;
-}
-QLabel#timeSeparator {
-    color: #718291;
-    font-size: 11px;
-    font-weight: 700;
-    padding: 8px 4px 4px 4px;
-}
-QFrame#chatAttachment {
-    background: #f5f8fa;
-    border: 1px solid #dbe5ea;
-    border-radius: 7px;
-}
-QLabel#chatAttachmentIcon {
-    background: transparent;
-    min-width: 18px;
-    max-width: 18px;
-}
-QLabel#chatAttachmentName {
-    color: #334e62;
-    font-size: 12px;
-    font-weight: 750;
-}
-QLabel#chatAttachmentSize {
-    color: #718291;
-    font-size: 10px;
-    font-weight: 700;
-}
 QPushButton#viewButton:hover {
     background: #f0f8f9;
     border-color: #d2e9ea;
@@ -2361,14 +2043,6 @@ QLabel#planStatus {
     font-size: 11px;
     font-weight: 850;
     padding: 3px 7px;
-}
-QLabel#chatAvatar {
-    background: #f2fbfc;
-    border: 1px solid #c8e9ea;
-    border-radius: 9px;
-    color: #0f8b8d;
-    font-size: 13px;
-    font-weight: 900;
 }
 QFrame#keywordPanel {
     background: transparent;

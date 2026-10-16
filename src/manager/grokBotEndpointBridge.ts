@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { GrokBotClient, GrokBotError, decodeGrokBotSessionId, encodeGrokBotSessionId, grokBotMessageId, grokBotProfilePath,
+import { GrokBotClient, GrokBotError, decodeGrokBotSessionId, encodeGrokBotSessionId, grokBotMessageId, grokBotProfilePath, isGrokBotRoom, verifyGrokBotRoomMember,
   type GrokBotClientOptions, type GrokBotNativeBot, type GrokBotNativeSession, type GrokBotSendReceipt, type GrokBotSendStatus } from "../agentAdapters/grokBotClient.js";
 import type { AgentThreadRequest } from "../agentThreads.js";
 import type { AgentRequestParty } from "../agentRequests/store.js";
@@ -7,6 +7,7 @@ import { sameAgentEndpoint, type AgentRequestEndpoint } from "../agentRequests/e
 import type { PreparedEndpointDelivery, EndpointDeliveryReceipt } from "../agentRequests/endpointDelivery.js";
 import { completeAgentSessionId, normalizeAgentThreadSourceType } from "../agentRequests/requestValidation.js";
 import { agentIdentityForMessageSource, normalizeRabiMessageSource } from "../shared/rabiMessage.js";
+import { normalizeEndpointExecutionOptions } from "../agentRequests/executionOptions.js";
 import type { AgentServiceEndpointBridge, AgentServiceSourcePrincipal } from "./agentEndpointDelivery.js";
 
 export type GrokBotEndpointConfiguration = GrokBotClientOptions;
@@ -25,11 +26,14 @@ export async function readGrokBotNativeOwner(id: string, configuration: GrokBotE
   const before = await client.profileStatus();
   if (!before.signedIn || !before.accountScope) throw new GrokBotError("GROK_BOT_NOT_SIGNED_IN");
   const roster = await client.listBots(before.accountScope);
-  const bots = roster.bots.filter(bot => bot.agentId === native.agentId);
+  const aliasRoom = !native.defaultMain ? roster.bots.find(bot => bot.agentId === native.sessionId && isGrokBotRoom(bot)) : undefined;
+  if (aliasRoom) verifyGrokBotRoomMember(roster, native.agentId, aliasRoom);
+  const address = aliasRoom ? { agentId: aliasRoom.agentId, sessionId: "", defaultMain: true as const } : native;
+  const bots = roster.bots.filter(bot => bot.agentId === address.agentId);
   if (bots.length !== 1) throw new GrokBotError(bots.length ? "GROK_BOT_DUPLICATE_OWNER_ID" : "GROK_BOT_SESSION_NOT_FOUND");
-  const sessions = await client.listSessions(native.agentId, before.accountScope);
-  if (sessions.some(session => session.agentId !== native.agentId)) throw new GrokBotError("GROK_BOT_SESSION_OWNER_MISMATCH");
-  const matched = sessions.filter(session => session.sessionId === native.sessionId && session.defaultMain === native.defaultMain);
+  const sessions = await client.listSessions(address.agentId, before.accountScope);
+  if (sessions.some(session => session.agentId !== address.agentId)) throw new GrokBotError("GROK_BOT_SESSION_OWNER_MISMATCH");
+  const matched = sessions.filter(session => session.sessionId === address.sessionId && session.defaultMain === address.defaultMain);
   if (matched.length !== 1) throw new GrokBotError(matched.length ? "GROK_BOT_DUPLICATE_OWNER_ID" : "GROK_BOT_SESSION_NOT_FOUND");
   const after = await client.profileStatus();
   if (after.accountScope !== before.accountScope) throw new GrokBotError("GROK_BOT_ACCOUNT_CHANGED");
@@ -37,7 +41,7 @@ export async function readGrokBotNativeOwner(id: string, configuration: GrokBotE
   const nativeProfileAfter = (after as { profilePath?: string }).profilePath;
   if (nativeProfileBefore !== nativeProfileAfter) throw new GrokBotError("GROK_BOT_ACCOUNT_CHANGED");
   const profile = profileIdentity(configuration, client);
-  return { ...native, id: encodeGrokBotSessionId(native.agentId, native.sessionId, native), bot: bots[0], session: matched[0],
+  return { ...address, id: encodeGrokBotSessionId(native.agentId, native.sessionId, native), bot: bots[0], session: matched[0],
     accountScope: before.accountScope, profileIdentity: profile,
     authorizationIncarnation: hash(["grokBot", profile, nativeProfileBefore ? hash(grokBotProfilePath(nativeProfileBefore)) : profile, before.accountScope]), client };
 }
@@ -113,21 +117,43 @@ export function createGrokBotEndpointBridge(options: { managerInstanceId: string
       if (request.agentAdapter !== "grokBot") return undefined;
       if (request.instanceBinding && request.instanceBinding.instanceId !== options.managerInstanceId) return undefined;
       const owner = await readOwner(completeAgentSessionId(request.threadId, "threadId"));
+      const delivery = normalizeEndpointExecutionOptions(request.grokBotDelivery === undefined ? {} : { grokBotDelivery: request.grokBotDelivery }).grokBotDelivery;
+      if (delivery && (delivery.deliveryType === "group") !== isGrokBotRoom(owner.bot)) throw new GrokBotError("GROK_BOT_TARGET_KIND_MISMATCH");
+      if (delivery?.sendMode === "identity" && isGrokBotRoom(owner.bot)) {
+        verifyGrokBotRoomMember(await owner.client.listBots(owner.accountScope), delivery.senderAgentId!, owner.bot);
+      }
       if (request.instanceBinding && request.instanceBinding.agentId !== owner.agentId) throw new GrokBotError("GROK_BOT_SESSION_OWNER_MISMATCH");
       if (request.agentTargetId && !["local:grokBot", "service:grokBot"].includes(request.agentTargetId)) throw new GrokBotError("GROK_BOT_SESSION_OWNER_MISMATCH");
       return partyFor(owner, normalizeAgentThreadSourceType(request.messageProcessing?.targetAgentType));
     },
-    resolveExecutionOptions: request => {
+    resolveExecutionOptions: (request, target) => {
       if (request.cwd !== undefined || request.model !== undefined || request.reasoningEffort !== undefined || request.sandbox !== undefined || request.dshDeliveryMode !== undefined) {
         throw new GrokBotError("GROK_BOT_PC_EXECUTION_OPTIONS_UNSUPPORTED");
       }
-      return {};
+      const execution = normalizeEndpointExecutionOptions(request.grokBotDelivery === undefined ? {} : { grokBotDelivery: request.grokBotDelivery });
+      const owner = proofs.get(target.threadId)?.owner;
+      if (!owner) throw new GrokBotError("GROK_BOT_OWNER_PROOF_UNAVAILABLE");
+      const delivery = execution.grokBotDelivery;
+      const native = decodeGrokBotSessionId(owner.id);
+      const alias = native.agentId !== owner.agentId;
+      if (alias && !delivery) throw new GrokBotError("GROK_BOT_TARGET_KIND_MISMATCH");
+      if (delivery && (delivery.deliveryType === "group") !== isGrokBotRoom(owner.bot)) throw new GrokBotError("GROK_BOT_TARGET_KIND_MISMATCH");
+      if (delivery?.sendMode === "identity" && alias && delivery.senderAgentId !== native.agentId) throw new GrokBotError("GROK_BOT_SESSION_OWNER_MISMATCH");
+      if (delivery?.sendMode === "identity" && isGrokBotRoom(owner.bot) && !owner.bot.memberAgentIds?.includes(delivery.senderAgentId!)) {
+        throw new GrokBotError("GROK_BOT_SENDER_NOT_MEMBER");
+      }
+      return execution;
     },
     transport: async (delivery, guard, reconcile) => {
       await refresh(delivery.target);
       guard();
       authorize(delivery.target);
       const owner = proofs.get(delivery.target.sessionId)!.owner;
+      const nativeDelivery = normalizeEndpointExecutionOptions(delivery.executionOptions).grokBotDelivery;
+      if (nativeDelivery && (nativeDelivery.deliveryType === "group") !== isGrokBotRoom(owner.bot)) throw new GrokBotError("GROK_BOT_TARGET_KIND_MISMATCH");
+      if (nativeDelivery?.sendMode === "identity" && isGrokBotRoom(owner.bot)) {
+        verifyGrokBotRoomMember(await owner.client.listBots(owner.accountScope), nativeDelivery.senderAgentId!, owner.bot);
+      }
       const messageId = grokBotDeliveryMessageId(delivery.deliveryId, delivery.target.sessionId);
       if (reconcile) {
         const status = await owner.client.getSendStatus(owner.agentId, owner.sessionId, messageId, owner.accountScope,
@@ -139,7 +165,10 @@ export function createGrokBotEndpointBridge(options: { managerInstanceId: string
         return undefined;
       }
       const accepted = await owner.client.sendNative({ agentId: owner.agentId, sessionId: owner.sessionId,
-        ...(owner.defaultMain ? { defaultMain: true as const } : {}), messageId, text: delivery.prompt }, owner.accountScope);
+        ...(owner.defaultMain ? { defaultMain: true as const } : {}),
+        ...(delivery.executionOptions.grokBotDelivery ? { deliveryType: delivery.executionOptions.grokBotDelivery.deliveryType,
+          ...(delivery.executionOptions.grokBotDelivery.sendMode === "identity" ? { fromAgentId: delivery.executionOptions.grokBotDelivery.senderAgentId } : {}) } : {}),
+        messageId, text: delivery.prompt }, owner.accountScope);
       await refresh(delivery.target); guard();
       validateNativeIdentity(accepted, owner, messageId, true);
       if (!accepted.accepted) throw new GrokBotError("GROK_BOT_DELIVERY_UNCONFIRMED", { uncertain: true });
