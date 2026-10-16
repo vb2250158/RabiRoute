@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.39 - 2026-10-17
+
+- Support native Grok room/private delivery and explicit sender identity with exact targets, durable receipt reconciliation, and UI membership validation.
+
 ## 0.3.38 - 2026-10-17
 
 - Replace the tray chat view with a persona configuration shortcut, remove retired composer and refresh paths, and retain plan approvals.

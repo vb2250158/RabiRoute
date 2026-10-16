@@ -105,7 +105,8 @@ function requestInputHash(request: AgentThreadRequest, source: AgentRequestParty
     messageProcessing: request.messageProcessing ? { requirementId: request.messageProcessing.requirementId, outcome: request.messageProcessing.outcome,
       targetAgentType: request.messageProcessing.targetAgentType, planId: request.messageProcessing.planId, planTitle: request.messageProcessing.planTitle } : undefined,
     // Unspecified defaults belong to the original frozen delivery, not the retry's current Route configuration.
-    execution: { cwd: explicit.cwd, model: explicit.model, reasoningEffort: explicit.reasoningEffort, sandbox: explicit.sandbox, dshDeliveryMode: explicit.dshDeliveryMode }
+    execution: { cwd: explicit.cwd, model: explicit.model, reasoningEffort: explicit.reasoningEffort, sandbox: explicit.sandbox, dshDeliveryMode: explicit.dshDeliveryMode,
+      ...(request.grokBotDelivery === undefined ? {} : { grokBotDelivery: request.grokBotDelivery }) }
   })).digest("hex");
 }
 
@@ -204,8 +205,10 @@ export async function executeEndpointAgentDelivery(request: AgentThreadRequest, 
       workspace: source.workspace, agentType: source.agentType };
     const verifiedSource = messageSource.type === "plan" ? { ...messageSource, sourceAgent: verifiedIdentity }
       : { ...verifiedIdentity, type: "agent" as const };
-    const prompt = renderRabiDelivery({ messageSource: verifiedSource, messageContent: content,
-      contextBlocks: request.contextBlocks, controlBlocks: [...(request.controlBlocks ?? []), renderAgentReplyParameters(preparation)] });
+    const prompt = target.endpoint!.kind === "service" && target.endpoint!.provider === "grokBot" && executionOptions.grokBotDelivery
+      ? content
+      : renderRabiDelivery({ messageSource: verifiedSource, messageContent: content,
+        contextBlocks: request.contextBlocks, controlBlocks: [...(request.controlBlocks ?? []), renderAgentReplyParameters(preparation)] });
     delivery = { deliveryId: preparation.deliveryId, generation: randomUUID(), source: source.endpoint,
       target: target.endpoint, prompt, promptHash: agentDeliveryPromptHash(prompt), executionOptions, executionOptionsHash, preparation, state: "prepared",
       ...(callerDeliveryId === undefined ? {} : { callerDeliveryId, requestHash }) };

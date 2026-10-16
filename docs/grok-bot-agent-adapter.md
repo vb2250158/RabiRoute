@@ -42,7 +42,11 @@ GET <managerBaseUrl>/api/scan/agents?agentAdapter=grokBot&grokBotAgentId=<URL编
 
 从 `agents.grokBot.sessions` 选择原会话，保存 `id` 与 `name`。`sessionPage.hasMore/nextOffset` 用于继续分页，参数是 `grokBotOffset`，不使用 `cursor`。扫描不会创建 Bot、会话或 routine；空列表时回到 Grok Bot 核对原账号和已有会话。
 
-普通会话的完整 ID为 `grokBot:` 加 `base64url(JSON([ownerAgentId,nativeSessionId]))`；原生默认主会话使用 `base64url(JSON([ownerAgentId,{"defaultMain":true}]))`，同样带 `grokBot:` 前缀。底层空会话 ID仅在默认主会话显式标记、真实 owner 列表和聊天记录核验后使用；公共 `sourceThreadId` 和 `messageSource.sessionId` 始终必须是非空的完整 ID。接入方只复制扫描返回值，不自行编码、拼接或猜测标识。Route 的 `grokBotAgentId` 必须与该 ID内的 owner 一致。
+普通私聊会话的完整 ID为 `grokBot:` 加 `base64url(JSON([ownerAgentId,nativeSessionId]))`；原生默认主会话使用 `base64url(JSON([ownerAgentId,{"defaultMain":true}]))`，同样带 `grokBot:` 前缀。默认主会话须经真实 roster 核验；Temporal 私聊还需聊天记录核验，ROOM 群地址由 roster 直接证明，不借用私聊会话。公共 `sourceThreadId` 和 `messageSource.sessionId` 始终必须是非空的完整 ID。接入方只复制扫描返回值，不自行编码、拼接或猜测标识。Route 的 `grokBotAgentId` 必须与该 ID内的 owner 一致。
+
+已保存的群身份地址也可以是同前缀的 `base64url(JSON([senderAgentId,groupId]))`，不带 `defaultMain`。这是 **roster-backed 群地址**，不是 `listSessions(sender)` 返回的私聊 session。`deliveryType=group` 时，原生 roster 必须证明 `groupId` 是 ROOM、`senderAgentId` 是真实 AGENT 且属于该群，并与显式 `fromAgentId` 一致。发送调用 `SendGrokBotAgentMessage`，原生 `toAgentId=groupId`、`fromAgentId=senderAgentId`；journal 回执保留原 sender/group tuple，核销将该 tuple 映射到群原生主地址查询同一 messageId。失败不向 sender 私聊发送，也不改回默认会话。
+
+列表请求可携带已保存的 `threadId`。通过 roster 成员校验后，群行保留这个完整 ID，`nativeAgentId/nativeAgentName` 仍描述群的真实 ID/名称，`kind/memberAgentIds` 原样提供；列表展示不能把该地址改写成私聊或默认主会话。扫描提供的群 owner/defaultMain 形式仍兼容。以上协议单测与真实群投递验收分别记录。
 
 Route 配置片段：
 
@@ -109,11 +113,29 @@ Codex → Bot 的精确投递示例：
 
 ## 会话复用与未知结果
 
+### 规则动作中的私聊、群与发送身份
+
+状态：源码实现；安装版须完成兼容热补丁及运行验收后才能使用。部署基线不支持时，不绕过补丁兼容检查；用户明确要求先迁移配置文件时，分别报告文件回读与运行生效结果。
+
+指定身份的群地址也可保存为 `grokBot:` + `base64url(JSON([发送Bot的ID,群ID]))`。它由当前原生群目录与成员关系验证，不冒充该 Bot 的私聊会话；发送时将群 ID 用作 `toAgentId`、发送 Bot 用作 `fromAgentId`，核销仍寻址同一个群。界面只保留 Manager 核验后的完整地址，不自行从显示名推算。
+
+选择“自定义”投递目标后，配置顺序为：Grok Bot Agent → 会话类型（私聊 / 群）→ 目标会话或群 → 发送方式（直接发送 / 通过指定身份发送）→ 身份。群和身份均来自当前账号原生目录；名称不替代 ID。
+
+`action.target` 保持 `kind=session`、`agentTargetId`、`agentAdapter=grokBot`、完整 `sessionId`、`sessionName` 和空 `workspace`，增加 `deliveryType=private|group`、`sendMode=direct|identity`。指定身份额外保存 `senderAgentId`、`senderAgentName`；直接发送不保留身份字段。切换类型或目标后重新核对身份。
+
+此显式模式把规则模板渲染结果作为正文，不附加人格提示词或控制块。例如 `{sender}({userId}) : {message}` 生成 `Example(123) : hello`。指定身份通过 `SendGrokBotAgentMessage` 直接寻址目标群，不先通知 Bot 默认私聊。缺少目标、身份失效或结果未知时不回退默认会话。
+
+`POST /api/agent/threads` 的 `send` / `reconcile_delivery` 请求携带 `grokBotDelivery: {deliveryType, sendMode, senderAgentId?}`、原 `threadId` 和稳定 `deliveryId`。结果未知时核对原回执，不换键重发。保存、服务受理及目标群显示分别验收；真实双向链路未验收前保持实验状态。
+
+公共服务投递桥也必须核验群地址与成员关系，并将发送方式、身份保存到每次投递的不可变执行选项及其摘要中；不能只在发现列表或独立发送 helper 中支持这些字段。原生群地址有效但公共入口返回 `GROK_BOT_SESSION_NOT_FOUND` 时，检查公共投递桥是否仍把群 ID 当成发送 Bot 的私聊会话。不要改回默认私聊，也不要用定时通知 Bot 再转发作为补偿。
+
+反向消息使用已有 NapCat 渠道的 QQ 群目标。上述选项不会自动创建 Grok 入站订阅；必须另行核对 Grok 来源、群过滤、QQ 目标及防回环，不能用 Bot 私聊转发指令代替直通。
+
 有效会话 ID直接复用。创建、消息受理和回答完成分别记录，不因第一轮投递超时创建替代会话。重复请求保留原投递 ID及完整载荷；同 ID不同载荷应拒绝。
 
 HTTP 202 或 `delivery_unconfirmed` 保留原请求。调用 `reconcile_delivery` 查询同一 owner 的原投递证据，不再次启动 Bot turn。无可读取证据时保留未确认状态。
 
-调用方的 `deliveryId` 是幂等键；Manager 会按真实来源生成 `agent-<64位小写十六进制>` 投递编号。回传与核销使用响应中的原编号，不用自行重算。Codex Desktop 保留结构化消息里的该编号。历史消息若额外带有单个 UUID 投递尾段，恢复仍须匹配原结构化编号、完整正文哈希、目标 owner 和认证代次；正文改动、引用文本及重复尾段不能成为回执。
+普通 Agent 端点互投中，调用方的 `deliveryId` 是幂等键；Manager 会按真实来源生成 `agent-<64位小写十六进制>` 投递编号。显式原生投递模式的 `delivery.deliveryId` 保留调用方原键，`messageId` 是对应的原生幂等编号。回传与核销使用所属模式响应中的原编号，不用自行重算或混用。Codex Desktop 保留结构化消息里的该编号。历史消息若额外带有单个 UUID 投递尾段，恢复仍须匹配原结构化编号、完整正文哈希、目标 owner 和认证代次；正文改动、引用文本及重复尾段不能成为回执。
 
 验收记录分别确认：Rabi 受理、Grok owner 受理、Bot 完成回答、Rabi 回传受理和目标收到结果。单次 HTTP 成功只证明对应一段。
 

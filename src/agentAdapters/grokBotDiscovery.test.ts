@@ -28,6 +28,20 @@ test("status is local auth only and never performs a roster/session scan", async
     request: async () => { throw new Error("status must not call network"); } });
   assert.equal((await getGrokBotStatus({ client })).status, "signed-in");
 });
+
+test("room discovery returns native kind, members and canonical main without private session lookup", async () => {
+  const client = new GrokBotClient({ readProfile: async () => ({ signedIn: true, accountScope: "fixture", accessToken: "fixture" }),
+    request: async input => {
+      assert.equal(String(input).split("/").at(-1), "ListGrokBotAgents");
+      return Response.json({ agents: [{ agentId: "room", name: "Room", kind: "ROOM", memberAgentIds: ["member"] }] });
+    } });
+  const result = await discoverGrokBotAgent({ client });
+  assert.equal(result.healthy, true);
+  assert.equal(result.sessions[0].kind, "ROOM");
+  assert.equal(result.sessions[0].nativeAgentId, "room");
+  assert.deepEqual(result.sessions[0].memberAgentIds, ["member"]);
+  assert.deepEqual(decodeGrokBotSessionId(result.sessions[0].id), { agentId: "room", sessionId: "", defaultMain: true });
+});
 test("discovery errors are actionable and cannot expose arbitrary credential text", async () => {
   const client = new GrokBotClient({ readProfile: async () => { throw new Error("private-token-should-not-escape"); } });
   const result = await discoverGrokBotAgent({ client });
