@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { MessageAttachmentRecord } from "./history.js";
-import { agentReplyDataDirsForRoute, agentReplyPersonaDeviceId, type AgentReplyOptions, type AgentReplyRouteProfile, type AgentReplyRuntime } from "./outbox.js";
+import { agentReplyDataDirsForRoute, agentReplyPersonaDeviceId, conversationDataDirForRoute, type AgentReplyOptions, type AgentReplyRouteProfile, type AgentReplyRuntime } from "./outbox.js";
+import { conversationMessageWindow } from "./messageContextStore.js";
 import { atomicWriteFileSync, withFileLockSync } from "./shared/filePersistence.js";
 
 export type ReplyImageDescriptionSend = {
@@ -55,6 +56,16 @@ export type ReviewedReplySourceEvidence = {
   reviewedAttachmentIds: string[];
 };
 
+/** Current formal QQ evidence is deliberately separate from human-reviewed source evidence. */
+export type PlatformReplySourceEvidence = {
+  routeId: string;
+  sourceMessageId: string;
+  groupId: string;
+  instanceId: string;
+  record: Record<string, unknown>;
+  dataDirs: string[];
+};
+
 type ResolvedRoute = {
   runtime: AgentReplyRuntime;
   profile?: AgentReplyRouteProfile;
@@ -102,7 +113,7 @@ function readJsonl(filePath: string): Record<string, unknown>[] {
     });
 }
 
-function locateMessage(
+function locateLegacyMessage(
   options: AgentReplyOptions,
   routeId: string,
   messageId: string,
@@ -122,6 +133,65 @@ function locateMessage(
     .map((record, index) => ({ record, index, time: Number(record.time ?? 0) })));
   const found = candidates.sort((left, right) => right.time - left.time || right.index - left.index)[0];
   return found ? { record: found.record, dataDirs } : undefined;
+}
+
+function locateManagedOutboundMessage(
+  options: AgentReplyOptions,
+  routeId: string,
+  messageId: string,
+  groupId: string,
+  instanceId: string
+): LocatedMessage | undefined {
+  const route = resolveRoute(options, routeId);
+  if (!route) throw new Error(`Cannot resolve the exact enabled routeId ${routeId} while checking the referenced QQ message.`);
+  const dataDir = conversationDataDirForRoute(options, route);
+  const routeProfileId = route.profile?.id ?? route.runtime.id;
+  const result = conversationMessageWindow(dataDir, {
+    limit: 2,
+    matches: record => record.direction === "outbound"
+      && record.adapter === "napcat"
+      && record.transport === "napcat"
+      && record.channel === "napcat"
+      && record.status === "sent"
+      && text(record.gatewayId) === route.runtime.id
+      && text(record.routeProfileId) === routeProfileId
+      && text(record.instanceId) === instanceId
+      && text(record.target) === groupId
+      && text(record.messageId) === messageId
+  });
+  if (result.entries.length > 1) {
+    throw new Error(`Referenced QQ message ${messageId} has multiple exact sent records in the selected Route conversation history.`);
+  }
+  return result.entries[0] ? { record: result.entries[0] as Record<string, unknown>, dataDirs: [dataDir] } : undefined;
+}
+
+function locatePlatformMessage(
+  evidence: PlatformReplySourceEvidence,
+  options: AgentReplyOptions,
+  routeId: string,
+  messageId: string,
+  groupId: string,
+  instanceId: string
+): LocatedMessage {
+  if (text(evidence.routeId) !== routeId
+    || text(evidence.sourceMessageId) !== messageId
+    || text(evidence.groupId) !== groupId
+    || text(evidence.instanceId) !== instanceId) {
+    throw new Error("Current QQ source evidence does not match the selected Route, message, group, or instance.");
+  }
+  if (text(evidence.record.messageId ?? evidence.record.message_id) !== messageId
+    || text(evidence.record.groupId ?? evidence.record.group_id) !== groupId
+    || text(evidence.record.instanceId) !== instanceId) {
+    throw new Error("Current QQ source record does not match the quoted message target.");
+  }
+  const route = resolveRoute(options, routeId);
+  if (!route) throw new Error(`Cannot resolve the exact enabled routeId ${routeId} while checking current QQ evidence.`);
+  const currentAuditDirectories = new Set(agentReplyDataDirsForRoute(options, route).map(directory => path.resolve(directory).toLowerCase()));
+  if (!Array.isArray(evidence.dataDirs) || evidence.dataDirs.length === 0
+    || evidence.dataDirs.some(directory => !currentAuditDirectories.has(path.resolve(directory).toLowerCase()))) {
+    throw new Error("Current QQ source record must use the selected Route's managed audit directories.");
+  }
+  return { record: evidence.record, dataDirs: evidence.dataDirs };
 }
 
 function locateReviewedMessage(
@@ -221,7 +291,8 @@ function concreteDescription(value: string, index: number): string {
 export function prepareReplyImageDescriptions(
   input: ReplyImageDescriptionSend,
   options: AgentReplyOptions,
-  reviewedSource?: ReviewedReplySourceEvidence
+  reviewedSource?: ReviewedReplySourceEvidence,
+  platformSource?: PlatformReplySourceEvidence
 ): ReplyImageDescriptionPlan | undefined {
   if (input.channel !== "napcat" || text(input.target.target) !== "group") return undefined;
   const replyToMessageId = text(input.target.replyToMessageId);
@@ -244,9 +315,21 @@ export function prepareReplyImageDescriptions(
       }
     }
   }
-  const located = reviewedSource
-    ? locateReviewedMessage(reviewedSource, input.routeId, replyToMessageId, groupId, instanceId)
-    : locateMessage(options, input.routeId, replyToMessageId, groupId, instanceId);
+  let located: LocatedMessage | undefined;
+  if (reviewedSource) {
+    located = locateReviewedMessage(reviewedSource, input.routeId, replyToMessageId, groupId, instanceId);
+  } else {
+    located = locateLegacyMessage(options, input.routeId, replyToMessageId, groupId, instanceId);
+    if (!located) {
+      const managedOutbound = locateManagedOutboundMessage(options, input.routeId, replyToMessageId, groupId, instanceId);
+      if (managedOutbound) {
+        if (!platformSource) {
+          throw new Error(`Referenced outbound QQ message ${replyToMessageId} requires current platform evidence before it can be quoted.`);
+        }
+        located = locatePlatformMessage(platformSource, options, input.routeId, replyToMessageId, groupId, instanceId);
+      }
+    }
+  }
   if (!located) {
     throw new Error(
       `Referenced QQ message ${replyToMessageId} was not found in the selected Route history. `

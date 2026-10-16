@@ -6,6 +6,16 @@ English | <a href="./rabi-agent-interfaces.md">简体中文</a>
 
 # Rabi Interfaces for Handlers
 
+## Address-free local discovery
+
+Agents do not need to enter a Manager address. Run `node scripts/resolve-manager.mjs` from the source checkout to obtain `managerBaseUrl`, `applicationGenerationId` and `managerInstanceId`. In PowerShell, use `$rabi = node scripts/resolve-manager.mjs | ConvertFrom-Json` for the current request batch.
+
+On successful startup and lifecycle transitions, Windows Host atomically publishes `manager-endpoint.json` in its state directory (default `%LOCALAPPDATA%\Programs\RabiRoute\manager-endpoint.json`). This public identity hint contains no credentials. Stopping or recovering clears the endpoint; a replacement generation publishes its new identity. `RABIROUTE_MANAGER_ENDPOINT_FILE` can override the cache path. No environment configuration is required: an already running Agent reads the current generation on its next resolution instead of inheriting an old address.
+
+The resolver verifies cached identity and business readiness against `/meta`. A missing or stale cache falls back to one Host status query, waits for process exit, captures stdout and validates `/meta` again. This also works with older Hosts that do not publish the cache. Calling the GUI executable directly with PowerShell `& RabiRouteHost.exe --command status --json` may return empty output without waiting; empty output is not proof that Host is offline. Explicit `RABIROUTE_MANAGER_URL` / `GATEWAY_MANAGER_URL` overrides remain supported and still require live verification. Enrolled remote Agents continue using their existing transport rather than a local cache.
+
+Resolve again for each request batch. Existing post-write identity checks, idempotency and uncertain-result reconciliation remain required. Publishing the cache requires an updated Host release; a Manager source hot patch cannot replace the running .NET Host.
+
 Once a connection is authenticated, use its provided APIs without another feature or persona grant. Sends still follow source identity, target, message format and idempotency contracts. See [Connections and API access](connection-access_en.md).
 
 Local Agents, authenticated RabiLink connections and enabled remote Agents share configuration API access. `POST/DELETE /api/agent-adapters/dsh/connection` accepts trusted local Agent requests without a browser `Origin`; cross-site browser requests, forged connection markers and revoked connections are still rejected. Configuration revisions, parameter validation and authoritative readback remain required.

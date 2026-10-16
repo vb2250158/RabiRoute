@@ -6,6 +6,16 @@
 
 # Agent 需要关注的 Rabi 接口
 
+## 本机自动发现地址
+
+Agent 无需填写 Manager 地址。在源码目录运行 `node scripts/resolve-manager.mjs`，返回 `managerBaseUrl`、`applicationGenerationId`、`managerInstanceId`；PowerShell 可用 `$rabi = node scripts/resolve-manager.mjs | ConvertFrom-Json` 保存本轮连接信息。
+
+Windows Host 在启动成功和生命周期变化时原子生成状态目录中的 `manager-endpoint.json`（默认 `%LOCALAPPDATA%\Programs\RabiRoute\manager-endpoint.json`）。缓存只包含公开连接身份，不含凭据；停止、恢复或切代时清除旧地址或发布新身份。缓存文件路径可通过 `RABIROUTE_MANAGER_ENDPOINT_FILE` 指定。默认无需配置环境变量，已运行的 Agent 每次重新解析即可读取新代次，不依赖进程启动时继承的旧地址。
+
+解析器先读取缓存并请求 `/meta` 核对完整身份和业务就绪；缓存缺失或过期时只向 Host 查询一次，等待进程退出并捕获完整 stdout，再验证 `/meta`。旧版安装尚不生成缓存时同样可用。PowerShell 直接 `& RabiRouteHost.exe --command status --json` 可能因 GUI 程序未被等待而得到空输出，空输出不能解释为 Host 离线。显式 `RABIROUTE_MANAGER_URL` / `GATEWAY_MANAGER_URL` 仍作为覆盖配置，并验证在线身份。远端 Agent 继续使用已接入的通用传输，不读取本机缓存。
+
+解析结果只用于当前请求批次；写入后的身份复核、幂等与不确定结果处理继续遵守下文合同。Host 缓存改动须随 Host 版本发布，Manager 源码热补丁无法替换运行中的 .NET Host。
+
 完成连接鉴权后即可使用已提供的接口，不再增加逐功能或逐人格授权。发送仍须遵守来源身份、目标、消息格式和幂等回执合同。详见[连接与接口使用](connection-access.md)。
 
 本机 Agent、已鉴权 RabiLink 和已启用远端 Agent 共用配置接口权限。`POST/DELETE /api/agent-adapters/dsh/connection` 接受可信本机 Agent 不带浏览器 `Origin` 的请求；浏览器跨站请求、伪造连接标记和已撤销连接仍被拒绝。配置版本、参数和写后回读要求保持有效。

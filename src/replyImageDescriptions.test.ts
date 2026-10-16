@@ -6,9 +6,11 @@ import test from "node:test";
 import {
   archiveReplyImageDescriptions,
   prepareReplyImageDescriptions,
+  type PlatformReplySourceEvidence,
   type ReviewedReplySourceEvidence,
   type ReplyImageDescriptionSend
 } from "./replyImageDescriptions.js";
+import { appendMessageContextToDir, type MessageContextRecord } from "./messageContextStore.js";
 import type { AgentReplyOptions } from "./outbox.js";
 
 function fixture(t: test.TestContext, options: { unavailable?: boolean; imageCount?: number } = {}) {
@@ -70,6 +72,27 @@ function send(replyImageDescriptions?: string[]): ReplyImageDescriptionSend {
   };
 }
 
+function appendManagedOutbound(dataDir: string, overrides: Partial<MessageContextRecord> = {}): void {
+  appendMessageContextToDir(dataDir, {
+    time: 2,
+    direction: "outbound",
+    adapter: "napcat",
+    transport: "napcat",
+    gatewayId: "route-main",
+    instanceId: "qq-main",
+    channel: "napcat",
+    conversationKey: "napcat:gateway:route-main:instance:qq-main:group:456",
+    kind: "reply_sent",
+    status: "sent",
+    sender: "Agent",
+    target: "456",
+    text: "managed outbound message",
+    messageId: "source-1",
+    routeProfileId: "route-main",
+    ...overrides
+  });
+}
+
 test("a quoted image message requires one concrete description per image", (t) => {
   const { replyOptions } = fixture(t);
   assert.throws(
@@ -102,6 +125,22 @@ test("an unknown quoted message fails closed because its image count cannot be c
     () => prepareReplyImageDescriptions(input, replyOptions),
     /referenced QQ message missing-source was not found.*cannot verify whether it contains images/i
   );
+});
+
+test("a current text-only platform message plus its exact sent Route record is a valid outbound quote source", (t) => {
+  const { routeDataDir, replyOptions } = fixture(t, { imageCount: 0 });
+  fs.rmSync(path.join(routeDataDir, "group-messages.jsonl"));
+  appendManagedOutbound(routeDataDir);
+  const platformSource: PlatformReplySourceEvidence = {
+    routeId: "route-main",
+    sourceMessageId: "source-1",
+    groupId: "456",
+    instanceId: "qq-main",
+    record: { messageId: "source-1", groupId: "456", instanceId: "qq-main", segments: [] },
+    dataDirs: [routeDataDir]
+  };
+
+  assert.equal(prepareReplyImageDescriptions(send([]), replyOptions, undefined, platformSource), undefined);
 });
 
 test("successful image review creates one same-name Markdown description beside each image", (t) => {

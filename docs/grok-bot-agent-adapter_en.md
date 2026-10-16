@@ -42,7 +42,11 @@ GET <managerBaseUrl>/api/scan/agents?agentAdapter=grokBot&grokBotAgentId=<URL-en
 
 Select the original session from `agents.grokBot.sessions` and retain `id` and `name`. Continue with `sessionPage.hasMore/nextOffset` and the `grokBotOffset` parameter, not `cursor`. Discovery creates no Bot, session or routine. If the list is empty, check the original account and existing sessions in Grok Bot.
 
-An ordinary session's canonical ID is `grokBot:` followed by `base64url(JSON([ownerAgentId,nativeSessionId]))`. The native default main session uses `base64url(JSON([ownerAgentId,{"defaultMain":true}]))` with the same `grokBot:` prefix. An empty underlying session ID is used only with an explicit default-main marker and verification against the real owner roster and chat history; public `sourceThreadId` and `messageSource.sessionId` must always contain the complete, nonempty ID. Copy the value returned by discovery instead of encoding, constructing or guessing it. Route `grokBotAgentId` must match the owner inside that ID.
+An ordinary private session's canonical ID is `grokBot:` followed by `base64url(JSON([ownerAgentId,nativeSessionId]))`. The native default main session uses `base64url(JSON([ownerAgentId,{"defaultMain":true}]))` with the same `grokBot:` prefix. Default-main addresses require real roster verification. Temporal private sessions also require chat-history verification; ROOM addresses are established directly by the roster, not by a private session. Public `sourceThreadId` and `messageSource.sessionId` must always contain the complete, nonempty ID. Copy the value returned by discovery instead of encoding, constructing or guessing it. Route `grokBotAgentId` must match the owner inside that ID.
+
+A saved group identity address may instead contain `base64url(JSON([senderAgentId,groupId]))` with the same prefix and no `defaultMain` marker. This is a **roster-backed group address**, not a private session returned by `listSessions(sender)`. With `deliveryType=group`, the native roster must prove that `groupId` is a ROOM, that `senderAgentId` is a real AGENT and room member, and that it matches the explicit `fromAgentId`. Delivery uses `SendGrokBotAgentMessage` with native `toAgentId=groupId` and `fromAgentId=senderAgentId`. Journal receipts retain the original sender/group tuple; reconciliation maps it to the room's native main address and queries the same messageId. Failures never send to the sender's private chat or rewrite the binding to a default session.
+
+List requests may include the saved `threadId`. After roster membership verification, the room row retains that complete ID. Its `nativeAgentId/nativeAgentName` still describe the room's real ID/name, and `kind/memberAgentIds` retain the native values. Listing must not rewrite the address into a private or default-main session. The discovered room-owner/defaultMain form remains compatible. Protocol unit tests and real group-delivery acceptance are recorded separately.
 
 Route configuration fragment:
 
@@ -109,11 +113,29 @@ For a formal Bot reply, choose `responsePolicy=required` and supply `responseIns
 
 ## Session reuse and unknown outcomes
 
+### Private chats, groups and sender identities in rule actions
+
+Status: source implementation. The installed application needs a compatible hot patch and runtime acceptance first. Do not bypass compatibility checks when the deployed baseline lacks support. If the user explicitly requests configuration-file migration first, report file readback and runtime activation separately.
+
+An identity-based group address may also use `grokBot:` + `base64url(JSON([senderBotId,groupId]))`. Validation uses the native group roster and membership, not a claimed private session of that Bot. Sending uses the group as `toAgentId` and the Bot as `fromAgentId`; reconciliation addresses the same group. The UI preserves the complete Manager-verified address rather than deriving it from display names.
+
+Choose a custom target, then configure: Grok Bot Agent → conversation type (private / group) → destination session or group → send mode (direct / specified identity) → identity. Groups and identities come from the current account's native roster; names do not replace IDs.
+
+The common service delivery bridge must also verify the group address and membership and freeze the send mode and identity in each delivery's execution options and hash. Discovery or a standalone send helper is not sufficient. If a valid native group address fails with `GROK_BOT_SESSION_NOT_FOUND` at the public endpoint, check whether the bridge still treats the group ID as a private session belonging to the sender Bot. Do not fall back to the default private chat or compensate with a scheduled Bot relay.
+
+`action.target` retains `kind=session`, `agentTargetId`, `agentAdapter=grokBot`, the complete `sessionId`, `sessionName` and an empty `workspace`. It adds `deliveryType=private|group` and `sendMode=direct|identity`. Identity mode also saves `senderAgentId` and `senderAgentName`; direct mode retains neither. Recheck the identity after changing the destination or type.
+
+This explicit mode sends the rendered rule template as the message body, without persona prompts or control blocks. For example, `{sender}({userId}) : {message}` produces `Example(123) : hello`. Identity mode uses `SendGrokBotAgentMessage` to address the group directly, not the Bot's default private chat. Invalid destinations, identities and uncertain results never fall back to default sessions.
+
+`POST /api/agent/threads` requests for `send` / `reconcile_delivery` carry `grokBotDelivery: {deliveryType, sendMode, senderAgentId?}`, the original `threadId` and a stable `deliveryId`. Reconcile uncertain outcomes without replacing the key. Verify configuration persistence, service acceptance and actual target-group display separately. Real bidirectional delivery remains experimental until accepted.
+
+Reverse messages use the existing NapCat channel with the QQ group destination. These options do not create a Grok inbound subscription. Verify the Grok source, group filter, QQ target and loop prevention separately; private-chat relay instructions are not direct delivery.
+
 Reuse a valid session ID directly. Record session creation, message acceptance and answer completion separately. A first-turn timeout does not justify a replacement session. Repeated requests retain the original delivery ID and full payload; a changed payload with the same ID must be rejected.
 
 HTTP 202 or `delivery_unconfirmed` retains the original request. Use `reconcile_delivery` to inspect its evidence on the same owner instead of starting another Bot turn. If evidence cannot be read, keep the outcome unconfirmed.
 
-The caller's `deliveryId` is an idempotency key. Manager derives an `agent-<64 lowercase hexadecimal digits>` delivery identity scoped to the actual source. Replies and reconciliation retain the identity returned in the response rather than recomputing it. Codex Desktop preserves that identity in the structured envelope. If a historical message has one additional UUID transport suffix, recovery still requires its original structured identity, exact prompt hash, target owner and authorization incarnation. Altered bodies, quotations and repeated suffixes cannot establish a receipt.
+For ordinary Agent endpoint delivery, the caller's `deliveryId` is an idempotency key and Manager derives an `agent-<64 lowercase hexadecimal digits>` identity scoped to the actual source. Explicit native delivery retains the caller's key in `delivery.deliveryId`, with `messageId` identifying the native operation. Replies and reconciliation retain the response identity for their mode rather than recomputing or mixing identities. Codex Desktop preserves that identity in the structured envelope. If a historical message has one additional UUID transport suffix, recovery still requires its original structured identity, exact prompt hash, target owner and authorization incarnation. Altered bodies, quotations and repeated suffixes cannot establish a receipt.
 
 Acceptance records separately establish Rabi acceptance, Grok owner acceptance, Bot answer completion, Rabi reply acceptance and receipt at the destination. One HTTP success proves only its own segment.
 

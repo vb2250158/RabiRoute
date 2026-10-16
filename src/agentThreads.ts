@@ -95,6 +95,7 @@ export type AgentThreadRequest = {
   deliveryId?: string;
   title?: string;
   prompt?: string;
+  grokBotDelivery?: { deliveryType: "private" | "group"; sendMode: "direct" | "identity"; senderAgentId?: string };
   cwd?: string;
   createIfMissing?: boolean;
   lookupMode?: "complete" | "state_db";

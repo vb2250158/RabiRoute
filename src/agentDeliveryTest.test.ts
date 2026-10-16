@@ -15,6 +15,7 @@ test("agent delivery test envelope carries a stable receipt marker", () => {
     agentAdapterType: "codex"
   });
 
+  assert.equal(envelope.deliveryId, deliveryId);
   assert.equal(envelope.messageSource.type, "system");
   assert.match(envelope.messageContent, /通道投递测试/);
   assert.match(envelope.messageContent, new RegExp(`deliveryId: ${deliveryId}`));

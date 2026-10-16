@@ -23,6 +23,7 @@ export function buildAgentDeliveryTestEnvelope(options: {
 }): RabiDeliveryEnvelope {
   const routeName = options.routeName?.trim() || options.gatewayId;
   return {
+    deliveryId: options.deliveryId,
     messageSource: {
       type: "system",
       eventType: "agent_delivery_test",

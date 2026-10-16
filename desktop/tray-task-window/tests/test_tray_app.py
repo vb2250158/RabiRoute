@@ -19,9 +19,9 @@ from PySide6.QtNetwork import QLocalServer
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from rabiroute_tray.desktop_refresh import DesktopRefreshService
-from rabiroute_tray.manager_client import ManagerSnapshot, ManualTriggerResult, PlanFeedbackSubmitResult, RolePanelSendResult
+from rabiroute_tray.manager_client import ManagerSnapshot, ManualTriggerResult, PlanFeedbackSubmitResult
 from rabiroute_tray.tray_app import (
-    MAX_DIRECT_PERSONA_CHATS,
+    MAX_DIRECT_PERSONAS,
     _SnapshotRefreshGate,
     _connect_host_lifecycle,
     _persona_menu_signature,
@@ -33,13 +33,12 @@ from rabiroute_tray.tray_app import (
     _show_panel_for_user_action,
     _send_plan_feedback,
     _start_desktop_refresh,
-    _rebuild_persona_chat_menu,
+    _rebuild_persona_menu,
     _retain_last_gateway_snapshot,
     _start_manager_snapshot,
     _start_application_quit,
     _start_manual_trigger,
     _start_plan_feedback_send,
-    _start_role_panel_send,
     _status_text,
     _show_tray_context_menu,
     _warm_menu_layout,
@@ -48,10 +47,6 @@ from rabiroute_tray.tray_app import (
 
 
 class _SlowManager:
-    def send_role_panel_message(self, gateway_id: str, text: str, attachments: list[dict]) -> RolePanelSendResult:
-        time.sleep(0.3)
-        return RolePanelSendResult(ok=True)
-
     def snapshot(self) -> ManagerSnapshot:
         time.sleep(0.15)
         return ManagerSnapshot(True, "http://127.0.0.1:8790", {}, [])
@@ -90,9 +85,6 @@ class _SlowLifecycle:
 class _FailingManager:
     manager_url = "http://127.0.0.1:8790"
 
-    def send_role_panel_message(self, gateway_id: str, text: str, attachments: list[dict]) -> RolePanelSendResult:
-        raise RuntimeError("send exploded")
-
     def snapshot(self) -> ManagerSnapshot:
         raise RuntimeError("snapshot exploded")
 
@@ -101,24 +93,6 @@ class TrayAppAsyncSendTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
-
-    def test_role_panel_send_returns_without_blocking_qt_thread(self) -> None:
-        results: list[RolePanelSendResult] = []
-        started_at = time.perf_counter()
-        task = _start_role_panel_send(
-            _SlowManager(),  # type: ignore[arg-type]
-            "route-1",
-            "hello",
-            [],
-            lambda _task, result: results.append(result),
-        )
-        elapsed = time.perf_counter() - started_at
-        self.assertLess(elapsed, 0.15)
-        deadline = time.perf_counter() + 1.0
-        while not results and time.perf_counter() < deadline:
-            self.app.processEvents()
-            time.sleep(0.01)
-        self.assertEqual(results, [RolePanelSendResult(ok=True)])
 
     def test_manager_snapshot_returns_without_blocking_qt_thread(self) -> None:
         results: list[ManagerSnapshot] = []
@@ -318,7 +292,6 @@ class TrayAppAsyncSendTest(unittest.TestCase):
         )
         manager.role_plans = lambda _role_id: (time.sleep(0.15), [])[1]
         manager.role_memory = lambda _role_id: (time.sleep(0.15), {})[1]
-        manager.role_panel_messages_snapshot = lambda _role_id: (time.sleep(0.15), [])[1]
         manager.role_avatar = lambda _role_id: (time.sleep(0.15), None)[1]
         results = []
         callback_threads: list[QThread] = []
@@ -348,17 +321,9 @@ class TrayAppAsyncSendTest(unittest.TestCase):
 
     def test_background_failures_return_terminal_results_instead_of_stranding_tasks(self) -> None:
         snapshots: list[ManagerSnapshot] = []
-        sends: list[RolePanelSendResult] = []
         _start_manager_snapshot(
             _FailingManager(),  # type: ignore[arg-type]
             lambda _task, snapshot: snapshots.append(snapshot),
-        )
-        _start_role_panel_send(
-            _FailingManager(),  # type: ignore[arg-type]
-            "route-1",
-            "hello",
-            [],
-            lambda _task, result: sends.append(result),
         )
         self.assertTrue(_wait_for_background_tasks())
         self.app.processEvents()
@@ -366,9 +331,6 @@ class TrayAppAsyncSendTest(unittest.TestCase):
         self.assertEqual(len(snapshots), 1)
         self.assertFalse(snapshots[0].connected)
         self.assertIn("snapshot exploded", snapshots[0].error)
-        self.assertEqual(len(sends), 1)
-        self.assertFalse(sends[0].ok)
-        self.assertIn("send exploded", sends[0].message)
 
     def test_snapshot_task_signals_outlive_the_qapplication_parent(self) -> None:
         task = _start_manager_snapshot(_SlowManager(), lambda _task, _snapshot: None)  # type: ignore[arg-type]
@@ -467,7 +429,7 @@ class TrayAppAsyncSendTest(unittest.TestCase):
 
         self.assertEqual(retained, disconnected)
 
-    def test_persona_chats_are_direct_and_overflow_into_more_menu(self) -> None:
+    def test_persona_configuration_entries_are_direct_and_overflow_into_more_menu(self) -> None:
         menu = QMenu()
         more_menu = QMenu("更多人格")
         insert_before = menu.addSeparator()
@@ -480,11 +442,11 @@ class TrayAppAsyncSendTest(unittest.TestCase):
                 "enabled": True,
                 "running": index % 2 == 0,
             }
-            for index in range(MAX_DIRECT_PERSONA_CHATS + 2)
+            for index in range(MAX_DIRECT_PERSONAS + 2)
         ]
         snapshot = ManagerSnapshot(True, "http://127.0.0.1:8790", {}, gateways)
 
-        _rebuild_persona_chat_menu(
+        _rebuild_persona_menu(
             menu,
             insert_before,
             more_menu,
@@ -494,8 +456,8 @@ class TrayAppAsyncSendTest(unittest.TestCase):
         )
 
         direct_actions = [action for action in menu.actions() if not action.isSeparator() and action.menu() is None]
-        self.assertEqual(len(direct_actions), MAX_DIRECT_PERSONA_CHATS)
-        self.assertTrue(direct_actions[0].text().startswith("继续聊天 · 人格 3"))
+        self.assertEqual(len(direct_actions), MAX_DIRECT_PERSONAS)
+        self.assertTrue(direct_actions[0].text().startswith("人格配置 · 人格 3"))
         self.assertEqual(len(more_menu.actions()), 1)
         more_menu.aboutToShow.emit()
         self.assertEqual(len(more_menu.actions()), 2)
@@ -608,13 +570,13 @@ class TrayAppAsyncSendTest(unittest.TestCase):
         self.assertIn("hide", calls)
         self.assertEqual(calls[-2:], [("opacity", 0.75), ("attribute", False)])
 
-    def test_persona_chat_menu_explains_manager_offline_state(self) -> None:
+    def test_persona_menu_explains_manager_offline_state(self) -> None:
         menu = QMenu()
         more_menu = QMenu("更多人格")
         insert_before = menu.addSeparator()
         snapshot = ManagerSnapshot(False, "http://127.0.0.1:8790", {}, [], "offline")
 
-        _rebuild_persona_chat_menu(menu, insert_before, more_menu, snapshot, "", lambda _gateway: None)
+        _rebuild_persona_menu(menu, insert_before, more_menu, snapshot, "", lambda _gateway: None)
 
         offline_action = menu.actions()[0]
         self.assertFalse(offline_action.isEnabled())

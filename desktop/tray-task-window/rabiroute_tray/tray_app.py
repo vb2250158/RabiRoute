@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import quote
+
 import json
 import os
 import sys
@@ -32,7 +34,6 @@ from .manager_client import (
     ManagerSnapshot,
     ManualTriggerResult,
     PlanFeedbackSubmitResult,
-    RolePanelSendResult,
 )
 from .plugin_catalog import (
     DesktopCommandContext,
@@ -60,7 +61,7 @@ from .tray_menu_controller import TrayMenuController, show_tray_menu_for_activat
 from .windows_app_identity import apply_qt_app_metadata
 
 
-MAX_DIRECT_PERSONA_CHATS = 5
+MAX_DIRECT_PERSONAS = 5
 FIXED_TRAY_COMMAND_HANDLER_IDS = frozenset({"desktop.open-webgui"})
 _ROUTE_STATE_ICONS: dict[str, QIcon] = {}
 
@@ -85,22 +86,6 @@ class _SnapshotRefreshGate:
         manual_refresh_queued = self._manual_refresh_queued
         self._manual_refresh_queued = False
         return manual_refresh_queued
-
-
-def _start_role_panel_send(
-    manager: ManagerClient,
-    gateway_id: str,
-    text: str,
-    attachments: list[dict],
-    completed_callback,
-    started_callback=None,
-) -> QtAsyncTask:
-    return start_qt_task(
-        lambda: manager.send_role_panel_message(gateway_id, text, attachments),
-        completed_callback,
-        on_error=lambda error: RolePanelSendResult(ok=False, message=f"unexpected send failure: {error}"),
-        started_callback=started_callback,
-    )
 
 
 def _start_manager_snapshot(
@@ -196,12 +181,12 @@ def _start_desktop_refresh(
     refresh_service: DesktopRefreshService,
     previous_manager: ManagerSnapshot,
     selected_gateway_id: str,
-    include_role_messages: bool,
+    include_role_details: bool,
     completed_callback,
     started_callback=None,
 ) -> QtAsyncTask:
     return start_qt_task(
-        lambda: refresh_service.load(previous_manager, selected_gateway_id, include_role_messages),
+        lambda: refresh_service.load(previous_manager, selected_gateway_id, include_role_details),
         completed_callback,
         on_error=refresh_service.unexpected_failure,
         started_callback=started_callback,
@@ -245,10 +230,11 @@ def run(
     tray.setToolTip("RabiRoute / Rabi 桌面分诊台")
 
     refresh_action = QAction("刷新")
+    task_action = QAction("任务与记忆")
     webgui_action = QAction("打开 RabiRoute WebGUI")
     desktop_pet_menu = QMenu("虚拟形象") if desktop_pet_enabled else None
     status_action = QAction("状态：加载中")
-    persona_heading_action = QAction("人格聊天")
+    persona_heading_action = QAction("人格配置")
     more_personas_menu = QMenu("更多人格")
     quit_action = QAction(lifecycle.exit_label)
     status_action.setEnabled(False)
@@ -266,6 +252,7 @@ def run(
     persona_actions_end = menu.addSeparator()
     if desktop_pet_menu is not None:
         menu.addMenu(desktop_pet_menu)
+    menu.addAction(task_action)
     menu.addAction(webgui_action)
     menu.addAction(refresh_action)
     menu.addSeparator()
@@ -292,7 +279,6 @@ def run(
         "manager": initial_manager,
         "plans": initial_plans,
         "context": initial_context,
-        "role_messages": [],
         "loaded_gateway_id": selected_gateway_id,
         "theme": "system",
         "resolved_theme": "light",
@@ -301,7 +287,6 @@ def run(
     }
     theme_refresh_task: QtAsyncTask | None = None
     plugin_catalog_task: QtAsyncTask | None = None
-    pending_role_panel_sends: set[QtAsyncTask] = set()
     pending_plan_feedback_sends: set[QtAsyncTask] = set()
     refresh_gate = _SnapshotRefreshGate()
     lifecycle.observe(initial_manager)
@@ -367,17 +352,6 @@ def run(
         )
         panel.refresh_button.clicked.connect(refresh)
         panel.route_selected.connect(lambda item_id: open_panel(_gateway_by_id(state["manager"].gateways, item_id)))
-        panel.send_message_requested.connect(lambda text, attachments: _send_role_panel_message(
-            manager,
-            selected_gateway_id,
-            str(text),
-            attachments if isinstance(attachments, list) else [],
-            panel,
-            tray,
-            tray_available,
-            refresh,
-            pending_role_panel_sends,
-        ))
         panel.plan_feedback_requested.connect(lambda plan_id, step_id, feedback_id, text: _send_plan_feedback(
             manager,
             selected_gateway_id,
@@ -412,7 +386,6 @@ def run(
             role_id = role_id_from_gateway(gateway, "未指定人格")
             if state["loaded_gateway_id"] != active_gateway_id:
                 state["plans"], state["context"] = empty_desktop_read_model(state_root, gateway, role_id)
-                state["role_messages"] = []
                 state["loaded_gateway_id"] = active_gateway_id
             active_panel.set_actions(
                 _panel_actions(
@@ -434,7 +407,6 @@ def run(
                 gateway,
                 state["plans"],
                 state["context"],
-                state["role_messages"],
             )
 
         _present_panel_immediately(active_panel, render_selected_gateway)
@@ -443,30 +415,22 @@ def run(
             0,
             lambda: _run_when_menu_idle(
                 menu,
-                lambda: _rebuild_persona_chat_menu(
+                lambda: _rebuild_persona_menu(
                     menu,
                     persona_actions_end,
                     more_personas_menu,
                     manager_snapshot,
                     active_gateway_id,
-                    open_chat,
+                    open_persona,
                 ),
             ),
         )
         QTimer.singleShot(0, lambda: refresh(auto=False))
 
-    def open_chat(gateway: dict) -> None:
-        try:
-            open_panel(gateway, "chat")
-        except Exception as error:
-            _show_message(
-                tray,
-                tray_available,
-                "RabiRoute / 人格聊天",
-                f"无法打开 {route_menu_label(gateway)} 的聊天窗口：{error}",
-                QSystemTrayIcon.Warning,
-                5000,
-            )
+    def open_persona(gateway: dict) -> None:
+        gateway_id = str(gateway.get("id") or "")
+        if state["manager"].connected and gateway_id:
+            desktop.open_url(state["manager"].manager_url.rstrip("/") + "/#/routes/" + quote(gateway_id, safe="") + "/persona")
 
     def open_desktop_pet_persona(persona_id: str) -> None:
         gateway = next(
@@ -483,7 +447,7 @@ def run(
                 4000,
             )
             return
-        open_chat(gateway)
+        open_persona(gateway)
 
     if desktop_pet_menu is not None:
         feature_context = DesktopFeatureContext(
@@ -499,7 +463,6 @@ def run(
         previous_manager = state["manager"]
         previous_plans = state["plans"]
         previous_context = state["context"]
-        previous_role_messages = state["role_messages"]
         state["manager"] = result.manager
         lifecycle.observe(state["manager"])
         selected_gateway = result.selected_gateway
@@ -510,14 +473,11 @@ def run(
         if selected_gateway is not None and result.plan_snapshot is not None and result.context_snapshot is not None:
             state["loaded_gateway_id"] = str(selected_gateway.get("id") or "")
         panel_active = _panel_is_active(panel)
-        if result.role_messages is not None:
-            state["role_messages"] = result.role_messages
         if panel_active and selected_gateway is not None and not (auto and panel.is_user_interacting()):
             panel_changed = (
                 _panel_manager_signature(previous_manager) != _panel_manager_signature(state["manager"])
                 or previous_plans != state["plans"]
                 or previous_context != state["context"]
-                or previous_role_messages != state["role_messages"]
             )
             if panel_changed:
                 panel.set_actions(_panel_actions(
@@ -538,7 +498,6 @@ def run(
                     selected_gateway,
                     state["plans"],
                     state["context"],
-                    state["role_messages"],
                 )
         tray.setToolTip(_tooltip(state["manager"], state["plans"]))
         status_action.setText(_status_text(state["manager"]))
@@ -546,13 +505,13 @@ def run(
             previous_manager.connected != state["manager"].connected
             or _persona_menu_signature(previous_manager) != _persona_menu_signature(state["manager"])
         ):
-            _rebuild_persona_chat_menu(
+            _rebuild_persona_menu(
                 menu,
                 persona_actions_end,
                 more_personas_menu,
                 state["manager"],
                 selected_gateway_id,
-                open_chat,
+                open_persona,
             )
 
     def execute_plugin_handler(
@@ -676,6 +635,7 @@ def run(
 
     refresh_action.triggered.connect(refresh)
     refresh_action.triggered.connect(lambda _checked=False: refresh_plugin_catalog())
+    task_action.triggered.connect(lambda: open_panel())
     webgui_action.triggered.connect(lambda: desktop.open_url(manager.manager_url))
     quit_action.triggered.connect(lambda: _quit(app, tray, tray_available, lifecycle))
 
@@ -735,7 +695,7 @@ def run(
         tray,
         tray_available,
         "RabiRoute / 当前人格",
-        "桌面入口已启动。点击托盘菜单中的人格即可打开聊天。",
+        "桌面入口已启动。点击托盘菜单中的人格即可打开对应航线的人格配置。",
         QSystemTrayIcon.Information,
         3000,
     )
@@ -935,38 +895,8 @@ def _render_panel(
     gateway: dict,
     plan_snapshot,
     context_snapshot,
-    role_messages: list[dict],
 ) -> None:
-    panel.render(manager_snapshot, gateway, plan_snapshot, context_snapshot, role_messages)
-
-
-def _send_role_panel_message(
-    manager: ManagerClient,
-    gateway_id: str,
-    text: str,
-    attachments: list[dict],
-    panel: TaskWindow,
-    tray: QSystemTrayIcon,
-    tray_available: bool,
-    refresh_callback,
-    pending_tasks: set[QtAsyncTask],
-) -> None:
-    if not gateway_id:
-        _show_message(tray, tray_available, "RabiRoute", "请先选择一条航线。", QSystemTrayIcon.Warning, 2500)
-        return
-    panel.set_message_send_pending(True)
-
-    def completed(completed_task: QtAsyncTask, result) -> None:
-        pending_tasks.discard(completed_task)
-        panel.complete_message_send(bool(result.ok))
-        if result.ok:
-            _show_message(tray, tray_available, "角色面板", "消息已发送给 Agent。", QSystemTrayIcon.Information, 1800)
-            refresh_callback()
-            return
-        detail = f"\n{result.message}" if result.message else ""
-        _show_message(tray, tray_available, "角色面板", f"发送失败。{detail}", QSystemTrayIcon.Warning, 5000)
-
-    _start_role_panel_send(manager, gateway_id, text, attachments, completed, pending_tasks.add)
+    panel.render(manager_snapshot, gateway, plan_snapshot, context_snapshot)
 
 
 def _send_plan_feedback(
@@ -1098,21 +1028,21 @@ def _panel_actions(
     ]
 
 
-def _rebuild_persona_chat_menu(
+def _rebuild_persona_menu(
     menu: QMenu,
     insert_before: QAction,
     more_personas_menu: QMenu,
     manager_snapshot: ManagerSnapshot,
     selected_gateway_id: str,
-    open_chat_callback,
+    open_persona_callback,
 ) -> None:
-    for action in getattr(menu, "_rabiroute_persona_chat_actions", []):
+    for action in getattr(menu, "_rabiroute_persona_actions", []):
         menu.removeAction(action)
         action.deleteLater()
     menu.removeAction(more_personas_menu.menuAction())
     more_personas_menu.clear()
     more_personas_menu._rabiroute_pending_personas = []
-    more_personas_menu._rabiroute_open_chat_callback = open_chat_callback
+    more_personas_menu._rabiroute_open_persona_callback = open_persona_callback
     if not getattr(more_personas_menu, "_rabiroute_lazy_population_connected", False):
         more_personas_menu.aboutToShow.connect(lambda: _populate_more_personas_menu(more_personas_menu))
         more_personas_menu._rabiroute_lazy_population_connected = True
@@ -1122,14 +1052,14 @@ def _rebuild_persona_chat_menu(
         offline_action = QAction("Manager 离线，无法读取人格")
         offline_action.setEnabled(False)
         menu.insertAction(insert_before, offline_action)
-        menu._rabiroute_persona_chat_actions = [offline_action]
+        menu._rabiroute_persona_actions = [offline_action]
         _warm_menu_layout(menu)
         return
     if not manager_snapshot.gateways:
         empty_action = QAction("暂无可用的人格航线")
         empty_action.setEnabled(False)
         menu.insertAction(insert_before, empty_action)
-        menu._rabiroute_persona_chat_actions = [empty_action]
+        menu._rabiroute_persona_actions = [empty_action]
         _warm_menu_layout(menu)
         return
 
@@ -1144,26 +1074,26 @@ def _rebuild_persona_chat_menu(
             selected_gateway is not None and str(gateway.get("id") or "") == str(selected_gateway.get("id") or "")
         )
         label = route_menu_label(gateway)
-        action_text = f"继续聊天 · {label}" if is_selected else label
-        if index >= MAX_DIRECT_PERSONA_CHATS:
+        action_text = f"人格配置 · {label}" if is_selected else label
+        if index >= MAX_DIRECT_PERSONAS:
             continue
         action = _action(
             action_text,
             menu,
-            lambda checked=False, item=gateway: open_chat_callback(item),
+            lambda checked=False, item=gateway: open_persona_callback(item),
         )
         action.setIcon(_route_state_icon(route_state(gateway)))
         action.setToolTip(_route_label(gateway))
         menu.insertAction(insert_before, action)
         direct_actions.append(action)
 
-    overflow_gateways = gateways[MAX_DIRECT_PERSONA_CHATS:]
+    overflow_gateways = gateways[MAX_DIRECT_PERSONAS:]
     if overflow_gateways:
         more_personas_menu._rabiroute_pending_personas = overflow_gateways
         loading_action = more_personas_menu.addAction("展开以加载更多人格")
         loading_action.setEnabled(False)
         menu.insertMenu(insert_before, more_personas_menu)
-    menu._rabiroute_persona_chat_actions = direct_actions
+    menu._rabiroute_persona_actions = direct_actions
     _warm_menu_layout(menu)
 
 
@@ -1198,14 +1128,14 @@ def _populate_more_personas_menu(more_personas_menu: QMenu) -> None:
     gateways = getattr(more_personas_menu, "_rabiroute_pending_personas", [])
     if not gateways:
         return
-    open_chat_callback = getattr(more_personas_menu, "_rabiroute_open_chat_callback", None)
+    open_persona_callback = getattr(more_personas_menu, "_rabiroute_open_persona_callback", None)
     more_personas_menu._rabiroute_pending_personas = []
     more_personas_menu.clear()
     for gateway in gateways:
         action = _action(
             route_menu_label(gateway),
             more_personas_menu,
-            lambda checked=False, item=gateway: open_chat_callback(item),
+            lambda checked=False, item=gateway: open_persona_callback(item),
         )
         action.setIcon(_route_state_icon(route_state(gateway)))
         action.setToolTip(_route_label(gateway))

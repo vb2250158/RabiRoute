@@ -735,6 +735,7 @@ internal sealed class HostRuntime
     private readonly object _mutationAcceptanceGate = new();
     private readonly RestartFailureWindow _failureWindow = new(RestartBackoff.Length, RestartFailureWindow.DefaultWindow);
     private readonly object _publicationGate = new();
+    private readonly ManagerEndpointCache _endpointCache;
     private readonly ConditionalWeakTable<HostOperationContext, TerminalAuditMarker> _terminalAuditOperations = new();
     private string _state = "starting";
     private ApplicationGeneration? _generation;
@@ -752,6 +753,7 @@ internal sealed class HostRuntime
     {
         _packageRoot = packageRoot;
         _stateRoot = stateRoot;
+        _endpointCache = new ManagerEndpointCache(Path.Combine(stateRoot, "manager-endpoint.json"));
         _log = log;
         _audit = audit ?? new HostLifecycleAudit();
         _identityReset = new IdentityResetLifecycle(packageRoot, stateRoot, log);
@@ -1347,6 +1349,11 @@ internal sealed class HostRuntime
                 active.TrayPid,
                 active.TrayBoundManagerInstanceId,
                 active.JobMemberPids.ToArray());
+        try { _endpointCache.Publish(_publication); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            _log.Write($"Manager endpoint cache publication failed ({error.GetType().Name}); live Host status remains available.");
+        }
     }
 
     private bool AdoptGeneration(ApplicationGeneration generation)

@@ -1,4 +1,13 @@
 export const englishCatalog: Record<string, string> = {
+  "会话类型": "Conversation type",
+  "目标群": "Target group",
+  "直接发送": "Send directly",
+  "指定身份": "Use a specific identity",
+  "发送方式": "Send mode",
+  "发送身份": "Sender identity",
+  "未找到群成员身份，请刷新或加载更多。": "No member identities found. Refresh or load more.",
+  "群消息指定身份发送必须选择群成员身份。": "Select a group member identity before sending group messages as that identity.",
+  "身份暂时无法加载，请重试。": "Identities could not be loaded. Try again.",
   "选择 Agent 和已有会话": "Choose an Agent and an existing session",
   "此接收者已删除，请重新选择。": "This recipient was removed. Choose another recipient.",
   "发送给这条消息关联计划的秘书。": "Send to the secretary of the plan linked to this message.",

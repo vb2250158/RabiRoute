@@ -11,6 +11,7 @@ export type EndpointExecutionOptions = {
   /** Compatibility input only: Desktop retains its own sandbox and approval policy. */
   sandbox?: CodexTurnSandbox;
   dshDeliveryMode?: "queue" | "steer";
+  grokBotDelivery?: AgentThreadRequest["grokBotDelivery"];
 };
 
 function boundedText(value: unknown, name: string, max: number): string {
@@ -24,7 +25,7 @@ function boundedText(value: unknown, name: string, max: number): string {
 export function normalizeEndpointExecutionOptions(value: unknown): EndpointExecutionOptions {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Endpoint execution options are required.");
   const input = value as Record<string, unknown>;
-  const fields = ["cwd", "model", "reasoningEffort", "sandbox", "dshDeliveryMode"];
+  const fields = ["cwd", "model", "reasoningEffort", "sandbox", "dshDeliveryMode", "grokBotDelivery"];
   if (Object.keys(input).some(key => !fields.includes(key))) throw new Error("Unsupported endpoint execution option.");
   const result: EndpointExecutionOptions = input.cwd === undefined ? {} : { cwd: boundedText(input.cwd, "cwd", 32_768) };
   if (input.model !== undefined) result.model = boundedText(input.model, "model", 500);
@@ -41,6 +42,17 @@ export function normalizeEndpointExecutionOptions(value: unknown): EndpointExecu
   if (input.dshDeliveryMode !== undefined) {
     if (input.dshDeliveryMode !== "queue" && input.dshDeliveryMode !== "steer") throw new Error("Invalid endpoint execution dshDeliveryMode.");
     result.dshDeliveryMode = input.dshDeliveryMode;
+  }
+  if (input.grokBotDelivery !== undefined) {
+    const delivery = input.grokBotDelivery as Record<string, unknown>;
+    if (!delivery || typeof delivery !== "object" || Array.isArray(delivery)
+      || Object.keys(delivery).some(key => !["deliveryType", "sendMode", "senderAgentId"].includes(key))
+      || !["private", "group"].includes(String(delivery.deliveryType)) || !["direct", "identity"].includes(String(delivery.sendMode))) {
+      throw new Error("Invalid Grok Bot delivery options.");
+    }
+    if (delivery.sendMode === "direct" && delivery.senderAgentId !== undefined) throw new Error("Direct delivery cannot carry a sender identity.");
+    result.grokBotDelivery = { deliveryType: delivery.deliveryType as "private" | "group", sendMode: delivery.sendMode as "direct" | "identity",
+      ...(delivery.sendMode === "identity" ? { senderAgentId: boundedText(delivery.senderAgentId, "senderAgentId", 4096) } : {}) };
   }
   return result;
 }

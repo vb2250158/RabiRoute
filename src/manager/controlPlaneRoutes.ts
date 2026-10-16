@@ -7220,6 +7220,7 @@ async function testGatewayAgentDelivery(
     routeName: runtime.definition.name,
     agentAdapterType: adapter
   });
+  envelope.deliveryId = deliveryId;
   const command = childCommand([
     `--direct-agent-envelope=${encodeURIComponent(JSON.stringify(envelope))}`,
     `--direct-agent-target=${encodeURIComponent(target!.id)}`,
@@ -7995,7 +7996,7 @@ const roleKnowledgeCatalogRefreshes = new Map<string, Promise<void>>();
 function requestRoleKnowledgeCatalogRefresh(roleDir: string): void {
   const key = path.resolve(roleDir);
   if (roleKnowledgeCatalogRefreshes.has(key)) return;
-  const refresh = managerCatalogWorkerPool.queryRoleKnowledgeCatalogSnapshot(roleDir, { timeoutMs: 30_000 })
+  const refresh = managerCatalogWorkerPool.queryRoleKnowledgeCatalogSnapshot(roleDir, { timeoutMs: 300_000 })
     .then(() => undefined)
     .catch((error) => {
       managerOperationalLog.record("warn", "role_knowledge_catalog_refresh_failed", {
@@ -9312,7 +9313,7 @@ async function prewarmRolePlanCatalogs(): Promise<boolean> {
     for (const roleDir of roleDirectories) {
       try {
         knowledgeSearchService?.ensure(path.basename(roleDir), roleDir);
-        await managerCatalogWorkerPool.queryRoleKnowledgeCatalogSnapshot(roleDir, { timeoutMs: 30_000 });
+        await managerCatalogWorkerPool.queryRoleKnowledgeCatalogSnapshot(roleDir, { timeoutMs: 300_000 });
         await knowledgeSearchService?.reload(path.basename(roleDir), roleDir);
         fulfilled += 1;
       } catch (error) {
