@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.54 - 2026-10-17
+
+- Record accepted 0.3.53 pet installation, scale/first-frame placement fixes, production cross-monitor captures, full airborne looping and 222 passing regressions.
+
 ## 0.3.53 - 2026-10-17
 
 - Restore saved placement after the first real animation establishes its canvas, preserving user drags completed while assets were loading.
