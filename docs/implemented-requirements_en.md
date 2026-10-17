@@ -20,6 +20,7 @@ Code integration and installed acceptance are recorded separately. Deployment st
 | Raise the thread bridge threadId/sourceThreadId limit from 80 to 512 (#10) | `4a68bc27` (merge `fb6423a3`) | 68 targeted tests passed; backend build and type checking passed |
 | DSH reconnect verification requests the first paged session/list result, with a 60-second timeout and 32 MiB cap for verification only (#11) | `2356d0be` (merge `0ae8c76e`) | 6 connection tests passed (paging, >10 s response, 8-32 MiB response, over-cap rejection); backend build and CodeQL/Gitleaks/dependency audit passed |
 | Route save lock is rechecked with the original owner after child termination before reopening; delivery rules are validated only within the Route being saved (fixes Grok Bot settings failing to save; from Codex session 01a14ac1) | PR #12 | Targeted tests and full build: see PR |
+| DSH reconnect validation sends `session/list` args as an object (fixes the 502 root cause), surfaces DSH error code/message with credential redaction, and raises the total connection timeout from 25 to 90 seconds (PR number pending) | Merge commit pending | 14 DSH connection tests passed; backend build passed |
 
 Drag fixtures use real Qt windows, monitors and native coordinates with pointer traces injected inside the test process. They do not establish manual mouse acceptance. See [the motion contract](desktop-pet-agent-motion_en.md) for action semantics, stride calibration and APIs. Check the source pack, persona binding and runtime cache separately; importing a pack does not activate it.
 
