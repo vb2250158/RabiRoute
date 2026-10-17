@@ -298,6 +298,10 @@
       "closed": "关闭"
     }
   },
+  "companion": {
+    "promptFile": "prompts/companionship.md",
+    "templates": { "watch": "prompts/companionship-watch.md" }
+  },
   "contextInjection": {
     "mode": "focused",
     "relevantKnowledgeLimit": 3,

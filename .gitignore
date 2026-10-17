@@ -1,4 +1,6 @@
 /node_modules/
+/.cache/
+/.npm-cache/
 /dist/
 /apps/rabi-agent/runtime/
 /apps/rabi-agent/dist/

@@ -11,7 +11,7 @@ test("desktop recovery retains only explicit intent across a new Manager and cle
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const store = new CompanionContinuationStore(root);
   const activity = new CompanionActivity({ presets: [{ id: "adaptive", label: "auto", labelEn: "Auto", reviewSeconds: 25, replyAgeSeconds: 30, guidance: "observe" }],
-    changed: () => {}, reaction: () => {}, save: async () => {}, cancelSpeech: async () => {}, speak: async () => {}, deliver: async () => {} });
+    changed: () => {}, reaction: () => {}, context: async () => "fixture persona", save: async () => {}, cancelSpeech: async () => {}, speak: async () => {}, deliver: async () => {} });
   t.after(() => activity.dispose());
   const session = (await activity.start("one", { requestId: "first-start", gatewayId: "local-route", presetId: "adaptive", title: "", autoReview: true, voice: false, saveSummary: false, observationOwner: "desktop" })).session!;
   await store.save(session);

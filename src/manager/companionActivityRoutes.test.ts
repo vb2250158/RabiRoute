@@ -16,7 +16,7 @@ test("local menu admission resolves the persona Route and recording consent, rej
   const recoveryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "companion-route-recovery-"));
   t.after(() => fs.rm(recoveryRoot, { recursive: true, force: true }));
   const continuation = new CompanionContinuationStore(recoveryRoot);
-  const service = new CompanionActivity({ presets,
+  const service = new CompanionActivity({ presets, context: async () => "fixture persona",
     changed: () => {}, reaction: () => {}, save: async () => {}, cancelSpeech: async () => {}, speak: async () => {}, deliver: async () => {} });
   const handler = companionActivityHandler(service, { continuation, local: () => true, readOnly: () => readOnly,
     verifyGateway: (role, gateway) => { assert.equal(role, "one"); return gateway || "persona-route"; },
@@ -62,7 +62,7 @@ test("authenticated remote Agents share companionship start, read and stop", asy
   const authority = new LanAgentAuthority({ statePath: path.join(root, "auth.json") });
   const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "remote-fixture");
   authority.registerAgentCatalog(credential.token, [{ agentId: "worker", provider: "custom-provider" }]);
-  const service = new CompanionActivity({ presets,
+  const service = new CompanionActivity({ presets, context: async () => "fixture persona",
     changed: () => {}, reaction: () => {}, save: async () => {}, cancelSpeech: async () => {}, speak: async () => {}, deliver: async () => {} });
   const handler = companionActivityHandler(service, { local: () => false, readOnly: () => false,
     verifyGateway: () => "persona-route", saveSummaryDefault: async () => false, last: async () => null });

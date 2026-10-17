@@ -16,7 +16,8 @@ import { RabiLinkDeviceConnections } from "./rabiLinkDeviceConnections.js";
 import { rabiLinkAgentDevicePrincipal, rabiLinkConnectionScope, rabiLinkTrustedTransport, rabiLinkTransportAssertionPresent } from "./rabiLinkAgentDeviceConnection.js";
 import { recordingManifestHash } from "./recordingArchiveContract.js";
 import { createAllDayRecording, allDayRecordingHandler } from "./allDayRecordingRoutes.js";
-import { CompanionActivity, companionSpeechScope, readCompanionPresets, saveCompanionSummary, lastCompanionSummary } from "./companionActivity.js";
+import { CompanionActivity, companionSpeechScope, readCompanionPresets, recordCompanionInteraction, saveCompanionSummary, lastCompanionSummary } from "./companionActivity.js";
+import { buildCompanionContext } from "./companionContext.js";
 import { readCompanionSceneRules } from "./companionScene.js";
 import { companionActivityHandler } from "./companionActivityRoutes.js";
 import { CompanionContinuationStore } from "./companionContinuation.js";
@@ -590,6 +591,7 @@ import {
   presentRoleMemory,
   presentRoleMemories,
   publishedRolePlans,
+  publishedRoleKnowledgeCatalogSnapshot,
   roleKnowledgeSnapshotFromPublishedCatalog,
   roleKnowledgeFileCounts,
   subscribePlanUpdates,
@@ -1163,6 +1165,16 @@ const companionActivity = new CompanionActivity({
     void companionFrameDelivery.retain(session?.status === "active" ? session.review?.id : undefined).catch(() => undefined);
   },
   reaction: event => publishManagerEvent("companion_reaction", event),
+  context: async session => {
+    const runtime = runtimes.get(session.gatewayId);
+    if (!runtime || roleIdForDefinition(runtime.definition) !== session.roleId) throw new Error("Activity Route no longer belongs to this persona");
+    assertLocalPersonaOwner(runtime.definition, "Companion context");
+    const roleDirectory = roleDirForApi(session.roleId);
+    const catalog = publishedRoleKnowledgeCatalogSnapshot(roleDirectory);
+    if (!catalog) throw new Error("Companion memory catalog is not ready");
+    return buildCompanionContext({ roleDirectory, personaFile: runtime.definition.agentRoleFile,
+      session, recentMemories: catalog.recentMemories });
+  },
   deliver: async (session, review) => {
     const runtime = runtimes.get(session.gatewayId);
     if (!runtime || roleIdForDefinition(runtime.definition) !== session.roleId) throw new Error("Activity Route no longer belongs to this persona");
@@ -1203,6 +1215,10 @@ const companionActivity = new CompanionActivity({
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sessionId: scope })
     }, { timeoutMs: 5000 });
     if (result.status !== 200) throw new Error(`RabiSpeech HTTP ${result.status}`);
+  },
+  record: async session => {
+    if (session.observationOwner === "desktop" && !(await allDayRecording.service.snapshot(session.roleId)).enabled) return;
+    await recordCompanionInteraction(roleDirForApi(session.roleId), session);
   },
   save: async session => {
     if (session.observationOwner === "desktop" && !(await allDayRecording.service.snapshot(session.roleId)).enabled) return;
@@ -7075,7 +7091,7 @@ function triggerGatewayLocalAgentMessage(
   const logLabel = argumentPrefix === "plan-feedback" ? "plan feedback" : "role panel";
   const command = childCommand([
     `--${argumentPrefix}-message=${encodeURIComponent(messageId)}`,
-    `--${argumentPrefix}-text=${encodeURIComponent(text)}`,
+    `--${argumentPrefix}-text-stdin`,
     `--${argumentPrefix}-role=${encodeURIComponent(roleId)}`,
     `--${argumentPrefix}-gateway=${encodeURIComponent(runtime.definition.id)}`,
     `--${argumentPrefix}-route-profile=${encodeURIComponent(routeProfileId)}`,
@@ -7114,6 +7130,7 @@ function triggerGatewayLocalAgentMessage(
       }
     });
     child.on("error", (error) => finish(() => reject(error)));
+    child.stdin.on("error", (error) => finish(() => reject(error)));
     child.on("exit", (code, signal) => {
       if (code === 0) {
         appendLog(runtime, `${logLabel} completed: ${messageId}`);
@@ -7122,6 +7139,7 @@ function triggerGatewayLocalAgentMessage(
       }
       finish(() => reject(new Error(`${logLabel} failed: code=${code ?? "null"} signal=${signal ?? "null"}`)));
     });
+    child.stdin.end(text, "utf8");
   });
 }
 

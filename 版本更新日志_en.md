@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.44 - 2026-10-17
+
+- Merge persona-aware companion context and continuation, preserving interaction progress and message ownership.
+
 ## 0.3.43 - 2026-10-17
 
 - Merge progressive recovery for slow storage with item deadlines, confirmed cancellation, exclusive writers and preserved plan-recovery fixes.
