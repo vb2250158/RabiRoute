@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.51 - 2026-10-17
+
+- Merge the PR #9 local media inspector and record installed 0.3.50 pet activation, v20 airborne playback, and cross-monitor pixel acceptance.
+
 ## 0.3.50 - 2026-10-17
 
 - Fix premature Developer activation rollback by allowing the full 420-second Host startup budget and overlaying updated activation scripts; document pet implementation and deployment status.

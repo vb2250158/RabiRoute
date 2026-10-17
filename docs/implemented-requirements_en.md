@@ -8,12 +8,13 @@ Code integration and installed acceptance are recorded separately. Deployment st
 
 | Requirement | Implementation in main | Installation and validation |
 | --- | --- | --- |
-| Smooth dragging, negative desktop coordinates, release outside the window | `19333c18` | Local Windows acceptance machine: 0.3.48 installed; native Qt drag fixture passed |
-| Throw inertia, gravity, bounce, landing recovery and recapture | `19333c18` | Same machine, 0.3.48; physics and landing recovery regressions passed |
-| Live size slider preview using canvas pixels | `19333c18` | Same machine, 0.3.48; scaling regressions passed |
-| Fixed pixel size across monitors with different DPI | `19333c18` | Same machine, 0.3.48; round-trip 100%/150% DPI fixture passed, with 256px decoded images and native window dimensions (at most 1px edge rounding) |
-| Pet manager retained for application lifetime; recovery from an empty startup roster | `af39725a`, `7754eee0` | Same machine, 0.3.48; Host-owned pet window acceptance passed |
-| One-shot `lift` and `throw`, looping `airborne`, slight flight tilt | `20a88832` | 0.3.49 source and native Qt preview passed; formal activation timed out and rolled back to 0.3.48; installed acceptance remains pending |
+| Smooth dragging, negative desktop coordinates, release outside the window | `19333c18` | Local Windows acceptance machine: 0.3.50 installed; native Qt drag fixture passed using installed Python |
+| Throw inertia, gravity, bounce, landing recovery and recapture | `19333c18` | Same machine, 0.3.50; physics regressions and installed throwing/landing recovery passed |
+| Live size slider preview using canvas pixels | `19333c18` | Same machine, 0.3.50; 25%/50%/75% produced 128/256/384px, retained the frame cache and preserved the binding |
+| Fixed pixel size across monitors with different DPI | `19333c18` | Same machine, 0.3.50; round-trip 100%/150% DPI drag fixture passed; the Host-owned pet was moved through Manager to both monitors, captured and restored; decoded images stayed 256px (native edge rounding at most 1px) |
+| Pet manager retained for application lifetime; recovery from an empty startup roster | `af39725a`, `7754eee0` | Same machine, 0.3.50; Host-owned pet visible and runtime files matched the candidate |
+| One-shot `lift` and `throw`, looping `airborne`, slight flight tilt | `20a88832` | Same machine, 0.3.50 with v20; correct phase order, all 34 airborne frames and one complete loop observed; landing reset tilt |
+| Developer readiness deadline covers Host startup | `562b4a4c` | Same machine, 0.3.50; controlled activation and Host/Manager/Tray identity checks passed without rollback |
 
 Drag fixtures use real Qt windows, monitors and native coordinates with pointer traces injected inside the test process. They do not establish manual mouse acceptance. See [the motion contract](desktop-pet-agent-motion_en.md) for action semantics, stride calibration and APIs. Check the source pack, persona binding and runtime cache separately; importing a pack does not activate it.
 
@@ -21,8 +22,12 @@ Drag fixtures use real Qt windows, monitors and native coordinates with pointer 
 
 Developer apply and publish scripts defaulted to 120 seconds. Host permits 180 seconds for Manager readiness and 120 seconds for Tray readiness, plus health admission and bootstrap time. The shorter outer deadline can roll back a candidate that is still starting within Host's own budget.
 
-Local logs show that the candidate Manager had run for only about 66 seconds when rollback arrived. Its replacement then encountered the previous Manager's single-instance guard. The next version sets both script defaults to 420 seconds and includes the updated scripts in immutable Developer candidates. Generation fencing, pointer compare-and-swap, complete readiness checks and rollback remain enforced.
+Local logs show that the candidate Manager had run for only about 66 seconds when rollback arrived. Its replacement then encountered the previous Manager's single-instance guard. Version 0.3.50 sets both script defaults to 420 seconds and includes the updated scripts in immutable Developer candidates. Generation fencing, pointer compare-and-swap, complete readiness checks and rollback remain enforced.
 
 The 420-second deadline is bounded; it cannot guarantee readiness on every slow storage system. Child shutdown after startup cancellation, heartbeat-triggered restarts and degraded plan storage require separate investigation. This budget fix does not establish that those issues are resolved. Similar slow-start symptoms were reported on another machine, but its logs have not been verified and a shared root cause is unconfirmed.
 
-After formal deployment, record the final commit, full releaseId, installed machine, Host/Manager generation verification, active pack, and evidence for dragging, throwing, airborne looping, scaling and round-trip monitor dragging.
+The installed release is `0.3.50-00c1b4327a20`, built from `562b4a4c`, with active pack `yeyu-library-flat-wide-airborne-v20`. Private deployment receipts retain machine identity, full generation checks, production-window captures on both monitors and installed drag/throw/airborne/scaling evidence. Screenshots and runtime data stay outside public source. Overall Host health remains `degraded`; pet acceptance does not establish that every background feature is healthy.
+
+## Source integrated in the same batch
+
+[PR #6](https://github.com/vb2250158/RabiRoute/pull/6), [PR #7](https://github.com/vb2250158/RabiRoute/pull/7) and [PR #8](https://github.com/vb2250158/RabiRoute/pull/8) are included in the main history above. [PR #9](https://github.com/vb2250158/RabiRoute/pull/9), media inspector `860b4c15`, is merged with 0.3.51; six image/audio/video acceptance and rejection samples passed. This is source integration; the installed 0.3.50 package does not claim to include that later restoration.
