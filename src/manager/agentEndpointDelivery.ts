@@ -3,8 +3,8 @@ import { resolveEndpointExecutionOptions, type EndpointExecutionOptions } from "
 import type { AgentThreadRequest, AgentThreadRequestOptions, AgentThreadRemoteSource, AgentThreadSummary } from "../agentThreads.js";
 import type { AgentRequestStore, AgentRequestParty } from "../agentRequests/store.js";
 import type { AgentRequestEndpoint } from "../agentRequests/endpoint.js";
-import { sameAgentEndpoint } from "../agentRequests/endpoint.js";
-import { EndpointDeliveryRecovery, type EndpointDeliveryOptions, type PreparedEndpointDelivery, type EndpointDeliveryReceipt } from "../agentRequests/endpointDelivery.js";
+import { normalizeAgentRequestEndpoint, sameAgentEndpoint } from "../agentRequests/endpoint.js";
+import { EndpointDeliveryRecovery, EndpointVerificationError, type EndpointDeliveryOptions, type PreparedEndpointDelivery, type EndpointDeliveryReceipt } from "../agentRequests/endpointDelivery.js";
 import { executePreparedEndpointDelivery } from "../agentRequests/endpointExecution.js";
 import { EndpointTransportReceipts } from "../agentRequests/endpointTransportReceipts.js";
 import { assertEndpointOwnerDirectory, executeEndpointOnOwner, recoverEndpointOwnerReceipt } from "../agentRequests/ownerExecution.js";
@@ -87,15 +87,33 @@ export function createAgentEndpointDelivery(context: AgentEndpointDeliveryContex
       throw new Error("Invalid local endpoint authority.");
     }
   }
+  // A Grok Bot source proof is a remote owner read; reuse one that is at most 60s old instead of re-reading per hop.
+  const sourceProofs = new Map<string, number>();
+  const SOURCE_PROOF_TTL_MS = 60_000;
   async function refreshEndpoints(identities: Pick<PreparedEndpointDelivery, "source" | "target">): Promise<void> {
-    for (const role of ["source", "target", "source"] as const) {
+    // Target first, source last: a source unloaded while awaiting the target proof is still caught, with one visit each.
+    for (const role of ["target", "source"] as const) {
       const endpoint = identities[role];
-      if (context.service?.owns(endpoint)) await context.service.refresh?.(Object.freeze({ ...endpoint }), role);
-      if (endpoint.kind === "device") {
-        if (!context.device) throw new Error("Device endpoint owner is unavailable.");
-        await context.device.refresh?.(Object.freeze({ ...endpoint }), role);
+      try {
+        if (context.service?.owns(endpoint)) {
+          const cacheable = role === "source" && endpoint.provider === "grokBot";
+          const key = cacheable ? JSON.stringify(normalizeAgentRequestEndpoint(endpoint)) : "";
+          const checkedAt = cacheable ? sourceProofs.get(key) : undefined;
+          if (checkedAt === undefined || Date.now() - checkedAt > SOURCE_PROOF_TTL_MS) {
+            if (cacheable) sourceProofs.delete(key);
+            await context.service.refresh?.(Object.freeze({ ...endpoint }), role);
+            if (cacheable) sourceProofs.set(key, Date.now());
+          }
+        }
+        if (endpoint.kind === "device") {
+          if (!context.device) throw new Error("Device endpoint owner is unavailable.");
+          await context.device.refresh?.(Object.freeze({ ...endpoint }), role);
+        }
+        authorize(endpoint, role);
+      } catch (error) {
+        if (role === "source") sourceProofs.delete(JSON.stringify(normalizeAgentRequestEndpoint(endpoint)));
+        throw error instanceof EndpointVerificationError ? error : new EndpointVerificationError(role, error);
       }
-      authorize(endpoint, role);
     }
   }
   async function localParty(provider: AgentAdapterType, sessionId: string, type: string, request: AgentThreadRequest, requiresDirectory = false): Promise<AgentRequestParty> {

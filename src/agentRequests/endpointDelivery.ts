@@ -50,10 +50,28 @@ export type EndpointDeliveryOptions = {
   reconcile: (delivery: PreparedEndpointDelivery, assertAuthorized: () => void) => Promise<EndpointDeliveryReceipt | undefined>;
 };
 
+/** Identifies which original endpoint failed a fresh owner proof, so pre-send failures report an exact stage. */
+export class EndpointVerificationError extends Error {
+  readonly role: "source" | "target";
+  constructor(role: "source" | "target", cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.name = "EndpointVerificationError";
+    this.role = role;
+    if (cause instanceof Error && (cause as { code?: unknown }).code !== undefined) (this as { code?: unknown }).code = (cause as { code?: unknown }).code;
+  }
+}
+
+function verificationRole(error: unknown): "source" | "target" | undefined {
+  return error instanceof EndpointVerificationError ? error.role
+    : error && typeof error === "object" && ((error as { role?: unknown }).role === "source" || (error as { role?: unknown }).role === "target")
+      ? (error as { role: "source" | "target" }).role : undefined;
+}
+
 async function refreshEndpointIdentities(identities: Pick<PreparedEndpointDelivery, "source" | "target">, options: EndpointDeliveryOptions): Promise<void> {
   await options.refreshEndpoints?.({ source: Object.freeze({ ...identities.source }), target: Object.freeze({ ...identities.target }) });
-  options.authorize(identities.source, "source");
-  options.authorize(identities.target, "target");
+  for (const role of ["source", "target"] as const) {
+    try { options.authorize(identities[role], role); } catch (error) { throw verificationRole(error) ? error : new EndpointVerificationError(role, error); }
+  }
 }
 
 export function validateEndpointReceipt(delivery: PreparedEndpointDelivery, receipt: EndpointDeliveryReceipt): void {
@@ -71,6 +89,19 @@ function guard(delivery: PreparedEndpointDelivery, options: EndpointDeliveryOpti
     options.authorize(delivery.target, "target");
     options.store.assertEndpointDeliveryActive(delivery.deliveryId);
   };
+}
+
+/** Nothing crossed the execution boundary: the delivery stays prepared and the same deliveryId may safely retry. */
+function notSentResult(delivery: PreparedEndpointDelivery, error: unknown): AgentThreadRequestResult {
+  const stage = verificationRole(error) === "target" ? "target_verification" : "source_verification";
+  return { statusCode: 503, data: {
+    action: "send", ok: false, status: "failed", threadId: delivery.target.sessionId,
+    delivery: { deliveryId: delivery.deliveryId, generation: delivery.generation,
+      status: "prepared", targetThreadId: delivery.target.sessionId, retryable: true },
+    communication: { deliveryId: delivery.deliveryId, requestId: delivery.preparation.requestId,
+      inReplyToRequestId: delivery.preparation.inReplyToRequestId, responsePolicy: delivery.preparation.responsePolicy },
+    error: { stage, message: error instanceof Error ? error.message : String(error), retryable: true }
+  } };
 }
 
 function result(delivery: PreparedEndpointDelivery, confirmed: boolean, error?: unknown): AgentThreadRequestResult {
@@ -221,14 +252,33 @@ export async function executeEndpointAgentDelivery(request: AgentThreadRequest, 
   return dispatchPreparedDelivery(delivery, options);
 }
 
-async function dispatchPreparedDelivery(delivery: PreparedEndpointDelivery, options: EndpointDeliveryOptions): Promise<AgentThreadRequestResult> {
-  // Persist before crossing the execution boundary. A crash here stays unknown, never resend.
-  options.store.markEndpointDispatching(delivery.deliveryId);
-  delivery.state = "dispatching";
+// Pre-send verification is async; concurrent retries of one prepared delivery must share a single dispatch.
+const inflightDispatches = new WeakMap<object, Map<string, Promise<AgentThreadRequestResult>>>();
+
+function dispatchPreparedDelivery(delivery: PreparedEndpointDelivery, options: EndpointDeliveryOptions): Promise<AgentThreadRequestResult> {
+  let byStore = inflightDispatches.get(options.store);
+  if (!byStore) inflightDispatches.set(options.store, byStore = new Map());
+  const existing = byStore.get(delivery.deliveryId);
+  if (existing) return existing;
+  const pending = verifyThenDispatch(delivery, options).finally(() => byStore!.delete(delivery.deliveryId));
+  byStore.set(delivery.deliveryId, pending);
+  return pending;
+}
+
+async function verifyThenDispatch(delivery: PreparedEndpointDelivery, options: EndpointDeliveryOptions): Promise<AgentThreadRequestResult> {
   const assertAuthorized = guard(delivery, options);
+  // Verify fresh owner proofs before anything is persisted as dispatching. A failure here sent nothing,
+  // so the delivery stays prepared and a retry with the same deliveryId really sends.
   try {
     await refreshEndpointIdentities(delivery, options);
     assertAuthorized();
+  } catch (error) {
+    return notSentResult(delivery, error);
+  }
+  // Persist before crossing the execution boundary. A crash here stays unknown, never resend.
+  options.store.markEndpointDispatching(delivery.deliveryId);
+  delivery.state = "dispatching";
+  try {
     const receipt = await options.dispatch(delivery, assertAuthorized);
     await refreshEndpointIdentities(delivery, options);
     assertAuthorized();

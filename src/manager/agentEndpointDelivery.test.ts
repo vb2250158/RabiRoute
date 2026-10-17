@@ -45,7 +45,7 @@ test("factory accepts a source without cwd, freezes trusted device identity and 
     messageSource: { type: "agent", agentAdapter: "deviceAgent", sessionId: device.sessionId, sessionName: "Glasses" } })).endpoint?.kind, "device");
   await assert.rejects(async () => fromDevice.resolveSource(source), /source substitution is forbidden/);
   await factory.refreshEndpoints({ source: device, target: device });
-  assert.deepEqual(deviceRoles.slice(-3), ["source", "target", "source"]);
+  assert.deepEqual(deviceRoles.slice(-2), ["target", "source"]);
   authorized = false;
   assert.throws(() => fromDevice.authorize(device), /revoked/);
 });
@@ -98,7 +98,27 @@ test("registered service bridge preserves its authenticated owner and delivers w
   const target = await options.resolveTarget(request);
   assert.deepEqual(options.resolveExecutionOptions(request, target), {});
   await factory.refreshEndpoints({ source: endpoint, target: endpoint });
-  assert.deepEqual(roles, ["source", "target", "source"]);
+  assert.deepEqual(roles, ["target", "source"]);
   await options.dispatch({ target: endpoint } as Parameters<typeof options.dispatch>[0], () => {}).catch(error => assert.match(error.message, /No exact owner receipt/));
   assert.equal(transports, 1);
+});
+
+test("refresh visits each endpoint once and reuses a fresh Grok Bot source proof", async () => {
+  const refreshed: string[] = [];
+  const grok: AgentRequestEndpoint = { kind: "service", managerInstanceId: "manager", agentId: "grok-agent", provider: "grokBot", sessionId: "grok-session", authorizationIncarnation: "epoch" };
+  const target: AgentRequestEndpoint = { kind: "service", managerInstanceId: "manager", agentId: "other-agent", provider: "grokBot", sessionId: "target-session", authorizationIncarnation: "epoch" };
+  let fail = false;
+  const context = { store: new AgentRequestStore({ read: () => undefined, write: () => {} }),
+    registry: { localInstanceId: "manager", listInstances: () => [] }, authority: {}, config: {}, receiptDirectory: "unused-memory-receipts",
+    readLocal: async () => { throw new Error("unused"); }, localOptions: () => ({ allowedWorkspaces: [] }),
+    service: { owns: (endpoint: AgentRequestEndpoint) => endpoint.provider === "grokBot", authorize: () => {},
+      refresh: async (endpoint: AgentRequestEndpoint, role?: string) => { refreshed.push(role + ":" + endpoint.sessionId); if (fail) throw new Error("GROK_BOT_HTTP_FAILED:429"); },
+      resolveSource: async () => undefined, resolveTarget: async () => undefined, resolveExecutionOptions: () => ({}), transport: async () => undefined } } as unknown as AgentEndpointDeliveryContext;
+  const factory = createAgentEndpointDelivery(context);
+  await factory.refreshEndpoints({ source: grok, target });
+  assert.deepEqual(refreshed, ["target:target-session", "source:grok-session"]);
+  await factory.refreshEndpoints({ source: grok, target });
+  assert.deepEqual(refreshed.slice(2), ["target:target-session"]);
+  fail = true;
+  await assert.rejects(() => factory.refreshEndpoints({ source: target, target: grok }), (error: { role?: string }) => error.role === "target");
 });
