@@ -16,6 +16,7 @@ import type {
   RouteCatalogTransactionOperation
 } from "./routeCatalogTransaction.js";
 import { routeCatalogSnapshotIdentities } from "./routeCatalogIdentity.js";
+import { StorageTerminationError } from "./boundedStorageStartup.js";
 
 function deferred<T>(): {
   promise: Promise<T>;
@@ -178,6 +179,7 @@ test("attempt timeout waits for confirmed termination before retry and never ove
 
 test("unconfirmed termination blocks retry and stop remains failed with the child pid until late exit", async () => {
   const lateExit = deferred<RouteCatalogSnapshot>();
+  let closed = false;
   let attempts = 0;
   let cancels = 0;
   const lifecycle = new RouteCatalogStartupLifecycle({
@@ -192,6 +194,7 @@ test("unconfirmed termination blocks retry and stop remains failed with the chil
         result: lateExit.promise,
         cancel() {
           cancels += 1;
+          if (closed) return Promise.resolve();
           return Promise.reject(new Error("termination not confirmed"));
         }
       };
@@ -216,10 +219,60 @@ test("unconfirmed termination blocks retry and stop remains failed with the chil
   assert.equal(lifecycle.snapshot().childPid, 301);
   assert.ok(cancels >= 2);
 
+  closed = true;
   lateExit.reject(new Error("child finally closed"));
   await waitFor(() => lifecycle.snapshot().childPid === undefined, "late child exit was not observed");
   await lifecycle.stop();
   assert.equal(lifecycle.snapshot().state, "stopped");
+});
+
+test("a blocked catalog rechecks child closure before accepting a later save", async () => {
+  let closed = false;
+  let attempts = 0;
+  const lifecycle = new RouteCatalogStartupLifecycle({
+    retryBaseMs: 5,
+    retryMaxMs: 5,
+    apply() {},
+    attemptFactory(_operation, identity) {
+      attempts += 1;
+      if (attempts === 1) return {
+        result: Promise.reject(new StorageTerminationError()),
+        async cancel() { if (!closed) throw new StorageTerminationError(); }
+      };
+      return { result: Promise.resolve(catalog(identity, ["saved"])), async cancel() {} };
+    }
+  });
+  lifecycle.start();
+  await waitFor(() => lifecycle.snapshot().lastErrorCode === ROUTE_CATALOG_TERMINATION_UNCONFIRMED_CODE,
+    "catalog was not blocked");
+  await assert.rejects(lifecycle.upsert({ id: "saved", gatewayPort: 23001 }), /termination|blocked/);
+  assert.equal(attempts, 1, "save started before child closure was confirmed");
+  closed = true;
+  const saved = await lifecycle.upsert({ id: "saved", gatewayPort: 23001 });
+  assert.equal(saved.gateways[0]?.id, "saved");
+  assert.equal(attempts, 2, "recovery replayed the failed operation");
+  assert.equal(lifecycle.snapshot().state, "ready");
+  await lifecycle.stop();
+});
+
+test("a cleanup that subsequently confirms closure does not permanently block the catalog", async () => {
+  let attempts = 0;
+  const lifecycle = new RouteCatalogStartupLifecycle({
+    retryBaseMs: 5,
+    retryMaxMs: 5,
+    apply() {},
+    attemptFactory(_operation, identity) {
+      attempts += 1;
+      return attempts === 1
+        ? { result: Promise.reject(new StorageTerminationError()), async cancel() {} }
+        : { result: Promise.resolve(catalog(identity)), async cancel() {} };
+    }
+  });
+  lifecycle.start();
+  try {
+    await waitFor(() => lifecycle.snapshot().state === "ready", "confirmed closure left the catalog locked");
+    assert.equal(attempts, 2);
+  } finally { await lifecycle.stop(); }
 });
 
 test("stop shares one stopFlight, awaits cancellation, and fences a late successful result", async () => {
@@ -259,6 +312,7 @@ test("stop shares one stopFlight, awaits cancellation, and fences a late success
 
 test("a direct stop cancellation failure keeps the pid until late close, then a second stop succeeds", async () => {
   const lateClose = deferred<RouteCatalogSnapshot>();
+  let closed = false;
   let cancels = 0;
   const lifecycle = new RouteCatalogStartupLifecycle({
     apply() {},
@@ -268,6 +322,7 @@ test("a direct stop cancellation failure keeps the pid until late close, then a 
         result: lateClose.promise,
         cancel() {
           cancels += 1;
+          if (closed) return Promise.resolve();
           return Promise.reject(new Error("direct stop could not confirm child exit"));
         }
       };
@@ -281,6 +336,7 @@ test("a direct stop cancellation failure keeps the pid until late close, then a 
   assert.equal(lifecycle.snapshot().childPid, 451);
   assert.equal(cancels, 1);
 
+  closed = true;
   lateClose.reject(new Error("child closed after cancellation deadline"));
   await waitFor(() => lifecycle.snapshot().childPid === undefined, "late direct-stop close did not clear pid");
   await lifecycle.stop();
