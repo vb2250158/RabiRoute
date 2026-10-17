@@ -2405,3 +2405,19 @@ test("Agent thread open locates the exact DSH session with its configured base U
     restoreDshAuth();
   }
 });
+
+test("thread bridge accepts thread IDs up to 512 characters and rejects longer ones", async () => {
+  const driver: AgentThreadDriver = {
+    read: async id => ({ id, title: "unused", cwd: process.cwd() }),
+    create: async () => { throw new Error("not used"); },
+    send: async () => { throw new Error("not used"); }
+  };
+  const options = { allowedWorkspaces: [process.cwd()] };
+  const request = (sourceThreadId: string) => ({ action: "send" as const, threadId: "019f0000-0000-7000-8000-000000000002", cwd: process.cwd(),
+    prompt: "Scoped task", sourceThreadId, sourceAgentType: "agent" as const, responsePolicy: "none" as const,
+    messageSource: { type: "agent" as const, agentAdapter: "codex" as const, sessionId: sourceThreadId, sessionName: "Long source" } });
+  for (const length of [90, 512]) {
+    await assert.rejects(handleAgentThreadRequest(request("x".repeat(length)), options, driver), (error: Error) => !/too long/.test(error.message));
+  }
+  await assert.rejects(handleAgentThreadRequest(request("x".repeat(513)), options, driver), /sourceThreadId is too long; maximum length is 512/);
+});
