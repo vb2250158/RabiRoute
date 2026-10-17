@@ -29,8 +29,11 @@ async function readBody(request: http.IncomingMessage, signal: AbortSignal): Pro
   } finally { signal.removeEventListener("abort", abort); }
 }
 
+/** Must exceed the 60-second DSH credential verification budget so slow DSH hosts can finish. */
+export const DSH_CONNECTION_REQUEST_TIMEOUT_MS = 90_000;
+
 export async function handleDshConnectionRequest(request: http.IncomingMessage, url: URL, store = new DshConnectionStore(), serviceSignal?: AbortSignal) {
-  const signal = serviceSignal ? AbortSignal.any([serviceSignal, AbortSignal.timeout(25000)]) : AbortSignal.timeout(25000);
+  const signal = serviceSignal ? AbortSignal.any([serviceSignal, AbortSignal.timeout(DSH_CONNECTION_REQUEST_TIMEOUT_MS)]) : AbortSignal.timeout(DSH_CONNECTION_REQUEST_TIMEOUT_MS);
   signal.throwIfAborted();
   const mutation = request.method !== "GET";
   if (url.pathname.endsWith("/connections") && mutation) throw new DshConnectionError("Unsupported DSH connection operation.", 405);
