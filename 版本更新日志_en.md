@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.53 - 2026-10-17
+
+- Restore saved placement after the first real animation establishes its canvas, preserving user drags completed while assets were loading.
+
 ## 0.3.52 - 2026-10-17
 
 - Restore saved monitor-relative placement after scale changes so shrinking a pet keeps its floor anchor; unrelated setting refreshes retain its current position.

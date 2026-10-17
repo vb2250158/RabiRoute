@@ -249,6 +249,18 @@ class DesktopPetController(QObject):
         self.window.set_persona_name(self.persona_name)
         self._apply_binding(binding)
 
+    def _play_animation(self, pack: DesktopPetPack, animation: LoadedDesktopPetAnimation) -> bool:
+        first_frame = not self.window.active_state
+        if self.window.play(pack, animation) is False:
+            return False
+        binding = self._binding_snapshot
+        if (first_frame and binding and binding.placement and not self.window.pointer_engaged and not self.window.travelling
+                and time.monotonic() >= self._manual_pause_until):
+            # The placeholder has a different canvas; its saved-position calculation
+            # must be repeated once the first real frame has established the size.
+            self.window.restore_placement(binding.placement)
+        return True
+
     def set_state(self, state_name: str, *, restart: bool = False) -> None:
         if self._closed:
             return
@@ -266,7 +278,7 @@ class DesktopPetController(QObject):
         requested = self._requested_state if self._requested_state in self._pack.states else "idle"
         cached_animation = self._animation_cache.get(requested)
         if cached_animation is not None:
-            if self.window.play(self._pack, cached_animation) is not False:
+            if self._play_animation(self._pack, cached_animation):
                 self._animation_retry_delay = 1500
                 self._idle_scheduler.state_started(cached_animation.state.name)
             else:
@@ -295,7 +307,7 @@ class DesktopPetController(QObject):
                     self.set_state(pending_state)
                     return
                 self._cache_animation(result)
-                if self.window.play(self._pack, result) is not False:
+                if self._play_animation(self._pack, result):
                     self._animation_retry_delay = 1500
                     self._idle_scheduler.state_started(result.state.name)
                 else:

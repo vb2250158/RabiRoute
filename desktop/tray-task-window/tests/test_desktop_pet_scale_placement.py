@@ -62,6 +62,34 @@ class PetScalePlacementTest(unittest.TestCase):
         self.controller._apply_binding(replace(self.binding, opacity=.8))
         self.assertEqual(self.window.pos(), QPoint(110, 120))
 
+    def unpainted_controller(self):
+        controller = DesktopPetController("http://127.0.0.1:1", "sample", lambda _: None)
+        self.addCleanup(controller.close)
+        controller._pack = self.controller._pack
+        controller._animation_cache = self.controller._animation_cache.copy()
+        controller.window.show_on_desktop()
+        controller._fullscreen_timer.stop()
+        controller._apply_binding(self.binding)
+        return controller
+
+    def test_first_frame_restores_placement_using_the_real_canvas(self):
+        controller = self.unpainted_controller()
+        controller.set_state("idle")
+        window = controller.window
+        self.assertEqual(window.x(), self.area.left() + round((self.area.width() - window.width()) * .25))
+        self.assertEqual(window.y(), self.area.bottom() + 1 - window.height())
+
+    def test_late_first_frame_does_not_undo_a_completed_drag(self):
+        controller = self.unpainted_controller()
+        pack = controller._pack
+        controller._pack = None
+        controller._drag_started()
+        controller.window.move(110, 120)
+        controller._drag_finished()
+        controller._pack = pack
+        controller.set_state("idle")
+        self.assertEqual(controller.window.pos(), QPoint(110, 120))
+
 
 if __name__ == "__main__":
     unittest.main()

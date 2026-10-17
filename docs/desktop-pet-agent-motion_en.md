@@ -69,3 +69,5 @@ Pet size uses native pixels: the pack canvas multiplied by the 10%–200% scale 
 Packs may add `lift` (one-shot pickup, then `drag`), `throw` (one-shot launch, then `airborne`), and looping `airborne` states. Flight keeps the airborne animation running with a small velocity-driven tilt and sway, without resizing the window. Landing or grabbing again clears the tilt and restores the current companion, speech or idle context. Older packs retain `drag`; these states do not enter the random idle pool.
 
 When settings change scale, Desktop reapplies the saved monitor and relative placement after resizing. A floor-anchored pet remains on the floor after growing against an edge and shrinking again. Other changes, such as opacity, retain its current travel position.
+
+Once the first animation establishes the real canvas size, Desktop reapplies saved placement to remove placeholder-size offsets. A drag completed while assets were loading retains its current position; a late first frame does not pull the pet back.
