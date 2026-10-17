@@ -769,7 +769,7 @@ export async function getCopilotStatus(ctx: AgentManagerApiContext): Promise<Rec
   } else {
     const whereCmd = process.platform === "win32" ? "where.exe" : "which";
     try {
-      const { stdout } = await execFileAsync(whereCmd, ["copilot"], { timeout: 2000 });
+      const { stdout } = await execFileAsync(whereCmd, ["copilot"], { timeout: 2000, windowsHide: true });
       const first = stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
         .find((p) => !p.endsWith(".ps1"));
       if (first) {
@@ -868,7 +868,7 @@ async function detectCopilotBins(resolveWingetCopilot?: () => string | null): Pr
   const whereCmd = process.platform === "win32" ? "where.exe" : "which";
   const copilotBins: string[] = [];
   try {
-    const { stdout } = await execFileAsync(whereCmd, ["copilot"], { timeout: 2000 });
+    const { stdout } = await execFileAsync(whereCmd, ["copilot"], { timeout: 2000, windowsHide: true });
     copilotBins.push(...stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean));
   } catch {
     // not found

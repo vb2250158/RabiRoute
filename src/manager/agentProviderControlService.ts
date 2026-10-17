@@ -52,6 +52,7 @@ export class CopilotControlService {
     return new Promise((resolve, reject) => {
       const child = this.scope.track(execFile("npm", ["install", "-g", "@github/copilot"], {
         shell: true,
+        windowsHide: true,
         timeout: 120_000,
         env: { ...process.env }
       }, (error, stdout, stderr) => {
@@ -70,7 +71,7 @@ export class CopilotControlService {
     const generation = ++this.generation;
     let copilotBin = "copilot";
     try {
-      const { stdout } = await execFileAsync(process.platform === "win32" ? "where.exe" : "which", ["copilot"], { timeout: 2_000 });
+      const { stdout } = await execFileAsync(process.platform === "win32" ? "where.exe" : "which", ["copilot"], { timeout: 2_000, windowsHide: true });
       const first = stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean)[0];
       if (first) copilotBin = first;
     } catch {}

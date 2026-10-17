@@ -6,6 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.55 - 2026-10-18
+
+- Hide the PowerShell console for Home Assistant OS background recovery. Refresh an existing task through foreground Start with administrator approval.
+- Hide console helpers used by NapCat detection, port queries, template extraction, Copilot discovery and installation, and opening configuration files.
+- Hide RabiSpeech audio conversion and speaker-model probe processes while preserving their output, timeouts and error handling.
+- Include the current Home Assistant OS installer in Developer candidates so upgrades cannot retain the old recovery launcher.
+
 ## 0.3.54 - 2026-10-17
 
 - Record accepted 0.3.53 pet installation, scale/first-frame placement fixes, production cross-monitor captures, full airborne looping and 222 passing regressions.

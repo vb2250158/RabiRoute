@@ -20,9 +20,10 @@ const knowledgeRuntimeFiles = Object.freeze([
 ]);
 const relayManifestPath = 'scripts/rabilink-relay-runtime-files.json';
 const retiredRelayFiles = Object.freeze(['scripts/rabilink-knowledge-grant.mjs', 'scripts/rabilink-knowledge-grant-ui.mjs']);
-const developerActivationFiles = Object.freeze([
+const developerMaintenanceFiles = Object.freeze([
   'scripts/Invoke-RabiRouteDeveloperApply.ps1',
-  'scripts/Publish-RabiRouteDeveloperCandidate.ps1'
+  'scripts/Publish-RabiRouteDeveloperCandidate.ps1',
+  'scripts/Install-HomeAssistantOs.ps1'
 ]);
 
 function readRelayRuntimeFiles(root) {
@@ -124,7 +125,7 @@ function createDeveloperCandidate(options) {
   requireFile(buildRoot, "packages/rabi-companion/presets.json");
   requireFile(buildRoot, "packages/rabi-companion/scene-rules.json");
   const relayRuntimeFiles = readRelayRuntimeFiles(buildRoot);
-  for (const relative of developerActivationFiles) requireFile(buildRoot, relative);
+  for (const relative of developerMaintenanceFiles) requireFile(buildRoot, relative);
   assertWebPluginEntries(buildRoot);
 
   fs.mkdirSync(versionsRoot, { recursive: true });
@@ -177,8 +178,8 @@ function createDeveloperCandidate(options) {
     for (const name of ["README.md", "README_zh.md", "版本更新日志.md", "版本更新日志_en.md"]) {
       fs.copyFileSync(requireFile(buildRoot, name), path.join(stagingRoot, name));
     }
-    // Relay imports and activation budgets must match this build; keep unrelated maintenance scripts intact.
-    for (const relative of [...relayRuntimeFiles, relayManifestPath, ...developerActivationFiles]) {
+    // Runtime launchers must match this build; keep unrelated maintenance scripts intact.
+    for (const relative of [...relayRuntimeFiles, relayManifestPath, ...developerMaintenanceFiles]) {
       const destination = path.join(stagingRoot, ...relative.split('/'));
       fs.mkdirSync(path.dirname(destination), { recursive: true });
       fs.copyFileSync(requireFile(buildRoot, relative), destination);

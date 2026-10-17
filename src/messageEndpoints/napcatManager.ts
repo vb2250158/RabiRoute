@@ -290,7 +290,7 @@ async function detectNapcatProcesses(): Promise<Array<{ name: string; pid: strin
       "} |",
       "ForEach-Object { \"$($_.Name)`t$($_.ProcessId)\" }"
     ].join(" ");
-    const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script], { timeout: 3000 });
+    const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script], { timeout: 3000, windowsHide: true });
     return String(stdout).split(/\r?\n/)
       .map(line => line.trim())
       .filter(Boolean)
@@ -647,7 +647,7 @@ function copyOrExtractNapcatTemplate(rootDir: string, targetDir: string): { work
       "Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force",
       sourceZip,
       targetDir
-    ], { stdio: "ignore" });
+    ], { stdio: "ignore", windowsHide: true });
     const nested = candidateNapcatShellDirs(targetDir).find((dir) => path.resolve(dir).startsWith(path.resolve(targetDir)));
     return { workingDir: nested || targetDir, steps };
   }
@@ -795,7 +795,7 @@ async function listeningPidsForPorts(ports: number[], strict = false): Promise<s
   const wanted = new Set(ports.filter((port) => Number.isInteger(port) && port > 0).map(String));
   if (wanted.size === 0 || process.platform !== "win32") return [];
   try {
-    const { stdout } = await execFileAsync("netstat.exe", ["-ano", "-p", "tcp"], { timeout: 3000 });
+    const { stdout } = await execFileAsync("netstat.exe", ["-ano", "-p", "tcp"], { timeout: 3000, windowsHide: true });
     const pids = new Set<string>();
     for (const line of String(stdout).split(/\r?\n/)) {
       if (!/\bLISTENING\b/i.test(line)) continue;
@@ -1988,7 +1988,7 @@ async function windowsPidsForCommandLineNeedle(needle: string | null, strict = f
       "Where-Object { $_.CommandLine -and $_.CommandLine.ToLowerInvariant().Contains($needle) } |",
       "Select-Object -ExpandProperty ProcessId"
     ].join(" ");
-    const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script], { timeout: 5000 });
+    const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script], { timeout: 5000, windowsHide: true });
     return String(stdout).split(/\r?\n/).map((line) => line.trim()).filter((line) => /^\d+$/.test(line));
   } catch (error) {
     if (strict) throw error;
@@ -2015,7 +2015,7 @@ async function windowsNapcatPidsForBotUserId(botUserId: string | number | undefi
       "Where-Object { $_.CommandLine -and $_.CommandLine -match ('(?i)napcat') -and $_.CommandLine -match ('(?<!\\S)-q\\s+' + [regex]::Escape($userId) + '(?!\\S)') } |",
       "Select-Object -ExpandProperty ProcessId"
     ].join(" ");
-    const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script], { timeout: 5000 });
+    const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script], { timeout: 5000, windowsHide: true });
     return String(stdout).split(/\r?\n/).map((line) => line.trim()).filter((line) => /^\d+$/.test(line));
   } catch (error) {
     if (strict) throw error;
@@ -2041,7 +2041,7 @@ async function windowsNapcatParentPids(pids: string[]): Promise<string[]> {
       "}",
       "$parents"
     ].join("\n");
-    const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script], { timeout: 5000 });
+    const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script], { timeout: 5000, windowsHide: true });
     return String(stdout).split(/\r?\n/).map((line) => line.trim()).filter((line) => /^\d+$/.test(line));
   } catch {
     return [];

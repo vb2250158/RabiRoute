@@ -702,6 +702,7 @@ def _probe_speaker_model(settings: SpeakerRecognitionSettings) -> str | None:
             capture_output=True,
             text=True,
             timeout=SPEAKER_MODEL_PROBE_TIMEOUT_SECONDS,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return f"Speaker model compatibility probe failed: {type(exc).__name__}: {exc}"

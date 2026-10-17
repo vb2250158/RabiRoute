@@ -86,7 +86,10 @@ class AudioTranscoder:
         if target_format == "pcm":
             command.extend(["-f", "s16le", "-acodec", "pcm_s16le"])
         command.append(str(output))
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=120, check=False)
+        completed = subprocess.run(
+            command, capture_output=True, text=True, timeout=120, check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
         if completed.returncode != 0:
             output.unlink(missing_ok=True)
             detail = (completed.stderr or completed.stdout or "ffmpeg failed").strip()[-1000:]

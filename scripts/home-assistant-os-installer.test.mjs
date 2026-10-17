@@ -8,6 +8,25 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+test("the registered HA OS recovery action hides PowerShell without changing its fixed command", { skip: process.platform !== "win32" }, () => {
+  const source = fileURLToPath(new URL("./Install-HomeAssistantOs.ps1", import.meta.url));
+  const script = `
+$ErrorActionPreference='Stop'; $tokens=$null; $errors=$null
+$ast=[System.Management.Automation.Language.Parser]::ParseFile('${source.replaceAll("'", "''")}',[ref]$tokens,[ref]$errors)
+if($errors.Count){throw 'Installer syntax errors'}
+$assignment=$ast.Find({param($node) $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$recoveryArguments'},$true)
+$recoveryCommand="Write-Output 'test-only-fixed-recovery'"
+Invoke-Expression $assignment.Extent.Text
+$action=New-ScheduledTaskAction -Execute "$env:SystemRoot\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Argument $recoveryArguments
+$action | Select-Object Execute,Arguments | ConvertTo-Json -Compress
+`;
+  const action = JSON.parse(execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { windowsHide: true, encoding: "utf8" }));
+  assert.match(action.Arguments, /(?:^| )-WindowStyle Hidden(?: |$)/);
+  assert.match(action.Arguments, /-NoProfile -NonInteractive/);
+  const encoded = action.Arguments.split("-EncodedCommand ")[1];
+  assert.equal(Buffer.from(encoded, "base64").toString("utf16le"), "Write-Output 'test-only-fixed-recovery'");
+});
+
 test("recovery task ownership accepts Windows-normalized account names and rejects other identities", { skip: process.platform !== "win32" }, () => {
   const source = fileURLToPath(new URL("./Install-HomeAssistantOs.ps1", import.meta.url));
   const script = `

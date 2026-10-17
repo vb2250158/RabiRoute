@@ -28,7 +28,7 @@ const knowledgeRuntimeFiles = [
   "apps/rabi-mcp/lib/knowledge-receipt.mjs"
 ];
 function writeKnowledgeRuntime(build) {
-  for (const name of ['Invoke-RabiRouteDeveloperApply.ps1', 'Publish-RabiRouteDeveloperCandidate.ps1']) {
+  for (const name of ['Invoke-RabiRouteDeveloperApply.ps1', 'Publish-RabiRouteDeveloperCandidate.ps1', 'Install-HomeAssistantOs.ps1']) {
     write(build, `scripts/${name}`, fs.readFileSync(new URL(`./${name}`, import.meta.url), 'utf8'));
   }
   write(build, "packages/rabi-companion/presets.json", '{"version":1,"presets":[]}');
@@ -84,6 +84,7 @@ test("developer candidate overlays only built runtime layers and leaves the immu
     write(base, 'scripts/local-maintenance.ps1', 'keep local maintenance\n');
     write(base, 'scripts/Invoke-RabiRouteDeveloperApply.ps1', 'obsolete activation budget\n');
     write(base, 'scripts/Publish-RabiRouteDeveloperCandidate.ps1', 'obsolete publisher budget\n');
+    write(base, 'scripts/Install-HomeAssistantOs.ps1', 'obsolete visible recovery launcher\n');
     fs.cpSync(new URL('../node_modules/ws', import.meta.url), path.join(base, 'node_modules/ws'), { recursive: true });
     writeKnowledgeRuntime(build);
     write(build, "dist/manager.js", "new manager\n");
@@ -139,7 +140,7 @@ test("developer candidate overlays only built runtime layers and leaves the immu
       assert.equal(fs.existsSync(path.join(base, 'scripts', name)), true);
     }
     assert.equal(fs.readFileSync(path.join(result.packageRoot, 'scripts/local-maintenance.ps1'), 'utf8'), 'keep local maintenance\n');
-    for (const name of ['Invoke-RabiRouteDeveloperApply.ps1', 'Publish-RabiRouteDeveloperCandidate.ps1']) {
+    for (const name of ['Invoke-RabiRouteDeveloperApply.ps1', 'Publish-RabiRouteDeveloperCandidate.ps1', 'Install-HomeAssistantOs.ps1']) {
       const relative = `scripts/${name}`;
       assert.equal(fs.readFileSync(path.join(result.packageRoot, relative), 'utf8'), fs.readFileSync(path.join(build, relative), 'utf8'));
       assert.ok(result.manifest.files.some(entry => entry.path === relative));

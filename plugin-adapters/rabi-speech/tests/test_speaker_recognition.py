@@ -486,6 +486,7 @@ def test_model_probe_allows_slow_windows_dependency_startup(tmp_path, monkeypatc
 
     def fake_run(*args, **kwargs):
         observed["timeout"] = kwargs["timeout"]
+        observed["creationflags"] = kwargs["creationflags"]
         return speaker_recognition.subprocess.CompletedProcess(args[0], 0, "", "")
 
     monkeypatch.setattr(speaker_recognition.subprocess, "run", fake_run)
@@ -493,6 +494,7 @@ def test_model_probe_allows_slow_windows_dependency_startup(tmp_path, monkeypatc
     assert speaker_recognition._probe_speaker_model(settings(tmp_path)) is None
     assert observed["timeout"] == speaker_recognition.SPEAKER_MODEL_PROBE_TIMEOUT_SECONDS
     assert observed["timeout"] >= 120
+    assert observed["creationflags"] == getattr(speaker_recognition.subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def test_validated_mode_fails_closed_when_report_does_not_match_runtime(tmp_path) -> None:

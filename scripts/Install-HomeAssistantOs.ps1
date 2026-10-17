@@ -100,7 +100,7 @@ $recoveryScript = Join-Path $recoveryDirectory 'Recover-HomeAssistantOs.ps1'
 $recoveryLog = Join-Path $recoveryDirectory 'recovery-run.log'
 $powershellPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
 $recoveryCommand = "try { & '" + $recoveryScript.Replace("'", "''") + "' -Operation 'Recover' -Root '" + $Root.Replace("'", "''") + "' -AutoStart 'yes'; exit " + '$LASTEXITCODE' + " } catch { [IO.File]::WriteAllText('" + $recoveryLog.Replace("'", "''") + "', " + '$_.Exception.ToString()' + "); exit 1 }"
-$recoveryArguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($recoveryCommand))
+$recoveryArguments = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($recoveryCommand))
 if (-not $administrator) {
     if ($Operation -eq 'Recover') {
         # Only reuse the exact helper authorized by a foreground Start/Install. No UAC in background.

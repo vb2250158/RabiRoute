@@ -30,7 +30,7 @@ function openFileWithDefaultApp(filePath: string): void {
   const target = path.resolve(filePath);
   const command = process.platform === "win32" ? "cmd" : process.platform === "darwin" ? "open" : "xdg-open";
   const args = process.platform === "win32" ? ["/c", "explorer", target] : [target];
-  const child = spawn(command, args, { detached: true, stdio: "ignore" });
+  const child = spawn(command, args, { detached: true, stdio: "ignore", windowsHide: true });
   child.unref();
 }
 

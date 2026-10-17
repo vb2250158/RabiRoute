@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 
 import numpy as np
 import pytest
@@ -59,3 +60,22 @@ def test_cross_format_conversion_still_requires_ffmpeg(tmp_path) -> None:
 
     with pytest.raises(RuntimeError, match="ffmpeg is required"):
         asyncio.run(transcoder.prepare(source, "mp3"))
+
+
+def test_cross_format_conversion_hides_ffmpeg_and_preserves_output(tmp_path, monkeypatch) -> None:
+    source = wav_artifact(tmp_path, channels=1)
+    observed = {}
+
+    def convert(command, **options):
+        observed.update(options)
+        from pathlib import Path
+        Path(command[-1]).write_bytes(b"test-only-mp3")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", convert)
+    result = asyncio.run(AudioTranscoder(tmp_path / "converted", ffmpeg="ffmpeg.exe").prepare(source, "mp3"))
+
+    assert observed["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    assert result.path.read_bytes() == b"test-only-mp3"
+    assert result.media_type == "audio/mpeg"
+    assert result.cleanup is True
