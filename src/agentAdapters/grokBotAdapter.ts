@@ -21,7 +21,6 @@ export type GrokBotAdapterDependencies = {
 export function grokBotConfigurationFromEnvironment(): GrokBotAdapterConfiguration {
   return { agentId: process.env.GROK_BOT_AGENT_ID?.trim(), sessionId: process.env.GROK_BOT_SESSION_ID?.trim(),
     sessionName: process.env.GROK_BOT_SESSION_NAME?.trim(),
-    profilePath: process.env.GROK_BOT_PROFILE_PATH?.trim(), backendUrl: process.env.GROK_BOT_BACKEND_URL?.trim() || undefined,
     dataDir: process.env.DATA_DIR?.trim() || path.join(process.cwd(), "data") };
 }
 export function resolveGrokBotConfiguredSession(configuration: GrokBotAdapterConfiguration): { agentId: string; sessionId: string; defaultMain?: true; id: string } {

@@ -39,6 +39,8 @@ test("room discovery returns native kind, members and canonical main without pri
   assert.equal(result.healthy, true);
   assert.equal(result.sessions[0].kind, "ROOM");
   assert.equal(result.sessions[0].nativeAgentId, "room");
+  assert.equal(result.bots[0].mainSessionId, result.sessions[0].id);
+  assert.ok(result.profilePath.endsWith("Grok Bot"));
   assert.deepEqual(result.sessions[0].memberAgentIds, ["member"]);
   assert.deepEqual(decodeGrokBotSessionId(result.sessions[0].id), { agentId: "room", sessionId: "", defaultMain: true });
 });

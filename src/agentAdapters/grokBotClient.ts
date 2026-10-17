@@ -242,10 +242,18 @@ async function protectedProfileFingerprint(profilePath: string): Promise<string>
       const file = path.join(profilePath, name);
       if ((await fsAsync.stat(file)).size > 4 * 1024 * 1024) throw new Error();
       const bytes = await fsAsync.readFile(file);
-      buffers.push(bytes); hash.update(name); hash.update(bytes);
+      buffers.push(bytes);
+      if (name === "desktop-status.json") {
+        const status = JSON.parse(bytes.toString("utf8"));
+        if (!Number.isSafeInteger(status.pid) || status.pid <= 0) throw new GrokBotError("GROK_BOT_NOT_RUNNING");
+        try { process.kill(status.pid, 0); }
+        catch { throw new GrokBotError("GROK_BOT_NOT_RUNNING"); }
+      }
+      hash.update(name); hash.update(bytes);
     }
     return hash.digest("hex");
   } catch (error) {
+    if (error instanceof GrokBotError) throw error;
     throw new GrokBotError((error as NodeJS.ErrnoException).code === "ENOENT" ? "GROK_BOT_PROFILE_MISSING" : "GROK_BOT_PROFILE_UNREADABLE");
   } finally { for (const buffer of buffers) buffer.fill(0); }
 }
