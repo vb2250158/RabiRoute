@@ -17,7 +17,7 @@ import {
   type CodexDesktopReasoningEffort,
   type CodexDesktopThread
 } from "./codexDesktopBridge.js";
-import { canonicalCodexWorkspacePath, isCodexTaskId, sameCodexWorkspace } from "./codexTaskIdentity.js";
+import { createCodexWorkspaceMatcher, isCodexTaskId, sameCodexWorkspace } from "./codexTaskIdentity.js";
 import { normalizeCodexThreadTitle } from "./shared/codexThreadTitle.js";
 import {
   resolveAndDeliverCodexSession,
@@ -312,7 +312,7 @@ export function mergeCodexDesktopThreadsWithMetadataForTest(
   options: { query?: string; limit?: number; offset?: number; allowedWorkspaces?: string[] } = {}
 ): CodexDesktopThread[] {
   const query = options.query?.trim().toLocaleLowerCase() ?? "";
-  const allowed = new Set((options.allowedWorkspaces ?? []).filter(Boolean).map(canonicalCodexWorkspacePath));
+  const workspaceAllowed = createCodexWorkspaceMatcher(options.allowedWorkspaces);
   const limit = Math.max(1, Math.min(10_000, Math.floor(options.limit ?? 20) || 20));
   const offset = Math.max(0, Math.floor(options.offset ?? 0) || 0);
   const localById = new Map(localThreads.map((thread) => [thread.id, thread]));
@@ -328,7 +328,7 @@ export function mergeCodexDesktopThreadsWithMetadataForTest(
     const metadataCwd = typeof metadata.cwd === "string" ? metadata.cwd.trim() : "";
     const cwd = metadataCwd || local.cwd;
     if (query && !title.toLocaleLowerCase().includes(query)) return [];
-    if (allowed.size > 0 && (!cwd || !allowed.has(canonicalCodexWorkspacePath(cwd)))) return [];
+    if (!workspaceAllowed(cwd)) return [];
     if (metadataCwd && local.cwd && !sameCodexWorkspace(metadataCwd, local.cwd)) return [];
     return [{
       ...local,

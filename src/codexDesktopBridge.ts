@@ -7,7 +7,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { canonicalCodexWorkspacePath } from "./codexTaskIdentity.js";
+import { createCodexWorkspaceMatcher } from "./codexTaskIdentity.js";
 
 export type CodexDesktopSandbox = "read-only" | "workspace-write" | "danger-full-access";
 export type CodexDesktopReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
@@ -215,7 +215,7 @@ export function listCodexDesktopThreadsFromRowsForTest(
   options: { query?: string; limit?: number; offset?: number; allowedWorkspaces?: string[]; includeArchived?: boolean } = {}
 ): CodexDesktopThread[] {
   const query = options.query?.trim().toLocaleLowerCase() ?? "";
-  const allowed = new Set((options.allowedWorkspaces ?? []).filter(Boolean).map(canonicalCodexWorkspacePath));
+  const workspaceAllowed = createCodexWorkspaceMatcher(options.allowedWorkspaces);
   const limit = Math.max(1, Math.min(10_000, Math.floor(options.limit ?? 20) || 20));
   const offset = Math.max(0, Math.floor(options.offset ?? 0) || 0);
   const byId = new Map<string, CodexDesktopThread>();
@@ -229,7 +229,7 @@ export function listCodexDesktopThreadsFromRowsForTest(
     const archived = Number(row.archived ?? 0) !== 0;
     if (!id || (archived && !options.includeArchived)) continue;
     if (query && !title.toLocaleLowerCase().includes(query)) continue;
-    if (allowed.size > 0 && (!cwd || !allowed.has(canonicalCodexWorkspacePath(cwd)))) continue;
+    if (!workspaceAllowed(cwd)) continue;
 
     const candidate = {
       id,
