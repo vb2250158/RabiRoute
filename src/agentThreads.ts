@@ -75,6 +75,7 @@ import {
   type AgentResponsePolicy
 } from "./agentRequests/store.js";
 
+const maxThreadIdLength = 512;
 const maxQueryLength = 240;
 const maxTitleInputLength = 200_000;
 const maxPromptLength = 200_000;
@@ -423,7 +424,7 @@ function optionalText(value: unknown, name: string, maxLength: number): string {
 }
 
 function normalizeThreadId(value: unknown): string {
-  const threadId = requiredText(value, "threadId", 80);
+  const threadId = requiredText(value, "threadId", maxThreadIdLength);
   if (!isCodexTaskId(threadId) && !isDshSessionId(threadId)) {
     throw new Error("Invalid threadId.");
   }
@@ -699,7 +700,7 @@ async function resolveAgentThreadSendSource(
       }
     };
   }
-  const rawSourceThreadId = optionalText(request.sourceThreadId, "sourceThreadId", 80);
+  const rawSourceThreadId = optionalText(request.sourceThreadId, "sourceThreadId", maxThreadIdLength);
   if (!rawSourceThreadId) {
     if (request.sourceAgentType != null) {
       throw new Error("sourceAgentType requires sourceThreadId.");
@@ -1066,7 +1067,7 @@ async function executeAgentThreadRequest(
 
   if (action === "resolve") {
     const agentAdapter = threadAgentAdapter(request);
-    const rawThreadId = optionalText(request.threadId, "threadId", 80);
+    const rawThreadId = optionalText(request.threadId, "threadId", maxThreadIdLength);
     const fallbackTitle = agentAdapter === "dsh"
       ? rawThreadId
       : (!isCodexTaskId(rawThreadId) ? rawThreadId : "");
