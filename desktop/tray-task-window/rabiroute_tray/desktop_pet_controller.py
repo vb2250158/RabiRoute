@@ -591,7 +591,11 @@ class DesktopPetController(QObject):
             bubble_enabled=binding.bubble_enabled,
             fps_cap=binding.fps_cap,
         )
-        if binding.placement and (previous is None or previous.placement != binding.placement):
+        # A larger size may clamp the window away from its saved anchor. Reapply
+        # that anchor after every size change, including shrinking back down.
+        if binding.placement and (
+            previous is None or previous.placement != binding.placement or previous.scale != binding.scale
+        ):
             self.window.cancel_travel()
             self.window.restore_placement(binding.placement)
         if binding.locked or (not binding.wander_enabled and not self._agent_motion.command):

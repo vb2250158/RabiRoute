@@ -30,4 +30,6 @@ The installed release is `0.3.50-00c1b4327a20`, built from `562b4a4c`, with acti
 
 ## Source integrated in the same batch
 
+Additional production-window scaling acceptance found that 0.3.50 retained the larger window's vertical position when shrinking from 75% to 50%, leaving a 128px gap. Version 0.3.52 reapplies saved placement after scale changes, with regressions for restoring the floor anchor and preserving current position on unrelated setting changes. Installed revalidation is recorded separately.
+
 [PR #6](https://github.com/vb2250158/RabiRoute/pull/6), [PR #7](https://github.com/vb2250158/RabiRoute/pull/7) and [PR #8](https://github.com/vb2250158/RabiRoute/pull/8) are included in the main history above. [PR #9](https://github.com/vb2250158/RabiRoute/pull/9), media inspector `860b4c15`, is merged with 0.3.51; six image/audio/video acceptance and rejection samples passed. This is source integration; the installed 0.3.50 package does not claim to include that later restoration.
