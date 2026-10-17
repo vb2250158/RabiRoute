@@ -6,7 +6,7 @@ import type {
 } from "./roleKnowledge.js";
 import type { PlanAttachmentPresentation } from "./shared/planAttachmentContract.js";
 import { planApprovalGate } from "./roleKnowledge.js";
-import { planActivationStatus, planCanAutoAdvance, planState } from "./planState.js";
+import { planActivationStatus, planCanAutoAdvance, planMarkerStatus, planState } from "./planState.js";
 import {
   personaPlanWorkflowRevision,
   validatePersonaPlanWorkflow,
@@ -109,8 +109,9 @@ function dateValue(primary: string | undefined, fallback: string | undefined): n
 }
 
 function definitionFor(plan: PlanItem, workflow: PersonaPlanWorkflow): PersonaPlanStatusDefinition {
-  const definition = planStatusDefinition(workflow, plan.status, { allowRetired: true });
-  if (!definition) throw new Error(`PLAN_STATUS_CONFIG_INVALID: ${plan.status} is not defined by this persona.`);
+  const marker = planMarkerStatus(plan);
+  const definition = planStatusDefinition(workflow, marker, { allowRetired: true, allowLegacyAliases: true });
+  if (!definition) throw new Error(`PLAN_STATUS_CONFIG_INVALID: ${marker} is not defined by this persona.`);
   return definition;
 }
 
@@ -126,6 +127,8 @@ function planPresentationForDefinition(
   workflow: PersonaPlanWorkflow,
   definition: PersonaPlanStatusDefinition
 ): PlanPresentation {
+  // Project only aliases declared by this persona; never migrate stored plans on reads.
+  plan = { ...plan, ...planState(plan, workflow), markerStatus: definition.key, status: definition.key };
   const approval = approvalPresentation(plan);
   if ((plan.markerStatus ?? plan.status) === workflow.roles.approved && planActivationStatus(plan, workflow) === "进行中") {
     approval.enabled = approval.state === "ready";
@@ -196,11 +199,14 @@ export function presentPlan(
   plan: PlanItem,
   workflow: PersonaPlanWorkflow
 ): PresentedPlanItem {
+  const definition = definitionFor(plan, workflow);
   return {
     ...plan,
     ...planState(plan, workflow),
+    markerStatus: definition.key,
+    status: definition.key,
     attachments: plan.attachments.map(({ path: _path, ...attachment }) => attachment),
-    presentation: planPresentation(plan, workflow)
+    presentation: planPresentationForDefinition(plan, workflow, definition)
   };
 }
 
@@ -217,15 +223,18 @@ export function presentPlans(
   // The lookup belongs to this batch, not to the caller's mutable workflow.
   // Each call still checks the content revision before using cached output.
   const validated = validatePersonaPlanWorkflow(workflow);
-  const definitions = new Map(validated.statuses.map(status => [status.key, status]));
+  const definitions = new Map(validated.statuses.flatMap(status =>
+    [status.key, ...status.legacyAliases].map(key => [key, status] as const)));
   const presented = plans
     .map(plan => {
-      const key = typeof plan.status === "string" ? plan.status.trim() : "";
+      const key = planMarkerStatus(plan);
       const definition = definitions.get(key);
-      if (!definition) throw new Error(`PLAN_STATUS_CONFIG_INVALID: ${plan.status} is not defined by this persona.`);
+      if (!definition) throw new Error(`PLAN_STATUS_CONFIG_INVALID: ${key} is not defined by this persona.`);
       return {
         ...plan,
         ...planState(plan, workflow),
+        markerStatus: definition.key,
+        status: definition.key,
         attachments: plan.attachments.map(({ path: _path, ...attachment }) => attachment),
         presentation: planPresentationForDefinition(plan, workflow, definition)
       };

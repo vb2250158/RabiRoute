@@ -58,14 +58,28 @@ export class PlanPageCatalogLifecycle<Input, Output> {
     return entry.stopFlight;
   }
 
-  private ensure(roleDir: string): Entry<Input, Output> {
+  private async ensure(roleDir: string): Promise<Entry<Input, Output>> {
     if (this.stopped) throw new Error("PLAN_CATALOG_STOPPED");
     const key = path.resolve(roleDir);
     const existing = this.entries.get(key);
-    if (existing) return existing;
-    if (this.entries.size >= this.options.maxRoles) throw new Error("PLAN_CATALOG_CAPACITY");
+    if (existing) {
+      existing.subscribers++;
+      return existing;
+    }
+    if (this.entries.size >= this.options.maxRoles) {
+      const idle = [...this.entries.entries()].find(([, entry]) =>
+        entry.prepared && !entry.invalidated && !entry.stopFlight
+        && entry.subscribers === 0 && entry.activeQueries === 0);
+      if (!idle) throw new Error("PLAN_CATALOG_CAPACITY");
+      const [idleKey, entry] = idle;
+      entry.invalidated = true;
+      // Keep admission occupied until the old owner's actual resources stop.
+      await this.stopOwner(entry);
+      if (this.entries.get(idleKey) === entry) this.entries.delete(idleKey);
+      return this.ensure(roleDir);
+    }
     const owner = this.options.create(key);
-    const entry: Entry<Input, Output> = { owner, ready: Promise.resolve(), prepared: false, activeQueries: 0, subscribers: 0, invalidated: false };
+    const entry: Entry<Input, Output> = { owner, ready: Promise.resolve(), prepared: false, activeQueries: 0, subscribers: 1, invalidated: false };
     this.entries.set(key, entry);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const expired = new Promise<never>((_resolve, reject) => {
@@ -104,21 +118,27 @@ export class PlanPageCatalogLifecycle<Input, Output> {
 
   /** Starts or joins shared preparation, independent of HTTP cancellation. */
   async prepare(roleDir: string): Promise<void> {
-    const entry = this.ensure(roleDir);
-    if (entry.invalidated) throw new Error("PLAN_CATALOG_DIRTY");
-    await entry.ready;
-    if (this.stopped) throw new Error("PLAN_CATALOG_STOPPED");
-    if (entry.invalidated) throw new Error("PLAN_CATALOG_DIRTY");
+    const entry = await this.ensure(roleDir);
+    try {
+      if (entry.invalidated) throw new Error("PLAN_CATALOG_DIRTY");
+      await entry.ready;
+      if (this.stopped) throw new Error("PLAN_CATALOG_STOPPED");
+      if (entry.invalidated) throw new Error("PLAN_CATALOG_DIRTY");
+    } finally { entry.subscribers--; }
   }
 
   async query(roleDir: string, input: Input, signal?: AbortSignal, readyOnly = false): Promise<Output> {
     if (signal?.aborted) throw new Error("PLAN_CATALOG_REQUEST_ABORTED");
-    const entry = this.ensure(roleDir);
-    if (entry.invalidated) throw new Error("PLAN_CATALOG_DIRTY");
-    if (entry.failure !== undefined) throw entry.failure;
-    if (entry.subscribers >= (this.options.maxQueriesPerRole ?? 8)) throw new Error("PLAN_CATALOG_QUERY_CAPACITY");
-    if (readyOnly && !entry.prepared) throw new PlanPageCatalogInitializingError();
-    entry.subscribers++;
+    const entry = await this.ensure(roleDir);
+    try {
+      if (entry.invalidated) throw new Error("PLAN_CATALOG_DIRTY");
+      if (entry.failure !== undefined) throw entry.failure;
+      if (readyOnly && !entry.prepared) throw new PlanPageCatalogInitializingError();
+      if (entry.subscribers > (this.options.maxQueriesPerRole ?? 8)) throw new Error("PLAN_CATALOG_QUERY_CAPACITY");
+    } catch (error) {
+      entry.subscribers--;
+      throw error;
+    }
     let abort: (() => void) | undefined;
     let onStop: (() => void) | undefined;
     const cancelled = new Promise<never>((_resolve, reject) => {

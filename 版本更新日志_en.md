@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.42 - 2026-10-17
+
+- Merge the storage recovery backup, preserving plan-directory retries, page-catalog recovery and role-knowledge refresh.
+
 ## 0.3.41 - 2026-10-17
 
 - Include the address-free discovery entry in the portable release contract regression and require its distribution alongside the Host endpoint hint.

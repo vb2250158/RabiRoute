@@ -298,6 +298,14 @@ export function inventoryPlanStorageDirectory(
   directory: string,
   lease?: PlanStorageLease
 ): PlanStorageInventory {
+  return readPlanStorageDirectoryInventory(directory, lease);
+}
+
+function readPlanStorageDirectoryInventory(
+  directory: string,
+  lease?: PlanStorageLease,
+  capture?: (entry: PlanStorageInventoryEntry, content: Buffer) => void
+): PlanStorageInventory {
   const root = path.resolve(directory);
   const rootStat = fs.lstatSync(root);
   if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
@@ -322,12 +330,14 @@ export function inventoryPlanStorageDirectory(
         || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) {
         throw new Error(`Plan storage entry changed during inventory: ${target}`);
       }
-      files.push({
+      const verifiedEntry = {
         path: relativePlanPath(target, root),
         bytes: content.byteLength,
         modifiedAt: after.mtime.toISOString(),
         sha256: sha256(content)
-      });
+      };
+      files.push(verifiedEntry);
+      capture?.(verifiedEntry, content);
     }
   };
   visit(root);
@@ -554,12 +564,13 @@ function validatePackageIdentity(planId: string, bucket: PlanStorageBucket, file
 }
 
 function physicalPackageInventory(directory: string): { hash: string; files: PlanStoragePackageFile[] } {
-  const inventory = inventoryPlanStorageDirectory(directory);
-  const files = inventory.files.map((entry) => {
-    const content = fs.readFileSync(path.join(directory, ...entry.path.split("/")));
-    return { path: entry.path, size: entry.bytes, sha256: entry.sha256, content };
+  const files: PlanStoragePackageFile[] = [];
+  const inventory = readPlanStorageDirectoryInventory(directory, undefined, (entry, content) => {
+    files.push({ path: entry.path, size: entry.bytes, sha256: entry.sha256, content });
   });
-  return { hash: packageInventoryHash(files), files };
+  files.sort((left, right) => left.path.localeCompare(right.path));
+  // The revision and response must describe the same verified bytes, not a second read.
+  return { hash: inventory.hash, files };
 }
 
 function packageSpecHash(input: CommitPlanStoragePackageInput, files: PlanStoragePackageFile[]): string {
@@ -1292,10 +1303,13 @@ export function recoverPlanLifecycleTransitions(
     let manifest: StoredPlanStorageLifecycleTransition | undefined;
     try {
       if (fs.existsSync(path.join(path.dirname(manifestPath), "receipt.json"))) continue;
-      manifest = readLifecycleManifest(manifestPath, resolvedRoleDir);
-      if (planId !== undefined && manifest.planId !== planId) {
+      const candidate = readLifecycleManifest(manifestPath, resolvedRoleDir);
+      if ((planId !== undefined && candidate.planId !== planId)
+        || path.resolve(manifestPath) !== path.join(root, candidate.storageId, candidate.transactionId, "manifest.json")) {
         throw new Error(`Plan storage lifecycle recovery scope mismatch: ${manifestPath}`);
       }
+      // Only an ownership-verified manifest may enter the retirement path.
+      manifest = candidate;
       const outcome = withPlanStorageLease(resolvedRoleDir, manifest.planId, (lease) =>
         completeLifecycleTransitionUnderLease(lease, manifest as StoredPlanStorageLifecycleTransition, path.dirname(manifestPath))
       );
@@ -1903,14 +1917,23 @@ export function recoverPlanStorageTransactions(
   roleDir: string,
   options: { kind?: "plan-feedback" | "plan-feedback-revision"; planId?: string } = {}
 ): PlanStorageTransactionRecoveryResult {
-  const root = path.join(plansRoot(roleDir), "quarantine", "plan-storage-transactions");
+  const resolvedRoleDir = path.resolve(roleDir);
+  const planId = options.planId === undefined ? undefined : canonicalLogicalPlanId(options.planId);
+  const root = path.join(plansRoot(resolvedRoleDir), "quarantine", "plan-storage-transactions");
   const result: PlanStorageTransactionRecoveryResult = { committed: 0, alreadyCommitted: 0, failures: [] };
-  const manifests = fixedDepthTransactionManifests(root, 3);
+  const manifests = planId === undefined
+    ? fixedDepthTransactionManifests(root, 3)
+    : options.kind
+      ? fixedDepthTransactionManifests(path.join(root, canonicalPlanStorageKey(planId), options.kind), 1)
+      : fixedDepthTransactionManifests(path.join(root, canonicalPlanStorageKey(planId)), 2);
   for (const manifestPath of manifests.sort()) {
     try {
-      const manifest = readStoredTransaction(manifestPath, roleDir);
+      const manifest = readStoredTransaction(manifestPath, resolvedRoleDir);
+      if ((planId !== undefined && manifest.planId !== planId)
+        || path.resolve(manifestPath) !== path.join(root, manifest.storageId, manifest.transactionKind, manifest.transactionId, "manifest.json")) {
+        throw new Error(`Plan storage transaction recovery scope mismatch: ${manifestPath}`);
+      }
       if (options.kind && manifest.transactionKind !== options.kind) continue;
-      if (options.planId && manifest.planId !== options.planId) continue;
       const transactionRoot = path.dirname(manifestPath);
       const outcome = withPlanStorageLease(manifest.roleDir, manifest.planId, (lease) =>
         applyStoredTransactionUnderLease(lease, manifest, transactionRoot)

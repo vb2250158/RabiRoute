@@ -10,6 +10,7 @@ import {
 import { readPersonaPlanWorkflow } from "../personaPlanWorkflow.js";
 import {
   getPlan,
+  getPlanAsync,
   getRoleSkill,
   listActiveRecentMemories,
   listArchivedMemories,
@@ -27,6 +28,7 @@ import {
   type RoleKnowledgeCatalogSnapshot
 } from "../roleKnowledge.js";
 import { listPlanFeedback, planFeedbackSummary } from "../planFeedback.js";
+import { listPlanFeedbackFromSnapshot } from "../planFeedbackStore.js";
 import { readPlanStoragePackage } from "../planStorageRepository.js";
 import { readRolePanelTimeline } from "../rolePanelTimeline.js";
 import type { RecentMessageContextQuery } from "../messageContextStore.js";
@@ -357,12 +359,19 @@ export async function execute(task: Exclude<ManagerReadWorkerTask, { type: "role
       return plan ? { plan, approval: planFeedbackSummary(task.roleDir, plan.id) } : null;
     }
     case "role_storage_plan_projection": {
-      const plan = getPlan(task.roleDir, task.planId);
-      return plan ? {
+      const plan = await getPlanAsync(task.roleDir, task.planId);
+      if (!plan) return null;
+      const storagePackage = readPlanStoragePackage(task.roleDir, plan.id,
+        plan.archiveStatus === "已归档" ? "archive" : "active");
+      const feedback = storagePackage.files.find(file => file.path === "feedback.jsonl");
+      const directory = path.dirname(path.join(task.roleDir, "plans", storagePackage.bucket,
+        storagePackage.storageId, "plan.json"));
+      const records = listPlanFeedbackFromSnapshot(feedback?.content.toString("utf8") ?? "", directory, plan.id);
+      return {
         plan,
-        revision: planStorageRevision(task.roleDir, plan),
-        approval: planFeedbackSummary(task.roleDir, plan.id)
-      } : null;
+        revision: storageInventoryRevisionToken(storagePackage.inventoryHash),
+        approval: { count: records.length, latest: records[0] }
+      };
     }
     case "role_plan_history": {
       const plan = getPlan(task.roleDir, task.planId);

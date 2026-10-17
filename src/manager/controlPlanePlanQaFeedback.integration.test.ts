@@ -4,7 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { readPlanStoragePackage } from "../planStorageRepository.js";
+import { readPlanStoragePackage, resolveCanonicalPlanStorageLocation } from "../planStorageRepository.js";
 import { createPlan } from "../roleKnowledge.js";
 import { storageInventoryRevisionToken } from "../shared/storageRevision.js";
 import { handlePersonaPluginApi } from "./controlPlaneRoutes.js";
@@ -44,6 +44,36 @@ function listen(server: http.Server): Promise<number> {
     });
   });
 }
+
+test("focused GET projects declared legacy markers without changing package bytes or ETag", async (t) => {
+  const { roleDir, roleStorageApplication } = createTestRoleStorage(t, "rabi-legacy-marker-read-");
+  createPlan(roleDir, { id: "legacy-marker", title: "Legacy marker", focus: "Read compatibility", keywords: ["legacy"], status: "分析中", currentStepId: "check", steps: [{ id: "check", title: "Check" }] });
+  const location = resolveCanonicalPlanStorageLocation(roleDir, "legacy-marker")!;
+  const stored = JSON.parse(fs.readFileSync(location.planFile, "utf8"));
+  stored.status = "进行中";
+  stored.markerStatus = "进行中";
+  fs.writeFileSync(location.planFile, JSON.stringify(stored));
+  const before = fs.readFileSync(location.planFile);
+  const revision = planRevision(roleDir, "legacy-marker");
+  const server = http.createServer((request, response) => {
+    const url = new URL(request.url || "/", "http://127.0.0.1");
+    if (!handlePersonaPluginApi(request, url, response, { roleDir: () => roleDir, roleStorageApplication })) response.writeHead(404).end();
+  });
+  const port = await listen(server);
+  t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
+  const endpoint = `http://127.0.0.1:${port}/api/roles/Rabi/plans/legacy-marker`;
+  const response = await fetch(endpoint);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("etag"), `"${revision}"`);
+  const data = (await response.json()).data;
+  assert.equal(data.markerStatus, "分析中");
+  assert.equal(data.presentation.status, "分析中");
+  assert.equal(data.activationStatus, "进行中");
+  const unchanged = await fetch(endpoint, { headers: { "if-plan-view-revision": response.headers.get("x-plan-view-revision")! } });
+  assert.equal(unchanged.status, 304);
+  assert.deepEqual(fs.readFileSync(location.planFile), before);
+  assert.equal(planRevision(roleDir, "legacy-marker"), revision);
+});
 
 test("a focused plan responds 304 for its current view revision and 200 after a plan change", async (t) => {
   const { application, roleDir, roleStorageApplication } = createTestRoleStorage(t, "rabi-focused-plan-cache-");

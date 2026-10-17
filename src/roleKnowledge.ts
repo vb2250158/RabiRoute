@@ -2604,7 +2604,7 @@ export function getPlan(roleDir: string, planId: string): PlanItem | null {
   return findPlanRecord(roleDir, canonicalPlanId)?.plan ?? null;
 }
 
-const PLAN_BY_ID_ASYNC_READ_CONCURRENCY = 8;
+const PLAN_BY_ID_ASYNC_READ_CONCURRENCY = 32;
 
 async function readPlanRecordAsync(
   filePath: string,

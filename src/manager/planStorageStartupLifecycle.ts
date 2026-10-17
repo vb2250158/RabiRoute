@@ -70,12 +70,13 @@ export function createPlanStorageStartupAttempt(input: Readonly<{
   rolesRoot: string;
   readOnly: boolean;
   terminateTimeoutMs?: number;
+  spawnChild?: typeof fork;
 }>): PlanStorageStartupAttempt {
   const childPath = fileURLToPath(new URL(
     import.meta.url.endsWith(".ts") ? "./planStorageStartupChild.ts" : "./planStorageStartupChild.js",
     import.meta.url
   ));
-  const child = fork(childPath, [], {
+  const child = (input.spawnChild ?? fork)(childPath, [], {
     env: {
       ...process.env,
       RABIROUTE_PLAN_STORAGE_STARTUP_INPUT: Buffer.from(JSON.stringify({
@@ -97,23 +98,29 @@ export function createPlanStorageStartupAttempt(input: Readonly<{
   let settled = false;
   let cancelFlight: Promise<void> | undefined;
   const result = new Promise<PlanStorageStartupGateSummary>((resolve, reject) => {
+    let received: StartupChildMessage | undefined;
     child.once("message", (message: StartupChildMessage) => {
-      if (settled) return;
-      settled = true;
-      if (message?.ok === true) resolve(message.summary);
-      else reject(new PlanStorageStartupAttemptError(
-        "Plan storage startup gate failed.",
-        message?.summary
-      ));
+      if (!settled) received = message;
     });
-    child.once("error", () => {
+    child.on("error", () => {
       if (settled) return;
+      // A spawned process may emit an error without exiting (for example kill failure).
+      // Its deadline/cancellation path must retain ownership until exit is confirmed.
+      if (child.pid !== undefined) return;
       settled = true;
       reject(new Error("Plan storage startup child process failed."));
     });
     child.once("exit", (code, signal) => {
       if (settled) return;
       settled = true;
+      if (received?.ok === true && code === 0 && signal === null) {
+        resolve(received.summary);
+        return;
+      }
+      if (received?.ok === false) {
+        reject(new PlanStorageStartupAttemptError("Plan storage startup gate failed.", received.summary));
+        return;
+      }
       reject(new Error(
         `Plan storage startup child exited without a result: code=${code ?? "none"}; signal=${signal ?? "none"}`
         + (diagnosticBytes > 0 ? `; diagnosticBytes=${diagnosticBytes}` : "")
@@ -208,10 +215,12 @@ export class PlanStorageStartupLifecycle {
     if (current) {
       current.settled = true;
       if (current.timeout) clearTimeout(current.timeout);
-      this.currentAttempt = undefined;
-      this.cancellationFlight = this.trackCancellation(current.value.cancel());
+      if (!this.cancellationFlight) {
+        this.cancellationFlight = this.trackCancellation(Promise.resolve().then(() => current.value.cancel()));
+      }
     }
     if (this.cancellationFlight) await this.cancellationFlight;
+    this.currentAttempt = undefined;
     this.readyListeners.clear();
     this.transition({ state: "stopped", incidents: 0, childPid: undefined, deadlineAt: undefined, nextRetryAt: undefined });
   }
@@ -233,7 +242,7 @@ export class PlanStorageStartupLifecycle {
   }
 
   private startAttempt(): void {
-    if (!this.active) return;
+    if (!this.active || this.currentAttempt || this.cancellationFlight) return;
     const attemptNumber = this.runtimeSnapshot.attempt + 1;
     let attempt: PlanStorageStartupAttempt;
     try {
@@ -259,10 +268,20 @@ export class PlanStorageStartupLifecycle {
     token.timeout = setTimeout(() => {
       if (token.settled) return;
       token.settled = true;
-      this.currentAttempt = undefined;
       const cancellation = Promise.resolve().then(() => attempt.cancel())
-        .then(() => this.failAttempt(new Error(`Plan storage startup attempt timed out after ${this.attemptTimeoutMs}ms.`), attemptNumber))
-        .catch(error => this.failAttempt(error instanceof Error ? error : new Error(String(error)), attemptNumber));
+        .then(() => {
+          if (this.currentAttempt === token) this.currentAttempt = undefined;
+          this.failAttempt(new Error(`Plan storage startup attempt timed out after ${this.attemptTimeoutMs}ms.`), attemptNumber);
+        })
+        .catch(error => {
+          // An unconfirmed termination still owns the storage writer slot.
+          // Leave the gate closed and retain its PID; never start a second recovery.
+          if (!this.active) throw error;
+          this.transition({
+            state: "degraded", incidents: 1, deadlineAt: undefined, nextRetryAt: undefined,
+            lastError: error instanceof Error ? error.message : String(error)
+          });
+        });
       this.cancellationFlight = this.trackCancellation(cancellation);
     }, this.attemptTimeoutMs);
     token.timeout.unref();

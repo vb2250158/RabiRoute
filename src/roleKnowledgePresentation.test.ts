@@ -64,6 +64,28 @@ test("presentation status is always the exact plan.status", () => {
   }
 });
 
+test("declared legacy markers are projected without mutating stored state", () => {
+  const item = plan("进行中", { markerStatus: "进行中", activationStatus: "进行中" });
+  const before = structuredClone(item);
+  const single = presentPlan(item, workflow);
+  const batch = presentPlans([item], workflow)[0];
+  for (const result of [single, batch]) {
+    assert.equal(result.status, "分析中");
+    assert.equal(result.markerStatus, "分析中");
+    assert.equal(result.activationStatus, "进行中");
+    assert.equal(result.presentation.status, "分析中");
+  }
+  assert.deepEqual(item, before);
+  assert.throws(() => presentPlan(plan("unknown-marker"), workflow), /PLAN_STATUS_CONFIG_INVALID/);
+  assert.throws(() => presentPlans([plan("unknown-marker")], workflow), /PLAN_STATUS_CONFIG_INVALID/);
+});
+
+test("canonical marker wins over a stale compatibility status", () => {
+  const item = plan("进行中", { markerStatus: "执行中", activationStatus: "进行中" });
+  assert.equal(presentPlan(item, workflow).presentation.status, "执行中");
+  assert.equal(presentPlans([item], workflow)[0].status, "执行中");
+});
+
 test("waiting text and step ids never override plan.status", () => {
   const item = plan("执行中", {
     currentStepId: "manual-verify-package-qa",

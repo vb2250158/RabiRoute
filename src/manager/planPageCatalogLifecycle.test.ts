@@ -2,6 +2,83 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { PlanPageCatalogInitializingError, PlanPageCatalogLifecycle } from "./planPageCatalogLifecycle.js";
 
+test("idle role owners release bounded capacity for new roles", async () => {
+  let live = 0, peak = 0, stops = 0;
+  const lifecycle = new PlanPageCatalogLifecycle<string, string>({
+    maxRoles: 4, buildTimeoutMs: 10000,
+    create: () => {
+      live++;
+      peak = Math.max(peak, live);
+      return { prepare: async () => {}, query: async input => input,
+        stop: async () => { live--; stops++; } };
+    }
+  });
+  try {
+    for (let index = 0; index < 12; index++) {
+      assert.equal(await lifecycle.query(`role-${index}`, `page-${index}`), `page-${index}`);
+    }
+    assert.equal(peak, 4);
+    assert.equal(stops, 8);
+    assert.equal(await lifecycle.query("role-0", "reopened"), "reopened");
+    assert.equal(peak, 4);
+  } finally { await lifecycle.stop(); }
+  assert.equal(live, 0);
+});
+
+test("idle eviction waits for actual termination and preserves admission under concurrency", async () => {
+  let releaseStop!: () => void;
+  let stopping!: () => void;
+  const stopEntered = new Promise<void>(resolve => { stopping = resolve; });
+  const stopped = new Promise<void>(resolve => { releaseStop = resolve; });
+  let creates = 0;
+  const lifecycle = new PlanPageCatalogLifecycle<string, string>({
+    maxRoles: 1, buildTimeoutMs: 10000,
+    create: () => {
+      const generation = ++creates;
+      return { prepare: async () => {}, query: async input => input,
+        stop: async () => { if (generation === 1) { stopping(); await stopped; } } };
+    }
+  });
+  try {
+    await lifecycle.query("first", "page");
+    const next = lifecycle.query("second", "next");
+    await stopEntered;
+    await assert.rejects(lifecycle.query("third", "page"), /CAPACITY/);
+    assert.equal(creates, 1);
+    releaseStop();
+    assert.equal(await next, "next");
+    assert.equal(creates, 2);
+  } finally { releaseStop(); await lifecycle.stop(); }
+});
+
+test("cancelled active work is not evicted until its query actually settles", async () => {
+  let finish!: (value: string) => void;
+  let entered!: () => void;
+  const running = new Promise<void>(resolve => { entered = resolve; });
+  let stops = 0;
+  const lifecycle = new PlanPageCatalogLifecycle<string, string>({
+    maxRoles: 1, buildTimeoutMs: 10000,
+    create: () => ({ prepare: async () => {},
+      query: async input => {
+        if (input !== "blocked") return input;
+        entered(); return new Promise<string>(resolve => { finish = resolve; });
+      }, stop: async () => { stops++; } })
+  });
+  try {
+    const controller = new AbortController();
+    const cancelled = assert.rejects(lifecycle.query("first", "blocked", controller.signal), /REQUEST_ABORTED/);
+    await running;
+    controller.abort();
+    await cancelled;
+    await assert.rejects(lifecycle.query("second", "page"), /CAPACITY/);
+    assert.equal(stops, 0);
+    finish("settled");
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(await lifecycle.query("second", "page"), "page");
+    assert.equal(stops, 1);
+  } finally { finish?.("settled"); await lifecycle.stop(); }
+});
+
 test("ready-only requests share preparation and distinguish a real empty page", async () => {
   let release!: () => void;
   const barrier = new Promise<void>(resolve => { release = resolve; });
@@ -107,8 +184,9 @@ test("cancelled running queries keep capacity until actual settlement", async ()
   resolveQuery("done");
   await new Promise<void>(resolve => setImmediate(resolve));
   const stopping = lifecycle.stop();
-  assert.equal(lifecycle.stop(), stopping);
-  await stopping;
+  // Instrumented builds retain each caller lease with a distinct Promise;
+  // idempotence belongs to the single underlying resource shutdown.
+  await Promise.all([stopping, lifecycle.stop()]);
   assert.equal(stops, 1);
 });
 

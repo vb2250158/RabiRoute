@@ -8,6 +8,7 @@ import {
   commitPlanLifecycleTransitionUnderLease,
   readCanonicalPlanStoragePackageUnderLease,
   recoverPlanLifecycleTransitions,
+  recoverPlanStorageTransactions,
   withPlanStorageLease,
   type PlanStoragePackageFile
 } from "./planStorageRepository.js";
@@ -92,6 +93,52 @@ test("scoped lifecycle recovery rejects another plan manifest inside the request
   assert.match(recovered.failures[0]!.error, /scope mismatch/);
   assert.equal(fs.existsSync(path.join(misplaced, "receipt.json")), false);
   assert.deepEqual(withPlanStorageLease(roleDir, "other-plan", lease => readCanonicalPlanStoragePackageUnderLease(lease)), before);
+});
+
+test("scoped lifecycle recovery never retires a foreign manifest after its owner advances", t => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "plan-lifecycle-foreign-retirement-"));
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const created = withPlanStorageLease(roleDir, "other-plan", lease => commitPlanLifecycleTransitionUnderLease(lease, {
+    transactionId: "foreign_create", kind: "plan-create", fromBucket: null, toBucket: "active",
+    files: revision("other-plan", "执行中", 1)
+  }));
+  const current = withPlanStorageLease(roleDir, "other-plan", lease => readCanonicalPlanStoragePackageUnderLease(lease));
+  withPlanStorageLease(roleDir, "other-plan", lease => commitPlanLifecycleTransitionUnderLease(lease, {
+    transactionId: "foreign_advance", kind: "plan-update", fromBucket: "active", toBucket: "active",
+    expectedSourceInventoryHash: current.inventoryHash, files: revision("other-plan", "完成", 2)
+  }));
+  const updated = withPlanStorageLease(roleDir, "other-plan", lease => readCanonicalPlanStoragePackageUnderLease(lease));
+  const interrupted = withPlanStorageLease(roleDir, "other-plan", lease => commitPlanLifecycleTransitionUnderLease(lease, {
+    transactionId: "foreign_interrupted", kind: "plan-update", fromBucket: "active", toBucket: "active",
+    expectedSourceInventoryHash: updated.inventoryHash, files: revision("other-plan", "完成", 4)
+  }));
+  const advanced = withPlanStorageLease(roleDir, "other-plan", lease => readCanonicalPlanStoragePackageUnderLease(lease));
+  withPlanStorageLease(roleDir, "other-plan", lease => commitPlanLifecycleTransitionUnderLease(lease, {
+    transactionId: "foreign_latest", kind: "plan-update", fromBucket: "active", toBucket: "active",
+    expectedSourceInventoryHash: advanced.inventoryHash, files: revision("other-plan", "完成", 5)
+  }));
+  const source = path.dirname(interrupted.receiptPath);
+  const misplaced = path.join(path.dirname(path.dirname(source)), "request-plan", "foreign_interrupted");
+  fs.cpSync(source, misplaced, { recursive: true });
+  fs.unlinkSync(path.join(misplaced, "receipt.json"));
+  const recovered = recoverPlanLifecycleTransitions(roleDir, { planId: "request-plan" });
+  assert.equal(recovered.abandoned.length, 0);
+  assert.equal(recovered.failures.length, 1);
+  assert.equal(fs.existsSync(path.join(misplaced, "receipt.json")), false);
+});
+
+test("scoped feedback recovery does not parse another plan's corrupt transaction", t => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "plan-feedback-scoped-recovery-"));
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const root = path.join(roleDir, "plans", "quarantine", "plan-storage-transactions", "other-plan", "plan-feedback", "broken");
+  fs.mkdirSync(root, { recursive: true });
+  const manifest = path.join(root, "manifest.json");
+  fs.writeFileSync(manifest, "invalid-json");
+  assert.deepEqual(recoverPlanStorageTransactions(roleDir, { planId: "request-plan" }), {
+    committed: 0, alreadyCommitted: 0, failures: []
+  });
+  assert.equal(fs.readFileSync(manifest, "utf8"), "invalid-json");
+  assert.equal(recoverPlanStorageTransactions(roleDir).failures.length, 1);
 });
 
 test("lifecycle repository publishes complete create, update, and archive snapshots and recovers a missing receipt", (t) => {
