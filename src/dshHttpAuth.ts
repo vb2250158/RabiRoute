@@ -198,14 +198,17 @@ export async function migrateDshOwner(baseUrl: string, expectedRevision: number,
   return { baseUrl: origin, state: 'connected', expiresAt: credential.expiresAt, revision: store.readMetadata().revision };
 }
 
+const DSH_CONNECTION_VERIFY_TIMEOUT_MS = 60_000;
+const DSH_CONNECTION_VERIFY_MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
+
 async function verifyDshCredential(origin: string, cookie: string, signal?: AbortSignal, assertAuthorized?: () => void): Promise<void> {
   assertAuthorized?.();
   const rpcId = randomUUID();
   let response: Response;
   try {
-    response = await fetch(`${origin}/api/session/list`, { method: 'POST', redirect: 'manual', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10000)]) : AbortSignal.timeout(10000),
+    response = await fetch(`${origin}/api/session/list`, { method: 'POST', redirect: 'manual', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(DSH_CONNECTION_VERIFY_TIMEOUT_MS)]) : AbortSignal.timeout(DSH_CONNECTION_VERIFY_TIMEOUT_MS),
       headers: { 'content-type': 'application/json', cookie },
-      body: JSON.stringify({ type: 'client-request', rpcId, method: 'session/list', payload: { args: { _request: {} } } }) });
+      body: JSON.stringify({ type: 'client-request', rpcId, method: 'session/list', payload: { args: [{ _request: { paged: true } }] } }) });
   } catch {
     assertAuthorized?.();
     throw new DshConnectionError('DSH connection verification failed; no task message was sent.', 502);
@@ -223,7 +226,7 @@ async function verifyDshCredential(origin: string, cookie: string, signal?: Abor
       assertAuthorized?.();
       if (done) break;
       length += value.byteLength;
-      if (length > 8 * 1024 * 1024) {
+      if (length > DSH_CONNECTION_VERIFY_MAX_RESPONSE_BYTES) {
         await reader.cancel();
         throw new DshConnectionError('DSH connection verification response is too large.', 502);
       }

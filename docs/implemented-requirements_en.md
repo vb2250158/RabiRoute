@@ -18,6 +18,7 @@ Code integration and installed acceptance are recorded separately. Deployment st
 | One-shot `lift` and `throw`, looping `airborne`, slight flight tilt | `20a88832` | Same machine, 0.3.53 with v20; correct phase order, all 34 airborne frames and one complete loop observed; landing reset tilt |
 | Developer readiness deadline covers Host startup | `562b4a4c` | Same machine, 0.3.53; controlled activation and Host/Manager/Tray identity checks passed without rollback |
 | Raise the thread bridge threadId/sourceThreadId limit from 80 to 512 (#10) | PR #10 | 68 targeted tests passed; backend build and type checking passed |
+| Use the first paged session/list result for DSH reconnect validation, with a 60-second timeout and 32 MiB response limit (#11) | PR #11 | Pagination, slow/large response boundary tests and backend build pending PR validation |
 
 Drag fixtures use real Qt windows, monitors and native coordinates with pointer traces injected inside the test process. They do not establish manual mouse acceptance. See [the motion contract](desktop-pet-agent-motion_en.md) for action semantics, stride calibration and APIs. Check the source pack, persona binding and runtime cache separately; importing a pack does not activate it.
 

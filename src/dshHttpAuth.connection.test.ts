@@ -99,7 +99,7 @@ test("explicit DSH connection verifies owner RPC, protects credentials and rejec
         "set-cookie": `${cookieName}=v1.fixture.signature; Path=/; HttpOnly; SameSite=Strict; Max-Age=3600` } });
       assert.equal(url.pathname, "/api/session/list");
       const body = JSON.parse(String(init?.body));
-      assert.deepEqual(body.payload, { args: { _request: {} } });
+      assert.deepEqual(body.payload, { args: [{ _request: { paged: true } }] });
       return Response.json({ rpcId: body.rpcId, result: { ok: true, value: { items: [] } } });
     };
     const connected = await connectDshOwner(`${origin}/?token=fixture-token`, 0, store);
@@ -130,5 +130,94 @@ test("explicit DSH connection verifies owner RPC, protects credentials and rejec
     };
     await assert.rejects(connectDshOwner(`${origin}/?token=fixture-token`, 2, store, controller.signal));
     assert.equal(store.readMetadata().revision, 2);
+  } finally { globalThis.fetch = prior; fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("DSH connection validation requests only the first page and accepts responses above 8 MiB", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-connect-paged-large-"));
+  const store = new DshConnectionStore(path.join(root, "connections.json"), {
+    scheme: "test", protect: text => Buffer.from(text).toString("base64"), unprotect: text => Buffer.from(text, "base64").toString("utf8")
+  });
+  const prior = globalThis.fetch;
+  const origin = "http://127.0.0.1:39271";
+  const cookieName = `dsh-auth-${createHash("sha256").update(new URL(origin).host).digest("base64url")}`;
+  let rpcSignal: AbortSignal | undefined;
+  try {
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/") return new Response(null, { status: 303, headers: { location: "/", "set-cookie": `${cookieName}=v1.fixture.signature; Path=/; HttpOnly; SameSite=Strict; Max-Age=3600` } });
+      const body = JSON.parse(String(init?.body));
+      assert.deepEqual(body.payload, { args: [{ _request: { paged: true } }] });
+      rpcSignal = init?.signal as AbortSignal;
+      const prefix = Buffer.from(JSON.stringify({ rpcId: body.rpcId, result: { ok: true, value: { items: [] } } }));
+      const padding = Buffer.alloc(9 * 1024 * 1024, 32);
+      let sent = false;
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (sent) { controller.close(); return; }
+          sent = true;
+          controller.enqueue(prefix);
+          controller.enqueue(padding);
+        }
+      });
+      return new Response(stream, { status: 200 });
+    };
+    const connected = await connectDshOwner(`${origin}/?token=fixture-token`, 0, store);
+    assert.equal(connected.state, "connected");
+    assert.equal(rpcSignal?.aborted, false);
+  } finally { globalThis.fetch = prior; fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("DSH connection validation accepts a response taking longer than the former 10-second timeout", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-connect-slow-"));
+  const store = new DshConnectionStore(path.join(root, "connections.json"), {
+    scheme: "test", protect: text => Buffer.from(text).toString("base64"), unprotect: text => Buffer.from(text, "base64").toString("utf8")
+  });
+  const prior = globalThis.fetch;
+  const origin = "http://127.0.0.1:39273";
+  const cookieName = `dsh-auth-${createHash("sha256").update(new URL(origin).host).digest("base64url")}`;
+  let rpcSignal: AbortSignal | undefined;
+  try {
+    globalThis.fetch = async (input, init) => {
+      if (new URL(String(input)).pathname === "/") return new Response(null, { status: 303, headers: { location: "/", "set-cookie": `${cookieName}=v1.fixture.signature; Path=/; HttpOnly; SameSite=Strict; Max-Age=3600` } });
+      const body = JSON.parse(String(init?.body));
+      rpcSignal = init?.signal as AbortSignal;
+      await new Promise(resolve => setTimeout(resolve, 10_100));
+      assert.equal(rpcSignal.aborted, false);
+      return Response.json({ rpcId: body.rpcId, result: { ok: true } });
+    };
+    const connected = await connectDshOwner(`${origin}/?token=fixture-token`, 0, store);
+    assert.equal(connected.state, "connected");
+    assert.equal(rpcSignal?.aborted, false);
+  } finally { globalThis.fetch = prior; fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("DSH connection validation rejects responses above 32 MiB", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-connect-over-limit-"));
+  const store = new DshConnectionStore(path.join(root, "connections.json"), {
+    scheme: "test", protect: text => Buffer.from(text).toString("base64"), unprotect: text => Buffer.from(text, "base64").toString("utf8")
+  });
+  const prior = globalThis.fetch;
+  const origin = "http://127.0.0.1:39272";
+  const cookieName = `dsh-auth-${createHash("sha256").update(new URL(origin).host).digest("base64url")}`;
+  try {
+    globalThis.fetch = async (input, init) => {
+      if (new URL(String(input)).pathname === "/") return new Response(null, { status: 303, headers: { location: "/", "set-cookie": `${cookieName}=v1.fixture.signature; Path=/; HttpOnly; SameSite=Strict; Max-Age=3600` } });
+      const body = JSON.parse(String(init?.body));
+      const prefix = Buffer.from(JSON.stringify({ rpcId: body.rpcId, result: { ok: true } }));
+      const padding = Buffer.alloc(33 * 1024 * 1024, 32);
+      let sent = false;
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (sent) { controller.close(); return; }
+          sent = true;
+          controller.enqueue(prefix);
+          controller.enqueue(padding);
+        }
+      });
+      return new Response(stream, { status: 200 });
+    };
+    await assert.rejects(connectDshOwner(`${origin}/?token=fixture-token`, 0, store), /too large/);
+    assert.equal(store.readMetadata().connections.length, 0);
   } finally { globalThis.fetch = prior; fs.rmSync(root, { recursive: true, force: true }); }
 });
