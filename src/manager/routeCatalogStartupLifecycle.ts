@@ -509,6 +509,20 @@ export class RouteCatalogStartupLifecycle {
       return Promise.reject(new Error("Route catalog lifecycle is stopped."));
     }
     if (this.hardBlocked) {
+      const token = this.currentAttempt;
+      if (token) {
+        // A progressive attempt can reject before its children have closed.
+        // Recheck the original owner; never infer closure from result settlement.
+        return token.attempt.cancel().then(() => {
+          if (this.currentAttempt === token) {
+            token.exitConfirmed = true;
+            this.currentAttempt = undefined;
+            this.hardBlocked = false;
+            this.transition({ childPid: undefined, lastErrorCode: undefined });
+          }
+          return this.enqueue(operation, operationIdValue);
+        });
+      }
       return Promise.reject(new Error(
         "Route catalog lifecycle is blocked because child termination was not confirmed."
       ));
@@ -725,8 +739,7 @@ export class RouteCatalogStartupLifecycle {
       .then(() => {
         if (this.currentAttempt === token) this.currentAttempt = undefined;
         if (!this.stopped) {
-          if (error instanceof StorageTerminationError) this.blockAfterUnconfirmedTermination(token, entry, error);
-          else this.failEntry(entry, error, errorCode);
+          this.failEntry(entry, error, error instanceof StorageTerminationError ? ROUTE_CATALOG_STARTUP_ERROR_CODE : errorCode);
         }
       })
       .catch(terminationError => {
@@ -858,11 +871,14 @@ export class RouteCatalogStartupLifecycle {
   private observeLateAttemptExit(token: AttemptToken): void {
     if (token.exitObserverAttached) return;
     token.exitObserverAttached = true;
-    void token.attempt.result.catch(() => {}).finally(() => {
+    void token.attempt.result.catch(() => {}).then(async () => {
+      try { await token.attempt.cancel(); } catch { return; }
       token.exitConfirmed = true;
-      if (this.currentAttempt === token) this.currentAttempt = undefined;
+      if (this.currentAttempt !== token) return;
+      this.currentAttempt = undefined;
+      if (!this.stopped) this.hardBlocked = false;
       if (this.runtimeSnapshot.state !== "stopped") {
-        this.transition({ childPid: undefined });
+        this.transition({ childPid: undefined, ...(!this.stopped ? { lastErrorCode: undefined } : {}) });
       }
     });
   }

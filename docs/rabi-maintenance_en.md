@@ -6,6 +6,10 @@ English | <a href="./rabi-maintenance.md">简体中文</a>
 
 # Long-term Rabi maintenance and self-repair
 
+Route catalog child termination timeouts block configuration saves. A later save or receipt lookup rechecks closure with the original process owner. Replacement writes remain blocked until closure is confirmed, after which the current request may proceed. An aggregate task failure is not proof that its children exited; failed or uncertain saves are not automatically replayed.
+
+Saving one Route validates only the delivery rules being written, so unrelated unmigrated Routes do not block the save. Preview and migrate the current persona's legacy delivery rules with `scripts/migrate-agent-delivery-targets.ts`; it preserves snapshots, checks original files, and derives explicit targets from the existing delivery settings.
+
 > Status: an Agent maintenance workflow. Configure and read back the plan, task binding, and scheduled triggers in the current installation. This document is not evidence that all bugs are fixed or a daemon independent of Desktop.
 
 ## P0: available APIs, matching documentation, and safe hot patches

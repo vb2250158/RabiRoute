@@ -404,10 +404,14 @@ export class ManagerConfigRepository {
 
   writeConfig(config: GatewayConfigFile, scope?: { configName: string; previousId: string }): GatewayConfigFile {
     if (!Array.isArray(config.gateways)) throw new Error("routes must be an array");
-    for (const gateway of config.gateways) for (const rule of gateway.automationRules ?? []) {
-      if (rule.action.type === "deliver_agent") {
-        if (!rule.action.target) throw new Error("Agent delivery target is required; migrate legacy rules before saving.");
-        validateAgentDeliveryTarget(normalizeAgentDeliveryTarget(rule.action.target));
+    for (const gateway of config.gateways) {
+      const configName = sanitizeConfigName(gateway.configName) || routeRuntimeParts(gateway.id).configName;
+      if (scope && configName !== scope.configName) continue;
+      for (const rule of gateway.automationRules ?? []) {
+        if (rule.action.type === "deliver_agent") {
+          if (!rule.action.target) throw new Error("Agent delivery target is required; migrate legacy rules before saving.");
+          validateAgentDeliveryTarget(normalizeAgentDeliveryTarget(rule.action.target));
+        }
       }
     }
     const normalized = { gateways: config.gateways.map((definition) => this.normalize(definition)) };

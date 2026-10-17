@@ -19,6 +19,30 @@ function writeJson(filePath: string, value: unknown): void {
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf8");
 }
 
+test("scoped Route saves preserve unrelated legacy delivery rules without validating or rewriting them", () => {
+  const rootDir = makeTempRoot();
+  try {
+    const repo = new ManagerConfigRepository({ rootDir, managerPort: 31_337 });
+    const current = { id: "current", configName: "current", gatewayPort: 23001, agentRoleId: "Current" };
+    const legacyRule = { id: "legacy", trigger: { type: "message", routeKinds: ["private"] }, action: { type: "deliver_agent", template: "keep" } };
+    const otherPath = repo.adapterConfigPath("other");
+    const personaPath = repo.personaConfigPath("Other");
+    writeJson(repo.adapterConfigPath("current"), current);
+    writeJson(otherPath, { gatewayPort: 23002, agentRoleId: "Other" });
+    writeJson(personaPath, { automationRules: [legacyRule] });
+    const otherBefore = fs.readFileSync(otherPath);
+    const personaBefore = fs.readFileSync(personaPath);
+    const config = repo.readConfig();
+    const selected = config.gateways.find(route => route.id === "current")!;
+    selected.agentAdapters = ["codex", "grokBot"];
+    repo.writeConfig(config, { configName: "current", previousId: "current" });
+    assert.deepEqual(JSON.parse(fs.readFileSync(repo.adapterConfigPath("current"), "utf8")).agentAdapters, ["codex", "grokBot"]);
+    assert.deepEqual(fs.readFileSync(otherPath), otherBefore);
+    assert.deepEqual(fs.readFileSync(personaPath), personaBefore);
+    assert.throws(() => repo.writeConfig(config), /Agent delivery target is required/);
+  } finally { fs.rmSync(rootDir, { recursive: true, force: true }); }
+});
+
 test("remote persona references save and reload without reading or overwriting same-name local configuration", async () => {
   const rootDir = makeTempRoot();
   try {
