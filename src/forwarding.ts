@@ -1,4 +1,5 @@
 import path from "node:path";
+import { appendDesktopPetTranscript } from "./desktopPetTranscript.js";
 import { executeAgentDelivery } from "./automation/agentDelivery.js";
 import { deliverSessionOnce } from "./automation/sessionDelivery.js";
 import { resolveAgentDeliveryExecutor, type AgentSessionDestination } from "./shared/agentDeliveryTarget.js";
@@ -939,6 +940,12 @@ function recordInboundForRoutes(
       && resolvedDataDir !== path.resolve(config.memoryDataDir)
       && !recordedRawDirs.has(resolvedDataDir)) {
       appendRecordToRoleDataDir(record, roleContext.personaDataDir);
+      if (isVoiceTranscriptRecord(record) && roleContext.roleId && roleContext.roleDir) {
+        appendDesktopPetTranscript(roleContext.roleId, roleContext.personaDataDir, {
+          kind: "asr", id: String(record.messageId), text: record.rawMessage, time: record.time,
+          source: record.adapterType ?? "voice"
+        });
+      }
       recordedRawDirs.add(resolvedDataDir);
     }
   }
