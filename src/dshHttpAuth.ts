@@ -208,7 +208,7 @@ async function verifyDshCredential(origin: string, cookie: string, signal?: Abor
   try {
     response = await fetch(`${origin}/api/session/list`, { method: 'POST', redirect: 'manual', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(DSH_CONNECTION_VERIFY_TIMEOUT_MS)]) : AbortSignal.timeout(DSH_CONNECTION_VERIFY_TIMEOUT_MS),
       headers: { 'content-type': 'application/json', cookie },
-      body: JSON.stringify({ type: 'client-request', rpcId, method: 'session/list', payload: { args: [{ _request: { paged: true } }] } }) });
+      body: JSON.stringify({ type: 'client-request', rpcId, method: 'session/list', payload: { args: { _request: { paged: true } } } }) });
   } catch {
     assertAuthorized?.();
     throw new DshConnectionError('DSH connection verification failed; no task message was sent.', 502);
@@ -237,9 +237,22 @@ async function verifyDshCredential(origin: string, cookie: string, signal?: Abor
     throw new DshConnectionError('DSH connection verification was interrupted; no authentication was saved.', 502);
   } finally { reader.releaseLock(); }
   const text = Buffer.concat(chunks).toString('utf8');
-  let value: { rpcId?: string; result?: { ok?: boolean } };
+  let value: { rpcId?: string; result?: { ok?: boolean; error?: { code?: unknown; message?: unknown } } };
   try { value = JSON.parse(text); } catch { throw new DshConnectionError('DSH connection verification returned an invalid response.', 502); }
-  if (value.rpcId !== rpcId || value.result?.ok !== true) throw new DshConnectionError('DSH session API is not ready; no authentication was saved.', 502);
+  if (value.rpcId !== rpcId || value.result?.ok !== true) {
+    throw new DshConnectionError(`DSH session API is not ready; no authentication was saved.${dshVerifyErrorDetail(value.result?.error)}`, 502);
+  }
+}
+
+/** Surface DSH's own error code and message, bounded and with any credential-like text redacted. */
+export function dshVerifyErrorDetail(error: { code?: unknown; message?: unknown } | undefined): string {
+  if (!error || typeof error !== 'object') return '';
+  const clean = (value: unknown) => typeof value === 'string' || typeof value === 'number'
+    ? String(value).replace(/[\r\n\u2028\u2029]+/g, ' ').replace(/dsh-auth-[^\s;=]*=[^\s;]*|token=[^\s&;]*|cookie[^\s]*/gi, '[redacted]').slice(0, 300)
+    : '';
+  const code = clean(error.code);
+  const message = clean(error.message);
+  return code || message ? ` DSH error${code ? ` ${code}` : ''}${message ? `: ${message}` : ''}` : '';
 }
 
 /** Authenticate before dispatch. Never retry an RPC, including after a 401. */

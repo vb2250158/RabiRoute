@@ -99,7 +99,7 @@ test("explicit DSH connection verifies owner RPC, protects credentials and rejec
         "set-cookie": `${cookieName}=v1.fixture.signature; Path=/; HttpOnly; SameSite=Strict; Max-Age=3600` } });
       assert.equal(url.pathname, "/api/session/list");
       const body = JSON.parse(String(init?.body));
-      assert.deepEqual(body.payload, { args: [{ _request: { paged: true } }] });
+      assert.deepEqual(body.payload, { args: { _request: { paged: true } } });
       return Response.json({ rpcId: body.rpcId, result: { ok: true, value: { items: [] } } });
     };
     const connected = await connectDshOwner(`${origin}/?token=fixture-token`, 0, store);
@@ -147,7 +147,7 @@ test("DSH connection validation requests only the first page and accepts respons
       const url = new URL(String(input));
       if (url.pathname === "/") return new Response(null, { status: 303, headers: { location: "/", "set-cookie": `${cookieName}=v1.fixture.signature; Path=/; HttpOnly; SameSite=Strict; Max-Age=3600` } });
       const body = JSON.parse(String(init?.body));
-      assert.deepEqual(body.payload, { args: [{ _request: { paged: true } }] });
+      assert.deepEqual(body.payload, { args: { _request: { paged: true } } });
       rpcSignal = init?.signal as AbortSignal;
       const prefix = Buffer.from(JSON.stringify({ rpcId: body.rpcId, result: { ok: true, value: { items: [] } } }));
       const padding = Buffer.alloc(9 * 1024 * 1024, 32);
@@ -220,4 +220,36 @@ test("DSH connection validation rejects responses above 32 MiB", async () => {
     await assert.rejects(connectDshOwner(`${origin}/?token=fixture-token`, 0, store), /too large/);
     assert.equal(store.readMetadata().connections.length, 0);
   } finally { globalThis.fetch = prior; fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("DSH verification sends object args and reports DSH's error without credentials", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-connect-object-args-"));
+  const store = new DshConnectionStore(path.join(root, "connections.json"), {
+    scheme: "test", protect: text => Buffer.from(text).toString("base64"), unprotect: text => Buffer.from(text, "base64").toString("utf8")
+  });
+  const prior = globalThis.fetch;
+  const origin = "http://127.0.0.1:39279";
+  const cookieName = `dsh-auth-${createHash("sha256").update(new URL(origin).host).digest("base64url")}`;
+  try {
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/") return new Response(null, { status: 303, headers: { location: "/", "set-cookie": `${cookieName}=v1.fixture.signature; Path=/; HttpOnly; SameSite=Strict; Max-Age=3600` } });
+      const body = JSON.parse(String(init?.body));
+      assert.equal(Array.isArray(body.payload.args), false);
+      assert.deepEqual(body.payload.args, { _request: { paged: true } });
+      return Response.json({ rpcId: body.rpcId, result: { ok: false, error: { code: "invalid_payload", message: `Remote payload must contain exactly one plain-object args field ${cookieName}=v1.fixture.signature` } } });
+    };
+    await assert.rejects(connectDshOwner(`${origin}/?token=fixture-token`, 0, store), (error: Error) => {
+      assert.match(error.message, /not ready/);
+      assert.match(error.message, /invalid_payload/);
+      assert.match(error.message, /plain-object args field/);
+      assert.doesNotMatch(error.message, /fixture\.signature|fixture-token/);
+      return true;
+    });
+  } finally { globalThis.fetch = prior; fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("DSH connection request budget exceeds the verification timeout", async () => {
+  const { DSH_CONNECTION_REQUEST_TIMEOUT_MS } = await import("./manager/dshConnectionRoutes.js");
+  assert.ok(DSH_CONNECTION_REQUEST_TIMEOUT_MS > 60_000);
 });
