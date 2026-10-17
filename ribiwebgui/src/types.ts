@@ -94,7 +94,8 @@ export type AgentScanResult = {
   endpoints?: Array<{ label: string; url: string; healthy?: boolean }>;
   projects?: AgentScanProject[];
   sessions?: AgentScanSession[];
-  bots?: Array<{ agentId: string; name: string }>;
+  bots?: Array<{ agentId: string; name: string; mainSessionId?: string; kind?: string | number }>;
+  profilePath?: string;
   models?: AgentScanModel[];
   agentPresets?: Array<{ id: string; name?: string; description?: string; broken?: string }>;
   sessionPage?: {

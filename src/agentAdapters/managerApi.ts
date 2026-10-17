@@ -378,12 +378,12 @@ export async function scanDshAgentAdapter(
 
 
 export async function scanGrokBotAgentAdapter(ctx: AgentManagerApiContext, options: AgentScanOptions = {}) {
-  const runtime = getRuntimeList(ctx).find(item => item.definition.agentAdapters?.includes("grokBot"));
   return scanNativeGrokBotAgentAdapter(ctx, {
     ...options,
-    profilePath: options.grokBotProfilePath || runtime?.definition.grokBotProfilePath,
-    backendUrl: options.grokBotBackendUrl || runtime?.definition.grokBotBackendUrl,
-    grokBotAgentId: options.grokBotAgentId || runtime?.definition.grokBotAgentId
+    // Retired route/query overrides cannot select another account or service.
+    profilePath: undefined,
+    backendUrl: undefined,
+    grokBotAgentId: options.grokBotAgentId
   });
 }
 

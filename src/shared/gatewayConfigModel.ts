@@ -1418,6 +1418,8 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
   const routeName = definition.routeName?.trim() || definition.name?.trim() || configName;
   const {
     agentInstanceBindings: _legacyAgentInstanceBindings,
+    grokBotProfilePath: _retiredGrokBotProfilePath,
+    grokBotBackendUrl: _retiredGrokBotBackendUrl,
     botNickname: _legacyBotNickname,
     codexOnlyPrimaryPersonaCanSendMessages: _legacyCodexOnlyPrimaryPersonaCanSendMessages,
     ...cleanDefinition

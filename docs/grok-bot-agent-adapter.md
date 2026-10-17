@@ -20,17 +20,17 @@ Grok 的 routine webhook 会启动 routine run，不能指定原会话继续一�
 
 ## 配置与发现
 
-先在 Grok Bot 中登录。Windows 发现只读当前 active 账号的受保护资料，使用原 Windows 用户解密；凭据仅在客户端内存中用于原服务请求，不写回 profile，不输出到日志或扫描结果。
+先启动并登录 Grok Bot。Windows 发现只读当前 active 账号的受保护资料，使用原 Windows 用户解密；凭据仅在客户端内存中用于原服务请求，不写回 profile，不输出到日志或扫描结果。
 
 | Route 字段 | 环境变量 | 用途 |
 | --- | --- | --- |
-| `grokBotProfilePath` | `GROK_BOT_PROFILE_PATH` | 登录资料目录；省略时使用当前用户的 `%APPDATA%/Grok Bot` |
-| `grokBotBackendUrl` | `GROK_BOT_BACKEND_URL` | 原生 cloud owner 的完整 HTTP(S) 地址 |
 | `grokBotAgentId` | `GROK_BOT_AGENT_ID` | 当前账号拥有的 Bot owner ID |
 | `grokBotSessionId` | `GROK_BOT_SESSION_ID` | 扫描返回的完整会话 ID |
 | `grokBotSessionName` | `GROK_BOT_SESSION_NAME` | 会话显示名称，不承担身份 |
 
-当前安装版合同的默认 cloud API 地址是 `https://api2.cursor.sh/`，可显式配置已验证的服务地址。这是产品 backend 地址，与 Rabi Manager 地址不同。Manager 地址仍从当前 Host/READY 发现并核对 `/meta`，不固定端口。
+服务地址由原生接入合同自动取得（`https://api2.cursor.sh/`），不再提供编辑入口。资料目录自动使用当前 Windows 用户的 Grok Bot 目录，并以只读信息显示。旧 Route、查询参数和环境变量中的连接覆盖值不再用于发现或投递；保存规范化会移除旧地址和目录字段。这是产品 backend 地址，与 Rabi Manager 地址不同。Manager 地址仍从当前 Host/READY 发现并核对 `/meta`，不固定端口。
+
+在 Route 的 Agent 设置中选择“主人格 Bot”，RabiRoute 会绑定该 Bot 已发现的默认主会话，并将 Grok Bot 设为主控 Agent；无需填写会话 ID 或目录。桌面应用必须保持运行，只有残留登录文件不能完成鉴权。进入设置时自动发现一次；稍后才启动或登录时，点击“刷新 Grok Bot”。发现只读登录资料，不替 Grok Bot 写入或刷新凭据。
 
 显式扫描已有 Bot 和会话：
 

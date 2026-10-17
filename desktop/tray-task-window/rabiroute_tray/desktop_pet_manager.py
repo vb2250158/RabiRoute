@@ -28,6 +28,7 @@ class DesktopPetManager(QObject):
         self._events = DesktopPetEventStream(manager_url)
         self._speech_events = DesktopPetEventStream(manager_url, path="/api/speech/events")
         self._events.settings_changed.connect(lambda _payload: self.refresh())
+        self._events.catalog_changed.connect(lambda _payload: self.refresh())
         self._events.connection_changed.connect(self._connection_changed)
         self._refresh_task: QtAsyncTask | None = None
         self._refresh_pending = False

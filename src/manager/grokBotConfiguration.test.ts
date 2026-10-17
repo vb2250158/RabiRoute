@@ -1,25 +1,38 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { encodeGrokBotSessionId } from "../agentAdapters/grokBotClient.js";
+import { normalizeGatewayDefinition } from "../shared/gatewayConfigModel.js";
 import { grokBotEndpointConfiguration } from "./grokBotConfiguration.js";
 
-test("Grok endpoint selects the configured native profile by complete session identity", () => {
+test("Grok endpoint verifies complete owner identity and ignores retired connection overrides", () => {
   const id = encodeGrokBotSessionId("owner-a", "session-a");
   const other = encodeGrokBotSessionId("owner-b", "session-b");
   const definitions = [
     { agentAdapters: ["grokBot"], grokBotAgentId: "owner-b", grokBotSessionId: other, grokBotProfilePath: "C:/profiles/b" },
     { agentAdapters: ["grokBot"], grokBotAgentId: "owner-a", grokBotSessionId: id, grokBotProfilePath: "C:/profiles/a" }
   ];
-  assert.equal(grokBotEndpointConfiguration(definitions, id).profilePath, "C:/profiles/a");
-  assert.equal(grokBotEndpointConfiguration(definitions, other).profilePath, "C:/profiles/b");
+  assert.deepEqual(grokBotEndpointConfiguration(definitions, id), {});
+  assert.deepEqual(grokBotEndpointConfiguration(definitions, other), {});
 });
 
-test("duplicate matching routes cannot silently replace a native owner profile", () => {
+test("retired profile overrides do not conflict, while a mismatched owner still fails closed", () => {
   const id = encodeGrokBotSessionId("owner", "session");
   const base = { agentAdapters: ["grokBot"], grokBotAgentId: "owner", grokBotSessionId: id };
-  assert.throws(() => grokBotEndpointConfiguration([
+  assert.deepEqual(grokBotEndpointConfiguration([
     { ...base, grokBotProfilePath: "C:/profiles/a" }, { ...base, grokBotProfilePath: "C:/profiles/b" }
-  ], id), /GROK_BOT_PROFILE_CONFIGURATION_CONFLICT/);
+  ], id), {});
   assert.throws(() => grokBotEndpointConfiguration([{ ...base, grokBotAgentId: "other" }], id), /GROK_BOT_SESSION_OWNER_MISMATCH/);
-  assert.equal(grokBotEndpointConfiguration([{ ...base, grokBotProfilePath: "C:/profiles/a" }, { ...base, grokBotProfilePath: "C:/profiles/a" }], id).profilePath, "C:/profiles/a");
+  assert.deepEqual(grokBotEndpointConfiguration([{ ...base, grokBotProfilePath: "C:/profiles/a" }, { ...base, grokBotProfilePath: "C:/profiles/a" }], id), {});
+});
+
+
+test("Route normalization retires connection paths while preserving the exact selected Bot", () => {
+  const id = encodeGrokBotSessionId("owner", "", { defaultMain: true });
+  const normalized = normalizeGatewayDefinition({ id: "example", gatewayPort: 18001, agentAdapters: ["grokBot"],
+    grokBotAgentId: "owner", grokBotSessionId: id, grokBotSessionName: "Example Bot",
+    grokBotProfilePath: "C:/retired-profile", grokBotBackendUrl: "https://retired.invalid/" });
+  assert.equal(normalized.grokBotProfilePath, undefined);
+  assert.equal(normalized.grokBotBackendUrl, undefined);
+  assert.equal(normalized.grokBotAgentId, "owner");
+  assert.equal(normalized.grokBotSessionId, id);
 });

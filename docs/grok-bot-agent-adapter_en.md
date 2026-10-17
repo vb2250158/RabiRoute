@@ -20,17 +20,17 @@ The native API depends on the installed service contract. Recheck discovery, aut
 
 ## Configuration and discovery
 
-Sign in through Grok Bot first. Windows discovery reads only the active account's protected profile and uses the original Windows user to decrypt it. Credentials remain in client memory for requests to the original service; they are not written back to the profile or exposed in logs or scan results.
+Start and sign in through Grok Bot first. Windows discovery reads only the active account's protected profile and uses the original Windows user to decrypt it. Credentials remain in client memory for requests to the original service; they are not written back to the profile or exposed in logs or scan results.
 
 | Route field | Environment variable | Purpose |
 | --- | --- | --- |
-| `grokBotProfilePath` | `GROK_BOT_PROFILE_PATH` | Login profile directory; defaults to the current user's `%APPDATA%/Grok Bot` |
-| `grokBotBackendUrl` | `GROK_BOT_BACKEND_URL` | Complete HTTP(S) URL of the native cloud owner |
 | `grokBotAgentId` | `GROK_BOT_AGENT_ID` | Bot owner ID belonging to the current account |
 | `grokBotSessionId` | `GROK_BOT_SESSION_ID` | Complete session ID returned by discovery |
 | `grokBotSessionName` | `GROK_BOT_SESSION_NAME` | Display name, not an identity |
 
-The installed service contract currently defaults to `https://api2.cursor.sh/`; a verified service URL can be configured explicitly. This is the product backend, separate from Rabi Manager. Discover Manager from the current Host/READY identity and verify `/meta`; do not fix its port.
+The service address is resolved automatically from the native integration contract (`https://api2.cursor.sh/`); it is no longer editable. The profile directory is discovered for the current Windows user and displayed read-only. Retired Route/query/environment connection overrides are ignored, and Route normalization removes the old address and profile fields. This is the product backend, separate from Rabi Manager. Discover Manager from the current Host/READY identity and verify `/meta`; do not fix its port.
+
+In Route Agent settings, choose **Primary persona Bot**. RabiRoute binds that Bot's discovered default main session and selects Grok Bot as the primary Agent. No session ID or directory needs to be entered. The desktop must remain running; a stale login file alone is insufficient. Opening settings performs one automatic discovery; after starting or signing in later, click **Refresh Grok Bot**. Discovery does not write login files or refresh credentials on behalf of Grok Bot.
 
 Explicitly scan existing Bots and sessions:
 

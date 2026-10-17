@@ -8,14 +8,11 @@ const sessionPageLimit = 100;
 export const maxGrokBotSessionItems = 1000;
 
 function connectionKey(connection: GrokBotRouteConnection): string {
-  return JSON.stringify([connection.id, connection.grokBotBackendUrl?.trim() || "",
-    connection.grokBotProfilePath?.trim() || "", connection.grokBotAgentId || ""]);
+  return JSON.stringify([connection.id, connection.grokBotAgentId || ""]);
 }
 
 export function grokBotScanParameters(connection: GrokBotRouteConnection, options: GrokBotScanOptions = {}): URLSearchParams {
   const params = new URLSearchParams();
-  if (connection.grokBotBackendUrl?.trim()) params.set("grokBotBackendUrl", connection.grokBotBackendUrl.trim());
-  if (connection.grokBotProfilePath?.trim()) params.set("grokBotProfilePath", connection.grokBotProfilePath.trim());
   if (connection.grokBotAgentId) params.set("grokBotAgentId", connection.grokBotAgentId);
   if (options.offset != null) params.set("grokBotOffset", String(options.offset));
   if (options.limit != null) params.set("grokBotLimit", String(options.limit));
@@ -47,6 +44,8 @@ export function selectGrokBotRouteSession(gateway: GatewayDefinition, sessions: 
     gateway.grokBotSessionId = "";
     gateway.grokBotSessionName = "";
     gateway.grokBotAgentId = "";
+    delete gateway.grokBotBackendUrl;
+    delete gateway.grokBotProfilePath;
     return true;
   }
   if (typeof value !== "string") return false;
@@ -55,7 +54,22 @@ export function selectGrokBotRouteSession(gateway: GatewayDefinition, sessions: 
   gateway.grokBotSessionId = session.id;
   gateway.grokBotSessionName = session.name;
   gateway.grokBotAgentId = session.ownerId;
+  delete gateway.grokBotBackendUrl;
+  delete gateway.grokBotProfilePath;
   return true;
+}
+
+export function grokBotPersonaPickerItems(scan: AgentScanResult | null) {
+  return (scan?.bots ?? []).filter(bot => !["2", "ROOM", "GROK_BOT_AGENT_KIND_ROOM"].includes(String(bot.kind)))
+    .map(bot => ({ title: bot.name, value: bot.agentId, props: { disabled: !bot.mainSessionId } }));
+}
+
+/** Only the discovered owner can supply its default main session identity. */
+export function selectGrokBotRoutePersona(gateway: GatewayDefinition, scan: AgentScanResult | null, value: unknown): boolean {
+  if (value == null || value === "") return selectGrokBotRouteSession(gateway, [], null);
+  const bot = scan?.bots?.find(item => item.agentId === value);
+  if (!bot?.mainSessionId || ["2", "ROOM", "GROK_BOT_AGENT_KIND_ROOM"].includes(String(bot.kind))) return false;
+  return selectGrokBotRouteSession(gateway, [{ id: bot.mainSessionId, ownerId: bot.agentId, name: bot.name + " · 默认会话" }], bot.mainSessionId);
 }
 
 export function grokBotSessionPickerItems(gateway: GatewayDefinition | null, sessions: readonly AgentScanSession[]) {
@@ -122,6 +136,13 @@ export function createGrokBotRouteScan(getConnection: () => GrokBotRouteConnecti
     state, needsRefresh, limitReached,
     get revision() { return revision; },
     seed,
+    async initialize(entry: AgentScanResult | undefined, connection: GrokBotRouteConnection, expectedRevision: number): Promise<void> {
+      if (disposed || !entry || revision !== expectedRevision || connectionKey(connection) !== connectionKey(getConnection())) return;
+      seed(entry, connection, expectedRevision);
+      // The general catalog skips accounts not yet bound to a Route. Discover
+      // this one once on entry so adding the card needs no manual auth step.
+      if (entry.auth?.loggedIn === undefined) await scan({ offset: 0, limit: sessionPageLimit }, false);
+    },
     refresh(query = state.queryDraft) { return scan({ offset: 0, limit: sessionPageLimit, query }, false); },
     async loadMore(): Promise<void> {
       const page = state.result?.sessionPage;

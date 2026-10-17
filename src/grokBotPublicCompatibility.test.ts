@@ -31,7 +31,9 @@ test("Grok ordinary and default main Route identities survive normalization and 
     };
     const normalized = normalizeGatewayDefinition(original);
     const restored = normalizeGatewayDefinition(JSON.parse(JSON.stringify(normalized)));
-    for (const [field, expected] of Object.entries(grokFields)) assert.equal(restored[field as keyof GatewayDefinition], expected);
+    for (const [field, expected] of Object.entries(grokFields)) {
+      assert.equal(restored[field as keyof GatewayDefinition], ["grokBotProfilePath", "grokBotBackendUrl"].includes(field) ? undefined : expected);
+    }
     assert.deepEqual(resolvePrimaryAgentTarget(restored), { id: "local:grokBot", provider: "grokBot" });
     assert.equal(primaryMessageProcessingAgentEnabled(restored), false);
     assert.equal(restored.codexPlanAssistantEnabled, undefined);

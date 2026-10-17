@@ -3,7 +3,7 @@ import test from "node:test";
 import { reactive } from "vue";
 import { cloneGatewayValue, mergeGatewayDraft } from "../src/gatewayDraft";
 import { createGrokBotRouteScan, grokBotSessionPickerItems, maxGrokBotSessionItems,
-  mergeGrokBotSessionPage, selectGrokBotRouteSession } from "../src/grokBotRouteConfig";
+  mergeGrokBotSessionPage, selectGrokBotRouteSession, selectGrokBotRoutePersona, grokBotPersonaPickerItems } from "../src/grokBotRouteConfig";
 import type { AgentScanResult, AgentScanSession, GatewayDefinition } from "../src/types";
 
 const sessionId = "grokBot:WyJleGFtcGxlLW93bmVyIiwiZXhhbXBsZS1zZXNzaW9uIl0";
@@ -20,15 +20,15 @@ function scan(sessions: AgentScanSession[], offset = 0, hasMore = false): AgentS
 function response(value: AgentScanResult): Response { return Response.json({ agents: { grokBot: value } }); }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 
-test("selection and the shared Route save/reload merge preserve all five Grok fields", () => {
+test("selection and the shared Route save/reload merge preserve the Bot identity and retire editable connection fields", () => {
   const baseline = route();
   const draft = cloneGatewayValue(baseline);
   assert.equal(selectGrokBotRouteSession(draft, [session], sessionId), true);
   const current = { ...baseline, name: "Independently renamed Route" };
   const saved = mergeGatewayDraft(baseline, draft, current);
   const reloaded = cloneGatewayValue(saved);
-  assert.equal(reloaded.grokBotProfilePath, "C:/Example/GrokProfile");
-  assert.equal(reloaded.grokBotBackendUrl, "https://owner.example/");
+  assert.equal(reloaded.grokBotProfilePath, undefined);
+  assert.equal(reloaded.grokBotBackendUrl, undefined);
   assert.equal(reloaded.grokBotAgentId, "example-owner");
   assert.equal(reloaded.grokBotSessionId, sessionId);
   assert.equal(reloaded.grokBotSessionName, "Example Bot");
@@ -76,8 +76,8 @@ test("entry scan reuse and draft edits cause no requests; explicit search and mo
   assert.equal(controller.state.queryDraft, "Other Bot");
   assert.equal(calls.length, 2);
   assert.ok(calls.every(url => url.pathname === "/api/scan/agents/grokBot"));
-  assert.equal(calls[0].searchParams.get("grokBotBackendUrl"), "https://other-owner.example/");
-  assert.equal(calls[0].searchParams.get("grokBotProfilePath"), "C:/Example/OtherProfile");
+  assert.equal(calls[0].searchParams.has("grokBotBackendUrl"), false);
+  assert.equal(calls[0].searchParams.has("grokBotProfilePath"), false);
   assert.equal(calls[0].searchParams.get("grokBotAgentId"), "example-owner");
   assert.equal(calls[0].searchParams.get("grokBotLimit"), "100");
   assert.equal(calls[1].searchParams.get("grokBotOffset"), "1");
@@ -139,4 +139,43 @@ test("unmount ignores late results; the scan cache remains bounded", async () =>
   assert.equal(controller.state.loading, false);
   const large = scan(Array.from({ length: maxGrokBotSessionItems + 20 }, (_, index) => ({ id: `example-session-${index}`, name: "Example", ownerId: "example-owner" })));
   assert.equal(mergeGrokBotSessionPage(null, large, false).sessions?.length, maxGrokBotSessionItems);
+});
+
+
+test("one Bot selection binds its verified main session and excludes rooms", () => {
+  const draft = route();
+  const result = scan([session]);
+  result.bots = [
+    { agentId: "example-owner", name: "Example Bot", mainSessionId: sessionId, kind: "AGENT" },
+    { agentId: "room", name: "Room", mainSessionId: "room-main", kind: "ROOM" },
+    { agentId: "no-main", name: "Unavailable Bot" }
+  ];
+  const items = grokBotPersonaPickerItems(result);
+  assert.deepEqual(items.map(item => item.value), ["example-owner", "no-main"]);
+  assert.equal(items[1].props.disabled, true);
+  assert.equal(selectGrokBotRoutePersona(draft, result, "room"), false);
+  assert.equal(selectGrokBotRoutePersona(draft, result, "no-main"), false);
+  assert.equal(selectGrokBotRoutePersona(draft, result, "example-owner"), true);
+  assert.equal(draft.grokBotAgentId, "example-owner");
+  assert.equal(draft.grokBotSessionId, sessionId);
+  assert.equal(draft.grokBotSessionName, "Example Bot · 默认会话");
+  assert.equal(draft.grokBotBackendUrl, undefined);
+  assert.equal(draft.grokBotProfilePath, undefined);
+});
+
+
+test("entry discovers an unbound running account once and ignores a stale entry result", async () => {
+  const draft=route(); let requests=0;
+  const ready=scan([session]); ready.auth={required:true,loggedIn:true};
+  const controller=createGrokBotRouteScan(()=>draft,(async()=>{requests+=1;return response(ready);}) as typeof fetch);
+  const revision=controller.revision;
+  const stub=scan([]); stub.auth={required:true};
+  await controller.initialize(stub,draft,revision);
+  assert.equal(requests,1);
+  assert.equal(controller.state.result?.auth?.loggedIn,true);
+  await controller.initialize(stub,draft,revision);
+  assert.equal(requests,1);
+  await controller.initialize(ready,draft,controller.revision);
+  assert.equal(requests,1);
+  controller.dispose();
 });

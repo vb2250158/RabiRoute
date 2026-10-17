@@ -107,7 +107,7 @@ test("profile deadline failure has a closed timeout code distinct from signed-ou
   try {
     const script = path.join(directory, "slow-profile.ps1");
     await fs.writeFile(script, "param([string]$ProfilePath,[switch]$CredentialForClient)\nStart-Sleep -Seconds 10\n");
-    for (const name of ["desktop-status.json", "sand-secrets.json", "Local State"]) await fs.writeFile(path.join(directory, name), "{}");
+    for (const name of ["desktop-status.json", "sand-secrets.json", "Local State"]) await fs.writeFile(path.join(directory, name), JSON.stringify({ pid: process.pid }));
     await assert.rejects(readGrokBotNativeProfile({ profileScriptPath: script, profilePath: directory, timeoutMs: 1_000 }), /GROK_BOT_PROFILE_TIMEOUT/);
     assert.throws(() => new GrokBotClient({ timeoutMs: 999 }), /GROK_BOT_TIMEOUT_INVALID/);
     assert.throws(() => new GrokBotClient({ timeoutMs: 60_001 }), /GROK_BOT_TIMEOUT_INVALID/);
@@ -116,7 +116,7 @@ test("profile deadline failure has a closed timeout code distinct from signed-ou
 async function profileCacheFixture(t: import("node:test").TestContext) {
   const profilePath = await fs.mkdtemp(path.join(os.tmpdir(), "grokbot-cache-fixture-"));
   t.after(() => fs.rm(profilePath, { recursive: true, force: true }));
-  for (const name of ["desktop-status.json", "sand-secrets.json", "Local State"]) await fs.writeFile(path.join(profilePath, name), JSON.stringify({ fixture: name }));
+  for (const name of ["desktop-status.json", "sand-secrets.json", "Local State"]) await fs.writeFile(path.join(profilePath, name), JSON.stringify({ fixture: name, pid: process.pid }));
   return { profilePath, profileScriptPath: path.resolve("scripts/grok-bot-native-profile.ps1") };
 }
 test("protected disk cache coalesces one helper and invalidates changed files without mixing account scopes", { skip: process.platform !== "win32" }, async t => {
@@ -554,7 +554,7 @@ test("Windows profile bridge decrypts only the active slot and leaves every prof
   try {
     const protectedKey = (await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", protect], { windowsHide: true })).stdout;
     const files = new Map<string, string>([
-      ["desktop-status.json", JSON.stringify({ signedIn: true, appVersion: "0.70.2" })],
+      ["desktop-status.json", JSON.stringify({ signedIn: true, pid: process.pid, appVersion: "0.70.2" })],
       ["sand-secrets.json", JSON.stringify({ version: 1, "cursor-accounts": JSON.stringify({ active: fixture.profile.accountScope,
         accounts: { [fixture.profile.accountScope!]: { "cursor-access-token": fixture.profile.accessToken!.data },
           "inactive-fixture": { "cursor-access-token": "inactive protected fixture" } } }) })],
@@ -570,4 +570,18 @@ test("Windows profile bridge decrypts only the active slot and leaves every prof
     assert.equal((await readGrokBotNativeProfile({ profilePath: directory, profileScriptPath: script, timeoutMs: 60_000 })).accessToken, fixture.token);
     for (const [name, content] of files) assert.equal(await fs.readFile(path.join(directory, name), "utf8"), content);
   } finally { await fs.rm(directory, { recursive: true, force: true }); }
+});
+
+
+test("a stopped desktop cannot reuse protected credentials or contact the cloud", { skip: process.platform !== "win32" }, async t => {
+  const options = await profileCacheFixture(t);
+  const fixture = snapshot(Date.now(), 3_600);
+  let reads = 0;
+  const input = { ...options, runProfileHelper: async () => { reads += 1; return fixture.profile; } };
+  await readGrokBotNativeProfile(input);
+  await fs.writeFile(path.join(options.profilePath, "desktop-status.json"), JSON.stringify({ pid: 2147483647, signedIn: true }));
+  const before = await fs.readFile(path.join(options.profilePath, "sand-secrets.json"), "utf8");
+  await assert.rejects(readGrokBotNativeProfile(input), /GROK_BOT_NOT_RUNNING/);
+  assert.equal(reads, 1);
+  assert.equal(await fs.readFile(path.join(options.profilePath, "sand-secrets.json"), "utf8"), before);
 });

@@ -18,7 +18,8 @@ export type GrokBotDiscovery = {
   healthy: boolean;
   status: "ready" | "unavailable";
   backendUrl: string;
-  bots: GrokBotNativeBot[];
+  profilePath: string;
+  bots: Array<GrokBotNativeBot & { mainSessionId?: string }>;
   sessions: GrokBotDiscoveredSession[];
   warnings: string[];
   errorCode?: string;
@@ -27,6 +28,7 @@ export type GrokBotDiscovery = {
 export function grokBotActionableError(error: unknown): string {
   const code = error instanceof GrokBotError ? error.code : "GROK_BOT_DISCOVERY_FAILED";
   const explanations: Record<string, string> = {
+    GROK_BOT_NOT_RUNNING: "请先启动 Grok Bot；登录后点击刷新即可自动鉴权。",
     GROK_BOT_PROFILE_MISSING: "未发现 Grok Bot 登录资料，请先安装并登录 Grok Bot。",
     GROK_BOT_NOT_SIGNED_IN: "Grok Bot 尚未登录，请在 Grok Bot 中登录后再刷新。",
     GROK_BOT_TOKEN_EXPIRED: "Grok Bot 登录已过期，请在 Grok Bot 中恢复登录后再刷新。",
@@ -60,7 +62,8 @@ export async function discoverGrokBotAgent(options: GrokBotDiscoveryOptions = {}
   const offset = Math.max(0, Math.floor(options.offset ?? 0));
   const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 100)));
   const result: GrokBotDiscovery = { installed: fs.existsSync(path.join(grokBotProfilePath(options.profilePath), "desktop-status.json")),
-    signedIn: false, healthy: false, status: "unavailable", backendUrl: options.client?.backendUrl || DEFAULT_GROK_BOT_BACKEND_URL, bots: [], sessions: [], warnings: [],
+    signedIn: false, healthy: false, status: "unavailable", backendUrl: options.client?.backendUrl || DEFAULT_GROK_BOT_BACKEND_URL,
+    profilePath: grokBotProfilePath(options.profilePath), bots: [], sessions: [], warnings: [],
     sessionPage: { offset, limit, returned: 0, hasMore: false } };
   try {
     const client = options.client || new GrokBotClient({ backendUrl: options.backendUrl, profilePath: options.profilePath,
@@ -85,6 +88,10 @@ export async function discoverGrokBotAgent(options: GrokBotDiscoveryOptions = {}
       }
     }));
     if ((await client.profileStatus()).accountScope !== account.accountScope) throw new GrokBotError("GROK_BOT_ACCOUNT_CHANGED");
+    result.bots = roster.bots.map(bot => {
+      const main = pages.get(bot.agentId)?.find(session => session.defaultMain);
+      return { ...bot, ...(main ? { mainSessionId: encodeGrokBotSessionId(bot.agentId, main.sessionId, main) } : {}) };
+    });
     const sessions = bots.flatMap(bot => (pages.get(bot.agentId) || []).map(session => ({ ...session,
       kind: bot.kind, memberAgentIds: bot.memberAgentIds, nativeAgentId: bot.agentId,
       id: encodeGrokBotSessionId(bot.agentId, session.sessionId, session), name: session.defaultMain ? bot.name + " · 默认会话" : bot.name,

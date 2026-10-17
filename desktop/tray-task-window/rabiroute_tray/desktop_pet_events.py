@@ -38,6 +38,7 @@ class DesktopPetEventStream(QObject):
 
     work_ended = Signal(object)
     settings_changed = Signal(object)
+    catalog_changed = Signal(object)
     motion_requested = Signal(object)
     companion_changed = Signal(object)
     companion_reaction = Signal(object)
@@ -98,6 +99,8 @@ class DesktopPetEventStream(QObject):
                             self.motion_requested.emit(payload)
                         elif event_name == "desktop_settings_changed" and isinstance(payload, dict):
                             self.settings_changed.emit(payload)
+                        elif event_name == "route_catalog_startup_changed" and isinstance(payload, dict):
+                            self.catalog_changed.emit(payload)
                         elif event_name == "companion_changed" and isinstance(payload, dict):
                             self.companion_changed.emit(payload)
                         elif event_name == "companion_reaction" and isinstance(payload, dict):

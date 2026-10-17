@@ -12,7 +12,7 @@ import { localAgentTargetKey, remoteAgentTargetKey, resolvePrimaryAgentTarget } 
 import { addRouteAgent, removeRouteAgent, selectRouteAgent } from "../routeAgentTargetEditor";
 import { postRouteAgentThreadAction } from "../routeAgentThreadClient";
 import { routeAgentOperationGuard } from "../routeAgentOperationGuard";
-import { createGrokBotRouteScan, grokBotScanParameters, grokBotSessionPickerItems, selectGrokBotRouteSession, type GrokBotRouteConnection } from "../grokBotRouteConfig";
+import { createGrokBotRouteScan, grokBotScanParameters, grokBotPersonaPickerItems, selectGrokBotRoutePersona, type GrokBotRouteConnection } from "../grokBotRouteConfig";
 import type { AgentInstance } from "@shared/agentInstance";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
 import TrustedWebRendererHost from "../components/TrustedWebRendererHost.vue";
@@ -88,7 +88,6 @@ const agentScan = ref({
 });
 const dshScanLoading = ref(false);
 const dshScanRevision = ref(0);
-const grokBotOwnerFilter = ref("");
 const grokBotSelectionError = ref("");
 const grokBotScan = createGrokBotRouteScan(grokBotConnection);
 watch(() => grokBotScan.state.result, result => {
@@ -96,8 +95,7 @@ watch(() => grokBotScan.state.result, result => {
 }, { flush: "sync" });
 
 function grokBotConnection(): GrokBotRouteConnection {
-  return { id: gateway.value?.id || "", grokBotBackendUrl: gateway.value?.grokBotBackendUrl,
-    grokBotProfilePath: gateway.value?.grokBotProfilePath, grokBotAgentId: grokBotOwnerFilter.value };
+  return { id: gateway.value?.id || "" };
 }
 
 const codexModelItems = computed(() => codexModelPickerItems(agentScan.value.agents.codex?.models ?? []));
@@ -257,7 +255,7 @@ async function runAgentScan(): Promise<void> {
     agentScan.value.copilotBins = data.copilotBins ?? [];
     agentScan.value.marvisAppIds = data.marvisAppIds ?? [];
     const currentDsh = agentScan.value.agents.dsh;
-    grokBotScan.seed(data.agents?.grokBot, grokBotConnectionAtStart, grokBotRevisionAtStart);
+    await grokBotScan.initialize(data.agents?.grokBot, grokBotConnectionAtStart, grokBotRevisionAtStart);
     const currentGrokBot = grokBotScan.state.result ?? agentScan.value.agents.grokBot;
     agentScan.value.agents = {
       ...(data.agents ?? {}),
@@ -313,16 +311,13 @@ async function runGrokBotAgentScan(): Promise<void> {
   await grokBotScan.refresh();
 }
 
-function grokBotSessionItems() {
-  return grokBotSessionPickerItems(gateway.value, grokBotScan.state.result?.sessions ?? []);
-}
-
-function selectGrokBotSession(value: unknown): void {
-  if (!gateway.value || grokBotScan.needsRefresh.value) return;
-  if (!selectGrokBotRouteSession(gateway.value, grokBotScan.state.result?.sessions ?? [], value)) {
-    grokBotSelectionError.value = "此会话缺少真实 owner 身份，请重新扫描并从已有会话中选择。";
+function selectGrokBotPersona(value: unknown): void {
+  if (!gateway.value || grokBotScan.state.loading) return;
+  if (!selectGrokBotRoutePersona(gateway.value, grokBotScan.state.result, value)) {
+    grokBotSelectionError.value = "未发现该 Bot 的默认主会话，请刷新后重新选择。";
     return;
   }
+  if (value) selectRouteAgent(gateway.value, localAgentTargetKey("grokBot"));
   grokBotSelectionError.value = "";
   touch();
 }
@@ -4118,7 +4113,6 @@ watch(() => gateway.value?.configName, (name, previousName) => {
 });
 
 watch(() => gateway.value?.id, () => {
-  grokBotOwnerFilter.value = gateway.value?.grokBotAgentId || "";
   grokBotScan.state.queryDraft = "";
   grokBotSelectionError.value = "";
   window.clearTimeout(napcatPanelPollTimer);
@@ -5753,96 +5747,30 @@ watch(
                 </template>
                 <!-- Grok Bot -->
                 <template v-else-if="agent.type === 'grokBot'">
-                  <v-alert type="info" variant="tonal" density="compact" class="mb-2">
-                    Grok Bot 云端服务执行消息，使用当前已登录账号的已有会话。电脑负责投递与回执；本接入仍为实验状态。
-                  </v-alert>
-                  <div class="catalog-param-grid">
-                    <v-text-field
-                      v-model="gateway.grokBotBackendUrl"
-                      label="Grok Bot 服务地址"
-                      placeholder="留空使用安装版默认服务"
-                      hint="这是 Grok 服务地址；修改后点击重新扫描确认连接。"
-                      persistent-hint
-                      data-no-i18n
-                      @update:model-value="touch"
-                    />
-                    <v-text-field
-                      v-model="gateway.grokBotProfilePath"
-                      label="本机登录资料目录（可选）"
-                      placeholder="留空使用当前 Windows 用户的 Grok Bot 资料"
-                      hint="只读当前账号的受保护登录资料；请先在 Grok Bot 中登录。"
-                      persistent-hint
-                      data-no-i18n
-                      @update:model-value="touch"
-                    />
-                    <v-select
-                      v-model="grokBotOwnerFilter"
-                      :items="grokBotScan.state.result?.bots?.map(bot => ({ title: bot.name, value: bot.agentId })) ?? []"
-                      item-title="title"
-                      item-value="value"
-                      label="按 Bot 筛选"
-                      hint="选择后点击搜索；筛选不会改变已保存的会话。"
-                      persistent-hint
-                      clearable
-                    />
-                    <v-text-field
-                      v-model="grokBotScan.state.queryDraft"
-                      label="搜索已有会话"
-                      placeholder="Bot 名称"
-                      hint="输入后点击搜索或按 Enter；不会自动扫描。"
-                      persistent-hint
-                      @keydown.enter.prevent="runGrokBotAgentScan"
-                    >
-                      <template #append-inner>
-                        <v-btn icon="mdi-magnify" size="small" variant="text" title="搜索 Grok Bot 会话"
-                          :loading="grokBotScan.state.loading" @click.stop="runGrokBotAgentScan" />
-                      </template>
-                    </v-text-field>
-                    <v-autocomplete
-                      class="full-span"
-                      :model-value="gateway.grokBotSessionId || null"
-                      :items="grokBotSessionItems()"
-                      item-title="title"
-                      item-value="value"
-                      :return-object="false"
-                      :disabled="grokBotScan.state.loading || grokBotScan.needsRefresh.value"
-                      label="已有 Grok Bot 会话"
-                      hint="从扫描结果选择；同时保存真实名称、完整会话 ID 和 owner ID。"
-                      persistent-hint
-                      clearable
-                      @update:model-value="selectGrokBotSession"
-                    >
-                      <template #item="{ props, item }">
-                        <v-list-item v-bind="props" :subtitle="item.raw.subtitle" />
-                      </template>
-                    </v-autocomplete>
+                  <div class="section-note mb-3">先启动并登录 Grok Bot，登录状态会自动读取。</div>
+                  <div class="status-row mb-3">
+                    <span>登录资料目录</span>
+                    <code class="text-break">{{ agentScanFor('grokBot')?.profilePath || '等待 Grok Bot 启动' }}</code>
                   </div>
-                  <div class="d-flex align-center ga-2 flex-wrap mt-2">
-                    <v-btn size="small" variant="tonal" prepend-icon="mdi-refresh"
-                      :loading="grokBotScan.state.loading" @click="runGrokBotAgentScan">重新扫描 Grok Bot</v-btn>
-                    <v-btn v-if="grokBotScan.state.result?.sessionPage?.hasMore && !grokBotScan.limitReached.value"
-                      size="small" variant="text" prepend-icon="mdi-chevron-down"
-                      :loading="grokBotScan.state.loading" :disabled="grokBotScan.needsRefresh.value"
-                      @click="grokBotScan.loadMore()">加载更多 Grok Bot 会话</v-btn>
-                    <span class="section-note">已加载 {{ grokBotScan.state.result?.sessions?.length ?? 0 }} 个已有会话。</span>
-                  </div>
+                  <v-autocomplete
+                    :model-value="gateway.grokBotAgentId || null"
+                    :items="grokBotPersonaPickerItems(grokBotScan.state.result)"
+                    item-title="title"
+                    item-value="value"
+                    :disabled="grokBotScan.state.loading || !agentScanFor('grokBot')?.auth?.loggedIn"
+                    label="主人格 Bot"
+                    hint="使用所选 Bot 的默认主会话。"
+                    persistent-hint
+                    clearable
+                    @update:model-value="selectGrokBotPersona"
+                  />
+                  <v-btn size="small" variant="tonal" prepend-icon="mdi-refresh" class="mt-2"
+                    :loading="grokBotScan.state.loading" @click="runGrokBotAgentScan">刷新 Grok Bot</v-btn>
                   <v-alert v-if="grokBotScan.state.error || grokBotSelectionError" type="error" variant="tonal" density="compact" class="mt-2">
                     {{ grokBotScan.state.error || grokBotSelectionError }}
                   </v-alert>
-                  <v-alert v-else-if="grokBotScan.needsRefresh.value" type="warning" variant="tonal" density="compact" class="mt-2">
-                    连接或 Bot 筛选已修改，请按当前设置重新扫描后选择会话。
-                  </v-alert>
-                  <v-alert v-else-if="agentScanFor('grokBot')?.auth?.loggedIn === undefined" type="info" variant="tonal" density="compact" class="mt-2">
-                    尚未扫描当前 Grok Bot 云端会话，请点击“重新扫描 Grok Bot”核验当前账号与已有会话。
-                  </v-alert>
-                  <v-alert v-else-if="grokBotScan.state.result && !grokBotScan.state.result.sessions?.length" type="warning" variant="tonal" density="compact" class="mt-2">
-                    当前没有可选会话。请在 Grok Bot 中确认登录与已有 Bot，或调整筛选后重新扫描。
-                  </v-alert>
-                  <v-alert v-if="grokBotScan.limitReached.value" type="info" variant="tonal" density="compact" class="mt-2">
-                    会话列表已达到本页上限，请选择 Bot 或按名称搜索。
-                  </v-alert>
-                  <div v-if="gateway.grokBotSessionId" class="status-row mt-2"><span>当前选择的完整会话 ID</span><code class="text-break">{{ gateway.grokBotSessionId }}</code></div>
-                  <div class="section-note mt-2">当前服务不提供新建、重命名或打开会话操作；请从已有会话中选择。会话执行不需要本地工作目录。</div>
+                  <v-alert v-else-if="grokBotScan.state.result?.auth?.loggedIn && !grokBotPersonaPickerItems(grokBotScan.state.result).length"
+                    type="info" variant="tonal" density="compact" class="mt-2">当前账号没有可选 Bot，请先在 Grok Bot 中创建。</v-alert>
                 </template>
                 <!-- Copilot CLI -->
                 <template v-else-if="agent.type === 'copilotCli'">

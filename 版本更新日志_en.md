@@ -6,6 +6,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.48 - 2026-10-17
+
+- Refresh the pet roster from catalog startup events so an initial empty snapshot recovers automatically.
+- Merge Grok Bot automatic authentication and persona selection with the unified desktop release.
+
 ## 0.3.47 - 2026-10-17
 
 - Keep the desktop-pet manager alive under the Qt application so enabled pets survive startup.

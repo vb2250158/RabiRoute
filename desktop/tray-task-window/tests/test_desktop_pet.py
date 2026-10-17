@@ -675,6 +675,33 @@ class DesktopPetManagerTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
 
+    def test_catalog_startup_event_recovers_an_initially_empty_roster(self) -> None:
+        binding = DesktopPetBinding(enabled=True, pack_id="default")
+        with (
+            patch.object(DesktopPetEventStream, "start"),
+            patch.object(DesktopPetEventStream, "stop"),
+            patch("rabiroute_tray.desktop_pet_manager.DesktopPetController") as controller,
+            patch("rabiroute_tray.desktop_pet_manager.start_qt_task") as start_task,
+        ):
+            first, second = MagicMock(), MagicMock()
+            start_task.side_effect = [first, second]
+            manager = DesktopPetManager("http://127.0.0.1:8790", MagicMock(), lambda _: None)
+            try:
+                start_task.call_args.args[1](first, ())
+                self.assertEqual(manager.controllers, {})
+                stream = manager._events
+                stream._connected = True
+                payload = io.BytesIO(b'event: route_catalog_startup_changed\ndata: {}\n\n')
+                with patch("rabiroute_tray.desktop_pet_events.urlopen", return_value=payload):
+                    stream.catalog_changed.connect(lambda _: stream._stop.set())
+                    stream._run()
+                self.assertEqual(start_task.call_count, 2)
+                start_task.call_args.args[1](second, (DesktopPetPersona("YeYu", "夜雨", binding),))
+                self.assertIn("YeYu", manager.controllers)
+                self.assertEqual(controller.call_count, 1)
+            finally:
+                manager.close()
+
     def test_reconcile_creates_one_named_controller_per_enabled_persona_and_removes_disabled_ones(self) -> None:
         binding = DesktopPetBinding(enabled=True, pack_id="default")
         fake_menu = MagicMock()
