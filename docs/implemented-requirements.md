@@ -20,8 +20,9 @@
 | 线程桥 threadId/sourceThreadId 上限从 80 提升至 512（#10） | `4a68bc27`（合并 `fb6423a3`） | 定向测试 68 项通过；后端构建与类型检查通过 |
 | DSH 重连校验使用 session/list 分页首屏，并将校验超时与响应上限提高至 60 秒和 32 MiB（#11） | `2356d0be`（合并 `0ae8c76e`） | 连接校验测试 6 项通过（分页、>10 秒慢响应、8–32 MiB 大响应、超限拒绝）；后端构建与 CodeQL/Gitleaks/依赖审计通过 |
 | Route 保存锁在子进程终止后按原 owner 复核再释放；按 Route 范围校验投递规则，不再被无关历史规则阻塞（修复 Grok Bot 设置无法保存；来自 Codex 会话 01a14ac1） | PR #12 | 定向测试与完整构建见 PR |
-| DSH 重连校验 session/list 的 args 改为对象形式（修复 502 根因），错误附带 DSH 错误码/信息（凭据脱敏），连接请求总超时 25 秒→90 秒合#13） | `9efcea18`（合并提交待补） | DSH 连接测试 14 项通过；后端构建通过 |
-（合并 `b17642c8`）
+| DSH 重连校验 session/list 的 args 改为对象形式（修复 502 根因），错误附带 DSH 错误码/信息（凭据脱敏），连接请求总超时 25 秒→90 秒（#13） | `9efcea18`（合并 `b17642c8`） | DSH 连接测试 14 项通过；后端构建通过 |
+| 端点投递先校验后派发：源/目标 owner 证明在标记 dispatching 之前刷新，发送前失败保持 prepared 并返回可重试的 source_verification/target_verification，同一 deliveryId 重试会真正发送；刷新每个端点只访问一次（先目标后源）并复用 60 秒内的 Grok Bot 源证明；Grok Bot HTTP 错误携带状态码与方法名（GROK_BOT_HTTP_FAILED:<status>），429 可重试（修复 Grok Bot 发送 GROK_BOT_HTTP_FAILED；#14） | 合并 `669deead` | 定向测试 119 项通过（端点投递/Grok Bot 客户端/端点工厂/投递授权路由）；完整构建通过 |
+| Codex 工作区过滤先做小写化的盘符/前缀廉价比较，仅可能匹配的行才 realpath；UNC 永不 realpath，realpath 失败或耗时超过 250ms 的盘符（如映射的 SMB/NAS 盘）此后只用字面键；失败与慢结果同样缓存（修复 Manager 主线程在 Z:\ 行上同步 realpath 阻塞超过 21 秒、被 Host 健康检查杀掉） | 见 PR | Codex/agentThreads 测试 154 项通过（含 537 行 Z:\ 与 UNC 行不触发 realpath 的用例）；完整构建通过 |
 
 拖拽验收夹具使用真实 Qt 窗口、显示器与原生窗口坐标，在进程内注入指针轨迹；这不等于人工鼠标操作验收。动作语义、步长计算与接口见[桌宠移动接口](desktop-pet-agent-motion.md)。资源包、人格绑定和运行缓存分别核对；包已导入不代表已启用。
 
