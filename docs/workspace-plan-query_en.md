@@ -8,6 +8,18 @@ Required `bindingScope` contains `agentType`, an absolute `workspace`, and host-
 
 The DSH Rabi plugin matches workspaces against routed personas, then reads summary pages per role in parallel. Button discovery reads no plans. Closing the dialog cancels reads and its event subscription. Rabi WebGUI owns on-demand plan details.
 
+Resident plan-page owners use a bounded budget. When full, only a prepared owner with no subscribers and no unfinished queries may be evicted; a new role is admitted only after its predecessor's resources have actually stopped. Cancelling an HTTP wait does not settle the underlying query. Preparing or busy owners are never evicted. If every slot is busy, admission still reports capacity rather than deleting plans or increasing the process budget.
+
+## Exact plan reads
+
+Exact plan projections use bounded asynchronous identity reads and still detect duplicate logical IDs in active, archive, and noncanonical physical directories. Finding the first match never skips duplicate verification. Strong ETags derive from the complete storage-package inventory. Package contents reuse the bytes verified by that inventory rather than rereading files after hashing, preventing concurrent replacement from separating the response bytes from their hashes. The feedback summary parses the `feedback.jsonl` bytes already obtained by that same package read instead of acquiring a write lease or creating/reclaiming locks. Plan details and the persona workflow are read in parallel. Workflow reads use the asynchronous read-only entry point: GET never creates, migrates, or upgrades configuration, and a missing workflow fails explicitly. This optimization neither releases the startup recovery gate nor adjudicates historical conflicts. A shared-storage timeout remains a read failure, not an empty plan or successful recovery.
+
+Detail and list presentation resolve old markers through the persona workflow's declared `legacyAliases`, preferring canonical `markerStatus`. Response marker keys and presentation remain consistent. This projection changes no plan bytes, history, or strong ETag; it does not treat activation state as a workflow marker or guess unknown states. Unconfigured markers still fail explicitly.
+
+## Startup recovery exit boundary
+
+An IPC recovery result remains provisional until the child exits. Readiness requires both success and a clean exit; failure results also wait for exit before retrying. Timeout cancellation must confirm termination. If termination fails, retain the process owner and PID, keep the gate closed, and never start overlapping recovery. Stop shares an in-flight cancellation and cannot report stopped without confirmed exit. This boundary neither adjudicates storage conflicts nor admits unrecovered plan writes.
+
 ## Status-driven advancement
 
 `GET/PUT /api/roles/:roleId/plan-advance/settings` stores status rules per persona and workspace. `POST .../check` returns candidates, blocking reasons, fingerprints, and the effective prompt without dispatching. `POST .../run` requires the checked fingerprints and rechecks plans, approval, the original bound session, and idle state before reserving dispatch receipts. Automation defaults off; prompts come from persona status configuration. Receipts durably deduplicate each workspace and plan, and uncertain outcomes stop automatic retries. Dispatch uses the formal Agent thread bridge. DSH uses `queue` so a new turn starting after the idle check is not interrupted; the original session is instructed to reread the plan before acting. The host supplies verified workspace `sessionIds`; Rabi never guesses sessions from titles.

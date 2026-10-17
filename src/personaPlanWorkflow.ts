@@ -588,6 +588,25 @@ export function readPersonaPlanWorkflow(roleDir: string): PersonaPlanWorkflowRea
   return { workflow, revision: personaPlanWorkflowRevision(workflow), materialized: true };
 }
 
+/** Read existing workflow without initialization, migration, or synchronous shared-storage calls. */
+export async function readPersonaPlanWorkflowAsync(
+  roleDir: string,
+  signal?: AbortSignal
+): Promise<PersonaPlanWorkflowReadResult | null> {
+  let text: string;
+  try {
+    text = await fs.promises.readFile(personaConfigPath(roleDir), { encoding: "utf8", signal });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  const config: unknown = JSON.parse(text);
+  if (!isRecord(config)) throw new Error("personaConfig.json must contain a JSON object.");
+  if (config.planWorkflow == null) return null;
+  const workflow = validatePersonaPlanWorkflow(config.planWorkflow);
+  return { workflow, revision: personaPlanWorkflowRevision(workflow), materialized: true };
+}
+
 export function writePersonaPlanWorkflow(
   roleDir: string,
   workflow: PersonaPlanWorkflow,

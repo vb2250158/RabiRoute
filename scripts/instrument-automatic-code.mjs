@@ -24,7 +24,8 @@ export async function instrumentAutomaticCode(root) {
       });
       if (source === undefined) continue;
       const protectedReason = relative.startsWith("plugin-kernel/") || relative.startsWith("manager/automatic")
-        ? "The patch runtime and publication owner require a controlled switch."
+        || relative === "manager/planStorageStartupLifecycle.js"
+        ? "The patch runtime, publication owner, and storage recovery lifecycle require a controlled switch."
         : managed.has(sourcePath) ? "This module belongs to the managed source-patch runtime." : undefined;
       const compiled = await fs.readFile(filename, "utf8");
       const runtimeImport = path.relative(path.dirname(filename), path.join(output, "plugin-kernel/automaticCodeRuntime.js")).replaceAll("\\", "/");

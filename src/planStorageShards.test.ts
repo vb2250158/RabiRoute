@@ -85,6 +85,27 @@ test("repository reads ordered shards and rejects gaps, empty base, partial rows
   assertRejected(() => fs.writeFileSync(path.join(archive, "history", "unexpected.jsonl"), archived), () => fs.unlinkSync(path.join(archive, "history", "unexpected.jsonl")));
 });
 
+test("package response uses the same verified bytes as its inventory hash", (t) => {
+  const { roleDir, active, archive } = fixture(t);
+  fs.rmSync(active, { recursive: true });
+  const historyFile = path.join(archive, "history.jsonl");
+  const originalRead = fs.readFileSync;
+  let historyReads = 0;
+  t.mock.method(fs, "readFileSync", (...args: Parameters<typeof fs.readFileSync>) => {
+    const value = originalRead(...args);
+    if (String(args[0]) === historyFile && ++historyReads > 1) {
+      return Buffer.from(`${JSON.stringify({ id: "replacement", planId: id })}\n`);
+    }
+    return value;
+  });
+  const snapshot = readPlanStoragePackage(roleDir, id, "archive");
+  for (const file of snapshot.files) {
+    assert.equal(file.sha256, createHash("sha256").update(file.content).digest("hex"));
+    assert.equal(file.size, file.content.byteLength);
+  }
+  assert.equal(historyReads, 1, "verified package bytes must not be fetched again");
+});
+
 test("feedback transaction refuses projected 96 MiB package before staging any operation", (t) => {
   const { roleDir, active } = fixture(t);
   fs.rmSync(path.join(roleDir, "plans", "archive"), { recursive: true });

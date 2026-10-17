@@ -599,7 +599,7 @@ import {
 } from "../roleKnowledge.js";
 import { presentPlan, presentPlans } from "../roleKnowledgePresentation.js";
 import { resolvePlanAttachmentFile } from "../planAttachments.js";
-import { ensurePersonaPlanWorkflow } from "../personaPlanWorkflow.js";
+import { ensurePersonaPlanWorkflow, readPersonaPlanWorkflowAsync } from "../personaPlanWorkflow.js";
 import {
   normalizeRoleMemoryPageLimit,
   normalizeRolePlanPageLimit,
@@ -8663,7 +8663,10 @@ function handleRoleKnowledgeApi(
       const wantsPage = !itemId && requestUrl.searchParams.has("limit");
       const wantsSummary = wantsPage && requestUrl.searchParams.get("detail") === "summary";
       if (itemId) {
-        void resolveRoleStorageApplication().queries.plan(roleId, itemId).then((result) => {
+        void Promise.all([
+          resolveRoleStorageApplication().queries.plan(roleId, itemId),
+          readPersonaPlanWorkflowAsync(roleDir)
+        ]).then(([result, workflowResult]) => {
           if (!result) {
             jsonResponse(response, 404, { code: -1, message: `Plan not found: ${itemId}` });
             return;
@@ -8671,7 +8674,8 @@ function handleRoleKnowledgeApi(
           response.setHeader("etag", `"${result.revision}"`);
           // Keep the plan mutation ETag intact; the view revision also covers
           // approval and persona presentation, which can change independently.
-          const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
+          if (!workflowResult) throw new Error("Persona plan workflow is not initialized.");
+          const workflow = workflowResult.workflow;
           const viewRevision = createHash("sha256")
             .update(JSON.stringify([result.revision, result.approval, workflow]))
             .digest("hex");

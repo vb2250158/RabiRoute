@@ -485,6 +485,17 @@ function latestRecords(snapshot: FeedbackLedgerSnapshot): PlanFeedbackRecord[] {
   });
 }
 
+/** Parse bytes already owned by a verified storage-package snapshot; no filesystem or lease side effects. */
+export function listPlanFeedbackFromSnapshot(
+  content: string,
+  planDirectory: string,
+  planId: string
+): PlanFeedbackRecord[] {
+  return latestRecords(readFeedbackLedgerContent(
+    content, path.join(planDirectory, FEEDBACK_LEDGER_RELATIVE_PATH), planId
+  )).map((record) => materializeRecordPaths(record, planDirectory));
+}
+
 export function listPlanFeedbackUnderLease(lease: PlanStorageLease): PlanFeedbackRecord[] {
   const location = canonicalLocationUnderLease(lease);
   return latestRecords(readFeedbackLedger(
