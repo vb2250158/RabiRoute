@@ -1,5 +1,5 @@
-import { fork, type ChildProcess } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { ProgressivePlanStorageStartup } from "./progressivePlanStorageStartup.js";
+import { StorageTerminationError, type StorageStartupLimits } from "./boundedStorageStartup.js";
 import type { PlanStorageStartupGateSummary } from "./planStorageStartupGate.js";
 
 export type PlanStorageStartupLifecycleState = "idle" | "running" | "ready" | "degraded" | "stopping" | "stopped";
@@ -38,136 +38,40 @@ export type PlanStorageStartupLifecycleOptions = Readonly<{
   retryBaseMs?: number;
   retryMaxMs?: number;
   terminateTimeoutMs?: number;
-  attemptFactory?: () => PlanStorageStartupAttempt;
+  limits?: StorageStartupLimits;
+  attemptFactory?: (onProgress: (summary: PlanStorageStartupGateSummary) => void) => PlanStorageStartupAttempt;
   onStatus?: (snapshot: PlanStorageStartupLifecycleSnapshot) => void;
 }>;
 
-type StartupChildMessage =
-  | Readonly<{ ok: true; summary: PlanStorageStartupGateSummary }>
-  | Readonly<{ ok: false; error: string; summary?: PlanStorageStartupGateSummary }>;
-
 function positiveInteger(value: number | undefined, fallback: number): number {
   return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : fallback;
-}
-
-function waitForExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
-  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
-  return new Promise(resolve => {
-    const timer = setTimeout(() => {
-      child.off("exit", onExit);
-      resolve(false);
-    }, timeoutMs);
-    timer.unref();
-    const onExit = (): void => {
-      clearTimeout(timer);
-      resolve(true);
-    };
-    child.once("exit", onExit);
-  });
-}
-
-export function createPlanStorageStartupAttempt(input: Readonly<{
-  rolesRoot: string;
-  readOnly: boolean;
-  terminateTimeoutMs?: number;
-  spawnChild?: typeof fork;
-}>): PlanStorageStartupAttempt {
-  const childPath = fileURLToPath(new URL(
-    import.meta.url.endsWith(".ts") ? "./planStorageStartupChild.ts" : "./planStorageStartupChild.js",
-    import.meta.url
-  ));
-  const child = (input.spawnChild ?? fork)(childPath, [], {
-    env: {
-      ...process.env,
-      RABIROUTE_PLAN_STORAGE_STARTUP_INPUT: Buffer.from(JSON.stringify({
-        rolesRoot: input.rolesRoot,
-        readOnly: input.readOnly
-      }), "utf8").toString("base64url")
-    },
-    execArgv: import.meta.url.endsWith(".ts") ? ["--import", "tsx"] : [],
-    serialization: "json",
-    stdio: ["ignore", "pipe", "pipe", "ipc"]
-  });
-  let diagnosticBytes = 0;
-  const captureDiagnostic = (chunk: Buffer | string): void => {
-    const bytes = Buffer.isBuffer(chunk) ? chunk.byteLength : Buffer.byteLength(chunk, "utf8");
-    diagnosticBytes = Math.min(Number.MAX_SAFE_INTEGER, diagnosticBytes + bytes);
-  };
-  child.stdout?.on("data", captureDiagnostic);
-  child.stderr?.on("data", captureDiagnostic);
-  let settled = false;
-  let cancelFlight: Promise<void> | undefined;
-  const result = new Promise<PlanStorageStartupGateSummary>((resolve, reject) => {
-    let received: StartupChildMessage | undefined;
-    child.once("message", (message: StartupChildMessage) => {
-      if (!settled) received = message;
-    });
-    child.on("error", () => {
-      if (settled) return;
-      // A spawned process may emit an error without exiting (for example kill failure).
-      // Its deadline/cancellation path must retain ownership until exit is confirmed.
-      if (child.pid !== undefined) return;
-      settled = true;
-      reject(new Error("Plan storage startup child process failed."));
-    });
-    child.once("exit", (code, signal) => {
-      if (settled) return;
-      settled = true;
-      if (received?.ok === true && code === 0 && signal === null) {
-        resolve(received.summary);
-        return;
-      }
-      if (received?.ok === false) {
-        reject(new PlanStorageStartupAttemptError("Plan storage startup gate failed.", received.summary));
-        return;
-      }
-      reject(new Error(
-        `Plan storage startup child exited without a result: code=${code ?? "none"}; signal=${signal ?? "none"}`
-        + (diagnosticBytes > 0 ? `; diagnosticBytes=${diagnosticBytes}` : "")
-      ));
-    });
-  });
-  return Object.freeze({
-    pid: child.pid,
-    result,
-    cancel(): Promise<void> {
-      if (cancelFlight) return cancelFlight;
-      cancelFlight = (async () => {
-        if (child.exitCode !== null || child.signalCode !== null) return;
-        child.kill();
-        if (await waitForExit(child, positiveInteger(input.terminateTimeoutMs, 5_000))) return;
-        child.kill("SIGKILL");
-        if (!await waitForExit(child, positiveInteger(input.terminateTimeoutMs, 5_000))) {
-          throw new Error(`Plan storage startup child did not exit after termination: pid=${child.pid ?? "unknown"}`);
-        }
-      })();
-      return cancelFlight;
-    }
-  });
 }
 
 export class PlanStorageStartupLifecycle {
   private readonly attemptTimeoutMs: number;
   private readonly retryBaseMs: number;
   private readonly retryMaxMs: number;
-  private readonly attemptFactory: () => PlanStorageStartupAttempt;
+  private readonly attemptFactory: NonNullable<PlanStorageStartupLifecycleOptions["attemptFactory"]>;
   private currentAttempt: { value: PlanStorageStartupAttempt; settled: boolean; timeout?: NodeJS.Timeout } | undefined;
   private cancellationFlight: Promise<void> | undefined;
   private retryTimer: NodeJS.Timeout | undefined;
   private stopFlight: Promise<void> | undefined;
   private active = false;
+  private terminationUnconfirmed = false;
   private readonly readyListeners = new Set<(summary: PlanStorageStartupGateSummary) => void>();
   private runtimeSnapshot: PlanStorageStartupLifecycleSnapshot;
 
   constructor(private readonly options: PlanStorageStartupLifecycleOptions) {
-    this.attemptTimeoutMs = positiveInteger(options.attemptTimeoutMs, 15 * 60_000);
+    this.attemptTimeoutMs = positiveInteger(options.attemptTimeoutMs, 45_000);
     this.retryBaseMs = positiveInteger(options.retryBaseMs, 5_000);
     this.retryMaxMs = Math.max(this.retryBaseMs, positiveInteger(options.retryMaxMs, 60_000));
-    this.attemptFactory = options.attemptFactory ?? (() => createPlanStorageStartupAttempt({
+    const loader = new ProgressivePlanStorageStartup({
       rolesRoot: options.rolesRoot,
       readOnly: options.readOnly,
-      terminateTimeoutMs: options.terminateTimeoutMs
-    }));
+      terminateTimeoutMs: options.terminateTimeoutMs,
+      limits: options.limits
+    });
+    this.attemptFactory = options.attemptFactory ?? (onProgress => loader.attempt(onProgress));
     this.runtimeSnapshot = Object.freeze({
       state: "idle",
       attempt: 0,
@@ -179,7 +83,7 @@ export class PlanStorageStartupLifecycle {
   snapshot(): PlanStorageStartupLifecycleSnapshot {
     return Object.freeze({
       ...this.runtimeSnapshot,
-      summary: this.runtimeSnapshot.summary ? { ...this.runtimeSnapshot.summary, failures: [...this.runtimeSnapshot.summary.failures] } : undefined
+      summary: this.runtimeSnapshot.summary ? structuredClone(this.runtimeSnapshot.summary) : undefined
     });
   }
 
@@ -194,7 +98,7 @@ export class PlanStorageStartupLifecycle {
   }
 
   start(): void {
-    if (this.active || this.runtimeSnapshot.state === "ready" || this.runtimeSnapshot.state === "stopped") return;
+    if (this.active || this.terminationUnconfirmed || this.runtimeSnapshot.state === "ready" || this.runtimeSnapshot.state === "stopped") return;
     this.active = true;
     this.startAttempt();
   }
@@ -202,7 +106,10 @@ export class PlanStorageStartupLifecycle {
   stop(): Promise<void> {
     if (this.stopFlight) return this.stopFlight;
     if (this.runtimeSnapshot.state === "stopped") return Promise.resolve();
-    this.stopFlight = this.stopOnce();
+    this.stopFlight = this.stopOnce().catch(error => {
+      this.stopFlight = undefined;
+      throw error;
+    });
     return this.stopFlight;
   }
 
@@ -219,7 +126,14 @@ export class PlanStorageStartupLifecycle {
         this.cancellationFlight = this.trackCancellation(Promise.resolve().then(() => current.value.cancel()));
       }
     }
-    if (this.cancellationFlight) await this.cancellationFlight;
+    if (this.cancellationFlight) {
+      try {
+        await this.cancellationFlight;
+      } catch (error) {
+        this.transition({ state: "degraded", incidents: 1, lastError: "Storage startup child exit is unconfirmed." });
+        throw error;
+      }
+    }
     this.currentAttempt = undefined;
     this.readyListeners.clear();
     this.transition({ state: "stopped", incidents: 0, childPid: undefined, deadlineAt: undefined, nextRetryAt: undefined });
@@ -229,6 +143,7 @@ export class PlanStorageStartupLifecycle {
     const tracked = Promise.resolve(cancellation).finally(() => {
       if (this.cancellationFlight === tracked) this.cancellationFlight = undefined;
     });
+    void tracked.catch(() => {});
     return tracked;
   }
 
@@ -238,21 +153,35 @@ export class PlanStorageStartupLifecycle {
       ...patch,
       lastTransitionAt: new Date().toISOString()
     });
-    this.options.onStatus?.(this.snapshot());
+    try {
+      this.options.onStatus?.(this.snapshot());
+    } catch (error) {
+      console.error("Plan storage startup observer failed.", error);
+    }
   }
 
   private startAttempt(): void {
     if (!this.active || this.currentAttempt || this.cancellationFlight) return;
     const attemptNumber = this.runtimeSnapshot.attempt + 1;
+    const reportProgress = (summary: PlanStorageStartupGateSummary): void => {
+      if (!token || !this.active || this.currentAttempt !== token || token.settled) return;
+      this.transition({
+        summary: structuredClone(summary),
+        deadlineAt: new Date(Date.now() + this.attemptTimeoutMs).toISOString(),
+        ...(summary.failures.length ? { state: "degraded" as const, incidents: 1 } : {})
+      });
+      token.timeout?.refresh();
+    };
     let attempt: PlanStorageStartupAttempt;
+    let token: NonNullable<PlanStorageStartupLifecycle["currentAttempt"]>;
     try {
-      attempt = this.attemptFactory();
+      attempt = this.attemptFactory(summary => queueMicrotask(() => reportProgress(summary)));
     } catch {
       this.failAttempt(new Error("Plan storage startup child failed to start."), attemptNumber);
       return;
     }
     const startedAt = new Date();
-    const token = { value: attempt, settled: false, timeout: undefined as NodeJS.Timeout | undefined };
+    token = { value: attempt, settled: false, timeout: undefined as NodeJS.Timeout | undefined };
     this.currentAttempt = token;
     this.transition({
       state: "running",
@@ -273,14 +202,12 @@ export class PlanStorageStartupLifecycle {
           if (this.currentAttempt === token) this.currentAttempt = undefined;
           this.failAttempt(new Error(`Plan storage startup attempt timed out after ${this.attemptTimeoutMs}ms.`), attemptNumber);
         })
-        .catch(error => {
-          // An unconfirmed termination still owns the storage writer slot.
-          // Leave the gate closed and retain its PID; never start a second recovery.
-          if (!this.active) throw error;
-          this.transition({
-            state: "degraded", incidents: 1, deadlineAt: undefined, nextRetryAt: undefined,
-            lastError: error instanceof Error ? error.message : String(error)
-          });
+        .catch(() => {
+          // Keep the writer slot until termination is confirmed; do not overlap recovery.
+          this.currentAttempt = token;
+          const error = new StorageTerminationError();
+          this.failAttempt(error, attemptNumber);
+          throw error;
         });
       this.cancellationFlight = this.trackCancellation(cancellation);
     }, this.attemptTimeoutMs);
@@ -291,6 +218,10 @@ export class PlanStorageStartupLifecycle {
       if (token.timeout) clearTimeout(token.timeout);
       this.currentAttempt = undefined;
       if (!this.active) return;
+      if (summary.failures.length) {
+        this.failAttempt(new PlanStorageStartupAttemptError("Plan storage startup gate failed.", summary), attemptNumber);
+        return;
+      }
       this.active = false;
       this.transition({
         state: "ready",
@@ -301,18 +232,23 @@ export class PlanStorageStartupLifecycle {
         lastError: undefined,
         summary
       });
-      for (const listener of [...this.readyListeners]) listener(summary);
+      for (const listener of [...this.readyListeners]) {
+        try { listener(structuredClone(summary)); } catch (error) {
+          console.error("Plan storage ready observer failed.", error);
+        }
+      }
     }).catch(error => {
       if (token.settled) return;
       token.settled = true;
       if (token.timeout) clearTimeout(token.timeout);
-      this.currentAttempt = undefined;
+      this.currentAttempt = error instanceof StorageTerminationError ? token : undefined;
       this.failAttempt(error instanceof Error ? error : new Error(String(error)), attemptNumber);
     });
   }
 
   private failAttempt(error: Error, attemptNumber: number): void {
     if (!this.active) return;
+    if (error instanceof StorageTerminationError) this.terminationUnconfirmed = true;
     const exponent = Math.max(0, Math.min(20, attemptNumber - 1));
     const retryMs = Math.min(this.retryMaxMs, this.retryBaseMs * (2 ** exponent));
     const nextRetryAt = new Date(Date.now() + retryMs).toISOString();
@@ -322,11 +258,12 @@ export class PlanStorageStartupLifecycle {
       incidents: 1,
       completedAt: new Date().toISOString(),
       deadlineAt: undefined,
-      childPid: undefined,
+      childPid: this.terminationUnconfirmed ? this.runtimeSnapshot.childPid : undefined,
       lastError: error.message,
-      nextRetryAt,
+      nextRetryAt: this.terminationUnconfirmed ? undefined : nextRetryAt,
       summary: error instanceof PlanStorageStartupAttemptError ? error.summary : this.runtimeSnapshot.summary
     });
+    if (this.terminationUnconfirmed) return;
     this.retryTimer = setTimeout(() => {
       this.retryTimer = undefined;
       this.startAttempt();

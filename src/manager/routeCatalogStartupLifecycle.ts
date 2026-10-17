@@ -10,6 +10,8 @@ import {
   type RouteCatalogTransactionOperation
 } from "./routeCatalogTransaction.js";
 import { routeCatalogSnapshotIdentities } from "./routeCatalogIdentity.js";
+import { ProgressiveRouteCatalogStartup } from "./progressiveRouteCatalogStartup.js";
+import { StorageTerminationError, type StorageStartupLimits } from "./boundedStorageStartup.js";
 
 export const ROUTE_CATALOG_STARTUP_ERROR_CODE = "ROUTE_CATALOG_STARTUP_FAILED";
 export const ROUTE_CATALOG_STARTUP_TIMEOUT_CODE = "ROUTE_CATALOG_STARTUP_TIMEOUT";
@@ -71,9 +73,11 @@ export type RouteCatalogStartupLifecycleOptions = Readonly<{
   maxAttempts?: number;
   maxPending?: number;
   terminateTimeoutMs?: number;
+  limits?: StorageStartupLimits;
   attemptFactory?: (
     operation: RouteCatalogTransactionOperation,
-    identity: RouteCatalogAttemptIdentity
+    identity: RouteCatalogAttemptIdentity,
+    onProgress?: (snapshot: RouteCatalogSnapshot) => Promise<void>
   ) => RouteCatalogStartupAttempt;
   onStatus?: (snapshot: RouteCatalogStartupLifecycleSnapshot) => void;
   onFailure?: (error: Error, snapshot: RouteCatalogStartupLifecycleSnapshot) => void;
@@ -138,6 +142,8 @@ function cloneSnapshot(snapshot: RouteCatalogSnapshot): RouteCatalogSnapshot {
       }
     } : {}),
     requestId: snapshot.requestId,
+    ...(snapshot.startupIncomplete === undefined ? {} : { startupIncomplete: snapshot.startupIncomplete }),
+    ...(snapshot.startupFailureCount === undefined ? {} : { startupFailureCount: snapshot.startupFailureCount }),
     attemptToken: snapshot.attemptToken,
     contentHash: snapshot.contentHash,
     routeConfigHash: snapshot.routeConfigHash,
@@ -372,7 +378,8 @@ export class RouteCatalogStartupLifecycle {
   private readonly terminateTimeoutMs: number;
   private readonly attemptFactory: (
     operation: RouteCatalogTransactionOperation,
-    identity: RouteCatalogAttemptIdentity
+    identity: RouteCatalogAttemptIdentity,
+    onProgress?: (snapshot: RouteCatalogSnapshot) => Promise<void>
   ) => RouteCatalogStartupAttempt;
   private readonly readyListeners = new Set<(snapshot: RouteCatalogSnapshot) => void>();
   private readonly queue: QueueEntry[] = [];
@@ -395,8 +402,12 @@ export class RouteCatalogStartupLifecycle {
     this.maxAttempts = positiveInteger(options.maxAttempts, 5);
     this.maxPending = positiveInteger(options.maxPending, 32);
     this.terminateTimeoutMs = positiveInteger(options.terminateTimeoutMs, 5_000);
-    this.attemptFactory = options.attemptFactory ?? ((operation, identity) => {
+    const loader = new ProgressiveRouteCatalogStartup({ limits: options.limits, terminateTimeoutMs: this.terminateTimeoutMs });
+    this.attemptFactory = options.attemptFactory ?? ((operation, identity, onProgress) => {
       if (!options.input) throw new Error("Route catalog lifecycle input is missing.");
+      if (operation.kind === "capture" && !operation.resolveOperationId) {
+        return loader.attempt({ ...options.input(), ...identity, operation }, onProgress ?? (async () => {}), this.latestCatalog);
+      }
       return createRouteCatalogStartupAttempt({
         ...options.input(),
         ...identity,
@@ -611,7 +622,28 @@ export class RouteCatalogStartupLifecycle {
     });
     let attempt: RouteCatalogStartupAttempt;
     try {
-      attempt = this.attemptFactory(entry.operation, identity);
+      attempt = this.attemptFactory(entry.operation, identity, async snapshot => {
+        if (this.stopped || this.currentAttempt?.identity !== identity || this.currentAttempt.settled) return;
+        const token = this.currentAttempt;
+        const validated = validateSnapshot(snapshot, identity);
+        const application = Promise.resolve(this.options.apply(validated));
+        this.applicationFlight = application;
+        try { await application; } finally {
+          if (this.applicationFlight === application) this.applicationFlight = undefined;
+        }
+        if (this.stopped || token.settled || this.currentAttempt !== token) return;
+        this.latestCatalog = cloneSnapshot(validated);
+        this.revision += 1;
+        token.timeout?.refresh();
+        this.transition({
+          ...((validated.startupFailureCount ?? 0) > 0 ? { state: "degraded" as const, incidents: 1 } : {}),
+          revision: this.revision,
+          contentHash: validated.contentHash,
+          routeConfigHash: validated.routeConfigHash,
+          presentationHash: validated.presentationHash,
+          deadlineAt: new Date(Date.now() + this.attemptTimeoutMs).toISOString()
+        });
+      });
     } catch (error) {
       this.failEntry(
         entry,
@@ -656,6 +688,10 @@ export class RouteCatalogStartupLifecycle {
         try { await application; } finally { if (this.applicationFlight === application) this.applicationFlight = undefined; }
         if (this.stopped) return;
         this.latestCatalog = cloneSnapshot(validated);
+        if (validated.startupIncomplete) {
+          this.failEntry(entry, new Error("Route catalog startup has unavailable storage items."), ROUTE_CATALOG_STARTUP_ERROR_CODE);
+          return;
+        }
         this.completeEntry(entry, validated);
       } catch (error) {
         this.failEntry(
@@ -688,7 +724,10 @@ export class RouteCatalogStartupLifecycle {
       .then(() => token.attempt.cancel())
       .then(() => {
         if (this.currentAttempt === token) this.currentAttempt = undefined;
-        if (!this.stopped) this.failEntry(entry, error, errorCode);
+        if (!this.stopped) {
+          if (error instanceof StorageTerminationError) this.blockAfterUnconfirmedTermination(token, entry, error);
+          else this.failEntry(entry, error, errorCode);
+        }
       })
       .catch(terminationError => {
         const normalized = terminationError instanceof Error
@@ -763,7 +802,8 @@ export class RouteCatalogStartupLifecycle {
       queueMicrotask(() => this.pump());
       return;
     }
-    const canRetry = entry.attempts < this.maxAttempts;
+    const canRetry = (entry.operation.kind === "capture" && !entry.operation.resolveOperationId)
+      || entry.attempts < this.maxAttempts;
     const exponent = Math.max(0, Math.min(20, entry.attempts - 1));
     const retryMs = Math.min(this.retryMaxMs, this.retryBaseMs * (2 ** exponent));
     this.transition({

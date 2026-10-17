@@ -427,7 +427,7 @@ import {
   RouteCatalogStartupLifecycle,
   type RouteCatalogStartupLifecycleSnapshot
 } from "./routeCatalogStartupLifecycle.js";
-import { routeCatalogStartupUnavailable } from "./routeCatalogStartupHttpGate.js";
+import { isRouteCatalogSnapshotInstalled, routeCatalogStartupUnavailable } from "./routeCatalogStartupHttpGate.js";
 import type { RouteCatalogPersonaPresentation, RouteCatalogSnapshot } from "./routeCatalogTransaction.js";
 import {
   planStorageStartupUnavailable,
@@ -2779,7 +2779,8 @@ async function applyRouteCatalogSnapshot(snapshot: RouteCatalogSnapshot): Promis
 
 function syncRunningGateways(): void {
   if (!gatewayRuntimePluginLease.active) return;
-  if (routeCatalogStartupStatus().state !== "ready") return;
+  const startup = routeCatalogStartupStatus();
+  if (!isRouteCatalogSnapshotInstalled(startup) || !["ready", "running", "degraded"].includes(startup.state)) return;
   gatewayRuntimeService.reconcile();
 }
 
@@ -3080,7 +3081,8 @@ function startGatewayRuntime(id: string): void {
   if (!runtime) {
     throw new Error(`Gateway not found: ${id}`);
   }
-  if (routeCatalogStartupStatus().state !== "ready") {
+  const startup = routeCatalogStartupStatus();
+  if (!isRouteCatalogSnapshotInstalled(startup) || !["ready", "running", "degraded"].includes(startup.state)) {
     runtime.readiness = "blocked";
     runtime.lastError = "Route catalog startup is not ready.";
     appendLog(runtime, "skip start until route catalog startup is ready");
@@ -9776,6 +9778,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       terminateTimeoutMs: Number(process.env.RABIROUTE_ROUTE_CATALOG_STARTUP_TERMINATE_TIMEOUT_MS) || undefined,
       onStatus: snapshot => {
         publishManagerEvent("route_catalog_startup_changed", snapshot);
+        syncRunningGateways();
       },
       onFailure: (error, snapshot) => {
         managerOperationalLog.record("error", "route_catalog_startup_failed", {

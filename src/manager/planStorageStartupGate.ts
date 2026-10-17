@@ -8,11 +8,13 @@ export type PlanStorageStartupGateSummary = {
   reconciled: number;
   failures: string[];
   skipped: boolean;
+  readyRoleIds?: string[];
 };
 
 export type PlanStorageStartupGateOptions = {
   rolesRoot: string;
   readOnly: boolean;
+  roleDirectories?: readonly string[];
   recoverRoleLifecycle: (roleDir: string) => Promise<{
     results: unknown[];
     failures: Array<{ transactionPath: string; error: string }>;
@@ -52,8 +54,8 @@ export async function runPlanStorageStartupGate(
   if (options.readOnly) {
     return { roles: 0, migrated: 0, reconciled: 0, failures: [], skipped: true };
   }
-  const entries = await readRoleDirectoryEntries(options.rolesRoot);
-  const roleDirectories = entries
+  const entries = options.roleDirectories ? [] : await readRoleDirectoryEntries(options.rolesRoot);
+  const roleDirectories = options.roleDirectories ?? entries
     .filter(entry => entry.isDirectory() && !entry.isSymbolicLink())
     .map(entry => path.join(options.rolesRoot, entry.name))
     .sort((left, right) => left.localeCompare(right));

@@ -47,6 +47,8 @@ export type RouteCatalogSnapshot = Readonly<{
   rolesRoot: string;
   gateways: readonly GatewayDefinition[];
   personas: readonly RouteCatalogPersonaPresentation[];
+  startupIncomplete?: boolean;
+  startupFailureCount?: number;
 }>;
 
 export type RouteCatalogPersonaPresentation = Readonly<{
@@ -104,26 +106,38 @@ function readOnlyConfig(repository: ManagerConfigRepository): GatewayConfigFile 
   const gateways: GatewayDefinition[] = [];
   for (const routeEntry of fs.readdirSync(repository.routeRoot, { withFileTypes: true })) {
     if (!routeEntry.isDirectory() || !sanitizeRoleId(routeEntry.name)) continue;
-    const configName = sanitizeConfigName(routeEntry.name);
-    const configPath = repository.adapterConfigPath(configName);
-    if (!fs.existsSync(configPath)) continue;
-    const raw = migrateLegacyCopilotThreadName(
-      JSON.parse(fs.readFileSync(configPath, "utf8")) as Partial<GatewayDefinition>
-    );
-    const { agentRoleDeviceId } = normalizeRemotePersonaReference(raw);
-    const personaConfig = agentRoleDeviceId ? {} : repository.readRoleMessageConfig(raw.agentRoleId);
-    gateways.push(repository.normalize({
-      ...raw,
-      ...personaConfig,
-      id: configName,
-      configName,
-      agentRoleId: raw.agentRoleId,
-      agentRoleDeviceId,
-      rolesDir: raw.rolesDir,
-      agentRoleFile: raw.agentRoleFile
-    } as GatewayDefinition));
+    const definition = readRouteCatalogDefinition(repository, routeEntry.name);
+    if (definition) gateways.push(definition);
   }
   return { gateways };
+}
+
+export function readRouteCatalogDefinition(
+  repository: ManagerConfigRepository,
+  name: string
+): GatewayDefinition | null {
+  const configName = sanitizeConfigName(name);
+  if (!configName || configName !== name) throw new Error("Invalid startup config identity.");
+  let content: string;
+  try {
+    content = fs.readFileSync(repository.adapterConfigPath(configName), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  const raw = migrateLegacyCopilotThreadName(JSON.parse(content) as Partial<GatewayDefinition>);
+  const { agentRoleDeviceId } = normalizeRemotePersonaReference(raw);
+  const personaConfig = agentRoleDeviceId ? {} : repository.readRoleMessageConfig(raw.agentRoleId);
+  return repository.normalize({
+    ...raw,
+    ...personaConfig,
+    id: configName,
+    configName,
+    agentRoleId: raw.agentRoleId,
+    agentRoleDeviceId,
+    rolesDir: raw.rolesDir,
+    agentRoleFile: raw.agentRoleFile
+  } as GatewayDefinition);
 }
 
 function safePersonaDisplayName(value: string, fallback: string): string {
@@ -230,7 +244,7 @@ function personaPresentation(
     .sort((a, b) => a.localeCompare(b))
     .map(file => readPersonaFilePresentation(rolesRoot, roleId, file)));
   const personaFile = files.find(file => file.fileName.toLowerCase() === "persona.md");
-  let displayName = roleId === "YeYu" ? "夜雨" : roleId;
+  let displayName = roleId;
   if (isPersona && personaFile?.title) displayName = safePersonaDisplayName(personaFile.title, roleId);
   const avatar = isPersona ? readPersonaAvatar(roleDir) : { configured: false };
   return Object.freeze({
@@ -243,6 +257,21 @@ function personaPresentation(
     files,
     speech: personaSpeechPresentation(roleDir)
   });
+}
+
+export function readRouteCatalogPersona(
+  rolesRoot: string,
+  roleId: string,
+  roleFiles: readonly string[]
+): RouteCatalogPersonaPresentation {
+  if (!sanitizeRoleId(roleId) || sanitizeRoleId(roleId) !== roleId) throw new Error("Invalid startup role identity.");
+  let isPersona = false;
+  try {
+    isPersona = fs.statSync(roleFilePath(rolesRoot, roleId, "persona.md")).isFile();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  return personaPresentation(rolesRoot, roleId, isPersona, isPersona ? ["persona.md", ...roleFiles] : roleFiles);
 }
 
 function capturePersonaPresentations(

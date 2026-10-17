@@ -5,12 +5,13 @@ import test from "node:test";
 import { withTestDeadline } from "../testFiniteDeadline.js";
 import { fileURLToPath } from "node:url";
 import {
-  createPlanStorageStartupAttempt,
   PlanStorageStartupLifecycle,
   type PlanStorageStartupAttempt,
   type PlanStorageStartupLifecycleSnapshot
 } from "./planStorageStartupLifecycle.js";
 import type { PlanStorageStartupGateSummary } from "./planStorageStartupGate.js";
+import { createStorageStartupProcess } from "./storageStartupProcess.js";
+import { ProgressivePlanStorageStartup } from "./progressivePlanStorageStartup.js";
 
 const SUCCESS_SUMMARY: PlanStorageStartupGateSummary = Object.freeze({
   roles: 2,
@@ -21,68 +22,66 @@ const SUCCESS_SUMMARY: PlanStorageStartupGateSummary = Object.freeze({
 });
 
 test("real startup child skips a read-only snapshot without probing the roles root", async () => {
-  const attempt = createPlanStorageStartupAttempt({
+  const attempt = new ProgressivePlanStorageStartup({
     rolesRoot: "Q:\\example-path-must-not-be-probed\\roles",
     readOnly: true,
     terminateTimeoutMs: 2_000
-  });
+  }).attempt(() => {});
   const summary = await attempt.result;
   assert.deepEqual(summary, {
     roles: 0,
     migrated: 0,
     reconciled: 0,
     failures: [],
-    skipped: true
+    skipped: true,
+    readyRoleIds: []
   });
 });
 
 test("startup IPC success does not settle before a clean child exit", async () => {
   const child = new ChildProcess();
-  const attempt = createPlanStorageStartupAttempt({
-    rolesRoot: "unused",
-    readOnly: true,
-    spawnChild: () => child
-  });
+  const attempt = createStorageStartupProcess<PlanStorageStartupGateSummary>(
+    { kind: "plan", rolesRoot: "unused", roleId: "example" }, 5000, () => child);
   let settled = false;
   void attempt.result.then(() => { settled = true; });
-  child.emit("message", { ok: true, summary: SUCCESS_SUMMARY });
+  child.emit("message", { ok: true, value: SUCCESS_SUMMARY });
   await new Promise<void>(resolve => setImmediate(resolve));
   assert.equal(settled, false);
-  child.emit("exit", 0, null);
+  child.emit("close", 0, null);
   assert.deepEqual(await attempt.result, SUCCESS_SUMMARY);
 });
 
 test("startup failure message retains ownership until child exit", async () => {
   const child = new ChildProcess();
-  const attempt = createPlanStorageStartupAttempt({ rolesRoot: "unused", readOnly: true, spawnChild: () => child });
+  const attempt = createStorageStartupProcess<PlanStorageStartupGateSummary>({ kind: "plan", rolesRoot: "unused", roleId: "example" }, 5000, () => child);
   let settled = false;
-  const rejected = assert.rejects(attempt.result, /startup gate failed/).then(() => { settled = true; });
+  const rejected = assert.rejects(attempt.result, /Storage startup item failed/).then(() => { settled = true; });
   child.emit("message", { ok: false, summary: { ...SUCCESS_SUMMARY, failures: ["conflict"] } });
   await new Promise<void>(resolve => setImmediate(resolve));
   assert.equal(settled, false);
-  child.emit("exit", 1, null);
+  child.emit("close", 1, null);
   await rejected;
 });
 
 test("spawned startup child error does not release its storage owner", async () => {
   const child = new ChildProcess();
   Object.defineProperty(child, "pid", { value: 4106 });
-  const attempt = createPlanStorageStartupAttempt({ rolesRoot: "unused", readOnly: true, spawnChild: () => child });
+  const attempt = createStorageStartupProcess<PlanStorageStartupGateSummary>({ kind: "plan", rolesRoot: "unused", roleId: "example" }, 5000, () => child);
   let settled = false;
-  const rejected = assert.rejects(attempt.result, /exited without a result/).then(() => { settled = true; });
+  const rejected = assert.rejects(attempt.result, /Storage startup item failed/).then(() => { settled = true; });
   child.emit("error", new Error("kill failed"));
   await new Promise<void>(resolve => setImmediate(resolve));
   assert.equal(settled, false);
-  child.emit("exit", 1, null);
+  child.emit("close", 1, null);
   await rejected;
 });
 
 test("startup success message followed by abnormal exit is rejected", async () => {
   const child = new ChildProcess();
-  const attempt = createPlanStorageStartupAttempt({ rolesRoot: "unused", readOnly: true, spawnChild: () => child });
-  const rejected = assert.rejects(attempt.result, /exited without a result/);
-  child.emit("message", { ok: true, summary: SUCCESS_SUMMARY });
-  child.emit("exit", 1, null);
+  const attempt = createStorageStartupProcess<PlanStorageStartupGateSummary>({ kind: "plan", rolesRoot: "unused", roleId: "example" }, 5000, () => child);
+  const rejected = assert.rejects(attempt.result, /Storage startup item failed/);
+  child.emit("message", { ok: true, value: SUCCESS_SUMMARY });
+  child.emit("close", 1, null);
   await rejected;
 });
 
@@ -102,7 +101,8 @@ test("failed timeout cancellation retains the owner and never starts overlapping
   assert.equal(lifecycle.snapshot().childPid, 4105);
   assert.equal(lifecycle.snapshot().nextRetryAt, undefined);
   await assert.rejects(lifecycle.stop(), /termination unconfirmed/);
-  assert.equal(lifecycle.snapshot().state, "stopping");
+  assert.equal(lifecycle.snapshot().state, "degraded");
+  assert.equal(lifecycle.snapshot().childPid, 4105);
 });
 
 function deferred<T>(): {
@@ -350,8 +350,12 @@ test("plan startup child diagnostics remain opaque outside the child boundary", 
     import.meta.url.endsWith(".ts") ? "./planStorageStartupLifecycle.ts" : "../../src/manager/planStorageStartupLifecycle.ts",
     import.meta.url
   )), "utf8");
-  assert.doesNotMatch(source, /diagnosticTail|diagnostics=/);
-  assert.doesNotMatch(source, /message\?\.error|reject\(error\)/);
-  assert.match(source, /diagnosticBytes/);
+  const processSource = fs.readFileSync(fileURLToPath(new URL(
+    import.meta.url.endsWith(".ts") ? "./storageStartupProcess.ts" : "../../src/manager/storageStartupProcess.ts",
+    import.meta.url
+  )), "utf8");
+  assert.doesNotMatch(processSource, /diagnosticTail|diagnostics=/);
+  assert.doesNotMatch(processSource, /message\?\.error|reject\(error\)/);
+  assert.match(processSource, /diagnosticBytes/);
   assert.match(source, /Plan storage startup gate failed\./);
 });

@@ -122,7 +122,8 @@ test("public startup snapshots expose stable counts without leaking paths or raw
     migrated: 3,
     reconciled: 4,
     failureCount: 1,
-    skipped: false
+    skipped: false,
+    readyRoles: 0
   });
   assert.equal(publicSnapshot.lastErrorCode, "PLAN_STORAGE_STARTUP_ATTEMPT_FAILED");
 });

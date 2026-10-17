@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.43 - 2026-10-17
+
+- Merge progressive recovery for slow storage with item deadlines, confirmed cancellation, exclusive writers and preserved plan-recovery fixes.
+
 ## 0.3.42 - 2026-10-17
 
 - Merge the storage recovery backup, preserving plan-directory retries, page-catalog recovery and role-knowledge refresh.
