@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import json
+import gc
+import weakref
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from PySide6.QtCore import QObject
+from PySide6.QtWidgets import QApplication
+from rabiroute_tray.desktop_pet_feature import activate
 
 from rabiroute_tray.desktop_feature_runtime import (
     DesktopFeatureContext,
@@ -51,6 +56,29 @@ class DesktopFeatureProfileTest(unittest.TestCase):
         tray_source = (Path(__file__).parents[1] / "rabiroute_tray" / "tray_app.py").read_text(encoding="utf-8")
         self.assertNotIn("from .desktop_pet_controller import", tray_source)
         self.assertIn("activate_builtin_features(enabled_features, feature_context)", tray_source)
+
+    def test_pet_manager_survives_weak_qt_disposer_connection(self) -> None:
+        app = QApplication.instance() or QApplication([])
+        refs = []
+
+        class Manager(QObject):
+            def __init__(self, *args):
+                super().__init__()
+                refs.append(weakref.ref(self))
+
+            def close(self):
+                pass
+
+        with patch("rabiroute_tray.desktop_pet_feature.DesktopPetManager", Manager):
+            dispose = activate(DesktopFeatureContext("", app, object(), lambda _: None))
+        app.aboutToQuit.connect(dispose)
+        del dispose
+        gc.collect()
+        manager = refs[0]()
+        self.assertIsNotNone(manager)
+        self.assertIs(manager.parent(), app)
+        app.aboutToQuit.disconnect()
+        manager.setParent(None)
 
 
 if __name__ == "__main__":

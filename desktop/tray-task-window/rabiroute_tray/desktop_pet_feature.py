@@ -11,4 +11,6 @@ def activate(context: DesktopFeatureContext):
         context.desktop_pet_menu,
         context.open_desktop_pet_persona,
     )
-    return manager.close
+    manager.setParent(context.application)
+    # Qt keeps bound-method connections weak; retain the Python manager as well.
+    return lambda: manager.close()

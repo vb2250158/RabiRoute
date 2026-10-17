@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.47 - 2026-10-17
+
+- Keep the desktop-pet manager alive under the Qt application so enabled pets survive startup.
+
 ## 0.3.46 - 2026-10-17
 
 - Add payload-free mutation outcomes for Agent transport, delivery state and migration records.
