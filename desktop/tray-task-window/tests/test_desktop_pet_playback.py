@@ -16,6 +16,7 @@ from rabiroute_tray.desktop_pet_events import DesktopPetEventStream
 from rabiroute_tray.desktop_pet_speech import DesktopPetSpeech
 from rabiroute_tray.desktop_pet_companion import DesktopPetCompanion
 from rabiroute_tray.desktop_pet_idle import DesktopPetIdleScheduler
+from rabiroute_tray.desktop_pet_physics import PetFlight
 from pet_motion_fixture import walking_animation, finish_walk
 
 
@@ -58,6 +59,42 @@ class PetPlaybackTest(unittest.TestCase):
     def finish_reaction(self):
         for _ in range(4):
             self.window._advance_png_frame()
+
+    def test_lift_throw_and_airborne_loop_restore_context_only_after_landing(self):
+        for name, loop, next_state in (("lift", False, "drag"), ("throw", False, "airborne"), ("airborne", True, "")):
+            self.animations[name] = replace(self.animations["drag"], state=replace(
+                self.animations["drag"].state, name=name, loop=loop, next_state=next_state))
+        self.pack = replace(self.pack, states={name: action.state for name, action in self.animations.items()})
+        self.controller._pack = self.pack
+        self.controller._animation_cache = self.animations.copy()
+        self.controller.set_state("thinking")
+        self.window._drag_offset = QPoint()
+        self.controller._drag_started()
+        self.assertEqual(self.window.active_state, "lift")
+        self.finish_reaction()
+        self.assertEqual(self.window.active_state, "drag")
+        self.window._flight = PetFlight(100, 100, 1000, -500)
+        self.window.flight_started.emit()
+        self.assertEqual(self.window.active_state, "throw")
+        self.finish_reaction()
+        self.assertEqual(self.window.active_state, "airborne")
+        for _ in range(12):
+            self.window._advance_png_frame()
+        self.assertEqual(self.window.active_state, "airborne")
+        self.assertTrue(self.window.animation_running)
+        self.window._flight = None
+        self.window._drag_offset = None
+        self.controller._drag_finished()
+        self.assertEqual(self.window.active_state, "thinking")
+
+    def test_older_pack_keeps_drag_animation_during_flight(self):
+        self.window._drag_offset = QPoint()
+        self.controller._drag_started()
+        self.window._flight = PetFlight(100, 100, 1000, -500)
+        self.window.flight_started.emit()
+        self.assertEqual(self.window.active_state, "drag")
+        self.finish_reaction()
+        self.assertEqual(self.window.active_state, "drag")
 
     def test_failed_scene_load_retries_the_current_scene_without_another_kind_change(self):
         states = {**self.pack.states, "attention": replace(self.pack.states["attention"], loop=True)}

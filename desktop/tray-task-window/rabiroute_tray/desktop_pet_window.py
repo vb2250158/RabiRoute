@@ -43,6 +43,7 @@ class DesktopPetWindow(QWidget):
     placement_changed = Signal(object)
     context_menu_requested = Signal(object)
     drag_started = Signal()
+    flight_started = Signal()
     drag_finished = Signal()
     travel_phase_changed = Signal(str)
     travel_finished = Signal()
@@ -107,6 +108,8 @@ class DesktopPetWindow(QWidget):
         self._dragging = False
         self._release_trail = ReleaseTrail()
         self._flight: PetFlight | None = None
+        self._airborne_started = 0.0
+        self._airborne_angle = 0.0
         self._drag_native: NativeDrag | None = None
         self._drag_follow: DragFollow | None = None
         self._drag_last_tick = 0.0
@@ -159,6 +162,10 @@ class DesktopPetWindow(QWidget):
     @property
     def pointer_engaged(self) -> bool:
         return self._drag_offset is not None
+
+    @property
+    def airborne(self) -> bool:
+        return self._flight is not None
 
     @property
     def active_state(self) -> str:
@@ -766,6 +773,16 @@ class DesktopPetWindow(QWidget):
                                  Qt.TransformationMode.FastTransformation)
         horizontal_scale = self._facing_scale()
         rendered = frame.transformed(QTransform().scale(horizontal_scale, 1))
+        if self._airborne_angle:
+            tilted = QPixmap(frame.size())
+            tilted.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(tilted)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            painter.translate(tilted.width() / 2, tilted.height() / 2)
+            painter.rotate(self._airborne_angle)
+            painter.drawPixmap(-rendered.width() // 2, -rendered.height() // 2, rendered)
+            painter.end()
+            rendered = tilted
         rendered.setDevicePixelRatio(max(.1, self.devicePixelRatioF()))
         self._label.setPixmap(rendered)
         floor_offset = self._gait.floor_offsets[self._png_index] if self._travel_kind in {"move", "run"} and self._gait else 0
@@ -953,11 +970,14 @@ class DesktopPetWindow(QWidget):
                 velocity = self._release_trail.velocity(now, max(.1, bounds[2] / 256))
                 if velocity is not None:
                     self._flight = PetFlight(bounds[0], bounds[1], *velocity)
+                    self._airborne_started = now
                     qInfo("rabiroute.desktop-pet.motion desktop_pet_throw_started")
                     self._drag_last_tick = now
                     if QWidget.mouseGrabber() is self:
                         self.releaseMouse()
-                    self._drag_timer.start(16)
+                    self.flight_started.emit()
+                    if self._flight is not None:
+                        self._drag_timer.start(16)
                     return
                 self._drag_release_until = time.monotonic() + 0.18
                 self._drag_drop_screen = QApplication.screenAt(QCursor.pos()) or self.screen()
@@ -967,6 +987,8 @@ class DesktopPetWindow(QWidget):
             return
         self._drag_timer.stop()
         self._flight = None
+        self._airborne_angle = 0.0
+        self._display_png_frame()
         self._release_trail.samples.clear()
         self._drag_offset = None
         self._dragging = False
@@ -1015,8 +1037,14 @@ class DesktopPetWindow(QWidget):
                 return rect.x(), rect.y(), rect.x() + rect.width(), rect.y() + rect.height()
             displays = [DisplayArea(edges(screen.geometry()), edges(screen.availableGeometry()))
                         for screen in QApplication.screens()]
-        x, y = flight.advance(now - self._drag_last_tick, size, displays)
+        elapsed = max(0, min(.05, now - self._drag_last_tick))
+        x, y = flight.advance(elapsed, size, displays)
         self._drag_last_tick = now
+        scale = max(.1, size[0] / 256)
+        target_angle = max(-14, min(14, flight.vx / (90 * scale)))
+        target_angle += 2 * math.sin((now - self._airborne_started) * math.tau / 1.4)
+        self._airborne_angle += (target_angle - self._airborne_angle) * (1 - math.exp(-10 * elapsed))
+        self._display_png_frame()
         if self._drag_native:
             if not self._drag_native.move(x, y):
                 self._finish_drag(cancelled=True)

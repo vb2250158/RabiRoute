@@ -35,6 +35,9 @@ DESKTOP_PET_STATE_LABELS = {
     "attention": "回应",
     "sleep": "睡觉",
     "drag": "拖动",
+    "lift": "提起",
+    "throw": "抛出",
+    "airborne": "空中待机",
     "move": "走路",
     "run": "奔跑",
     "teleport-out": "传送离开",
@@ -79,6 +82,7 @@ class DesktopPetController(QObject):
         self.window.placement_changed.connect(lambda placement: self._persist({"placement": placement}))
         self.window.context_menu_requested.connect(self._show_context_menu)
         self.window.drag_started.connect(self._drag_started)
+        self.window.flight_started.connect(self._throw_started)
         self.window.drag_finished.connect(self._drag_finished)
         self.window.travel_phase_changed.connect(self._travel_phase_changed)
         self.window.travel_result.connect(self._travel_finished)
@@ -429,10 +433,16 @@ class DesktopPetController(QObject):
             mode_idles = {group.idle_state for group in self._pack.mode_animation_sets.values()} if self._pack else set()
             if self._pack and (fallback in self._pack.companion_states.values() or fallback in mode_idles):
                 fallback = "idle"
-            self.set_state(fallback if fallback not in {"talking", "drag", "move", "run", "teleport-out", "teleport-in"} else "idle")
+            self.set_state(fallback if fallback not in {"talking", "drag", "lift", "throw", "airborne", "move", "run", "teleport-out", "teleport-in"} else "idle")
 
     def _animation_finished(self, next_state: str) -> None:
-        if self.window.travelling or self.window.pointer_engaged or not self.window.is_playing(self._pack, self._requested_state):
+        if self.window.travelling or not self.window.is_playing(self._pack, self._requested_state):
+            return
+        if self.window.pointer_engaged:
+            if self.window.airborne and self._requested_state == "throw":
+                self.set_state("airborne" if self._pack and "airborne" in self._pack.states else "drag")
+            elif not self.window.airborne and self._requested_state == "lift":
+                self.set_state("drag")
             return
         self._resume_context(next_state or "idle")
 
@@ -492,7 +502,14 @@ class DesktopPetController(QObject):
         self._state_before_drag = "idle" if self._transient_state else self._requested_state or "idle"
         self._reaction_timer.stop()
         self._transient_state = "drag"
-        self.set_state("drag")
+        self.set_state("lift" if self._pack and "lift" in self._pack.states else "drag")
+
+    def _throw_started(self) -> None:
+        if not self.visible or self._pack is None:
+            return
+        state = next((name for name in ("throw", "airborne", "drag") if name in self._pack.states), "idle")
+        self._transient_state = state
+        self.set_state(state)
 
     def _drag_finished(self) -> None:
         if not self.visible:
@@ -1041,7 +1058,7 @@ class DesktopPetController(QObject):
         queued = set(self._preload_queue)
         interaction_states = [
             state_name
-            for state_name in ("attention", "drag", "move", "run")
+            for state_name in ("attention", "lift", "drag", "throw", "airborne", "move", "run")
             if state_name in self._pack.states
         ]
         one_shot_states = [

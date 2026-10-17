@@ -159,7 +159,10 @@ class ThrowWindowTest(unittest.TestCase):
 
     def test_release_enters_flight_and_only_commits_once_at_rest(self):
         finished, placed = QSignalSpy(self.window.drag_finished), QSignalSpy(self.window.placement_changed)
+        launched = QSignalSpy(self.window.flight_started)
         self.throw()
+        self.assertEqual(launched.count(), 1)
+        self.assertTrue(self.window.airborne)
         self.assertIsNotNone(self.window._flight)
         self.assertTrue(self.window.pointer_engaged)
         self.assertEqual(finished.count(), 0)
@@ -173,6 +176,19 @@ class ThrowWindowTest(unittest.TestCase):
         self.assertEqual(finished.count(), 1)
         self.assertEqual(placed.count(), 1)
         self.assertFalse(self.window._drag_timer.isActive())
+        self.assertFalse(self.window.airborne)
+        self.assertEqual(self.window._airborne_angle, 0)
+
+    def test_flight_tilts_without_resizing_and_new_grab_resets_the_pose(self):
+        self.throw()
+        size = self.window.size()
+        self.clock += .016
+        self.window._advance_drag()
+        self.assertGreater(abs(self.window._airborne_angle), .1)
+        self.assertLessEqual(abs(self.window._airborne_angle), 16)
+        self.assertEqual(self.window.size(), size)
+        self.press()
+        self.assertEqual(self.window._airborne_angle, 0)
 
     def test_grabbing_again_interrupts_flight_immediately(self):
         self.throw()

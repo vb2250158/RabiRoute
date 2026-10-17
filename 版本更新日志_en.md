@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.49 - 2026-10-17
+
+- Add pickup, launch and looping airborne animation phases with bounded flight tilt and context restoration on landing.
+
 ## 0.3.48 - 2026-10-17
 
 - Refresh the pet roster from catalog startup events so an initial empty snapshot recovers automatically.
