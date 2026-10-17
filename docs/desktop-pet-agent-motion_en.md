@@ -4,6 +4,8 @@
 
 # Desktop-pet motion API
 
+See [implemented requirements](implemented-requirements_en.md) for integration, installation status and the startup timeout memo.
+
 An Agent instructs an enabled pet through Manager; Qt Desktop uses the current pack's walking, running or teleport animations. Wandering need not be enabled and its settings remain unchanged. Application windows are neither focused nor moved.
 
 For regular movement toward the active window, enable wandering and active-window destinations in the persona's avatar settings in WebGUI (`wanderEnabled=true`, `wanderToActiveWindow=true`). After each configured wait, the pet reads the current foreground window and chooses a reachable position. Companionship pauses wandering and restores it when ended. These settings are independent of the one-time motion API below.

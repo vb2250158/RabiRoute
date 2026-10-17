@@ -28,6 +28,9 @@ const knowledgeRuntimeFiles = [
   "apps/rabi-mcp/lib/knowledge-receipt.mjs"
 ];
 function writeKnowledgeRuntime(build) {
+  for (const name of ['Invoke-RabiRouteDeveloperApply.ps1', 'Publish-RabiRouteDeveloperCandidate.ps1']) {
+    write(build, `scripts/${name}`, fs.readFileSync(new URL(`./${name}`, import.meta.url), 'utf8'));
+  }
   write(build, "packages/rabi-companion/presets.json", '{"version":1,"presets":[]}');
   write(build, "packages/rabi-companion/scene-rules.json", '{"schemaVersion":1,"rules":[]}');
   for (const relative of knowledgeRuntimeFiles) {
@@ -79,6 +82,8 @@ test("developer candidate overlays only built runtime layers and leaves the immu
     write(base, 'scripts/rabilink-knowledge-grant.mjs', 'retired grant owner\n');
     write(base, 'scripts/rabilink-knowledge-grant-ui.mjs', 'retired grant editor\n');
     write(base, 'scripts/local-maintenance.ps1', 'keep local maintenance\n');
+    write(base, 'scripts/Invoke-RabiRouteDeveloperApply.ps1', 'obsolete activation budget\n');
+    write(base, 'scripts/Publish-RabiRouteDeveloperCandidate.ps1', 'obsolete publisher budget\n');
     fs.cpSync(new URL('../node_modules/ws', import.meta.url), path.join(base, 'node_modules/ws'), { recursive: true });
     writeKnowledgeRuntime(build);
     write(build, "dist/manager.js", "new manager\n");
@@ -134,6 +139,12 @@ test("developer candidate overlays only built runtime layers and leaves the immu
       assert.equal(fs.existsSync(path.join(base, 'scripts', name)), true);
     }
     assert.equal(fs.readFileSync(path.join(result.packageRoot, 'scripts/local-maintenance.ps1'), 'utf8'), 'keep local maintenance\n');
+    for (const name of ['Invoke-RabiRouteDeveloperApply.ps1', 'Publish-RabiRouteDeveloperCandidate.ps1']) {
+      const relative = `scripts/${name}`;
+      assert.equal(fs.readFileSync(path.join(result.packageRoot, relative), 'utf8'), fs.readFileSync(path.join(build, relative), 'utf8'));
+      assert.ok(result.manifest.files.some(entry => entry.path === relative));
+      assert.match(fs.readFileSync(path.join(base, relative), 'utf8'), /obsolete/);
+    }
     const relayUrl = pathToFileURL(path.join(result.packageRoot, 'scripts/rabilink-relay-server.mjs')).href;
     const relayImported = spawnSync(process.execPath, ['--input-type=module', '--eval', `await import(${JSON.stringify(relayUrl)}); process.exit(0);`], {
       encoding: 'utf8', timeout: 10000, windowsHide: true,
@@ -290,6 +301,26 @@ test("developer activation serializes install mutation, CASes the pointer, and f
   assert.match(apply, /Wait-Ready \$hostExe \$currentPath \$previousReleaseId \$ReadyTimeoutSeconds/);
   assert.match(apply, /\$candidateStopFailure/);
   assert.doesNotMatch(apply, /catch\s*\{\s*\}/);
+});
+
+test("developer activation defaults cover the complete Host startup budget", () => {
+  const host = fs.readFileSync(new URL('../desktop/windows-host/HostRuntime.cs', import.meta.url), 'utf8');
+  const minutes = name => {
+    const match = host.match(new RegExp(`${name} = TimeSpan\\.FromMinutes\\((\\d+)\\)`));
+    assert.ok(match, `Missing Host readiness budget: ${name}`);
+    return Number(match[1]) * 60;
+  };
+  // Both readiness phases, two 30-second health admissions, and 60 seconds for bootstrap.
+  const minimum = minutes('ManagerReadyTimeout') + minutes('TrayReadyTimeout') + 2 * 30 + 60;
+  const budgets = ['Invoke-RabiRouteDeveloperApply.ps1', 'Publish-RabiRouteDeveloperCandidate.ps1'].map(name => {
+    const source = fs.readFileSync(new URL(`./${name}`, import.meta.url), 'utf8');
+    const match = source.match(/\[int\]\$ReadyTimeoutSeconds\s*=\s*(\d+)/);
+    assert.ok(match, `Missing Developer readiness budget: ${name}`);
+    const budget = Number(match[1]);
+    assert.ok(budget >= minimum, `${name}: ${budget}s cannot cover Host startup (${minimum}s)`);
+    return budget;
+  });
+  assert.equal(budgets[0], budgets[1]);
 });
 
 test("developer publishing rebuilds the Desktop runtime and Host Core by default", () => {

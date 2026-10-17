@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.50 - 2026-10-17
+
+- Fix premature Developer activation rollback by allowing the full 420-second Host startup budget and overlaying updated activation scripts; document pet implementation and deployment status.
+
 ## 0.3.49 - 2026-10-17
 
 - Add pickup, launch and looping airborne animation phases with bounded flight tilt and context restoration on landing.

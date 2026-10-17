@@ -4,7 +4,8 @@ param(
     [switch]$SkipBuild,
     [switch]$RebuildDesktopRuntime = $true,
     [switch]$RebuildHostCore = $true,
-    [int]$ReadyTimeoutSeconds = 120
+    # Keep the complete Host readiness budget when forwarding to DeveloperApply.
+    [int]$ReadyTimeoutSeconds = 420
 )
 
 $ErrorActionPreference = "Stop"

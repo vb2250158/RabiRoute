@@ -2,7 +2,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$CandidateRoot,
     [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA "Programs\RabiRoute"),
-    [int]$ReadyTimeoutSeconds = 120
+    # Cover Host bootstrap, Manager/Tray readiness and their health admission probes.
+    [int]$ReadyTimeoutSeconds = 420
 )
 
 $ErrorActionPreference = "Stop"
