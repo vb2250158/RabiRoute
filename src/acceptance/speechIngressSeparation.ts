@@ -138,6 +138,7 @@ function routeProfile(
     notificationRules: [{
       id: `${id}-rule`,
       name: `${id}-rule`,
+      agentTarget: { kind: "recipient", recipientId: "primary" },
       enabled: true,
       routeKinds: [routeKind],
       template: "{message}"

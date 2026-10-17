@@ -3,7 +3,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { once, EventEmitter } from "node:events";
+import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { XiaomiHomeArtifactStore } from "./artifactStore.js";
 import { XiaomiHomeArtifactAccess } from "./artifactAccess.js";
@@ -19,6 +19,7 @@ import { createXiaomiHomeRequestAuthority, XiaomiHomeRequestAuthorityError } fro
 import { XiaomiHomeManagerApiClient } from "./managerApi.js";
 import type { XiaomiHomeRuntimeController } from "./settingsRuntime.js";
 import { HomeAssistantDeployment } from "./homeAssistantDeployment.js";
+import { listenManagerEndpoint } from "../../managerEndpointPolicy.js";
 
 const json = (response: http.ServerResponse, status: number, body: unknown) => {
   response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(body));
@@ -39,7 +40,7 @@ async function fixture(t: TestContext, handler: http.RequestListener) {
     Object.defineProperty(request.socket, "remoteAddress", { value: "192.0.2.20", configurable: true });
     handler(request, response);
   });
-  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  await listenManagerEndpoint({ server, host: "127.0.0.1", policy: { mode: "auto" } });
   const address = server.address(); assert.ok(address && typeof address !== "string");
   t.after(async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); fs.rmSync(root, { recursive: true, force: true }); });
   return { root, authority, global, url: `http://127.0.0.1:${address.port}/api/agent/xiaomi-home`,

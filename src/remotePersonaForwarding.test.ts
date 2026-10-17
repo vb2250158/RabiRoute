@@ -23,7 +23,7 @@ async function withRemoteRoute(
     const snapshot: RemotePersonaSnapshot = {
       schemaVersion: 1, deviceId: "pc-b", roleId: "Shared", file: "persona.md", document: "# Remote authoritative persona",
       revision: "a".repeat(64),
-      personaConfig: { notificationRules: [{ id: "remote-private", routeKinds: ["private"], regex: "remote", template: "Remote template {message}" }] },
+      personaConfig: { notificationRules: [{ id: "remote-private", routeKinds: ["private"], regex: "remote", template: "Remote template {message}", agentTarget: { kind: "recipient", recipientId: "primary" } }] },
       applicationGenerationId: "generation-a", managerInstanceId: "manager-a", remoteApplicationGenerationId: "generation-b", remoteManagerInstanceId: "manager-b",
       knowledgeApiBaseUrl: `${baseUrl}/api/rabilink/peer/http/pc-b/persona`
     };
@@ -80,7 +80,7 @@ const message = { time: 1, rawMessage: "remote hello", messageId: "remote-messag
 test("forwarding resolves remote rules before matching and keeps all local audit data in the Route", async () => {
   await withRemoteRoute(snapshot => ({ status: 200, payload: { code: 0, data: snapshot } }), async (route, requests) => {
     const result = await forwardMessageAndWait("private", message, {}, { logReplayAttempt: false });
-    assert.equal(result.status, "routed");
+    assert.equal(result.status, "routed", JSON.stringify(result));
     assert.deepEqual(result.matchedRuleIds, ["remote-private"]);
     assert.equal(result.sentPacketCount, 1);
     assert.equal(requests.length, 1);

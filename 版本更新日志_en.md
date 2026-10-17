@@ -6,6 +6,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.46 - 2026-10-17
+
+- Add payload-free mutation outcomes for Agent transport, delivery state and migration records.
+- Unify desktop-pet runtime behavior: restore smooth cross-display dragging, inertial throws, playback transitions, running and scale preview; preserve native pixel size across displays with DPI-correct strides and bubble anchors.
+- Align integration fixtures with explicit Agent targets and plan markers, and resolve launcher paths using the target platform.
+
 ## 0.3.45 - 2026-10-17
 
 - Merge persona-specific pet dialogue with Manager-owned configuration and correctly attributed speech transcripts.

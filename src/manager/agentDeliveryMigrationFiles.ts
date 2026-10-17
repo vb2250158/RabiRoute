@@ -1,10 +1,32 @@
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 import { migrateAgentDeliveryConfiguration } from "./agentDeliveryMigration.js";
 import type { GatewayDefinition } from "../shared/gatewayConfigModel.js";
 
 export function migrateAgentDeliveryFiles(options: {
+  personaPath: string; routePaths: string[]; apply?: boolean;
+  beforeWrite?: (index: number) => void;
+  explicitTargetRuleIds?: ReadonlySet<string>;
+}): { changed: boolean; files: number; snapshotPath?: string } {
+  const id = createHash("sha256").update(JSON.stringify([options.personaPath, ...options.routePaths].map(file => path.resolve(file)))).digest("hex");
+  const audit = (outcome: "started" | "committed" | "no_change" | "failed") => recordDataMutationAudit({
+    group: "configuration", event: "agent_delivery_migration", owner: "agent-delivery-migration", action: options.apply ? "apply" : "preview", outcome,
+    target: { type: "configuration-set", id }, dataSource: { kind: "file", id }
+  });
+  audit("started");
+  try {
+    const result = migrateAgentDeliveryFilesOnce(options);
+    audit(options.apply && result.changed ? "committed" : "no_change");
+    return result;
+  } catch (error) {
+    audit("failed");
+    throw error;
+  }
+}
+
+function migrateAgentDeliveryFilesOnce(options: {
   personaPath: string; routePaths: string[]; apply?: boolean;
   beforeWrite?: (index: number) => void;
   explicitTargetRuleIds?: ReadonlySet<string>;

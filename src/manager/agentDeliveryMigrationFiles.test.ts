@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { migrateAgentDeliveryFiles } from "./agentDeliveryMigrationFiles.js";
+import { installDataMutationAuditSink, type RecordedDataMutationAudit } from "../observability/dataMutationAudit.js";
 test("migration snapshots, reads back, is idempotent, and restores after a partial write", t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-delivery-migration-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -13,12 +14,21 @@ test("migration snapshots, reads back, is idempotent, and restores after a parti
   fs.writeFileSync(personaPath, '{"automationRules":[],"custom":"preserved"}');
   fs.writeFileSync(routePath, '{"agentAdapters":["codex"],"codexThreadId":"original"}');
   const before = [personaPath, routePath].map(file => fs.readFileSync(file));
+  const audit: RecordedDataMutationAudit[] = [];
+  const uninstallAudit = installDataMutationAuditSink(record => {
+    if (record.event === "agent_delivery_migration") audit.push(record);
+  });
+  t.after(uninstallAudit);
   assert.throws(() => migrateAgentDeliveryFiles({ personaPath, routePaths: [routePath], apply: true, beforeWrite: index => { if (index === 0) throw new Error("injected failure"); } }), /injected/);
   [personaPath, routePath].forEach((file, index) => assert.deepEqual(fs.readFileSync(file), before[index]));
   const result = migrateAgentDeliveryFiles({ personaPath, routePaths: [routePath], apply: true });
   assert.ok(result.snapshotPath);
   assert.equal(JSON.parse(fs.readFileSync(routePath, "utf8")).codexThreadId, "original");
   assert.equal(migrateAgentDeliveryFiles({ personaPath, routePaths: [routePath], apply: true }).changed, false);
+  assert.deepEqual(audit.map(record => record.outcome), ["started", "failed", "started", "committed", "started", "no_change"]);
+  assert.ok(audit.every(record => /^[a-f0-9]{64}$/.test(record.target.id)));
+  assert.ok(!JSON.stringify(audit).includes(root));
+  assert.doesNotMatch(JSON.stringify(audit), /original|preserved|injected failure|codexThreadId/);
 });
 
 

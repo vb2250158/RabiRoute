@@ -207,6 +207,7 @@ test("speech CLI reads the host record once and writes one RabiLink persona even
     notificationRules: [{
       id: "mobile-audio",
       name: "Mobile audio",
+      agentTarget: { kind: "recipient", recipientId: "primary" },
       enabled: true,
       routeKinds: ["rabilink"],
       template: "{message}"
@@ -292,6 +293,7 @@ test("speech CLI keeps the PC microphone on the independent voice endpoint", asy
     notificationRules: [{
       id: "host-voice",
       name: "Host voice",
+      agentTarget: { kind: "recipient", recipientId: "primary" },
       enabled: true,
       routeKinds: ["voice_transcript"],
       template: "{message}"

@@ -432,7 +432,7 @@ class DesktopPetController(QObject):
             self.set_state(fallback if fallback not in {"talking", "drag", "move", "run", "teleport-out", "teleport-in"} else "idle")
 
     def _animation_finished(self, next_state: str) -> None:
-        if self.window.travelling or not self.window.is_playing(self._pack, self._requested_state):
+        if self.window.travelling or self.window.pointer_engaged or not self.window.is_playing(self._pack, self._requested_state):
             return
         self._resume_context(next_state or "idle")
 
@@ -727,6 +727,8 @@ class DesktopPetController(QObject):
 
     def _reconcile_fullscreen_visibility(self) -> None:
         self._fullscreen_timer.start(1500)
+        if self.window.pointer_engaged:
+            return
         fullscreen = self._hide_on_fullscreen and is_foreground_fullscreen(int(self.window.winId()))
         if fullscreen and self.visible:
             self._hidden_for_fullscreen = True
@@ -1002,7 +1004,11 @@ class DesktopPetController(QObject):
         self._scale = scale
         self._apply_presentation()
         self._enqueue_animation_preloads()
-        self._persist({"scale": scale})
+        patch = {"scale": scale}
+        placement = self.window.placement()
+        if placement is not None:
+            patch["placement"] = placement
+        self._persist(patch)
 
     def _play_manual_action(self, state_name: str) -> None:
         self.window.cancel_travel()

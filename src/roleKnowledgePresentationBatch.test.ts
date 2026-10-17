@@ -19,5 +19,5 @@ test("batch status lookup preserves individual presentation and mutable workflow
   const second = presentPlans(rows, workflow);
   assert.notEqual(second, first);
   assert.equal(second.find(item => item.id === rows[0]!.id)!.presentation.label, "Changed synthetic label");
-  assert.throws(() => presentPlans([{ ...rows[0]!, status: "unknown-synthetic-status" }], workflow), /PLAN_STATUS_CONFIG_INVALID/);
+  assert.throws(() => presentPlans([{ ...rows[0]!, status: "unknown-synthetic-status", markerStatus: "unknown-synthetic-status" }], workflow), /PLAN_STATUS_CONFIG_INVALID/);
 });

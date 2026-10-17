@@ -2,7 +2,8 @@ import type { AgentSessionDestination } from "../shared/agentDeliveryTarget.js";
 import type { RabiDeliveryEnvelope } from "../shared/rabiMessage.js";
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 const inFlight = new Map<string, { target: string; promise: Promise<void> }>();
 
@@ -22,9 +23,21 @@ export function deliverSessionOnce(
     }
     if (existing?.status === "delivered") return;
     const save = (status: string) => {
+      const id = createHash("sha256").update(path.resolve(statePath)).digest("hex");
+      const audit = (outcome: "started" | "committed" | "failed") => recordDataMutationAudit({
+        group: "agent-delivery", event: "session_delivery_state", owner: "session-delivery", action: "save", outcome,
+        target: { type: "delivery", id }, dataSource: { kind: "file", id }, result: status
+      });
+      audit("started");
       const temporary = `${statePath}.${randomUUID()}.tmp`;
-      fs.writeFileSync(temporary, JSON.stringify({ deliveryId, target, status }), { flag: "wx" });
-      fs.renameSync(temporary, statePath);
+      try {
+        fs.writeFileSync(temporary, JSON.stringify({ deliveryId, target, status }), { flag: "wx" });
+        fs.renameSync(temporary, statePath);
+        audit("committed");
+      } catch (error) {
+        audit("failed");
+        throw error;
+      }
     };
     if (existing?.status === "pending") {
       const readback = await request({ action: target.deliveryType ? "reconcile_delivery" : "read", agentAdapter: target.agentAdapter, threadId: target.sessionId,

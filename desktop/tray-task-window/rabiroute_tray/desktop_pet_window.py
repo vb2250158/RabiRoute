@@ -3,12 +3,14 @@ from __future__ import annotations
 import math
 import time
 
-from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QPoint, QRect, QSize, Qt, QTimer, QVariantAnimation, Signal, qInfo
-from PySide6.QtGui import QColor, QImage, QImageReader, QMouseEvent, QPainter, QPen, QPixmap, QRegion, QTransform
+from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QEvent, QPoint, QRect, QSize, Qt, QTimer, QVariantAnimation, Signal, qInfo
+from PySide6.QtGui import QColor, QCursor, QImage, QImageReader, QMouseEvent, QPainter, QPen, QPixmap, QRegion, QTransform
 from PySide6.QtWidgets import QApplication, QGraphicsOpacityEffect, QLabel, QWidget
 
 from .desktop_pet_client import DesktopPetPack, LoadedDesktopPetAnimation
 from .desktop_pet_gait import SoleFrame, WalkingGait, running_gait, walking_gait
+from .desktop_pet_drag import DragFollow, NativeDrag, preserve_dpi_size
+from .desktop_pet_physics import DisplayArea, PetFlight, ReleaseTrail
 from .desktop_pet_bubble import DesktopPetBubble, place_dialogue_bubble
 
 class _TravelHalo(QWidget):
@@ -103,6 +105,19 @@ class DesktopPetWindow(QWidget):
         self._png_frame_delays: tuple[int, ...] = ()
         self._drag_offset: QPoint | None = None
         self._dragging = False
+        self._release_trail = ReleaseTrail()
+        self._flight: PetFlight | None = None
+        self._drag_native: NativeDrag | None = None
+        self._drag_follow: DragFollow | None = None
+        self._drag_last_tick = 0.0
+        self._drag_cursor = (0.0, 0.0)
+        self._drag_release_cursor: tuple[float, float] | None = None
+        self._drag_release_until = 0.0
+        self._drag_drop_screen = None
+        self._drag_timer = QTimer(self)
+        self._drag_timer.setSingleShot(True)
+        self._drag_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._drag_timer.timeout.connect(self._advance_drag)
         self._double_click_release = False
         self._png_frames: tuple[QPixmap, ...] = ()
         self._prepared_png_frames: dict[tuple[str, str, int, int], tuple[QPixmap, ...]] = {}
@@ -120,6 +135,9 @@ class DesktopPetWindow(QWidget):
         self._active_pack: DesktopPetPack | None = None
         self._active_animation: LoadedDesktopPetAnimation | None = None
         self._scale = 0.5
+        self._pixel_size_timer = QTimer(self)
+        self._pixel_size_timer.setSingleShot(True)
+        self._pixel_size_timer.timeout.connect(self._sync_pixel_size)
         self._scale_preview: float | None = None
         self._scale_preview_origin: QPoint | None = None
         self._fps_cap = 15
@@ -317,7 +335,7 @@ class DesktopPetWindow(QWidget):
         self._active_pack = pack
         self._active_animation = animation
         target = self._target_size(pack)
-        self.resize(self._preview_size() or target)
+        self._resize_pet(self._preview_size() or target)
         self._keep_visible()
         self._label.setGeometry(self.rect())
         self._label.setText("")
@@ -460,18 +478,22 @@ class DesktopPetWindow(QWidget):
         pixmap = self._label.pixmap()
         if pixmap is None or pixmap.isNull() or self._sprite_bounds.isNull() or self._sprite_canvas.isEmpty():
             return self.frameGeometry()
-        factor = pixmap.width() / self._sprite_canvas.width()
-        vertical_factor = pixmap.height() / self._sprite_canvas.height()
-        bounds = QRect(round(self._sprite_bounds.x() * factor), round(self._sprite_bounds.y() * vertical_factor),
-                       max(1, round(self._sprite_bounds.width() * factor)),
-                       max(1, round(self._sprite_bounds.height() * vertical_factor)))
+        ratio = max(.1, pixmap.devicePixelRatio())
+        width, height = pixmap.width() / ratio, pixmap.height() / ratio
+        horizontal = width / self._sprite_canvas.width()
+        vertical = height / self._sprite_canvas.height()
+        bounds = QRect(round(self._sprite_bounds.x() * horizontal), round(self._sprite_bounds.y() * vertical),
+                       max(1, round(self._sprite_bounds.width() * horizontal)),
+                       max(1, round(self._sprite_bounds.height() * vertical)))
         if self._facing_scale() < 0:
-            bounds.moveLeft(pixmap.width() - bounds.right() - 1)
-        origin = self._label.mapToGlobal(QPoint((self._label.width() - pixmap.width()) // 2,
-                                               (self._label.height() - pixmap.height()) // 2))
+            bounds.moveLeft(round(width) - bounds.right() - 1)
+        origin = self._label.mapToGlobal(QPoint(round((self._label.width() - width) / 2),
+                                               round((self._label.height() - height) / 2)))
         return bounds.translated(origin)
 
     def set_click_through(self, enabled: bool) -> None:
+        if enabled:
+            self._finish_drag(cancelled=True)
         was_visible = self.isVisible()
         bubble_visible = self._bubble.isVisible()
         self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, enabled)
@@ -494,7 +516,7 @@ class DesktopPetWindow(QWidget):
             self._finish_transition()
         self._scale_preview = max(0.1, min(2.0, float(scale))) if scale is not None else None
         if self._active_pack is not None:
-            self.resize(self._preview_size() or self._target_size(self._active_pack))
+            self._resize_pet(self._preview_size() or self._target_size(self._active_pack))
             if self._scale_preview_origin is not None:
                 self.move(self._scale_preview_origin)
             self._keep_visible()
@@ -519,6 +541,8 @@ class DesktopPetWindow(QWidget):
             self._scale_preview = None
             self._scale_preview_origin = None
         self._fps_cap = min((6, 12, 15, 24), key=lambda candidate: abs(candidate - int(fps_cap)))
+        if locked or abs(self._scale - previous_scale) > 0.001:
+            self._finish_drag(cancelled=True)
         self._locked = bool(locked)
         self._bubble_enabled = bool(bubble_enabled)
         self.setWindowOpacity(max(0.2, min(1.0, float(opacity))))
@@ -542,9 +566,15 @@ class DesktopPetWindow(QWidget):
             self.play(self._active_pack, self._active_animation)
 
     def restore_placement(self, placement: object) -> None:
+        if self.pointer_engaged:
+            return
         row = placement if isinstance(placement, dict) else {}
         screen_name = str(row.get("screen") or "")
-        screen = next((item for item in QApplication.screens() if item.name() == screen_name), None)
+        screens = QApplication.screens()
+        screen = next((item for item in screens if self._screen_key(item) == screen_name), None)
+        # Existing settings contain the plain name. Keep accepting those while
+        # new placements disambiguate identical monitor models.
+        screen = screen or next((item for item in screens if item.name() == screen_name), None)
         screen = screen or QApplication.primaryScreen()
         if screen is None:
             return
@@ -564,13 +594,20 @@ class DesktopPetWindow(QWidget):
         span_x = max(1, area.width() - self.width())
         span_y = max(1, area.height() - self.height())
         return {
-            "screen": screen.name(),
+            "screen": self._screen_key(screen),
             "xRatio": max(0.0, min(1.0, (self.x() - area.left()) / span_x)),
             "yRatio": max(0.0, min(1.0, (self.y() - area.top()) / span_y)),
         }
 
-    def _keep_visible(self) -> None:
-        screen = QApplication.screenAt(self.frameGeometry().center()) or QApplication.primaryScreen()
+    def _keep_visible(self, screen=None) -> None:
+        if self.pointer_engaged:
+            return
+        screen = screen or QApplication.screenAt(self.frameGeometry().center())
+        if screen is None:
+            center = self.frameGeometry().center()
+            screen = min(QApplication.screens(), key=lambda item: (
+                max(item.geometry().left() - center.x(), 0, center.x() - item.geometry().right()) ** 2
+                + max(item.geometry().top() - center.y(), 0, center.y() - item.geometry().bottom()) ** 2), default=None)
         if screen is None:
             return
         area = screen.availableGeometry()
@@ -602,7 +639,9 @@ class DesktopPetWindow(QWidget):
         if animation.state.name in {"move", "run"}:
             if cache_key not in self._prepared_gaits:
                 self._prepared_gaits[cache_key] = self._prepare_locomotion_gait(self._active_pack, animation, frames)
-            self._gait = self._prepared_gaits[cache_key]
+            physical_gait = self._prepared_gaits[cache_key]
+            ratio = max(.1, self.devicePixelRatioF())
+            self._gait = physical_gait.scaled(1 / ratio, 1 / ratio) if physical_gait else None
         self._png_index = 0
         self._png_loop = animation.state.loop
         self._png_next_state = animation.state.next_state
@@ -726,7 +765,9 @@ class DesktopPetWindow(QWidget):
             frame = frame.scaled(preview_size, Qt.AspectRatioMode.KeepAspectRatio,
                                  Qt.TransformationMode.FastTransformation)
         horizontal_scale = self._facing_scale()
-        self._label.setPixmap(frame.transformed(QTransform().scale(horizontal_scale, 1)))
+        rendered = frame.transformed(QTransform().scale(horizontal_scale, 1))
+        rendered.setDevicePixelRatio(max(.1, self.devicePixelRatioF()))
+        self._label.setPixmap(rendered)
         floor_offset = self._gait.floor_offsets[self._png_index] if self._travel_kind in {"move", "run"} and self._gait else 0
         self._label.move(0, round(floor_offset))
         if self._bubble.isVisible():
@@ -741,43 +782,55 @@ class DesktopPetWindow(QWidget):
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._double_click_release = False
-            if not self._locked:
-                self.cancel_travel()
-                self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-                self._dragging = False
+            if self._locked:
+                event.accept()
+                return
+            self._finish_drag(cancelled=True)
+            self.cancel_travel()
+            self._drag_offset = event.position().toPoint()
+            self._dragging = False
+            self._drag_release_cursor = None
+            self._drag_native = NativeDrag.for_window(int(self.winId()))
+            sample = self._drag_native.sample() if self._drag_native else None
+            if sample is None:
+                self._drag_native = None
+                point = event.globalPosition()
+                sample = ((point.x(), point.y()), (self.x(), self.y(), self.width(), self.height()))
+            self._drag_cursor = sample[0]
+            self._drag_follow = DragFollow.begin(*sample)
+            self._drag_last_tick = time.monotonic()
+            self._release_trail = ReleaseTrail()
+            self._release_trail.add(self._drag_last_tick, sample[0])
+            self.grabMouse()
+            self._drag_timer.start(16)
             event.accept()
             return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if self._drag_offset is not None and event.buttons() & Qt.MouseButton.LeftButton:
-            if not self._dragging:
-                displacement = event.globalPosition().toPoint() - self.frameGeometry().topLeft() - self._drag_offset
-                if displacement.manhattanLength() < QApplication.startDragDistance():
-                    event.accept()
-                    return
-                self._dragging = True
-                self.drag_started.emit()
-            self.move(event.globalPosition().toPoint() - self._drag_offset)
-            if self._bubble.isVisible():
-                self._place_bubble()
+            if self._drag_native:
+                sample = self._drag_native.sample()
+                cursor = sample[0] if sample else None
+                threshold = QApplication.startDragDistance() * self.devicePixelRatioF()
+            else:
+                point = event.globalPosition()
+                self._drag_cursor = (point.x(), point.y())
+                cursor = self._drag_cursor
+                threshold = QApplication.startDragDistance()
+            if cursor is not None and self._drag_follow and self._drag_follow.distance(cursor) >= threshold:
+                self._begin_drag()
+            # The frame clock reads the latest cursor; event delivery is not a
+            # movement clock and its global position changes basis across DPI.
             event.accept()
             return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            was_dragging = self._dragging
-            self._drag_offset = None
-            self._dragging = False
-            if was_dragging:
-                self._keep_visible()
-                placement = self.placement()
-                if placement is not None:
-                    self.placement_changed.emit(placement)
-                self.drag_finished.emit()
-            elif not self._double_click_release:
+            if self._locked and not self.pointer_engaged and not self._double_click_release:
                 self.clicked.emit()
+            self._finish_drag()
             self._double_click_release = False
             event.accept()
             return
@@ -789,15 +842,16 @@ class DesktopPetWindow(QWidget):
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
+            self._finish_drag(cancelled=True)
             self._double_click_release = True
-            self._drag_offset = None
-            self._dragging = False
             self.double_clicked.emit()
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
 
     def closeEvent(self, event) -> None:
+        self._pixel_size_timer.stop()
+        self._finish_drag(cancelled=True)
         self.cancel_travel()
         self.stop_animation()
         self._bubble_timer.stop()
@@ -805,10 +859,224 @@ class DesktopPetWindow(QWidget):
         super().closeEvent(event)
 
     def hideEvent(self, event) -> None:
-        self._drag_offset = None
-        self._dragging = False
+        self._pixel_size_timer.stop()
+        self._finish_drag(cancelled=True)
         self._double_click_release = False
         self._finish_transition()
         self._cancel_turn()
         self.hide_bubble()
         super().hideEvent(event)
+
+    @staticmethod
+    def _screen_key(screen) -> str:
+        name = screen.name()
+        if sum(item.name() == name for item in QApplication.screens()) < 2:
+            return name[:200]
+        geometry = screen.geometry()
+        return f"{name[:160]} [{geometry.x()},{geometry.y()}]"
+
+
+    def _begin_drag(self) -> None:
+        if not self._dragging:
+            self._dragging = True
+            self.hide_bubble()
+            self.drag_started.emit()
+
+
+    def _advance_drag(self) -> None:
+        if self._flight is not None:
+            self._advance_flight()
+            return
+        if not self.pointer_engaged or self._drag_follow is None:
+            return
+        if self._drag_native:
+            if self._drag_release_cursor is None and not self._drag_native.button_down():
+                self._finish_drag()
+                return
+            sample = self._drag_native.sample()
+            if sample is None:
+                self._finish_drag(cancelled=True)
+                return
+            cursor, bounds = sample
+            cursor = self._drag_release_cursor or cursor
+            threshold = QApplication.startDragDistance() * self.devicePixelRatioF()
+        else:
+            if self._drag_release_cursor is None and not QApplication.mouseButtons() & Qt.MouseButton.LeftButton:
+                self._finish_drag()
+                return
+            cursor, bounds = self._drag_release_cursor or self._drag_cursor, (self.x(), self.y(), self.width(), self.height())
+            threshold = QApplication.startDragDistance()
+        now = time.monotonic()
+        elapsed = now - self._drag_last_tick
+        self._drag_last_tick = now
+        if self._drag_release_cursor is None:
+            self._release_trail.add(now, cursor)
+        if not self._dragging:
+            if self._drag_follow.distance(cursor) < threshold:
+                self._drag_timer.start(16)
+                return
+            self._begin_drag()
+            if not self.pointer_engaged or self._drag_follow is None:
+                return
+        x, y = self._drag_follow.advance(cursor, bounds[2:], elapsed)
+        if self._drag_native:
+            if not self._drag_native.move(x, y):
+                self._finish_drag(cancelled=True)
+                return
+        else:
+            self.move(x, y)
+        if self._drag_release_cursor is not None:
+            error = math.hypot(self._drag_follow.x - (cursor[0] - self._drag_follow.anchor_x * bounds[2]),
+                               self._drag_follow.y - (cursor[1] - self._drag_follow.anchor_y * bounds[3]))
+            if error < 1 or now >= self._drag_release_until:
+                self._finish_drag(settle=False)
+                return
+        self._drag_timer.start(16)
+
+
+    def _finish_drag(self, *, cancelled: bool = False, settle: bool = True) -> None:
+        if not self.pointer_engaged:
+            return
+        if self._flight is not None and not cancelled and settle:
+            return
+        was_flying = self._flight is not None
+        if was_flying:
+            qInfo("rabiroute.desktop-pet.motion " + ("desktop_pet_throw_cancelled" if cancelled else "desktop_pet_throw_landed"))
+        was_dragging = self._dragging
+        if not cancelled and was_dragging and settle:
+            if self._drag_release_cursor is None:
+                sample = self._drag_native.sample() if self._drag_native else None
+                self._drag_release_cursor = sample[0] if sample else self._drag_cursor
+                now = time.monotonic()
+                self._release_trail.add(now, self._drag_release_cursor)
+                bounds = sample[1] if sample else (self.x(), self.y(), self.width(), self.height())
+                velocity = self._release_trail.velocity(now, max(.1, bounds[2] / 256))
+                if velocity is not None:
+                    self._flight = PetFlight(bounds[0], bounds[1], *velocity)
+                    qInfo("rabiroute.desktop-pet.motion desktop_pet_throw_started")
+                    self._drag_last_tick = now
+                    if QWidget.mouseGrabber() is self:
+                        self.releaseMouse()
+                    self._drag_timer.start(16)
+                    return
+                self._drag_release_until = time.monotonic() + 0.18
+                self._drag_drop_screen = QApplication.screenAt(QCursor.pos()) or self.screen()
+                if QWidget.mouseGrabber() is self:
+                    self.releaseMouse()
+                self._drag_timer.start(16)
+            return
+        self._drag_timer.stop()
+        self._flight = None
+        self._release_trail.samples.clear()
+        self._drag_offset = None
+        self._dragging = False
+        self._drag_native = None
+        self._drag_follow = None
+        drop_screen = self._drag_drop_screen
+        self._drag_release_cursor = None
+        self._drag_drop_screen = None
+        if QWidget.mouseGrabber() is self:
+            self.releaseMouse()
+        if cancelled:
+            if was_dragging:
+                self.drag_finished.emit()
+            return
+        # Commit only at release, on the cursor's screen, rather than clamping
+        # the straddling window back to the monitor containing its old center.
+        if was_dragging:
+            if not was_flying:
+                self._keep_visible(drop_screen or QApplication.screenAt(QCursor.pos()) or self.screen())
+            placement = self.placement()
+            if placement is not None:
+                self.placement_changed.emit(placement)
+            self.drag_finished.emit()
+        elif not self._double_click_release:
+            self.clicked.emit()
+
+
+    def _advance_flight(self) -> None:
+        flight = self._flight
+        if flight is None:
+            return
+        now = time.monotonic()
+        if self._locked or not self.isVisible():
+            self._finish_drag(cancelled=True)
+            return
+        if self._drag_native:
+            sample = self._drag_native.sample()
+            if sample is None:
+                self._finish_drag(cancelled=True)
+                return
+            size = sample[1][2:]
+            displays = self._drag_native.display_areas()
+        else:
+            size = (self.width(), self.height())
+            def edges(rect):
+                return rect.x(), rect.y(), rect.x() + rect.width(), rect.y() + rect.height()
+            displays = [DisplayArea(edges(screen.geometry()), edges(screen.availableGeometry()))
+                        for screen in QApplication.screens()]
+        x, y = flight.advance(now - self._drag_last_tick, size, displays)
+        self._drag_last_tick = now
+        if self._drag_native:
+            if not self._drag_native.move(x, y):
+                self._finish_drag(cancelled=True)
+                return
+        else:
+            self.move(x, y)
+        if flight.at_rest:
+            self._finish_drag(settle=False)
+            return
+        self._drag_timer.start(16)
+
+
+
+    def _resize_pet(self, physical_size: QSize) -> None:
+        """Keep decoded image pixels invariant while Qt UI stays DPI aware."""
+        ratio = max(.1, self.devicePixelRatioF())
+        native = self._drag_native or NativeDrag.for_window(int(self.winId()))
+        sample = native.sample() if native else None
+        self.resize(QSize(max(1, round(physical_size.width() / ratio)),
+                          max(1, round(physical_size.height() / ratio))))
+        if native:
+            # Integer logical dimensions cannot represent e.g. 256/1.5 exactly.
+            # Finish with an exact native size, retaining the physical origin.
+            native.resize(physical_size.width(), physical_size.height())
+            if sample:
+                native.move(round(sample[1][0]), round(sample[1][1]))
+
+    def _sync_pixel_size(self) -> None:
+        if self._active_pack is None or not self.isVisible() or getattr(self, "_pixel_sync_active", False):
+            return
+        self._pixel_sync_active = True
+        try:
+            self._resize_pet(self._preview_size() or self._target_size(self._active_pack))
+        finally:
+            self._pixel_sync_active = False
+        if self._active_animation and self._active_animation.state.name in {"move", "run"}:
+            key = self._prepared_key(self._active_pack, self._active_animation, self._target_size(self._active_pack))
+            gait = self._prepared_gaits.get(key)
+            ratio = max(.1, self.devicePixelRatioF())
+            self._gait = gait.scaled(1 / ratio, 1 / ratio) if gait else None
+            if self._gait and self.travelling:
+                cycle_ms = (sum(max(round(1000 / self._fps_cap), delay) for delay in self._png_frame_delays)
+                            if self._png_frame_delays else len(self._png_frames) * self._frame_interval(self._active_animation.state.fps))
+                self._walk_speed = self._gait.cycle_distance * 1000 / cycle_ms
+        self._display_png_frame()
+
+    def event(self, event) -> bool:
+        result = super().event(event)
+        if hasattr(self, "_pixel_size_timer"):
+            if event.type() == QEvent.Type.DevicePixelRatioChange:
+                # Apply before the first repaint at the new DPI, rather than
+                # leaving a one-frame shrink/stretch until a queued timer runs.
+                self._sync_pixel_size()
+            elif event.type() == QEvent.Type.ScreenChangeInternal:
+                self._pixel_size_timer.start(0)
+        return result
+
+    def nativeEvent(self, event_type, message):
+        pack = getattr(self, "_active_pack", None)
+        if pack is not None:
+            size = self._preview_size() or self._target_size(pack)
+            preserve_dpi_size(int(message), (size.width(), size.height()))
+        return super().nativeEvent(event_type, message)

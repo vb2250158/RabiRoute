@@ -357,10 +357,10 @@ function splitCommandLine(command: string): string[] {
   return parts;
 }
 
-function resolveCommandPath(commandPath: string, cwd: string): string {
-  if (path.isAbsolute(commandPath)) return path.resolve(commandPath);
-  if (commandPath.includes("\\") || commandPath.includes("/")) return path.resolve(cwd, commandPath);
-  return path.resolve(cwd, commandPath);
+function resolveCommandPath(commandPath: string, cwd: string, platform: NodeJS.Platform): string {
+  const paths = platform === "win32" ? path.win32 : path.posix;
+  if (paths.isAbsolute(commandPath)) return paths.resolve(commandPath);
+  return paths.resolve(cwd, commandPath);
 }
 
 function findInnerNapcatLauncher(shellDir: string): string | null {
@@ -401,7 +401,7 @@ export function resolveNapcatLaunchPlan(instance: NapCatInstanceDefinition, root
   }
   const cwd = path.resolve(rootDir, instance.workingDir?.trim() || ".");
   const parts = splitCommandLine(command);
-  const commandPath = resolveCommandPath(parts[0] || command, cwd);
+  const commandPath = resolveCommandPath(parts[0] || command, cwd, platform);
   const args = parts.slice(1);
   const innerLauncher = findInnerNapcatLauncher(cwd);
   const commandBase = path.basename(commandPath).toLowerCase();

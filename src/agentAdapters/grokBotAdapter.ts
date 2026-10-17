@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 import { createHash, randomUUID } from "node:crypto";
 import { renderRabiDelivery, type RabiDeliveryEnvelope } from "../shared/rabiMessage.js";
 import type { AgentAdapter } from "./contracts.js";
@@ -35,13 +36,23 @@ export function resolveGrokBotConfiguredSession(configuration: GrokBotAdapterCon
   return { agentId: configuration.agentId, sessionId: configuration.sessionId,
     id: encodeGrokBotSessionId(configuration.agentId, configuration.sessionId) };
 }
+function auditTransportFile(file: string, action: string, outcome: "started" | "committed" | "no_change" | "failed"): void {
+  const id = createHash("sha256").update(path.resolve(file)).digest("hex");
+  recordDataMutationAudit({ group: "agent-delivery", event: "grok_bot_transport_mutation", owner: "grok-bot",
+    action, outcome, target: { type: "transport-record", id }, dataSource: { kind: "file", id } });
+}
 async function writeGrokBotState(dataDir: string, state: Record<string, unknown>): Promise<void> {
   await fs.mkdir(dataDir, { recursive: true });
   const file = path.join(dataDir, "grokbot-agent-state.json");
   const temporary = file + "." + randomUUID() + ".tmp";
+  auditTransportFile(file, "state", "started");
   try {
     await fs.writeFile(temporary, JSON.stringify(state, null, 2), { encoding: "utf8", mode: 0o600 });
     await fs.rename(temporary, file);
+    auditTransportFile(file, "state", "committed");
+  } catch (error) {
+    auditTransportFile(file, "state", "failed");
+    throw error;
   } finally { await fs.rm(temporary, { force: true }); }
 }
 type TransportAttempt = { version: 1; messageId: string; promptHash: string; accountScope: string; attemptedAt: string; deliveryOptionsHash?: string };
@@ -76,18 +87,25 @@ function verifyTransportRecord(value: TransportAttempt, expected: TransportAttem
   if (value.accountScope !== expected.accountScope) throw new GrokBotError("GROK_BOT_ACCOUNT_CHANGED");
 }
 async function reserveTransportAttempt(file: string, attempt: TransportAttempt): Promise<boolean> {
+  auditTransportFile(file, "reserve", "started");
   try {
     await fs.mkdir(path.dirname(file), { recursive: true });
     const handle = await fs.open(file, "wx", 0o600);
     try { await handle.writeFile(JSON.stringify(attempt)); await handle.sync(); }
     finally { await handle.close(); }
+    auditTransportFile(file, "reserve", "committed");
     return true;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      auditTransportFile(file, "reserve", "no_change");
+      return false;
+    }
+    auditTransportFile(file, "reserve", "failed");
     throw new GrokBotError("GROK_BOT_JOURNAL_UNAVAILABLE");
   }
 }
 async function commitTransportReceipt(file: string, attemptFile: string, receipt: TransportReceipt): Promise<void> {
+  auditTransportFile(file, "receipt", "started");
   const temporary = file + "." + randomUUID() + ".tmp";
   try {
     const handle = await fs.open(temporary, "wx", 0o600);
@@ -97,7 +115,11 @@ async function commitTransportReceipt(file: string, attemptFile: string, receipt
     const readback = await readTransportRecord(file);
     if (JSON.stringify(readback) !== JSON.stringify(receipt)) throw new Error();
     await fs.rm(attemptFile, { force: true });
-  } catch { throw new GrokBotError("GROK_BOT_RECEIPT_STATE_UNCONFIRMED", { uncertain: true }); }
+    auditTransportFile(file, "receipt", "committed");
+  } catch {
+    auditTransportFile(file, "receipt", "failed");
+    throw new GrokBotError("GROK_BOT_RECEIPT_STATE_UNCONFIRMED", { uncertain: true });
+  }
   finally { await fs.rm(temporary, { force: true }).catch(() => {}); }
 }
 /** Immutable attempts survive crashes. Compact terminal receipts have direct ID lookup;

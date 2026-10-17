@@ -121,7 +121,8 @@ class PetPlaybackTest(unittest.TestCase):
 
     def test_companion_disconnect_restores_idle_scheduling(self):
         concerned = replace(self.animations["attention"], state=replace(self.animations["attention"].state, name="concerned"))
-        self.controller._pack = replace(self.pack, states={**self.pack.states, "concerned": concerned.state})
+        self.controller._pack = replace(self.pack, states={**self.pack.states, "concerned": concerned.state},
+                                        idle_behavior=DesktopPetIdleBehavior(1, 1, ("attention",)))
         self.controller._animation_cache["concerned"] = concerned
         scheduler = self.controller._idle_scheduler
         scheduler.configure(DesktopPetIdleBehavior(1, 1, ("attention",)))
@@ -142,6 +143,7 @@ class PetPlaybackTest(unittest.TestCase):
         QTest.mouseMove(self.window, QPoint(50, 50), delay=1)
         self.assertEqual(self.window.active_state, "drag")
         QTest.mouseRelease(self.window, Qt.MouseButton.LeftButton, pos=QPoint(50, 50))
+        QTest.qWait(230)
         self.assertEqual(clicked.count(), 0)
         self.assertEqual(started.count(), 1)
         self.assertEqual(finished.count(), 1)
@@ -285,7 +287,7 @@ class PetPlaybackTest(unittest.TestCase):
             self.assertEqual(self.controller._scale, 0.1)
             self.assertIsNone(self.window._scale_preview)
             decode.assert_called_once()
-            self.controller._persist.assert_called_once_with({"scale": 0.1})
+            self.controller._persist.assert_called_once_with({"scale": 0.1, "placement": self.window.placement()})
             self.controller._enqueue_animation_preloads.assert_called_once()
         menu.deleteLater()
 

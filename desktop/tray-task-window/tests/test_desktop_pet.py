@@ -577,6 +577,7 @@ class DesktopPetWindowTest(unittest.TestCase):
             QTest.mousePress(window, Qt.MouseButton.LeftButton, pos=QPoint(50, 50))
             QTest.mouseMove(window, QPoint(90, 90), delay=1)
             QTest.mouseRelease(window, Qt.MouseButton.LeftButton, pos=QPoint(90, 90))
+            QTest.qWait(230)
             self.assertEqual(started.count(), 1)
             self.assertEqual(finished.count(), 1)
         finally:
