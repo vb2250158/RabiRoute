@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { AgentRequestStore, type AgentRequestPersistence } from "./store.js";
 import type { AgentRequestEndpoint } from "./endpoint.js";
-import { executeEndpointAgentDelivery, EndpointDeliveryRecovery, sourceScopedAgentDeliveryId, type EndpointDeliveryOptions, type EndpointDeliveryReceipt } from "./endpointDelivery.js";
+import { executeEndpointAgentDelivery, EndpointDeliveryRecovery, EndpointVerificationError, sourceScopedAgentDeliveryId, type EndpointDeliveryOptions, type EndpointDeliveryReceipt } from "./endpointDelivery.js";
 import { executePreparedEndpointDelivery } from "./endpointExecution.js";
 import { EndpointTransportReceipts } from "./endpointTransportReceipts.js";
 import { endpointExecutionOptionsHash, normalizeEndpointExecutionOptions, resolveEndpointExecutionOptions } from "./executionOptions.js";
@@ -515,4 +515,37 @@ test("source qualification is rechecked after target lookup while target loading
   assert.equal(result.statusCode, 200);
   assert.equal(roles.includes("target"), true);
   assert.equal(roles.includes("missing"), false);
+});
+
+test("pre-send verification failure leaves the delivery prepared and the same deliveryId really sends on retry", async () => {
+  const f = fixture();
+  let refreshes = 0;
+  let failing = true;
+  f.options.refreshEndpoints = async () => { if (++refreshes === 2 && failing) throw new EndpointVerificationError("source", new Error("GROK_BOT_HTTP_FAILED:429 (GetGrokBotAgent)")); };
+  const request = { ...f.request, deliveryId: "caller-verify-first" };
+  const first = await executeEndpointAgentDelivery(request, f.options);
+  assert.equal(first.statusCode, 503);
+  assert.equal(f.dispatched(), 0);
+  const error = first.data.error as { stage: string; retryable: boolean; message: string };
+  assert.equal(error.stage, "source_verification");
+  assert.equal(error.retryable, true);
+  assert.equal((first.data.delivery as { status: string; retryable: boolean }).retryable, true);
+  const original = f.store.listEndpointDeliveries()[0];
+  assert.equal(original.state, "prepared");
+  failing = false;
+  const retried = await executeEndpointAgentDelivery(request, f.options);
+  assert.equal(retried.statusCode, 200);
+  assert.equal(f.dispatched(), 1);
+  assert.equal((retried.data.delivery as { deliveryId: string }).deliveryId, original.deliveryId);
+  assert.equal(f.store.getEndpointDelivery(original.deliveryId)?.state, "committed");
+});
+
+test("target authorization failure before send reports target_verification", async () => {
+  const f = fixture();
+  let calls = 0;
+  f.options.authorize = (_endpoint, role) => { if (role === "target" && ++calls === 3) throw new Error("target owner unloaded"); };
+  const outcome = await executeEndpointAgentDelivery({ ...f.request, deliveryId: "caller-target" }, f.options);
+  assert.equal(f.dispatched(), 0);
+  assert.equal((outcome.data.error as { stage: string }).stage, "target_verification");
+  assert.equal(f.store.listEndpointDeliveries()[0].state, "prepared");
 });

@@ -585,3 +585,20 @@ test("a stopped desktop cannot reuse protected credentials or contact the cloud"
   assert.equal(reads, 1);
   assert.equal(await fs.readFile(path.join(options.profilePath, "sand-secrets.json"), "utf8"), before);
 });
+
+test("HTTP failures carry status and method without secrets and treat 429 as retryable", async () => {
+  const limited = fixtureClient(() => new Response("private server response", { status: 429 }));
+  const error = await limited.client.listSessions(session.agentId).then(() => undefined, (caught: unknown) => caught);
+  assert.ok(error instanceof GrokBotError);
+  assert.equal(error.code, "GROK_BOT_HTTP_FAILED:429");
+  assert.equal(error.httpStatus, 429);
+  assert.equal(error.retryable, true);
+  assert.equal(error.uncertain, true);
+  assert.match(error.message, /^GROK_BOT_HTTP_FAILED:429 \(ListGrokBot/);
+  assert.doesNotMatch(error.message, /fixture-token|private server response/);
+  const bad = fixtureClient(() => new Response("{}", { status: 400 }));
+  const rejected = await bad.client.listSessions(session.agentId).then(() => undefined, (caught: unknown) => caught);
+  assert.ok(rejected instanceof GrokBotError);
+  assert.equal(rejected.code, "GROK_BOT_HTTP_FAILED:400");
+  assert.equal(rejected.retryable, false);
+});

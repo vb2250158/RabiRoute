@@ -15,12 +15,16 @@ export class GrokBotError extends Error {
   readonly code: string;
   readonly uncertain: boolean;
   readonly httpStatus?: number;
-  constructor(code: string, options: { uncertain?: boolean; httpStatus?: number } = {}) {
-    super(code);
+  readonly method?: string;
+  readonly retryable: boolean;
+  constructor(code: string, options: { uncertain?: boolean; httpStatus?: number; method?: string; retryable?: boolean } = {}) {
+    super(options.method ? `${code} (${options.method})` : code);
     this.name = "GrokBotError";
     this.code = code;
     this.uncertain = options.uncertain === true;
     this.httpStatus = options.httpStatus;
+    this.method = options.method;
+    this.retryable = options.retryable === true;
   }
 }
 
@@ -365,8 +369,12 @@ export class GrokBotClient {
         method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(boundedTimeout(this.options.timeoutMs, 20_000)), redirect: "error" });
     } catch { throw new GrokBotError("GROK_BOT_TRANSPORT_UNAVAILABLE", { uncertain: true }); }
     if (!response.ok) {
-      throw new GrokBotError(response.status === 401 ? "GROK_BOT_LOGIN_EXPIRED" : response.status === 403 ? "GROK_BOT_OWNER_REFUSED" : "GROK_BOT_HTTP_FAILED",
-        { httpStatus: response.status, uncertain: response.status >= 500 || response.status === 408 });
+      const status = response.status;
+      const code = status === 401 ? "GROK_BOT_LOGIN_EXPIRED" : status === 403 ? "GROK_BOT_OWNER_REFUSED" : `GROK_BOT_HTTP_FAILED:${status}`;
+      // Method name and status only; never headers, tokens or bodies.
+      console.warn(`[grokBot] ${method} failed with HTTP ${status}`);
+      throw new GrokBotError(code, { httpStatus: status, method, retryable: status === 429 || status === 408 || status >= 500,
+        uncertain: status >= 500 || status === 408 || status === 429 });
     }
     try {
       const text = await response.text();
