@@ -6,6 +6,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.56 - 2026-10-18
+
+- Launch HA OS recovery through an administrator-protected hidden launcher so its console is hidden from process creation, fixing the initial flash that can precede PowerShell's `-WindowStyle Hidden`.
+- Keep the fixed recovery command, child exit code, exact task/user/privilege binding and launcher-content checks. Refresh existing tasks through foreground Start.
+
 ## 0.3.55 - 2026-10-18
 
 - Hide the PowerShell console for Home Assistant OS background recovery. Refresh an existing task through foreground Start with administrator approval.

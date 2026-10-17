@@ -101,15 +101,28 @@ $recoveryLog = Join-Path $recoveryDirectory 'recovery-run.log'
 $powershellPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
 $recoveryCommand = "try { & '" + $recoveryScript.Replace("'", "''") + "' -Operation 'Recover' -Root '" + $Root.Replace("'", "''") + "' -AutoStart 'yes'; exit " + '$LASTEXITCODE' + " } catch { [IO.File]::WriteAllText('" + $recoveryLog.Replace("'", "''") + "', " + '$_.Exception.ToString()' + "); exit 1 }"
 $recoveryArguments = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($recoveryCommand))
+$recoveryLauncher = Join-Path $recoveryDirectory 'Start-RecoveryHidden.vbs'
+$recoveryTaskExecutable = "$env:SystemRoot\System32\wscript.exe"
+$recoveryTaskArguments = '//B //NoLogo "' + $recoveryLauncher + '"'
+$recoveryLaunchCommand = '"' + $powershellPath + '" ' + $recoveryArguments
+# PowerShell's own WindowStyle takes effect after its console has been created.
+$recoveryLauncherContent = @(
+    'Option Explicit',
+    'Dim launcher, exitCode',
+    'Set launcher = CreateObject("WScript.Shell")',
+    ('exitCode = launcher.Run("' + $recoveryLaunchCommand.Replace('"', '""') + '", 0, True)'),
+    'WScript.Quit exitCode'
+) -join "`r`n"
 if (-not $administrator) {
     if ($Operation -eq 'Recover') {
         # Only reuse the exact helper authorized by a foreground Start/Install. No UAC in background.
         $task = Get-ScheduledTask -TaskName $recoveryTaskName -ErrorAction SilentlyContinue
         $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
         if (-not $task -or $task.Description -cne $recoveryOwner -or $task.Actions.Count -ne 1 -or
-            $task.Actions[0].Execute -ine $powershellPath -or $task.Actions[0].Arguments -cne $recoveryArguments -or
+            $task.Actions[0].Execute -ine $recoveryTaskExecutable -or $task.Actions[0].Arguments -cne $recoveryTaskArguments -or
             $task.Actions[0].WorkingDirectory -ine $recoveryDirectory -or $task.Principal.LogonType -ne 'Interactive' -or
-            -not (Test-RecoveryTaskUser $task.Principal.UserId $identity.User.Value) -or $task.Principal.RunLevel -ne 'Highest') {
+            -not (Test-RecoveryTaskUser $task.Principal.UserId $identity.User.Value) -or $task.Principal.RunLevel -ne 'Highest' -or
+            -not (Test-Path -LiteralPath $recoveryLauncher -PathType Leaf) -or [IO.File]::ReadAllText($recoveryLauncher) -cne $recoveryLauncherContent) {
             throw 'Background recovery needs one foreground Start with Windows administrator approval.'
         }
         $before = Get-ScheduledTaskInfo -TaskName $recoveryTaskName
@@ -271,7 +284,13 @@ try {
         $fileAcl.SetAccessRuleProtection($false, $false)
         $fileAcl.SetOwner([Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
         Set-Acl -LiteralPath $recoveryScript -AclObject $fileAcl
-        $action = New-ScheduledTaskAction -Execute $powershellPath -Argument $recoveryArguments -WorkingDirectory $recoveryDirectory
+        if ((Test-Path -LiteralPath $recoveryLauncher) -and ((Get-Item -LiteralPath $recoveryLauncher -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Recovery launcher cannot be a reparse point.' }
+        $temporaryLauncher = Join-Path $recoveryDirectory ('launcher-' + [guid]::NewGuid().ToString('N') + '.partial')
+        [IO.File]::WriteAllText($temporaryLauncher, $recoveryLauncherContent, [Text.Encoding]::Unicode)
+        if (Test-Path -LiteralPath $recoveryLauncher) { [IO.File]::Replace($temporaryLauncher, $recoveryLauncher, ($recoveryLauncher + '.previous')) }
+        else { [IO.File]::Move($temporaryLauncher, $recoveryLauncher) }
+        Set-Acl -LiteralPath $recoveryLauncher -AclObject $fileAcl
+        $action = New-ScheduledTaskAction -Execute $recoveryTaskExecutable -Argument $recoveryTaskArguments -WorkingDirectory $recoveryDirectory
         $principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value) -LogonType Interactive -RunLevel Highest
         $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
         Register-ScheduledTask -TaskName $recoveryTaskName -Action $action -Principal $principal -Settings $settings -Description $recoveryOwner -Force | Out-Null

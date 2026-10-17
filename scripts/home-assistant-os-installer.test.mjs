@@ -8,23 +8,35 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-test("the registered HA OS recovery action hides PowerShell without changing its fixed command", { skip: process.platform !== "win32" }, () => {
+test("HA OS recovery uses a protected GUI launcher to hide the console from process creation", { skip: process.platform !== "win32" }, t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "haos-hidden-launcher-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const receipt = path.join(root, "receipt.txt");
+  const command = `[IO.File]::WriteAllText('${receipt.replaceAll("'", "''")}','fixed-command'); exit 7`;
   const source = fileURLToPath(new URL("./Install-HomeAssistantOs.ps1", import.meta.url));
   const script = `
 $ErrorActionPreference='Stop'; $tokens=$null; $errors=$null
 $ast=[System.Management.Automation.Language.Parser]::ParseFile('${source.replaceAll("'", "''")}',[ref]$tokens,[ref]$errors)
 if($errors.Count){throw 'Installer syntax errors'}
-$assignment=$ast.Find({param($node) $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$recoveryArguments'},$true)
-$recoveryCommand="Write-Output 'test-only-fixed-recovery'"
-Invoke-Expression $assignment.Extent.Text
-$action=New-ScheduledTaskAction -Execute "$env:SystemRoot\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Argument $recoveryArguments
-$action | Select-Object Execute,Arguments | ConvertTo-Json -Compress
+$recoveryCommand=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(command).toString("base64")}'))
+$powershellPath="$env:SystemRoot\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+$recoveryDirectory=Join-Path $env:TEMP 'test-only-recovery'
+$names=@('$recoveryArguments','$recoveryLauncher','$recoveryTaskExecutable','$recoveryTaskArguments','$recoveryLaunchCommand','$recoveryLauncherContent')
+foreach($assignment in $ast.FindAll({param($node) $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -in $names},$true)) { Invoke-Expression $assignment.Extent.Text }
+$action=New-ScheduledTaskAction -Execute $recoveryTaskExecutable -Argument $recoveryTaskArguments
+@{execute=$action.Execute;arguments=$action.Arguments;launcher=$recoveryLauncherContent} | ConvertTo-Json -Compress
 `;
   const action = JSON.parse(execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { windowsHide: true, encoding: "utf8" }));
-  assert.match(action.Arguments, /(?:^| )-WindowStyle Hidden(?: |$)/);
-  assert.match(action.Arguments, /-NoProfile -NonInteractive/);
-  const encoded = action.Arguments.split("-EncodedCommand ")[1];
-  assert.equal(Buffer.from(encoded, "base64").toString("utf16le"), "Write-Output 'test-only-fixed-recovery'");
+  assert.match(action.execute, /\\System32\\wscript\.exe$/i);
+  assert.match(action.arguments, /^\/\/B \/\/NoLogo ".*\\test-only-recovery\\Start-RecoveryHidden\.vbs"$/);
+  assert.match(action.launcher, /launcher\.Run\(".*", 0, True\)/);
+  assert.match(action.launcher, /WScript\.Quit exitCode/);
+  const encoded = action.launcher.match(/-EncodedCommand ([A-Za-z0-9+/=]+)/)[1];
+  assert.equal(Buffer.from(encoded, "base64").toString("utf16le"), command);
+  const launcher = path.join(root, "test launcher.vbs");
+  fs.writeFileSync(launcher, `\uFEFF${action.launcher}`, "utf16le");
+  assert.throws(() => execFileSync(action.execute, ["//B", "//NoLogo", launcher], { windowsHide: true, timeout: 15000 }), error => error.status === 7);
+  assert.equal(fs.readFileSync(receipt, "utf8"), "fixed-command");
 });
 
 test("recovery task ownership accepts Windows-normalized account names and rejects other identities", { skip: process.platform !== "win32" }, () => {
