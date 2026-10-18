@@ -1711,9 +1711,13 @@ const agentCompletionDelivery = new AgentCompletionDeliveryService({
   }
 });
 const codexHookContextService = new CodexHookContextService({
-  readContext: input => managerKnowledgePageWorkerPool.run({ type: "codex_hook_context_read", input }, {
-    timeoutMs: Number(process.env.RABIROUTE_CODEX_HOOK_READ_TIMEOUT_MS) || 45_000
-  }),
+  readContext: async input => {
+    const options = { timeoutMs: Number(process.env.RABIROUTE_CODEX_HOOK_READ_TIMEOUT_MS) || 45_000 };
+    const current = input.kind === "knowledge" ? {
+      ...input, memories: await managerKnowledgePageWorkerPool.queryRoleMemoryCatalogs(input.trigger.roleDir, options)
+    } : input;
+    return managerKnowledgePageWorkerPool.run({ type: "codex_hook_context_read", input: current }, options);
+  },
   deliverAgentCompletion: async request => {
     const results = await agentCompletionDelivery.handle(request);
     for (const result of results) {

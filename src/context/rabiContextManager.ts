@@ -4,6 +4,7 @@ import {
   roleKnowledgeSnapshotFromStorage,
   roleKnowledgeSnapshotFromStorageAsync,
   type RoleKnowledgeSnapshotOptions,
+  type RoleMemoryCatalogs,
   type RequiredReadItem,
   type RoleKnowledgeSnapshot
 } from "../roleKnowledge.js";
@@ -67,7 +68,7 @@ export type RabiContextKnowledgeResolver = (
 export type RabiContextKnowledgeResolvers = {
   published: RabiContextKnowledgeResolver;
   storage: RabiContextKnowledgeResolver;
-  storageAsync?: (roleDir: string, signalText: string, options: RoleKnowledgeSnapshotOptions) => Promise<RoleKnowledgeSnapshot>;
+  storageAsync?: (roleDir: string, signalText: string, options: RoleKnowledgeSnapshotOptions, memories?: RoleMemoryCatalogs) => Promise<RoleKnowledgeSnapshot>;
 };
 
 const DEFAULT_KNOWLEDGE_RESOLVERS: RabiContextKnowledgeResolvers = Object.freeze({
@@ -143,10 +144,10 @@ export class RabiContextManager {
   }
 
   /** Resolves physical Hook memory reads in bounded parallel I/O without reusing a stale catalog. */
-  async resolveAsync(trigger: RabiContextTrigger): Promise<RabiContextResolution> {
+  async resolveAsync(trigger: RabiContextTrigger, memories?: RoleMemoryCatalogs): Promise<RabiContextResolution> {
     const resolveKnowledge = trigger.source === "codex_hook"
       ? this.knowledgeResolvers.storageAsync ?? this.knowledgeResolvers.storage : this.knowledgeResolvers.published;
-    const knowledge = await resolveKnowledge(trigger.roleDir, String(trigger.signalText || ""), this.knowledgeOptions(trigger));
+    const knowledge = await resolveKnowledge(trigger.roleDir, String(trigger.signalText || ""), this.knowledgeOptions(trigger), memories);
     return this.resolveProjection(trigger, knowledge);
   }
 

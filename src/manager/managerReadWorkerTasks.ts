@@ -26,6 +26,7 @@ import {
   presentRoleMemories,
   readRecentMemoryFromStorageInWorker,
   readRoleMemoryCatalogsInWorker,
+  type RoleMemoryCatalogs,
   type RoleKnowledgeCatalogSnapshot
 } from "../roleKnowledge.js";
 import { listPlanFeedback, planFeedbackSummary } from "../planFeedback.js";
@@ -55,6 +56,7 @@ import { verifyCriticalProjectFactRecord, type CriticalProjectFactRecordVerifica
 import { readCodexHookContextInputAsync, type CodexHookContextReadRequest } from "./codexHookContextRead.js";
 
 export type ManagerReadWorkerTask =
+  | { type: "role_memory_catalogs"; roleDir: string }
   | { type: "codex_hook_context_read"; input: CodexHookContextReadRequest }
   | { type: "critical_fact_record_verify"; input: CriticalProjectFactRecordVerificationInput }
   | { type: "all_day_recording_read"; input: import("./allDayRecordingReadStorage.js").AllDayReadJob }
@@ -165,6 +167,7 @@ export type ManagerReadWorkerTask =
     }
   | {
       type: "role_memory_page";
+      catalogs?: RoleMemoryCatalogs;
       roleDir: string;
       kind: "recent" | "consolidated" | "archived";
       cursor: string;
@@ -450,7 +453,8 @@ export async function execute(task: Exclude<ManagerReadWorkerTask, { type: "role
       return projection ? { memory: projection, revision: storageRevisionToken(memory) } : null;
     }
     case "role_memory_page": {
-      const catalog = await readRoleMemoryCatalogsInWorker(task.roleDir);
+      const catalog = task.catalogs ?? await readRoleMemoryCatalogsInWorker(task.roleDir);
+      if (catalog.roleDir !== path.resolve(task.roleDir)) throw new Error("Physical memory catalog belongs to another persona.");
       const items = task.kind === "consolidated"
         ? presentRoleMemories(task.roleDir, sortKnowledgeByUpdatedAt(catalog.consolidated), "consolidated")
         : presentRoleMemories(
@@ -469,6 +473,8 @@ export async function execute(task: Exclude<ManagerReadWorkerTask, { type: "role
       };
     case "role_memory_counts":
       return (await readRoleMemoryCatalogsInWorker(task.roleDir)).counts;
+    case "role_memory_catalogs":
+      return readRoleMemoryCatalogsInWorker(task.roleDir);
     case "performance_summary": {
       const samples = await readPerformanceSummarySamples(task.logDirectory, task.rangeMs);
       return JSON.stringify({

@@ -3,6 +3,7 @@ import path from "node:path";
 import { rabiContextManager, type RabiContextResolution, type RabiContextTrigger } from "../context/rabiContextManager.js";
 import { sanitizeRoleId } from "../shared/routeIdentity.js";
 import { roleFolderPath } from "../shared/routePaths.js";
+import type { RoleMemoryCatalogs } from "../roleKnowledge.js";
 
 export type CodexHookRoleSource = {
   roleId: string;
@@ -14,7 +15,7 @@ export type CodexHookRoleSource = {
 
 export type CodexHookContextReadRequest =
   | { kind: "role_source"; rolesRoot: string; roleId: string }
-  | { kind: "knowledge"; trigger: RabiContextTrigger };
+  | { kind: "knowledge"; trigger: RabiContextTrigger; memories?: RoleMemoryCatalogs };
 
 export type CodexHookContextReadReply =
   | { kind: "role_source"; source: CodexHookRoleSource }
@@ -54,6 +55,6 @@ export function readCodexHookContextInput(input: CodexHookContextReadRequest): C
 
 /** Physical worker face; keeps synchronous direct-hook consumers on their existing API. */
 export async function readCodexHookContextInputAsync(input: CodexHookContextReadRequest): Promise<CodexHookContextReadReply> {
-  if (input.kind === "knowledge") return { kind: "knowledge", resolution: await rabiContextManager.resolveAsync(input.trigger) };
+  if (input.kind === "knowledge") return { kind: "knowledge", resolution: await rabiContextManager.resolveAsync(input.trigger, input.memories) };
   return readCodexHookContextInput(input);
 }

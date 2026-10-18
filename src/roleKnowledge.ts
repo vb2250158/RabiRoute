@@ -2790,10 +2790,14 @@ async function readMemoryCatalogAsync<T extends MemoryCatalogItem>(
   });
 }
 
-/** Fresh read-worker catalogs shared by page rows and counts; no second synchronous scan. */
-export async function readRoleMemoryCatalogsInWorker(roleDir: string): Promise<{
+/** One physical memory read supplies context, page rows and counts. */
+export type RoleMemoryCatalogs = {
+  roleDir: string;
   recent: RecentMemoryItem[]; consolidated: ConsolidatedMemoryItem[]; counts: ReturnType<typeof roleMemoryCounts>;
-}> {
+};
+
+/** Fresh read-worker catalogs shared by page rows and counts; no second synchronous scan. */
+export async function readRoleMemoryCatalogsInWorker(roleDir: string): Promise<RoleMemoryCatalogs> {
   const [recent, consolidated] = await Promise.all([
     readMemoryCatalogAsync(memoryCatalogDirectory(roleDir, "recent"), normalizeRecentMemory),
     readMemoryCatalogAsync(memoryCatalogDirectory(roleDir, "consolidated"), normalizeConsolidatedMemory)
@@ -2801,7 +2805,7 @@ export async function readRoleMemoryCatalogsInWorker(roleDir: string): Promise<{
   let runs: fs.Dirent[];
   try { runs = await fs.promises.readdir(path.join(memoryDir(roleDir), "consolidation-runs"), { withFileTypes: true }); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; runs = []; }
-  return { recent, consolidated, counts: {
+  return { roleDir: path.resolve(roleDir), recent, consolidated, counts: {
     recent: recent.filter(item => !item.consolidatedAt).length,
     archived: recent.filter(item => Boolean(item.consolidatedAt)).length,
     consolidated: consolidated.length,
@@ -4599,12 +4603,13 @@ export function roleKnowledgeSnapshotFromStorage(
 
 /** Reads fresh memory files with bounded parallel I/O inside the owned context worker. */
 export async function roleKnowledgeSnapshotFromStorageAsync(
-  roleDir: string, messageText: string, options: RoleKnowledgeSnapshotOptions = {}
+  roleDir: string, messageText: string, options: RoleKnowledgeSnapshotOptions = {}, memories?: RoleMemoryCatalogs
 ): Promise<RoleKnowledgeSnapshot> {
+  if (memories && memories.roleDir !== path.resolve(roleDir)) throw new Error("Physical memory catalog belongs to another persona.");
   const [physicalPlans, recentMemories, consolidatedMemories] = await Promise.all([
     readFreshHookPlans(roleDir),
-    readMemoryCatalogAsync(memoryCatalogDirectory(roleDir, "recent"), normalizeRecentMemory),
-    readMemoryCatalogAsync(memoryCatalogDirectory(roleDir, "consolidated"), normalizeConsolidatedMemory)
+    memories ? memories.recent : readMemoryCatalogAsync(memoryCatalogDirectory(roleDir, "recent"), normalizeRecentMemory),
+    memories ? memories.consolidated : readMemoryCatalogAsync(memoryCatalogDirectory(roleDir, "consolidated"), normalizeConsolidatedMemory)
   ]);
   const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
   const archived = options.archiveCompletedPlans === true
