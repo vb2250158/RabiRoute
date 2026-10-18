@@ -62,7 +62,7 @@ export class PlanStorageStartupLifecycle {
   private runtimeSnapshot: PlanStorageStartupLifecycleSnapshot;
 
   constructor(private readonly options: PlanStorageStartupLifecycleOptions) {
-    this.attemptTimeoutMs = positiveInteger(options.attemptTimeoutMs, 45_000);
+    this.attemptTimeoutMs = positiveInteger(options.attemptTimeoutMs, 180_000);
     this.retryBaseMs = positiveInteger(options.retryBaseMs, 5_000);
     this.retryMaxMs = Math.max(this.retryBaseMs, positiveInteger(options.retryMaxMs, 60_000));
     const loader = new ProgressivePlanStorageStartup({

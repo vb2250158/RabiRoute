@@ -289,3 +289,19 @@ test("real progressive route capture matches the transactional catalog including
     await settled;
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test("plan recovery keeps healthy roles visible while a slow role exceeds ten seconds", async () => {
+  const progress: string[][] = [];
+  const loader = new ProgressivePlanStorageStartup({ rolesRoot: "roles", readOnly: false,
+    processFactory: factory(async task => {
+      if (task.kind === "directories") return ["slow", "fast"];
+      if (task.kind !== "plan") throw new Error("unexpected task");
+      if (task.roleId === "slow") await delay(10_500);
+      return success;
+    })
+  });
+  const result = await loader.attempt(summary => { progress.push(summary.readyRoleIds ?? []); }).result;
+  assert.ok(progress.some(ids => ids.includes("fast") && !ids.includes("slow")), "healthy roles publish before cold recovery completes");
+  assert.deepEqual(new Set(result.readyRoleIds), new Set(["fast", "slow"]));
+  assert.equal(result.failures.length, 0);
+});
