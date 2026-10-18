@@ -376,3 +376,11 @@ test("a late contender is preserved when exclusive stale replacement loses publi
   assert.equal(retained.length, 1);
   assert.equal(JSON.parse(fs.readFileSync(path.join(path.dirname(lockPath), retained[0]!), "utf8")).owner, "previous-owner");
 });
+
+
+test("a live synchronous lease waits for delayed worker acknowledgement within its lease lifetime", (t) => {
+  const role = temporaryRole(t);
+  let entered = false;
+  withPlanStorageLease(role, "delayed-worker", () => { entered = true; }, { testFault: "delayed-start" });
+  assert.equal(entered, true);
+});

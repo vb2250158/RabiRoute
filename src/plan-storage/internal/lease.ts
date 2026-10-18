@@ -121,6 +121,7 @@ function renew() {
 }
 
 try {
+  if (workerData.testFault === "delayed-start") Atomics.wait(control, STOP_INDEX, 0, 11_000);
   if (renew()) {
     publishStatus(ACTIVE);
     while (Atomics.load(control, STOP_INDEX) === 0) {
@@ -167,8 +168,8 @@ export type PlanStorageLease = Readonly<{
 export type PlanStorageSyncLeaseOptions = Readonly<{
   /** May shorten, but never lengthen, the production heartbeat interval. */
   heartbeatIntervalMs?: number;
-  /** Test-only fault injection for proving that an ineffective timestamp renewal fails closed. */
-  testFault?: "mtime-not-advance";
+  /** Test-only renewal failure or delayed worker startup. */
+  testFault?: "mtime-not-advance" | "delayed-start";
 }>;
 
 type SyncLeaseHeartbeat = Readonly<{
@@ -206,8 +207,8 @@ function heartbeatFailure(lockPath: string, failure: number, phase: string): Err
   });
 }
 
-function waitForHeartbeatTransition(control: Int32Array, expected: number): number {
-  const deadline = Date.now() + SYNC_HEARTBEAT_WAIT_TIMEOUT_MS;
+function waitForHeartbeatTransition(control: Int32Array, expected: number, timeoutMs = SYNC_HEARTBEAT_WAIT_TIMEOUT_MS): number {
+  const deadline = Date.now() + timeoutMs;
   let status = Atomics.load(control, SYNC_HEARTBEAT_STATUS_INDEX);
   while (status === expected) {
     const remaining = deadline - Date.now();
@@ -241,7 +242,8 @@ function startSyncLeaseHeartbeat(
   worker.unref();
   worker.on("error", () => undefined);
 
-  const startupStatus = waitForHeartbeatTransition(control, SYNC_HEARTBEAT_STARTING);
+  // Startup can include slow storage I/O; the worker still validates ownership and expiry before admitting the transaction.
+  const startupStatus = waitForHeartbeatTransition(control, SYNC_HEARTBEAT_STARTING, PLAN_LOCK_EXPIRY_MS);
   if (startupStatus !== SYNC_HEARTBEAT_ACTIVE) {
     Atomics.store(control, SYNC_HEARTBEAT_STOP_INDEX, 1);
     Atomics.notify(control, SYNC_HEARTBEAT_STOP_INDEX);
