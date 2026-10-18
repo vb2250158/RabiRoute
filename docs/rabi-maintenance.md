@@ -77,3 +77,5 @@ Manager 先发布结构化 READY，再在后台枚举 Route 和人格的直接�
 失败项不会丢掉已成功的结果，生命周期进入 degraded，并按 5 秒起步、最高 60 秒的指数退避后台重试；计划恢复跳过本生命周期内已经完成的人格，目录枚举失败时保留原结果。配置目录捕获不再受修改请求的最大尝试次数限制；已有超时配置作为无进展看门狗，每次有效进展刷新 deadline，不再限制整棵树的总耗时。`POST /reload` 不要求已有配置快照，仍由原生命周期串行执行。`/meta` 的 live/requiredReady 与这些业务恢复状态分别判断，不关闭无关接口。
 
 回归入口：`node --import ./scripts/test-manager-runtime-env.mjs --import tsx --test src/manager/progressiveStorageStartup.test.ts`。覆盖挂起项、批次截止、并发上限、部分成功、晚到进度、失败后恢复、本地真实子程序，以及渐进快照与事务目录 hash 一致性。真实 NAS、安装版及页面验收仍需在获准的部署窗口执行；不要删除锁或迁移配置路径来制造 ready。
+
+计划恢复子程序失败时，错误摘要写入同一私有操作日志的 `plan_storage_startup_child_failed` 事件；IPC 和公开健康信息仍不返回原始异常。日志记录任务类别、角色 ID 与子进程 PID，用于区分存储冲突、文件错误和超时。

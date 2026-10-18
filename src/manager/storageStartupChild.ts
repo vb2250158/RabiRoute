@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { sanitizeRoleId, sanitizeConfigName } from "../shared/routeIdentity.js";
 import { ManagerConfigRepository } from "./configRepository.js";
 import { recoverRouteCatalogTransactions } from "./routeCatalogDurableTransaction.js";
@@ -47,13 +48,30 @@ async function execute(task: StorageStartupTask): Promise<unknown> {
   }
 }
 
+let startupTask: StorageStartupTask | undefined;
 try {
   const encoded = process.env.RABIROUTE_STORAGE_STARTUP_TASK;
   if (!encoded) throw new Error("Storage startup task is missing.");
-  const value = await execute(JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as StorageStartupTask);
+  startupTask = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as StorageStartupTask;
+  const value = await execute(startupTask);
   if (typeof process.send !== "function") throw new Error("Storage startup IPC is missing.");
   process.send({ ok: true, value }, () => { process.disconnect(); process.exit(0); });
-} catch {
+} catch (error) {
+  try {
+    const { resolveRuntimeLayout } = await import("../shared/runtimeLayout.js");
+    const { createManagerOperationalLog, managerOperationalError } = await import("./operationalLog.js");
+    const { stateRoot } = resolveRuntimeLayout(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."));
+    const log = createManagerOperationalLog({ rootDir: stateRoot });
+    log.record("error", "plan_storage_startup_child_failed", {
+      group: "storage", action: startupTask?.kind, owner: "storage_startup_child",
+      ...(startupTask?.kind === "plan" ? { target: { type: "role", id: startupTask.roleId } } : {}),
+      error: managerOperationalError(error, stateRoot)
+    });
+    await log.flush();
+  } catch (loggingError) {
+    // Keep the original failure opaque even when its private diagnostic cannot be saved.
+    process.stderr.write("Storage startup failure diagnostics unavailable.\n");
+  }
   if (typeof process.send === "function") {
     process.send({ ok: false }, () => { process.disconnect(); process.exit(1); });
   } else process.exit(1);

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { ChildProcess } from "node:child_process";
 import test from "node:test";
 import { withTestDeadline } from "../testFiniteDeadline.js";
@@ -358,4 +360,25 @@ test("plan startup child diagnostics remain opaque outside the child boundary", 
   assert.doesNotMatch(processSource, /message\?\.error|reject\(error\)/);
   assert.match(processSource, /diagnosticBytes/);
   assert.match(source, /Plan storage startup gate failed\./);
+});
+
+test("a failing startup child saves its cause privately without returning it over IPC", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-startup-diagnostic-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const previous = process.env.RABIROUTE_STATE_ROOT;
+  process.env.RABIROUTE_STATE_ROOT = root;
+  try {
+    const attempt = createStorageStartupProcess({ kind: "plan", rolesRoot: root, roleId: "../invalid" });
+    await assert.rejects(attempt.result, error => error instanceof Error
+      && error.message.includes("Storage startup item failed") && !error.message.includes("Invalid startup role identity"));
+    const logs = path.join(root, "logs", "manager");
+    const filename = fs.readdirSync(logs).find(name => name.startsWith("manager-operations-"));
+    assert.ok(filename);
+    const records = fs.readFileSync(path.join(logs, filename), "utf8").trim().split("\n").map(line => JSON.parse(line));
+    const record = records.find(item => item.event === "plan_storage_startup_child_failed");
+    assert.equal(record?.error?.message, "Invalid startup role identity.");
+  } finally {
+    if (previous === undefined) delete process.env.RABIROUTE_STATE_ROOT;
+    else process.env.RABIROUTE_STATE_ROOT = previous;
+  }
 });

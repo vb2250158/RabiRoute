@@ -102,6 +102,7 @@ test("Codex Stop HTTP hook returns recovery gate 503 while ordinary context rema
   const body = await stop.json() as Record<string, any>;
   assert.equal(stop.status, 503);
   assert.equal(body.error, "PLAN_STORAGE_STARTUP_UNAVAILABLE");
+  assert.equal(body.commitState, "not_started");
 });
 
 async function json(response: Response): Promise<Record<string, any>> {

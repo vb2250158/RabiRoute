@@ -91,6 +91,7 @@ export function handleCodexHookApi(
           jsonResponse(response, error.statusCode, {
             code: -1,
             error: error.code,
+            commitState: "not_started",
             message: error.message
           });
           return;
