@@ -79,3 +79,5 @@ Manager 先发布结构化 READY，再在后台枚举 Route 和人格的直接�
 回归入口：`node --import ./scripts/test-manager-runtime-env.mjs --import tsx --test src/manager/progressiveStorageStartup.test.ts`。覆盖挂起项、批次截止、并发上限、部分成功、晚到进度、失败后恢复、本地真实子程序，以及渐进快照与事务目录 hash 一致性。真实 NAS、安装版及页面验收仍需在获准的部署窗口执行；不要删除锁或迁移配置路径来制造 ready。
 
 计划恢复子程序失败时，错误摘要写入同一私有操作日志的 `plan_storage_startup_child_failed` 事件；IPC 和公开健康信息仍不返回原始异常。日志记录任务类别、角色 ID 与子进程 PID，用于区分存储冲突、文件错误和超时。
+
+Codex Hook 的物理记忆读取在独立 worker 内对近期、沉淀记忆分别以最多 4 个并发文件读取构建当前快照；不复用界面缓存或过期目录。文件顺序、Markdown 优先、按 ID 去重和召回更新规则保持一致，减少 NAS 串行读取触发 30 秒工作预算超时。

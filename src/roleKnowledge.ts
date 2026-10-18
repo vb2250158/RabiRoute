@@ -694,27 +694,28 @@ function memoryActivityAt(memory: { updatedAt: string; viewedAt?: string }): str
   return laterIso(memory.updatedAt, memory.viewedAt);
 }
 
-function parseMemoryMarkdown(filePath: string): Record<string, unknown> | null {
-  try {
-    const source = fs.readFileSync(filePath, "utf8").replace(/^\uFEFF/, "");
-    const match = source.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
-    if (!match) return null;
-    const metadata: Record<string, unknown> = {};
-    for (const line of match[1].split(/\r?\n/)) {
-      const pair = line.match(/^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$/);
-      if (!pair) continue;
-      const rawValue = pair[2].trim();
-      try {
-        metadata[pair[1]] = JSON.parse(rawValue);
-      } catch {
-        metadata[pair[1]] = rawValue.replace(/^["']|["']$/g, "");
-      }
+function parseMemoryMarkdownSource(source: string): Record<string, unknown> | null {
+  source = source.replace(/^\uFEFF/, "");
+  const match = source.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (!match) return null;
+  const metadata: Record<string, unknown> = {};
+  for (const line of match[1].split(/\r?\n/)) {
+    const pair = line.match(/^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$/);
+    if (!pair) continue;
+    const rawValue = pair[2].trim();
+    try {
+      metadata[pair[1]] = JSON.parse(rawValue);
+    } catch {
+      metadata[pair[1]] = rawValue.replace(/^["']|["']$/g, "");
     }
-    metadata.content = source.slice(match[0].length).trim();
-    return metadata;
-  } catch {
-    return null;
   }
+  metadata.content = source.slice(match[0].length).trim();
+  return metadata;
+}
+
+function parseMemoryMarkdown(filePath: string): Record<string, unknown> | null {
+  try { return parseMemoryMarkdownSource(fs.readFileSync(filePath, "utf8")); }
+  catch (error) { return null; /* Malformed or unreadable catalog entries are excluded. */ }
 }
 
 function memoryMarkdown(value: RecentMemoryItem | ConsolidatedMemoryItem): string {
@@ -2744,6 +2745,36 @@ function listMemoryCatalog<T extends MemoryCatalogItem>(
   return items;
 }
 
+async function readMemoryCatalogAsync<T extends MemoryCatalogItem>(
+  directory: string, normalize: (raw: Record<string, unknown>, fallbackId: string) => T | null
+): Promise<T[]> {
+  let entries: fs.Dirent[];
+  try { entries = await fs.promises.readdir(directory, { withFileTypes: true }); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
+  const files = entries.filter(entry => entry.isFile()).map(entry => entry.name).sort();
+  const names = [...files.filter(name => /\.md$/i.test(name)), ...files.filter(name => /\.json$/i.test(name))];
+  const values: Array<T | null> = new Array(names.length).fill(null);
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(4, names.length) }, async () => {
+    while (cursor < names.length) {
+      const index = cursor++;
+      const name = names[index];
+      let source: string;
+      try { source = await fs.promises.readFile(path.join(directory, name), "utf8"); }
+      catch (error) { continue; /* Match the synchronous reader's exclusion of unreadable entries. */ }
+      try {
+        const raw = /\.md$/i.test(name) ? parseMemoryMarkdownSource(source) : JSON.parse(source) as Record<string, unknown>;
+        values[index] = raw ? normalize(raw, path.basename(name, path.extname(name))) : null;
+      } catch (error) { /* Match the synchronous reader's exclusion of malformed entries. */ }
+    }
+  }));
+  const seen = new Set<string>();
+  return values.filter((item): item is T => {
+    if (!item || seen.has(item.id)) return false;
+    seen.add(item.id); return true;
+  });
+}
+
 /** Bounded read-worker entry; never used on a Manager request event loop. */
 export function readKnowledgeSearchFileInWorker(filePath: string, kind: KnowledgeKind): KnowledgeChange {
   const raw = kind !== "plan" && filePath.toLowerCase().endsWith(".md")
@@ -4529,6 +4560,24 @@ export function roleKnowledgeSnapshotFromStorage(
     consolidatedMemories: listConsolidatedMemories(roleDir),
     skills: listRoleSkills(roleDir),
     contextInjection: roleContextInjectionPolicy(roleDir)
+  }, true);
+}
+
+/** Reads fresh memory files with bounded parallel I/O inside the owned context worker. */
+export async function roleKnowledgeSnapshotFromStorageAsync(
+  roleDir: string, messageText: string, options: RoleKnowledgeSnapshotOptions = {}
+): Promise<RoleKnowledgeSnapshot> {
+  if (options.archiveCompletedPlans === true) {
+    const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
+    archiveCompletedPlansFromStorage(roleDir, workflow.archiveAfterHours);
+  }
+  const [recentMemories, consolidatedMemories] = await Promise.all([
+    readMemoryCatalogAsync(memoryCatalogDirectory(roleDir, "recent"), normalizeRecentMemory),
+    readMemoryCatalogAsync(memoryCatalogDirectory(roleDir, "consolidated"), normalizeConsolidatedMemory)
+  ]);
+  return buildRoleKnowledgeSnapshot(roleDir, messageText, options, {
+    plans: readPlansFromStorageInWorker(roleDir), planWorkflow: ensurePersonaPlanWorkflow(roleDir).workflow,
+    recentMemories, consolidatedMemories, skills: listRoleSkills(roleDir), contextInjection: roleContextInjectionPolicy(roleDir)
   }, true);
 }
 

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import {
   roleKnowledgeSnapshot,
   roleKnowledgeSnapshotFromStorage,
+  roleKnowledgeSnapshotFromStorageAsync,
   type RoleKnowledgeSnapshotOptions,
   type RequiredReadItem,
   type RoleKnowledgeSnapshot
@@ -66,11 +67,13 @@ export type RabiContextKnowledgeResolver = (
 export type RabiContextKnowledgeResolvers = {
   published: RabiContextKnowledgeResolver;
   storage: RabiContextKnowledgeResolver;
+  storageAsync?: (roleDir: string, signalText: string, options: RoleKnowledgeSnapshotOptions) => Promise<RoleKnowledgeSnapshot>;
 };
 
 const DEFAULT_KNOWLEDGE_RESOLVERS: RabiContextKnowledgeResolvers = Object.freeze({
   published: roleKnowledgeSnapshot,
-  storage: roleKnowledgeSnapshotFromStorage
+  storage: roleKnowledgeSnapshotFromStorage,
+  storageAsync: roleKnowledgeSnapshotFromStorageAsync
 });
 
 const EXPLICIT_RABI_CONTEXT_PATTERN = /\[rabi:|\/api\/roles\/[^\s/]+\/(?:plans|memory|skills)|(?:data[\\/])?roles[\\/][^\\/\s]+[\\/](?:plans|memory|persona\.md|growth\.md|skills\.md)/i;
@@ -134,12 +137,23 @@ export class RabiContextManager {
   constructor(private readonly knowledgeResolvers: RabiContextKnowledgeResolvers = DEFAULT_KNOWLEDGE_RESOLVERS) {}
 
   resolve(trigger: RabiContextTrigger): RabiContextResolution {
+    const resolveKnowledge = trigger.source === "codex_hook" ? this.knowledgeResolvers.storage : this.knowledgeResolvers.published;
+    const knowledge = resolveKnowledge(trigger.roleDir, String(trigger.signalText || ""), this.knowledgeOptions(trigger));
+    return this.resolveProjection(trigger, knowledge);
+  }
+
+  /** Resolves physical Hook memory reads in bounded parallel I/O without reusing a stale catalog. */
+  async resolveAsync(trigger: RabiContextTrigger): Promise<RabiContextResolution> {
+    const resolveKnowledge = trigger.source === "codex_hook"
+      ? this.knowledgeResolvers.storageAsync ?? this.knowledgeResolvers.storage : this.knowledgeResolvers.published;
+    const knowledge = await resolveKnowledge(trigger.roleDir, String(trigger.signalText || ""), this.knowledgeOptions(trigger));
+    return this.resolveProjection(trigger, knowledge);
+  }
+
+  private knowledgeOptions(trigger: RabiContextTrigger): RoleKnowledgeSnapshotOptions {
     const policy = RABI_CONTEXT_TRIGGER_POLICIES[trigger.kind];
     const seenContextKeys = new Set(trigger.seenContextKeys ?? []);
-    const resolveKnowledge = trigger.source === "codex_hook"
-      ? this.knowledgeResolvers.storage
-      : this.knowledgeResolvers.published;
-    const knowledge = resolveKnowledge(trigger.roleDir, String(trigger.signalText || ""), {
+    return {
       roleId: trigger.roleId,
       consolidationInputMemoryIds: trigger.consolidationInputMemoryIds,
       includePendingConsolidation: trigger.includePendingConsolidation,
@@ -148,8 +162,7 @@ export class RabiContextManager {
       archiveCompletedPlans: trigger.consolidationInputMemoryIds === undefined && policy.archiveCompletedPlans,
       touchViewedAt: policy.touchViewedAt,
       touchRequiredRead: (item) => !seenContextKeys.has(requiredReadContextKey(item))
-    });
-    return this.resolveProjection(trigger, knowledge);
+    };
   }
 
   /** Resolves presentation metadata from a Manager-fenced projection without reading role storage. */

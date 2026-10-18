@@ -51,3 +51,9 @@ export function readCodexHookContextInput(input: CodexHookContextReadRequest): C
     }
   };
 }
+
+/** Physical worker face; keeps synchronous direct-hook consumers on their existing API. */
+export async function readCodexHookContextInputAsync(input: CodexHookContextReadRequest): Promise<CodexHookContextReadReply> {
+  if (input.kind === "knowledge") return { kind: "knowledge", resolution: await rabiContextManager.resolveAsync(input.trigger) };
+  return readCodexHookContextInput(input);
+}

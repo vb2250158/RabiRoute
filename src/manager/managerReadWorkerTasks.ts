@@ -51,7 +51,7 @@ import type { GatewayDiagnosticsWorkerInput } from "./gatewayDiagnosticsSnapshot
 import { readGatewayStatusInWorker } from "./gatewayStatusSnapshot.js";
 
 import { verifyCriticalProjectFactRecord, type CriticalProjectFactRecordVerificationInput } from "../messageProcessing/criticalFactRecord.js";
-import { readCodexHookContextInput, type CodexHookContextReadRequest } from "./codexHookContextRead.js";
+import { readCodexHookContextInputAsync, type CodexHookContextReadRequest } from "./codexHookContextRead.js";
 
 export type ManagerReadWorkerTask =
   | { type: "codex_hook_context_read"; input: CodexHookContextReadRequest }
@@ -307,7 +307,7 @@ export async function execute(task: Exclude<ManagerReadWorkerTask, { type: "role
       verifyCriticalProjectFactRecord(task.input);
       return true;
     case "codex_hook_context_read":
-      return readCodexHookContextInput(task.input);
+      return readCodexHookContextInputAsync(task.input);
     case "role_knowledge_catalog_snapshot":
       return readRoleKnowledgeCatalogSnapshot(task.roleDir) satisfies RoleKnowledgeCatalogSnapshot;
     case "role_plan_catalog": {
