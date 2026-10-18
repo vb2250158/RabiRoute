@@ -2790,6 +2790,25 @@ async function readMemoryCatalogAsync<T extends MemoryCatalogItem>(
   });
 }
 
+/** Fresh read-worker catalogs shared by page rows and counts; no second synchronous scan. */
+export async function readRoleMemoryCatalogsInWorker(roleDir: string): Promise<{
+  recent: RecentMemoryItem[]; consolidated: ConsolidatedMemoryItem[]; counts: ReturnType<typeof roleMemoryCounts>;
+}> {
+  const [recent, consolidated] = await Promise.all([
+    readMemoryCatalogAsync(memoryCatalogDirectory(roleDir, "recent"), normalizeRecentMemory),
+    readMemoryCatalogAsync(memoryCatalogDirectory(roleDir, "consolidated"), normalizeConsolidatedMemory)
+  ]);
+  let runs: fs.Dirent[];
+  try { runs = await fs.promises.readdir(path.join(memoryDir(roleDir), "consolidation-runs"), { withFileTypes: true }); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; runs = []; }
+  return { recent, consolidated, counts: {
+    recent: recent.filter(item => !item.consolidatedAt).length,
+    archived: recent.filter(item => Boolean(item.consolidatedAt)).length,
+    consolidated: consolidated.length,
+    consolidationRuns: runs.filter(entry => entry.isFile() && entry.name.endsWith(".json")).length
+  } };
+}
+
 /** Bounded read-worker entry; never used on a Manager request event loop. */
 export function readKnowledgeSearchFileInWorker(filePath: string, kind: KnowledgeKind): KnowledgeChange {
   const raw = kind !== "plan" && filePath.toLowerCase().endsWith(".md")

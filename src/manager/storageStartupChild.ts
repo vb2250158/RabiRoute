@@ -12,6 +12,30 @@ import { recoverPlanFeedbackStoreTransactions } from "../planFeedback.js";
 import { recoverStoredPlanPackages } from "../planStoragePackageRecovery.js";
 import type { StorageStartupTask } from "./storageStartupProcess.js";
 
+async function recordPlanStage(task: Extract<StorageStartupTask, { kind: "plan" }>, action: string, outcome: string, durationMs?: number): Promise<void> {
+  try {
+    const { resolveRuntimeLayout } = await import("../shared/runtimeLayout.js");
+    const { createManagerOperationalLog } = await import("./operationalLog.js");
+    const { stateRoot } = resolveRuntimeLayout(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."));
+    const log = createManagerOperationalLog({ rootDir: stateRoot });
+    log.record("info", "plan_storage_startup_stage", {
+      group: "storage", action, outcome, durationMs, owner: "storage_startup_child",
+      target: { type: "role", id: task.roleId }
+    });
+    await log.flush();
+  } catch (loggingError) {
+    process.stderr.write("Storage startup stage diagnostics unavailable.\n");
+  }
+}
+
+async function planStage<Value>(task: Extract<StorageStartupTask, { kind: "plan" }>, action: string, run: () => Promise<Value> | Value): Promise<Value> {
+  await recordPlanStage(task, action, "started");
+  const start = performance.now();
+  const value = await run();
+  await recordPlanStage(task, action, "completed", performance.now() - start);
+  return value;
+}
+
 async function execute(task: StorageStartupTask): Promise<unknown> {
   switch (task.kind) {
     case "directories": {
@@ -39,10 +63,10 @@ async function execute(task: StorageStartupTask): Promise<unknown> {
         rolesRoot: task.rolesRoot,
         roleDirectories: [path.join(task.rolesRoot, roleId)],
         readOnly: false,
-        recoverRoleLifecycle: async roleDir => recoverPlanLifecycleTransitions(roleDir),
-        migrateRole: async roleDir => migrateRolePlanLayoutAtStartup(roleDir),
-        recoverRoleFeedback: async roleDir => recoverPlanFeedbackStoreTransactions(roleDir),
-        recoverRolePackages: async roleDir => recoverStoredPlanPackages(roleDir)
+        recoverRoleLifecycle: roleDir => planStage(task, "lifecycle", () => recoverPlanLifecycleTransitions(roleDir)),
+        migrateRole: roleDir => planStage(task, "layout", () => migrateRolePlanLayoutAtStartup(roleDir)),
+        recoverRoleFeedback: roleDir => planStage(task, "feedback", () => recoverPlanFeedbackStoreTransactions(roleDir)),
+        recoverRolePackages: roleDir => planStage(task, "packages", () => recoverStoredPlanPackages(roleDir))
       });
     }
   }

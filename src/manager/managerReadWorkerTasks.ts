@@ -25,6 +25,7 @@ import {
   roleMemoryCounts,
   presentRoleMemories,
   readRecentMemoryFromStorageInWorker,
+  readRoleMemoryCatalogsInWorker,
   type RoleKnowledgeCatalogSnapshot
 } from "../roleKnowledge.js";
 import { listPlanFeedback, planFeedbackSummary } from "../planFeedback.js";
@@ -449,14 +450,15 @@ export async function execute(task: Exclude<ManagerReadWorkerTask, { type: "role
       return projection ? { memory: projection, revision: storageRevisionToken(memory) } : null;
     }
     case "role_memory_page": {
+      const catalog = await readRoleMemoryCatalogsInWorker(task.roleDir);
       const items = task.kind === "consolidated"
-        ? presentRoleMemories(task.roleDir, sortKnowledgeByUpdatedAt(listConsolidatedMemories(task.roleDir)), "consolidated")
+        ? presentRoleMemories(task.roleDir, sortKnowledgeByUpdatedAt(catalog.consolidated), "consolidated")
         : presentRoleMemories(
           task.roleDir,
-          sortKnowledgeByUpdatedAt(task.kind === "archived" ? listArchivedMemories(task.roleDir) : listActiveRecentMemories(task.roleDir)),
+            sortKnowledgeByUpdatedAt(catalog.recent.filter(item => task.kind === "archived" ? Boolean(item.consolidatedAt) : !item.consolidatedAt)),
           "recent"
         );
-      return paginateRoleMemory(items, task.cursor, task.limit, task.query, roleMemoryCounts(task.roleDir));
+      return paginateRoleMemory(items, task.cursor, task.limit, task.query, catalog.counts);
     }
     case "role_memory_overview":
       return {
@@ -466,7 +468,7 @@ export async function execute(task: Exclude<ManagerReadWorkerTask, { type: "role
         consolidationRuns: listConsolidationRuns(task.roleDir)
       };
     case "role_memory_counts":
-      return roleMemoryCounts(task.roleDir);
+      return (await readRoleMemoryCatalogsInWorker(task.roleDir)).counts;
     case "performance_summary": {
       const samples = await readPerformanceSummarySamples(task.logDirectory, task.rangeMs);
       return JSON.stringify({

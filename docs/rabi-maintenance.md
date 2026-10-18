@@ -85,3 +85,5 @@ Codex Hook 的物理记忆读取在独立 worker 内对近期、沉淀记忆分�
 Hook 上下文只枚举活动计划，过期完成计划沿用原归档事务且不重复全目录扫描。记忆正文缓存在 worker 内；每次请求重新枚举文件并核验大小、修改时间、变更时间及文件标识，修改后重读、删除后移除，读取不稳定或失败时不使用旧正文。
 
 Hook 物理读取默认单项预算 45 秒，由 `RABIROUTE_CODEX_HOOK_READ_TIMEOUT_MS` 调整；普通资料页仍为 30 秒。冷启动的完整人格读取不同于分页查询，适配端请求预算应覆盖该读取及发现/身份核对。大目录计划恢复可分别通过 `RABIROUTE_PLAN_STORAGE_STARTUP_ITEM_TIMEOUT_MS`、`RABIROUTE_PLAN_STORAGE_STARTUP_BATCH_TIMEOUT_MS` 和已有 `RABIROUTE_PLAN_STORAGE_STARTUP_TIMEOUT_MS` 调整单项、批次和无进展预算；仍在确认旧子程序退出后才重试，不改变冲突判断。
+
+记忆分页与计数从同一次异步物理目录读取生成，共用已核验的正文缓存，不在统计时再次同步扫描记忆。启动计划恢复的生命周期、布局、反馈与包阶段在私有操作日志记录开始、完成和耗时，可定位子程序被截止前的阻塞阶段。
