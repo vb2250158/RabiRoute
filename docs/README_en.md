@@ -98,6 +98,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Offline glasses recording and live preview](rabilink-offline-recording_en.md): record glasses streams on the phone and watch locally; device acceptance is in progress.
 - [Rokid development sources and troubleshooting](rokid-development_en.md) — SDK route, official-source reading status, installation evidence and development skill; CXR-M is excluded.
 - [Local YeYu Gamer Manager integration](yeyu-gamer-manager-integration_en.md) — **Experimental integration**. Fixed local port 8877, typed health/meta/snapshot/capability reads, and plan-only Agent work-item creation through a dedicated `rabiroute.token`; disabled by default pending live installation acceptance.
+- [Installation-file recovery and offline dialogue extraction](yeyu-install-file-recovery_en.md) — Maintainer compatibility entry point, script arguments, and candidate-data limitations; no installation operations.
 - [WeCom integration](wecom-integration_en.md)
 - [Feishu endpoint integration](feishu-integration_en.md) — enterprise-app event callbacks, signature/encryption checks, durable deduplication, and source-chat text replies.
 - [Video generation plugin](video-generation-plugin_en.md) — Choose models on this or a connected computer, submit generation jobs, and save, preview or download work in the current workspace.

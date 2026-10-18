@@ -97,6 +97,7 @@
 - [眼镜离线录像与实时预览](rabilink-offline-recording.md)：把眼镜直播保存在手机并实时查看；真机验收进行中。
 - [乐奇开发依据与排障](rokid-development.md) — SDK 路线、官方资料读取状态、安装证据及对应开发 Skill；当前不采用 CXR-M。
 - [YeYu Gamer Manager 本机接入](yeyu-gamer-manager-integration.md) — **实验集成**。固定连接本机 8877，只读 health/meta/snapshot/capabilities，并用独立 `rabiroute.token` 创建 plan-only Agent work item；默认关闭，真实安装联调待验收。
+- [安装目录文件恢复与离线台词提取](yeyu-install-file-recovery.md) — 维护者使用的兼容入口、脚本参数及候选数据限制；不包含安装操作。
 - [企业微信接入](wecom-integration.md) — WeCom 智能机器人 WebSocket 与 Outbox 回发。
 - [飞书独立消息端接入](feishu-integration.md) — 飞书应用事件订阅、签名/加密回调、持久去重与来源 chat 回发。
 - [视频生成插件](video-generation-plugin.md) — 选择本机或已连接电脑的模型，提交生成任务，并在当前工作台保存、预览和下载作品。
