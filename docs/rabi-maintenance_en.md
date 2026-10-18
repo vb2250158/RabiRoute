@@ -81,3 +81,5 @@ Regression entry: `node --import ./scripts/test-manager-runtime-env.mjs --import
 Failed plan recovery children record bounded error details as `plan_storage_startup_child_failed` in the same private operational log. IPC and public health responses retain opaque failures. Task kind, role ID and child PID distinguish storage conflicts, file errors and timeouts.
 
 Physical Codex Hook recall builds a fresh snapshot in its isolated worker, with at most four concurrent file reads per recent/consolidated memory directory. It never reuses UI caches or expired catalogs. File ordering, Markdown precedence, ID deduplication and recall updates remain unchanged, reducing serial NAS reads that can exhaust the thirty-second worker budget.
+
+Hook context enumerates active plans only. Expired completed plans retain their existing archival transaction without a second catalog scan. Memory bodies remain in worker memory; each request enumerates current files and validates size, modification/change times and file identity. Changes reload, deletions remove, and unstable or failed reads never reuse an older body.

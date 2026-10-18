@@ -1848,7 +1848,7 @@ type PlanFileCacheEntry = {
   plan: PlanItem | null;
 };
 
-function samePlanFileMetadata(entry: PlanFileCacheEntry, stat: fs.Stats): boolean {
+function samePlanFileMetadata(entry: Pick<PlanFileCacheEntry, "size" | "mtimeMs" | "ctimeMs" | "ino">, stat: fs.Stats): boolean {
   return Number.isFinite(stat.ctimeMs) && stat.ctimeMs > 0 && Number.isFinite(stat.ino) && stat.ino > 0
     && entry.size === stat.size && entry.mtimeMs === stat.mtimeMs && entry.ctimeMs === stat.ctimeMs && entry.ino === stat.ino;
 }
@@ -2037,8 +2037,8 @@ function awaitAbortable<T>(operation: Promise<T>, signal?: AbortSignal): Promise
   });
 }
 
-async function allPlanFilesAsync(roleDir: string, signal?: AbortSignal): Promise<string[]> {
-  const storageGroups = await Promise.all((["active", "archive"] as const).map(async (bucket) => {
+async function allPlanFilesAsync(roleDir: string, signal?: AbortSignal, buckets: readonly PlanStorageBucket[] = ["active", "archive"]): Promise<string[]> {
+  const storageGroups = await Promise.all(buckets.map(async (bucket) => {
     const directory = path.join(plansDir(roleDir), bucket);
     try {
       const entries = await awaitAbortable(
@@ -2674,6 +2674,9 @@ type MemoryCatalogItem = RecentMemoryItem | ConsolidatedMemoryItem;
 type MemoryCatalogCacheEntry = { validUntil: number; items: MemoryCatalogItem[] };
 const MEMORY_CATALOG_CACHE_TTL_MS = 500;
 const memoryCatalogCache = new Map<string, MemoryCatalogCacheEntry>();
+const physicalMemoryFiles = new Map<string, Map<string, {
+  size: number; mtimeMs: number; ctimeMs: number; ino: number; raw: Record<string, unknown> | null;
+}>>();
 const memoryCatalogWatchers = new Map<string, fs.FSWatcher>();
 const roleKnowledgeCatalogMetadataCache = new Map<string, {
   skills: RoleSkillItem[];
@@ -2753,19 +2756,31 @@ async function readMemoryCatalogAsync<T extends MemoryCatalogItem>(
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
   const files = entries.filter(entry => entry.isFile()).map(entry => entry.name).sort();
   const names = [...files.filter(name => /\.md$/i.test(name)), ...files.filter(name => /\.json$/i.test(name))];
+  const cachedFiles = physicalMemoryFiles.get(directory) ?? new Map();
+  physicalMemoryFiles.set(directory, cachedFiles);
+  const current = new Set(names);
+  for (const name of cachedFiles.keys()) if (!current.has(name)) cachedFiles.delete(name);
   const values: Array<T | null> = new Array(names.length).fill(null);
   let cursor = 0;
   await Promise.all(Array.from({ length: Math.min(4, names.length) }, async () => {
     while (cursor < names.length) {
       const index = cursor++;
       const name = names[index];
-      let source: string;
-      try { source = await fs.promises.readFile(path.join(directory, name), "utf8"); }
-      catch (error) { continue; /* Match the synchronous reader's exclusion of unreadable entries. */ }
       try {
-        const raw = /\.md$/i.test(name) ? parseMemoryMarkdownSource(source) : JSON.parse(source) as Record<string, unknown>;
+        const file = path.join(directory, name);
+        const before = await fs.promises.stat(file);
+        let cached = cachedFiles.get(name);
+        if (!cached || !samePlanFileMetadata(cached, before)) {
+          const source = await fs.promises.readFile(file, "utf8");
+          const after = await fs.promises.stat(file);
+          if (!samePlanFileMetadata(before, after)) throw new Error("Memory changed while reading its context index.");
+          const raw = /\.md$/i.test(name) ? parseMemoryMarkdownSource(source) : JSON.parse(source) as Record<string, unknown>;
+          cached = { size: after.size, mtimeMs: after.mtimeMs, ctimeMs: after.ctimeMs, ino: after.ino, raw };
+          cachedFiles.set(name, cached);
+        }
+        const raw = cached.raw;
         values[index] = raw ? normalize(raw, path.basename(name, path.extname(name))) : null;
-      } catch (error) { /* Match the synchronous reader's exclusion of malformed entries. */ }
+      } catch (error) { cachedFiles.delete(name); /* Unreadable, malformed or changing entries never use an older body. */ }
     }
   }));
   const seen = new Set<string>();
@@ -3885,10 +3900,10 @@ export function archiveCompletedPlans(roleDir: string, archiveAfterHours?: numbe
   return archived;
 }
 
-function archiveCompletedPlansFromStorage(roleDir: string, archiveAfterHours: number): PlanItem[] {
+function archiveCompletedPlansFromStorage(roleDir: string, archiveAfterHours: number, plans = readPlansFromStorageInWorker(roleDir)): PlanItem[] {
   const archived: PlanItem[] = [];
   const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
-  for (const plan of readPlansFromStorageInWorker(roleDir)) {
+  for (const plan of plans) {
     if (planActivationStatus(plan, workflow) !== "已完成" || ageHours(plan.updatedAt) <= archiveAfterHours) continue;
     const next = {
       ...plan,
@@ -4567,18 +4582,34 @@ export function roleKnowledgeSnapshotFromStorage(
 export async function roleKnowledgeSnapshotFromStorageAsync(
   roleDir: string, messageText: string, options: RoleKnowledgeSnapshotOptions = {}
 ): Promise<RoleKnowledgeSnapshot> {
-  if (options.archiveCompletedPlans === true) {
-    const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
-    archiveCompletedPlansFromStorage(roleDir, workflow.archiveAfterHours);
-  }
-  const [recentMemories, consolidatedMemories] = await Promise.all([
+  const [physicalPlans, recentMemories, consolidatedMemories] = await Promise.all([
+    readFreshHookPlans(roleDir),
     readMemoryCatalogAsync(memoryCatalogDirectory(roleDir, "recent"), normalizeRecentMemory),
     readMemoryCatalogAsync(memoryCatalogDirectory(roleDir, "consolidated"), normalizeConsolidatedMemory)
   ]);
+  const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
+  const archived = options.archiveCompletedPlans === true
+    ? archiveCompletedPlansFromStorage(roleDir, workflow.archiveAfterHours, physicalPlans) : [];
+  const byId = new Map(archived.map(plan => [plan.id, plan]));
   return buildRoleKnowledgeSnapshot(roleDir, messageText, options, {
-    plans: readPlansFromStorageInWorker(roleDir), planWorkflow: ensurePersonaPlanWorkflow(roleDir).workflow,
+    plans: physicalPlans.map(plan => byId.get(plan.id) ?? plan), planWorkflow: workflow,
     recentMemories, consolidatedMemories, skills: listRoleSkills(roleDir), contextInjection: roleContextInjectionPolicy(roleDir)
   }, true);
+}
+
+async function readFreshHookPlans(roleDir: string): Promise<PlanItem[]> {
+  const files = await allPlanFilesAsync(roleDir, undefined, ["active"]);
+  const plans: Array<PlanItem | null> = new Array(files.length).fill(null);
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(4, files.length) }, async () => {
+    while (cursor < files.length) {
+      const index = cursor++;
+      const result = await readPlanFileForCatalog(files[index]);
+      if (result.retry) throw new Error("PLAN_CATALOG_REFRESH_UNAVAILABLE");
+      plans[index] = result.entry?.plan ?? null;
+    }
+  }));
+  return uniquePlans(plans.filter((plan): plan is PlanItem => plan !== null));
 }
 
 /** Memory-only recall projection. Undefined is an explicit cold state. */

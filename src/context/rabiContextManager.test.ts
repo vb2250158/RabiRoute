@@ -46,6 +46,23 @@ function fixture(): { root: string; roleDir: string; memoryPath: string; complet
   return { root, roleDir, memoryPath, completedPlanPath };
 }
 
+test("async physical entry context retains completed-plan archival policy", async t => {
+  const data = fixture();
+  t.after(() => fs.rmSync(data.root, { recursive: true, force: true }));
+  const stored = JSON.parse(fs.readFileSync(data.completedPlanPath, "utf8"));
+  fs.writeFileSync(path.join(path.dirname(data.completedPlanPath), "history.jsonl"), `${JSON.stringify({
+    id: "history-complete", planId: stored.id, kind: "created", recordedAt: stored.createdAt, after: stored
+  })}\n`);
+  const resolution = await new RabiContextManager().resolveAsync({
+    kind: "user_prompt", source: "codex_hook", roleId: "YeYu", roleDir: data.roleDir,
+    signalText: "旧计划"
+  });
+  assert.equal(resolution.policy.archiveCompletedPlans, true);
+  assert.equal(fs.existsSync(data.completedPlanPath), false);
+  assert.equal(fs.existsSync(planJsonFile(data.roleDir, "plan-complete", "archive")), true);
+  assert.equal(resolution.knowledge.activePlans.length, 0);
+});
+
 test("dedicated context carries candidate ID filter and disables plan archiving before snapshot", (t) => {
   const data = fixture();
   t.after(() => fs.rmSync(data.root, { recursive: true, force: true }));
