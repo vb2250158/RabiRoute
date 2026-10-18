@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.58 - 2026-10-19
+
+- Document the four unmatched historical blobs blocking installation of 0.3.57. No legacy logic or private defaults restored; documentation version only, not installed.
+
 ## 0.3.57 - 2026-10-18
 
 - Scope bound-persona Codex Stop processing to the recovered current persona: plan follow-ups, file-change reminders and completion notices stay within that persona, and recovery failures in other personas no longer block it. An unrecovered current persona still returns `PLAN_STORAGE_STARTUP_UNAVAILABLE` before writes; unbound sessions still wait for full plan recovery.
