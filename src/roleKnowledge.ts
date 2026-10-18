@@ -3027,8 +3027,32 @@ export function touchRecentMemory(
 }
 
 function touchRecentMemoryView(roleDir: string, memory: RecentMemoryItem, viewedAt = nowIso()): RecentMemoryItem {
-  const viewed = { ...memory, viewedAt, recalledAt: viewedAt, storageRevision: createStorageRevision() };
-  writeMemoryCatalog(recentMemoryFile(roleDir, viewed), viewed);
+  return touchMemoryCatalogView(recentMemoryFile(roleDir, memory), memory, normalizeRecentMemory, viewedAt);
+}
+
+/** Existing-file view metadata cannot introduce another storage key. Read the
+ * target again so a cached recall never overwrites newer content. */
+function touchMemoryCatalogView<T extends MemoryCatalogItem>(
+  filePath: string,
+  memory: T,
+  normalize: (raw: Record<string, unknown>, fallbackId: string) => T | null,
+  viewedAt: string
+): T {
+  if (!fs.existsSync(filePath)) {
+    // Legacy JSON catalogs still migrate through the complete collision check.
+    const viewed = { ...memory, viewedAt, recalledAt: viewedAt, storageRevision: createStorageRevision() };
+    writeMemoryCatalog(filePath, viewed);
+    return viewed;
+  }
+  const raw = memoryCatalogRaw(filePath);
+  const current = raw ? normalize(raw, memory.id) : null;
+  if (!current || current.id !== memory.id) throw new Error("Memory storage target logical id could not be verified");
+  const viewed = { ...current, viewedAt, recalledAt: viewedAt, storageRevision: createStorageRevision() };
+  try {
+    writeMemoryMarkdown(filePath, viewed);
+  } finally {
+    invalidateMemoryCatalog(path.dirname(filePath));
+  }
   return viewed;
 }
 
@@ -3254,9 +3278,7 @@ export function getConsolidatedMemory(roleDir: string, memoryId: string): Consol
 }
 
 function touchConsolidatedMemoryView(roleDir: string, memory: ConsolidatedMemoryItem, viewedAt = nowIso()): ConsolidatedMemoryItem {
-  const viewed = { ...memory, viewedAt, recalledAt: viewedAt, storageRevision: createStorageRevision() };
-  writeMemoryCatalog(consolidatedMemoryFile(roleDir, viewed), viewed);
-  return viewed;
+  return touchMemoryCatalogView(consolidatedMemoryFile(roleDir, memory), memory, normalizeConsolidatedMemory, viewedAt);
 }
 
 export function listConsolidationRuns(roleDir: string): MemoryConsolidationRun[] {

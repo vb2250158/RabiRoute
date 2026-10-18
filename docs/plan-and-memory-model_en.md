@@ -6,6 +6,10 @@ English | <a href="./plan-and-memory-model.md">简体中文</a>
 
 # Plans and Memory Model
 
+## Memory recall view timestamps
+
+Recalling an existing Markdown memory rereads and verifies only the target file’s logical ID before updating `viewedAt`, `recalledAt` and its storage revision. This preserves newer file content and avoids rereading the entire memory directory for a timestamp update on NAS storage. Legacy JSON memories without a canonical file still migrate through the existing catalog collision checks. Full validation for creation, renaming and explicit content edits remains unchanged.
+
 ## Reading step cards
 
 Plan headers show the update time and marker status; the current-step label and title share a row. Step bodies start collapsed and can be expanded by clicking the heading or using the keyboard. The current-step summary stays visible, and approval actions remain independent of body disclosure. Both body areas have 10px horizontal insets. File changes have their own disclosure, grouped by record time, with separate change types, wrapping paths, and descriptions at the same 11px size as body text. SHA-256 values start collapsed; ordinary records no longer use error colors.
