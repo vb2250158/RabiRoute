@@ -6,6 +6,16 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.57 - 2026-10-18
+
+- Scope bound-persona Codex Stop processing to the recovered current persona: plan follow-ups, file-change reminders and completion notices stay within that persona, and recovery failures in other personas no longer block it. An unrecovered current persona still returns `PLAN_STORAGE_STARTUP_UNAVAILABLE` before writes; unbound sessions still wait for full plan recovery.
+- Hook cold reads: physical memory reads default to a 45-second per-item budget, adjustable with `RABIROUTE_CODEX_HOOK_READ_TIMEOUT_MS`; recent and consolidated memories build the current snapshot with up to 4 concurrent file reads, only active plans are enumerated, and expired completed plans reuse the existing archive transaction without repeated full scans.
+- Memory catalog caching: pages and counts share one asynchronous physical catalog read and the verified body cache; the catalog runs in a dedicated resident reader (concurrency 1, 35-second default, adjustable with `RABIROUTE_MEMORY_CATALOG_READ_TIMEOUT_MS`) that revalidates size, modification time and file identity on every request, rereading changed files and dropping deleted ones. Recall timestamp updates no longer rescan the whole catalog.
+- Physical read sharing: recent, consolidated and archived pages, counts and Hook context for one persona share in-flight physical reads; IPC carries the persona directory and checks ownership before use, and unverified snapshots are never reused across requests.
+- Plan recovery budgets: 60 seconds per item, 150 seconds per batch and a 180-second no-progress watchdog, adjustable with `RABIROUTE_PLAN_STORAGE_STARTUP_ITEM_TIMEOUT_MS`, `RABIROUTE_PLAN_STORAGE_STARTUP_BATCH_TIMEOUT_MS` and `RABIROUTE_PLAN_STORAGE_STARTUP_TIMEOUT_MS`; child failure summaries and per-stage durations go to the private operation log, and retries still require confirmed exit of the previous child.
+- Lease heartbeat admission: synchronous plan locks wait for the renewal thread's first confirmation within the existing lease lifetime instead of failing startup at 10 seconds; no transaction runs before that confirmation, and the normal renewal interval and shutdown confirmation limit are unchanged.
+- Not yet verified fixed: the 57 private plan lineage conflicts in production data and the 45000ms production cold-read timeout are not confirmed resolved by this version and still require measured acceptance in an approved deployment window.
+
 ## 0.3.56 - 2026-10-18
 
 - Launch HA OS recovery through an administrator-protected hidden launcher so its console is hidden from process creation, fixing the initial flash that can precede PowerShell's `-WindowStyle Hidden`.
