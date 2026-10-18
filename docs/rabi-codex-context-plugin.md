@@ -14,6 +14,8 @@ Manager 将人格资料与知识召回的物理读取交给受限存储进程，
 
 ## 人格可配置的 Stop 追问
 
+已绑定人格的 Stop 只检查该人格的恢复状态，并在同一人格范围内查找计划追问、文件变更提醒和完成通知。其它人格恢复失败不会阻断它；当前人格未恢复时仍在写入前返回 `PLAN_STORAGE_STARTUP_UNAVAILABLE`。未绑定人格的会话仍需等待全部计划恢复后，才能跨人格查找任务绑定。
+
 `personaConfig.json.codexHooks.planFollowup` 拥有 `enabled`（默认 false）、`cooldownSeconds`（默认 300）和有序 `rules`。每条规则包含稳定 `id`、`enabled`、`statusKeys` 和 `prompt`。状态 key 引用该人格状态目录，没有内置业务状态触发列表。Manager 在唯一业务任务绑定下匹配第一条规则，返回 `followup: { decision: "block", reason }`，插件只转换为 Codex Stop 输出。配置保存复用人格 Repository，UI 位于「自动化 → Agent Hook」。
 
 既有 Hook 运行记录保存规则与计划步骤指纹、轮次和时间。同轮、相同指纹、冷却期及 `stop_hook_active` 阻止重复追问；终态、归档、绑定歧义或 Manager 不可用时不触发。追问期间不提前发送完成通知。该决策不会变更业务计划、替代授权或安排未来唤醒。独立本机守卫的固定 Stop 拦截应另行退役为提示；插件不会改写其他 Hook。

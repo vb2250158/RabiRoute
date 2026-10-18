@@ -694,27 +694,28 @@ function memoryActivityAt(memory: { updatedAt: string; viewedAt?: string }): str
   return laterIso(memory.updatedAt, memory.viewedAt);
 }
 
-function parseMemoryMarkdown(filePath: string): Record<string, unknown> | null {
-  try {
-    const source = fs.readFileSync(filePath, "utf8").replace(/^\uFEFF/, "");
-    const match = source.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
-    if (!match) return null;
-    const metadata: Record<string, unknown> = {};
-    for (const line of match[1].split(/\r?\n/)) {
-      const pair = line.match(/^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$/);
-      if (!pair) continue;
-      const rawValue = pair[2].trim();
-      try {
-        metadata[pair[1]] = JSON.parse(rawValue);
-      } catch {
-        metadata[pair[1]] = rawValue.replace(/^["']|["']$/g, "");
-      }
+function parseMemoryMarkdownSource(source: string): Record<string, unknown> | null {
+  source = source.replace(/^\uFEFF/, "");
+  const match = source.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (!match) return null;
+  const metadata: Record<string, unknown> = {};
+  for (const line of match[1].split(/\r?\n/)) {
+    const pair = line.match(/^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$/);
+    if (!pair) continue;
+    const rawValue = pair[2].trim();
+    try {
+      metadata[pair[1]] = JSON.parse(rawValue);
+    } catch {
+      metadata[pair[1]] = rawValue.replace(/^["']|["']$/g, "");
     }
-    metadata.content = source.slice(match[0].length).trim();
-    return metadata;
-  } catch {
-    return null;
   }
+  metadata.content = source.slice(match[0].length).trim();
+  return metadata;
+}
+
+function parseMemoryMarkdown(filePath: string): Record<string, unknown> | null {
+  try { return parseMemoryMarkdownSource(fs.readFileSync(filePath, "utf8")); }
+  catch (error) { return null; /* Malformed or unreadable catalog entries are excluded. */ }
 }
 
 function memoryMarkdown(value: RecentMemoryItem | ConsolidatedMemoryItem): string {
@@ -1847,7 +1848,7 @@ type PlanFileCacheEntry = {
   plan: PlanItem | null;
 };
 
-function samePlanFileMetadata(entry: PlanFileCacheEntry, stat: fs.Stats): boolean {
+function samePlanFileMetadata(entry: Pick<PlanFileCacheEntry, "size" | "mtimeMs" | "ctimeMs" | "ino">, stat: fs.Stats): boolean {
   return Number.isFinite(stat.ctimeMs) && stat.ctimeMs > 0 && Number.isFinite(stat.ino) && stat.ino > 0
     && entry.size === stat.size && entry.mtimeMs === stat.mtimeMs && entry.ctimeMs === stat.ctimeMs && entry.ino === stat.ino;
 }
@@ -2036,8 +2037,8 @@ function awaitAbortable<T>(operation: Promise<T>, signal?: AbortSignal): Promise
   });
 }
 
-async function allPlanFilesAsync(roleDir: string, signal?: AbortSignal): Promise<string[]> {
-  const storageGroups = await Promise.all((["active", "archive"] as const).map(async (bucket) => {
+async function allPlanFilesAsync(roleDir: string, signal?: AbortSignal, buckets: readonly PlanStorageBucket[] = ["active", "archive"]): Promise<string[]> {
+  const storageGroups = await Promise.all(buckets.map(async (bucket) => {
     const directory = path.join(plansDir(roleDir), bucket);
     try {
       const entries = await awaitAbortable(
@@ -2673,6 +2674,9 @@ type MemoryCatalogItem = RecentMemoryItem | ConsolidatedMemoryItem;
 type MemoryCatalogCacheEntry = { validUntil: number; items: MemoryCatalogItem[] };
 const MEMORY_CATALOG_CACHE_TTL_MS = 500;
 const memoryCatalogCache = new Map<string, MemoryCatalogCacheEntry>();
+const physicalMemoryFiles = new Map<string, Map<string, {
+  size: number; mtimeMs: number; ctimeMs: number; ino: number; raw: Record<string, unknown> | null;
+}>>();
 const memoryCatalogWatchers = new Map<string, fs.FSWatcher>();
 const roleKnowledgeCatalogMetadataCache = new Map<string, {
   skills: RoleSkillItem[];
@@ -2742,6 +2746,74 @@ function listMemoryCatalog<T extends MemoryCatalogItem>(
   }
   memoryCatalogCache.set(cacheKey, { validUntil: Date.now() + MEMORY_CATALOG_CACHE_TTL_MS, items });
   return items;
+}
+
+async function readMemoryCatalogAsync<T extends MemoryCatalogItem>(
+  directory: string, normalize: (raw: Record<string, unknown>, fallbackId: string) => T | null
+): Promise<T[]> {
+  let entries: fs.Dirent[];
+  try { entries = await fs.promises.readdir(directory, { withFileTypes: true }); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
+  const files = entries.filter(entry => entry.isFile()).map(entry => entry.name).sort();
+  const names = [...files.filter(name => /\.md$/i.test(name)), ...files.filter(name => /\.json$/i.test(name))];
+  const cachedFiles = physicalMemoryFiles.get(directory) ?? new Map();
+  physicalMemoryFiles.set(directory, cachedFiles);
+  const current = new Set(names);
+  for (const name of cachedFiles.keys()) if (!current.has(name)) cachedFiles.delete(name);
+  const values: Array<T | null> = new Array(names.length).fill(null);
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(4, names.length) }, async () => {
+    while (cursor < names.length) {
+      const index = cursor++;
+      const name = names[index];
+      try {
+        const file = path.join(directory, name);
+        const before = await fs.promises.stat(file);
+        let cached = cachedFiles.get(name);
+        if (!cached || !samePlanFileMetadata(cached, before)) {
+          const source = await fs.promises.readFile(file, "utf8");
+          const after = await fs.promises.stat(file);
+          if (before.size !== after.size || before.mtimeMs !== after.mtimeMs
+            || before.ctimeMs !== after.ctimeMs || before.ino !== after.ino) {
+            throw new Error("Memory changed while reading its context index.");
+          }
+          const raw = /\.md$/i.test(name) ? parseMemoryMarkdownSource(source) : JSON.parse(source) as Record<string, unknown>;
+          cached = { size: after.size, mtimeMs: after.mtimeMs, ctimeMs: after.ctimeMs, ino: after.ino, raw };
+          cachedFiles.set(name, cached);
+        }
+        const raw = cached.raw;
+        values[index] = raw ? normalize(raw, path.basename(name, path.extname(name))) : null;
+      } catch (error) { cachedFiles.delete(name); /* Unreadable, malformed or changing entries never use an older body. */ }
+    }
+  }));
+  const seen = new Set<string>();
+  return values.filter((item): item is T => {
+    if (!item || seen.has(item.id)) return false;
+    seen.add(item.id); return true;
+  });
+}
+
+/** One physical memory read supplies context, page rows and counts. */
+export type RoleMemoryCatalogs = {
+  roleDir: string;
+  recent: RecentMemoryItem[]; consolidated: ConsolidatedMemoryItem[]; counts: ReturnType<typeof roleMemoryCounts>;
+};
+
+/** Fresh read-worker catalogs shared by page rows and counts; no second synchronous scan. */
+export async function readRoleMemoryCatalogsInWorker(roleDir: string): Promise<RoleMemoryCatalogs> {
+  const [recent, consolidated] = await Promise.all([
+    readMemoryCatalogAsync(memoryCatalogDirectory(roleDir, "recent"), normalizeRecentMemory),
+    readMemoryCatalogAsync(memoryCatalogDirectory(roleDir, "consolidated"), normalizeConsolidatedMemory)
+  ]);
+  let runs: fs.Dirent[];
+  try { runs = await fs.promises.readdir(path.join(memoryDir(roleDir), "consolidation-runs"), { withFileTypes: true }); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; runs = []; }
+  return { roleDir: path.resolve(roleDir), recent, consolidated, counts: {
+    recent: recent.filter(item => !item.consolidatedAt).length,
+    archived: recent.filter(item => Boolean(item.consolidatedAt)).length,
+    consolidated: consolidated.length,
+    consolidationRuns: runs.filter(entry => entry.isFile() && entry.name.endsWith(".json")).length
+  } };
 }
 
 /** Bounded read-worker entry; never used on a Manager request event loop. */
@@ -3027,8 +3099,32 @@ export function touchRecentMemory(
 }
 
 function touchRecentMemoryView(roleDir: string, memory: RecentMemoryItem, viewedAt = nowIso()): RecentMemoryItem {
-  const viewed = { ...memory, viewedAt, recalledAt: viewedAt, storageRevision: createStorageRevision() };
-  writeMemoryCatalog(recentMemoryFile(roleDir, viewed), viewed);
+  return touchMemoryCatalogView(recentMemoryFile(roleDir, memory), memory, normalizeRecentMemory, viewedAt);
+}
+
+/** Existing-file view metadata cannot introduce another storage key. Read the
+ * target again so a cached recall never overwrites newer content. */
+function touchMemoryCatalogView<T extends MemoryCatalogItem>(
+  filePath: string,
+  memory: T,
+  normalize: (raw: Record<string, unknown>, fallbackId: string) => T | null,
+  viewedAt: string
+): T {
+  if (!fs.existsSync(filePath)) {
+    // Legacy JSON catalogs still migrate through the complete collision check.
+    const viewed = { ...memory, viewedAt, recalledAt: viewedAt, storageRevision: createStorageRevision() };
+    writeMemoryCatalog(filePath, viewed);
+    return viewed;
+  }
+  const raw = memoryCatalogRaw(filePath);
+  const current = raw ? normalize(raw, memory.id) : null;
+  if (!current || current.id !== memory.id) throw new Error("Memory storage target logical id could not be verified");
+  const viewed = { ...current, viewedAt, recalledAt: viewedAt, storageRevision: createStorageRevision() };
+  try {
+    writeMemoryMarkdown(filePath, viewed);
+  } finally {
+    invalidateMemoryCatalog(path.dirname(filePath));
+  }
   return viewed;
 }
 
@@ -3254,9 +3350,7 @@ export function getConsolidatedMemory(roleDir: string, memoryId: string): Consol
 }
 
 function touchConsolidatedMemoryView(roleDir: string, memory: ConsolidatedMemoryItem, viewedAt = nowIso()): ConsolidatedMemoryItem {
-  const viewed = { ...memory, viewedAt, recalledAt: viewedAt, storageRevision: createStorageRevision() };
-  writeMemoryCatalog(consolidatedMemoryFile(roleDir, viewed), viewed);
-  return viewed;
+  return touchMemoryCatalogView(consolidatedMemoryFile(roleDir, memory), memory, normalizeConsolidatedMemory, viewedAt);
 }
 
 export function listConsolidationRuns(roleDir: string): MemoryConsolidationRun[] {
@@ -3832,10 +3926,10 @@ export function archiveCompletedPlans(roleDir: string, archiveAfterHours?: numbe
   return archived;
 }
 
-function archiveCompletedPlansFromStorage(roleDir: string, archiveAfterHours: number): PlanItem[] {
+function archiveCompletedPlansFromStorage(roleDir: string, archiveAfterHours: number, plans = readPlansFromStorageInWorker(roleDir)): PlanItem[] {
   const archived: PlanItem[] = [];
   const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
-  for (const plan of readPlansFromStorageInWorker(roleDir)) {
+  for (const plan of plans) {
     if (planActivationStatus(plan, workflow) !== "已完成" || ageHours(plan.updatedAt) <= archiveAfterHours) continue;
     const next = {
       ...plan,
@@ -4508,6 +4602,41 @@ export function roleKnowledgeSnapshotFromStorage(
     skills: listRoleSkills(roleDir),
     contextInjection: roleContextInjectionPolicy(roleDir)
   }, true);
+}
+
+/** Reads fresh memory files with bounded parallel I/O inside the owned context worker. */
+export async function roleKnowledgeSnapshotFromStorageAsync(
+  roleDir: string, messageText: string, options: RoleKnowledgeSnapshotOptions = {}, memories?: RoleMemoryCatalogs
+): Promise<RoleKnowledgeSnapshot> {
+  if (memories && memories.roleDir !== path.resolve(roleDir)) throw new Error("Physical memory catalog belongs to another persona.");
+  const [physicalPlans, recentMemories, consolidatedMemories] = await Promise.all([
+    readFreshHookPlans(roleDir),
+    memories ? memories.recent : readMemoryCatalogAsync(memoryCatalogDirectory(roleDir, "recent"), normalizeRecentMemory),
+    memories ? memories.consolidated : readMemoryCatalogAsync(memoryCatalogDirectory(roleDir, "consolidated"), normalizeConsolidatedMemory)
+  ]);
+  const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
+  const archived = options.archiveCompletedPlans === true
+    ? archiveCompletedPlansFromStorage(roleDir, workflow.archiveAfterHours, physicalPlans) : [];
+  const byId = new Map(archived.map(plan => [plan.id, plan]));
+  return buildRoleKnowledgeSnapshot(roleDir, messageText, options, {
+    plans: physicalPlans.map(plan => byId.get(plan.id) ?? plan), planWorkflow: workflow,
+    recentMemories, consolidatedMemories, skills: listRoleSkills(roleDir), contextInjection: roleContextInjectionPolicy(roleDir)
+  }, true);
+}
+
+async function readFreshHookPlans(roleDir: string): Promise<PlanItem[]> {
+  const files = await allPlanFilesAsync(roleDir, undefined, ["active"]);
+  const plans: Array<PlanItem | null> = new Array(files.length).fill(null);
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(4, files.length) }, async () => {
+    while (cursor < files.length) {
+      const index = cursor++;
+      const result = await readPlanFileForCatalog(files[index]);
+      if (result.retry) throw new Error("PLAN_CATALOG_REFRESH_UNAVAILABLE");
+      plans[index] = result.entry?.plan ?? null;
+    }
+  }));
+  return uniquePlans(plans.filter((plan): plan is PlanItem => plan !== null));
 }
 
 /** Memory-only recall projection. Undefined is an explicit cold state. */

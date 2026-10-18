@@ -10,6 +10,8 @@ Manager delegates physical role-source and knowledge reads to the bounded storag
 
 ## Persona-configured Stop follow-ups
 
+A persona-bound Stop checks recovery and discovers plan follow-ups, file-change reminders, and completion notifications only for that persona. An unrelated persona's recovery failure does not block it; an unrecovered bound persona still returns `PLAN_STORAGE_STARTUP_UNAVAILABLE` before writes. An unbound session still waits for global plan recovery before discovering task bindings across personas.
+
 `personaConfig.json.codexHooks.planFollowup` owns `enabled` (default false), `cooldownSeconds` (default 300), and ordered `rules`. Each rule has a stable `id`, `enabled`, `statusKeys`, and `prompt`. Status keys reference the persona's catalog; no business-state trigger list is built in. Manager matches the first rule for the uniquely bound business task and returns `followup: { decision: "block", reason }`. The thin plugin converts this to Codex Stop output. Persona Repository persists settings from Automation → Agent Hook.
 
 Existing Hook runtime records store the rule/plan-step fingerprint, turn and timestamp. Same-turn, unchanged-fingerprint, cooldown and `stop_hook_active` guards prevent repeated prompts. Terminal, archived or ambiguous bindings and unavailable Manager do not trigger. Completion delivery is deferred while a follow-up is issued. This never changes the business plan, grants authority or schedules a future wake-up. Independently installed local fixed Stop guards must be retired to advisory output separately; the plugin does not rewrite other hooks.

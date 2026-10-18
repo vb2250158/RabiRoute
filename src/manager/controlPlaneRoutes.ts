@@ -431,6 +431,7 @@ import {
 import { isRouteCatalogSnapshotInstalled, routeCatalogStartupUnavailable } from "./routeCatalogStartupHttpGate.js";
 import type { RouteCatalogPersonaPresentation, RouteCatalogSnapshot } from "./routeCatalogTransaction.js";
 import {
+  planStorageReadyForRoles,
   planStorageStartupUnavailable,
   publicPlanStorageStartupSnapshot
 } from "./planStorageStartupHttpGate.js";
@@ -1673,11 +1674,12 @@ function remotePersonaReadContext(): RemotePersonaReadContext {
   };
 }
 const agentCompletionDelivery = new AgentCompletionDeliveryService({
-  rules: request => {
+  rules: (request, roleIds) => {
     const roles = new Set<string>();
     return [...runtimes.values()].flatMap(runtime => {
       const roleId = sanitizeRoleId(runtime.definition.agentRoleId);
       if (!roleId || roles.has(roleId) || runtime.definition.enabled === false || runtime.definition.agentRoleDeviceId) return [];
+      if (roleIds && !roleIds.includes(roleId)) return [];
       roles.add(roleId);
       return [
         ...(agentHookSettingsFor(runtime.definition.codexHooks, request.agentType).completionDeliveries ?? []).map(rule => ({ roleId, rule })),
@@ -1711,9 +1713,15 @@ const agentCompletionDelivery = new AgentCompletionDeliveryService({
   }
 });
 const codexHookContextService = new CodexHookContextService({
-  readContext: input => managerKnowledgePageWorkerPool.run({ type: "codex_hook_context_read", input }),
-  deliverAgentCompletion: async request => {
-    const results = await agentCompletionDelivery.handle(request);
+  readContext: async input => {
+    const options = { timeoutMs: Number(process.env.RABIROUTE_CODEX_HOOK_READ_TIMEOUT_MS) || 45_000 };
+    const current = input.kind === "knowledge" ? {
+      ...input, memories: await managerKnowledgePageWorkerPool.queryRoleMemoryCatalogs(input.trigger.roleDir, options)
+    } : input;
+    return managerKnowledgePageWorkerPool.run({ type: "codex_hook_context_read", input: current }, options);
+  },
+  deliverAgentCompletion: async (request, roleIds) => {
+    const results = await agentCompletionDelivery.handle(request, roleIds);
     for (const result of results) {
       managerOperationalLog.record(result.status === "failed" ? "warn" : "info", "agent_completion_delivery", {
         action: result.ruleId, outcome: result.status, result: result.reason
@@ -1745,7 +1753,7 @@ const codexHookContextService = new CodexHookContextService({
     .map(definition => sanitizeRoleId(definition.agentRoleId))
     .filter((roleId): roleId is string => Boolean(roleId)),
   onChatHistoryChanged: roleId => publishManagerEvent("persona_chat_history_changed", { roleId }),
-  planStorageReady: () => planStorageStartupStatus().state === "ready"
+  planStorageReady: roleIds => planStorageReadyForRoles(planStorageStartupStatus(), roleIds)
 });
 const languageStyleValidator = new LanguageStyleValidator();
 const messageLengthGuard = new AgentSendMessageLengthGuard();
@@ -9763,6 +9771,12 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       retryBaseMs: Number(process.env.RABIROUTE_PLAN_STORAGE_STARTUP_RETRY_BASE_MS) || undefined,
       retryMaxMs: Number(process.env.RABIROUTE_PLAN_STORAGE_STARTUP_RETRY_MAX_MS) || undefined,
       terminateTimeoutMs: Number(process.env.RABIROUTE_PLAN_STORAGE_STARTUP_TERMINATE_TIMEOUT_MS) || undefined,
+      limits: {
+        ...(process.env.RABIROUTE_PLAN_STORAGE_STARTUP_ITEM_TIMEOUT_MS
+          ? { itemTimeoutMs: Number(process.env.RABIROUTE_PLAN_STORAGE_STARTUP_ITEM_TIMEOUT_MS) } : {}),
+        ...(process.env.RABIROUTE_PLAN_STORAGE_STARTUP_BATCH_TIMEOUT_MS
+          ? { batchTimeoutMs: Number(process.env.RABIROUTE_PLAN_STORAGE_STARTUP_BATCH_TIMEOUT_MS) } : {})
+      },
       onStatus: snapshot => {
         publishManagerEvent("plan_storage_startup_changed", publicPlanStorageStartupSnapshot(snapshot));
         const level = snapshot.state === "degraded" ? "error" : "info";

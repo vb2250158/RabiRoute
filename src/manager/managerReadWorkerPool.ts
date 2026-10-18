@@ -15,7 +15,8 @@ import {
   type PlanItem,
   type RoleKnowledgeCatalogSnapshot,
   type MemoryLifecyclePresentation,
-  type RecentMemoryItem
+  type RecentMemoryItem,
+  type RoleMemoryCatalogs
 } from "../roleKnowledge.js";
 import type { PlanFeedbackRecoveryCandidate } from "./planFeedbackRecovery.js";
 import type { RolePanelTimelineMessage } from "../rolePanelTimeline.js";
@@ -475,7 +476,7 @@ export class ManagerReadWorkerPool {
     }, options);
   }
 
-  queryRoleMemoryPage<T>(
+  async queryRoleMemoryPage<T>(
     roleDir: string,
     input: {
       kind: "recent" | "consolidated" | "archived";
@@ -485,13 +486,15 @@ export class ManagerReadWorkerPool {
     },
     options: { signal?: AbortSignal; timeoutMs?: number } = {}
   ): Promise<T> {
-    const key = JSON.stringify(["role_memory_page", roleDir, input]);
-    return this.querySharedRead<T>(
-      this.roleMemoryPageInFlight,
-      key,
-      { type: "role_memory_page", roleDir, ...input },
-      options
-    );
+    const catalogs = await this.queryRoleMemoryCatalogs(roleDir, options);
+    return this.run<T>({ type: "role_memory_page", roleDir, ...input, catalogs }, options);
+  }
+
+  /** Shares an in-progress physical read across memory categories and Hook context. */
+  queryRoleMemoryCatalogs(roleDir: string, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<RoleMemoryCatalogs> {
+    if (this === managerKnowledgePageWorkerPool) return managerMemoryCatalogWorkerPool.queryRoleMemoryCatalogs(roleDir, options);
+    return this.querySharedRead<RoleMemoryCatalogs>(this.roleMemoryPageInFlight,
+      JSON.stringify(["role_memory_catalogs", roleDir]), { type: "role_memory_catalogs", roleDir }, options);
   }
 
   queryRoleMemoryOverview<T>(
@@ -501,11 +504,11 @@ export class ManagerReadWorkerPool {
     return this.run<T>({ type: "role_memory_overview", roleDir }, options);
   }
 
-  queryRoleMemoryCounts<T>(
+  async queryRoleMemoryCounts(
     roleDir: string,
     options: { signal?: AbortSignal; timeoutMs?: number } = {}
-  ): Promise<T> {
-    return this.run<T>({ type: "role_memory_counts", roleDir }, options);
+  ): Promise<RoleMemoryCatalogs["counts"]> {
+    return (await this.queryRoleMemoryCatalogs(roleDir, options)).counts;
   }
 
   queryDesktopPetCatalog(
@@ -954,6 +957,12 @@ export const managerKnowledgePageWorkerPool = new ManagerReadWorkerPool({
   maxQueue: 32,
   timeoutMs: 30_000
 });
+/** One resident reader keeps validated memory bodies across page and context requests. */
+export const managerMemoryCatalogWorkerPool = new ManagerReadWorkerPool({
+  maxConcurrency: 1,
+  maxQueue: 32,
+  timeoutMs: Number(process.env.RABIROUTE_MEMORY_CATALOG_READ_TIMEOUT_MS) || 35_000
+});
 /** Search initialization is user-visible; it cannot inherit idle-priority catalog stalls. */
 export const managerKnowledgeIndexWorkerPool = new ManagerReadWorkerPool({
   maxConcurrency: 1,
@@ -976,6 +985,7 @@ export const managerPerformanceWorkerPool = new ManagerReadWorkerPool({
 const builtinManagerReadWorkerPools = [
   managerReadWorkerPool,
   managerKnowledgePageWorkerPool,
+  managerMemoryCatalogWorkerPool,
   managerKnowledgeIndexWorkerPool,
   managerCatalogWorkerPool,
   managerPerformanceWorkerPool

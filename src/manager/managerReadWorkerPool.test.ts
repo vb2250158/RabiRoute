@@ -76,6 +76,25 @@ class FakeReadWorker extends EventEmitter implements ManagerReadWorkerChild {
   }
 }
 
+test("concurrent memory categories share one physical catalog read", async () => {
+  let physicalReads = 0;
+  const counts = { recent: 0, consolidated: 0, archived: 0, consolidationRuns: 0 };
+  const worker = new FakeReadWorker(56_099, (request, child) => {
+    const task = request.task;
+    assert.ok(task && typeof task === "object" && "type" in task);
+    if (task.type === "role_memory_catalogs" || (task.type === "role_memory_page" && !("catalogs" in task))) physicalReads++;
+    queueMicrotask(() => child.respond(request, task.type === "role_memory_catalogs"
+      ? { roleDir: process.cwd(), recent: [], consolidated: [], counts } : { items: [], total: 0, nextCursor: "", counts }));
+  }, (_signal, child) => child.close(0, "SIGTERM"));
+  const pool = new ManagerReadWorkerPool({ workerFactory: () => worker, setWorkerPriority: () => {} });
+  try {
+    await Promise.all(["recent", "consolidated"].map(kind => pool.queryRoleMemoryPage(process.cwd(), {
+      kind: kind === "recent" ? "recent" : "consolidated", cursor: "", limit: 20, query: ""
+    })));
+    assert.equal(physicalReads, 1);
+  } finally { await pool.stop(); }
+});
+
 test("knowledge initialization survives an unconfirmed catalog termination and respects its own lifecycle", async () => {
   const blocked = new FakeReadWorker(56_003, () => {});
   const reader = new FakeReadWorker(56_004, (request, worker) => worker.respond(request, { indexed: true }),

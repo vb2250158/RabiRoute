@@ -16,7 +16,7 @@ export class ProgressivePlanStorageStartup {
   }>) {}
 
   attempt(onProgress: (summary: PlanStorageStartupGateSummary) => void): StorageAttempt<PlanStorageStartupGateSummary> {
-    const scope = new BoundedStorageStartup(this.options.limits);
+    const scope = new BoundedStorageStartup({ itemTimeoutMs: 60_000, batchTimeoutMs: 150_000, ...this.options.limits });
     const create: StartupProcessFactory = this.options.processFactory
       ?? (task => createStorageStartupProcess(task, this.options.terminateTimeoutMs));
     const summary: PlanStorageStartupGateSummary = {

@@ -25,6 +25,8 @@ import {
   roleMemoryCounts,
   presentRoleMemories,
   readRecentMemoryFromStorageInWorker,
+  readRoleMemoryCatalogsInWorker,
+  type RoleMemoryCatalogs,
   type RoleKnowledgeCatalogSnapshot
 } from "../roleKnowledge.js";
 import { listPlanFeedback, planFeedbackSummary } from "../planFeedback.js";
@@ -51,9 +53,10 @@ import type { GatewayDiagnosticsWorkerInput } from "./gatewayDiagnosticsSnapshot
 import { readGatewayStatusInWorker } from "./gatewayStatusSnapshot.js";
 
 import { verifyCriticalProjectFactRecord, type CriticalProjectFactRecordVerificationInput } from "../messageProcessing/criticalFactRecord.js";
-import { readCodexHookContextInput, type CodexHookContextReadRequest } from "./codexHookContextRead.js";
+import { readCodexHookContextInputAsync, type CodexHookContextReadRequest } from "./codexHookContextRead.js";
 
 export type ManagerReadWorkerTask =
+  | { type: "role_memory_catalogs"; roleDir: string }
   | { type: "codex_hook_context_read"; input: CodexHookContextReadRequest }
   | { type: "critical_fact_record_verify"; input: CriticalProjectFactRecordVerificationInput }
   | { type: "all_day_recording_read"; input: import("./allDayRecordingReadStorage.js").AllDayReadJob }
@@ -164,6 +167,7 @@ export type ManagerReadWorkerTask =
     }
   | {
       type: "role_memory_page";
+      catalogs?: RoleMemoryCatalogs;
       roleDir: string;
       kind: "recent" | "consolidated" | "archived";
       cursor: string;
@@ -307,7 +311,7 @@ export async function execute(task: Exclude<ManagerReadWorkerTask, { type: "role
       verifyCriticalProjectFactRecord(task.input);
       return true;
     case "codex_hook_context_read":
-      return readCodexHookContextInput(task.input);
+      return readCodexHookContextInputAsync(task.input);
     case "role_knowledge_catalog_snapshot":
       return readRoleKnowledgeCatalogSnapshot(task.roleDir) satisfies RoleKnowledgeCatalogSnapshot;
     case "role_plan_catalog": {
@@ -449,14 +453,16 @@ export async function execute(task: Exclude<ManagerReadWorkerTask, { type: "role
       return projection ? { memory: projection, revision: storageRevisionToken(memory) } : null;
     }
     case "role_memory_page": {
+      const catalog = task.catalogs ?? await readRoleMemoryCatalogsInWorker(task.roleDir);
+      if (catalog.roleDir !== path.resolve(task.roleDir)) throw new Error("Physical memory catalog belongs to another persona.");
       const items = task.kind === "consolidated"
-        ? presentRoleMemories(task.roleDir, sortKnowledgeByUpdatedAt(listConsolidatedMemories(task.roleDir)), "consolidated")
+        ? presentRoleMemories(task.roleDir, sortKnowledgeByUpdatedAt(catalog.consolidated), "consolidated")
         : presentRoleMemories(
           task.roleDir,
-          sortKnowledgeByUpdatedAt(task.kind === "archived" ? listArchivedMemories(task.roleDir) : listActiveRecentMemories(task.roleDir)),
+            sortKnowledgeByUpdatedAt(catalog.recent.filter(item => task.kind === "archived" ? Boolean(item.consolidatedAt) : !item.consolidatedAt)),
           "recent"
         );
-      return paginateRoleMemory(items, task.cursor, task.limit, task.query, roleMemoryCounts(task.roleDir));
+      return paginateRoleMemory(items, task.cursor, task.limit, task.query, catalog.counts);
     }
     case "role_memory_overview":
       return {
@@ -466,7 +472,9 @@ export async function execute(task: Exclude<ManagerReadWorkerTask, { type: "role
         consolidationRuns: listConsolidationRuns(task.roleDir)
       };
     case "role_memory_counts":
-      return roleMemoryCounts(task.roleDir);
+      return (await readRoleMemoryCatalogsInWorker(task.roleDir)).counts;
+    case "role_memory_catalogs":
+      return readRoleMemoryCatalogsInWorker(task.roleDir);
     case "performance_summary": {
       const samples = await readPerformanceSummarySamples(task.logDirectory, task.rangeMs);
       return JSON.stringify({

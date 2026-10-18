@@ -2,6 +2,13 @@ import type { PlanStorageStartupLifecycleSnapshot } from "./planStorageStartupLi
 
 const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
+/** Whether all requested personas have recovered; an omitted scope requires the full catalog. */
+export function planStorageReadyForRoles(snapshot: PlanStorageStartupLifecycleSnapshot | undefined, roleIds?: readonly string[]): boolean {
+  if (snapshot?.state === "ready") return true;
+  return Boolean(snapshot && ["running", "degraded"].includes(snapshot.state)
+    && roleIds?.length && roleIds.every(roleId => snapshot.summary?.readyRoleIds?.includes(roleId)));
+}
+
 export function publicPlanStorageStartupSnapshot(snapshot: PlanStorageStartupLifecycleSnapshot): Record<string, unknown> {
   return Object.freeze({
     state: snapshot.state,
@@ -45,8 +52,7 @@ export function planStorageStartupUnavailable(
   } catch {
     roleId = undefined;
   }
-  if (snapshot && ["running", "degraded"].includes(snapshot.state)
-    && roleId && snapshot.summary?.readyRoleIds?.includes(roleId)) return null;
+  if (roleId && planStorageReadyForRoles(snapshot, [roleId])) return null;
   const retryAfterSeconds = snapshot?.nextRetryAt
     ? Math.max(1, Math.ceil((Date.parse(snapshot.nextRetryAt) - Date.now()) / 1_000))
     : 1;

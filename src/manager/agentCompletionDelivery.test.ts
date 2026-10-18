@@ -13,6 +13,15 @@ const owner: CompletionRuleOwner = { roleId: "test", rule: { id: "rule", enabled
   destination: { channel: "napcat", gatewayId: "route", params: { target: "group", instanceId: "qq", targetId: "12345" } } } };
 const event = { eventName: "Stop" as const, sessionId: "agent-1", turnId: "turn-1", cwd: "/project", lastAssistantMessage: "Done" };
 
+test("completion rule discovery receives the same recovered persona scope as Stop", async () => {
+  const scopes: Array<readonly string[] | undefined> = [];
+  const service = new AgentCompletionDeliveryService({ rules: (_request, roleIds) => { scopes.push(roleIds); return []; },
+    deliver: async () => { assert.fail("No matching rules"); } });
+  await service.handle(event, ["ReadyRole"]);
+  await service.handle({ ...event, turnId: "unbound-turn" });
+  assert.deepEqual(scopes, [["ReadyRole"], undefined]);
+});
+
 test("optional plan channels merge with persona rules and deduplicate the same destination", async () => {
   const plans = [{ id: "plan", taskBinding: { agentType: "codex" as const, sessionId: "agent-1", workspace: "/project" }, messageChannels: [owner.rule.destination] }];
   assert.deepEqual(planCompletionDeliveryRules("test", plans, "other"), []);
