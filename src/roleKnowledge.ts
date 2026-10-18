@@ -2773,7 +2773,10 @@ async function readMemoryCatalogAsync<T extends MemoryCatalogItem>(
         if (!cached || !samePlanFileMetadata(cached, before)) {
           const source = await fs.promises.readFile(file, "utf8");
           const after = await fs.promises.stat(file);
-          if (!samePlanFileMetadata(before, after)) throw new Error("Memory changed while reading its context index.");
+          if (before.size !== after.size || before.mtimeMs !== after.mtimeMs
+            || before.ctimeMs !== after.ctimeMs || before.ino !== after.ino) {
+            throw new Error("Memory changed while reading its context index.");
+          }
           const raw = /\.md$/i.test(name) ? parseMemoryMarkdownSource(source) : JSON.parse(source) as Record<string, unknown>;
           cached = { size: after.size, mtimeMs: after.mtimeMs, ctimeMs: after.ctimeMs, ino: after.ino, raw };
           cachedFiles.set(name, cached);

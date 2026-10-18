@@ -104,3 +104,18 @@ test("async physical recall reads fresh files with bounded parallelism despite a
   assert.equal(deleted.requiredReadItems.length, 0, "deleted source files must not survive in context cache");
   fs.promises.readFile = read;
 });
+
+test("storage without stable file IDs still returns freshly read memory bodies", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-context-no-inode-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  createRecentMemory(root, { id: "no-inode", title: "Needle", focus: "Needle", content: "Current source", keywords: ["needle"] });
+  const stat = fs.promises.stat;
+  fs.promises.stat = (async (...args: Parameters<typeof stat>) => {
+    const current = await Reflect.apply(stat, fs.promises, args);
+    current.ino = 0;
+    return current;
+  }) as typeof stat;
+  t.after(() => { fs.promises.stat = stat; });
+  const result = await roleKnowledgeSnapshotFromStorageAsync(root, "needle", { archiveCompletedPlans: false, touchViewedAt: false });
+  assert.equal(result.requiredReadItems[0]?.id, "no-inode");
+});
