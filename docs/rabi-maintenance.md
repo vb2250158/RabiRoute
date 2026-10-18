@@ -83,3 +83,5 @@ Manager 先发布结构化 READY，再在后台枚举 Route 和人格的直接�
 Codex Hook 的物理记忆读取在独立 worker 内对近期、沉淀记忆分别以最多 4 个并发文件读取构建当前快照；不复用界面缓存或过期目录。文件顺序、Markdown 优先、按 ID 去重和召回更新规则保持一致，减少 NAS 串行读取触发 30 秒工作预算超时。
 
 Hook 上下文只枚举活动计划，过期完成计划沿用原归档事务且不重复全目录扫描。记忆正文缓存在 worker 内；每次请求重新枚举文件并核验大小、修改时间、变更时间及文件标识，修改后重读、删除后移除，读取不稳定或失败时不使用旧正文。
+
+Hook 物理读取默认单项预算 45 秒，由 `RABIROUTE_CODEX_HOOK_READ_TIMEOUT_MS` 调整；普通资料页仍为 30 秒。冷启动的完整人格读取不同于分页查询，适配端请求预算应覆盖该读取及发现/身份核对。大目录计划恢复可分别通过 `RABIROUTE_PLAN_STORAGE_STARTUP_ITEM_TIMEOUT_MS`、`RABIROUTE_PLAN_STORAGE_STARTUP_BATCH_TIMEOUT_MS` 和已有 `RABIROUTE_PLAN_STORAGE_STARTUP_TIMEOUT_MS` 调整单项、批次和无进展预算；仍在确认旧子程序退出后才重试，不改变冲突判断。

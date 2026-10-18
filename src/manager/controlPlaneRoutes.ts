@@ -1711,7 +1711,9 @@ const agentCompletionDelivery = new AgentCompletionDeliveryService({
   }
 });
 const codexHookContextService = new CodexHookContextService({
-  readContext: input => managerKnowledgePageWorkerPool.run({ type: "codex_hook_context_read", input }),
+  readContext: input => managerKnowledgePageWorkerPool.run({ type: "codex_hook_context_read", input }, {
+    timeoutMs: Number(process.env.RABIROUTE_CODEX_HOOK_READ_TIMEOUT_MS) || 45_000
+  }),
   deliverAgentCompletion: async request => {
     const results = await agentCompletionDelivery.handle(request);
     for (const result of results) {
@@ -9763,6 +9765,12 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       retryBaseMs: Number(process.env.RABIROUTE_PLAN_STORAGE_STARTUP_RETRY_BASE_MS) || undefined,
       retryMaxMs: Number(process.env.RABIROUTE_PLAN_STORAGE_STARTUP_RETRY_MAX_MS) || undefined,
       terminateTimeoutMs: Number(process.env.RABIROUTE_PLAN_STORAGE_STARTUP_TERMINATE_TIMEOUT_MS) || undefined,
+      limits: {
+        ...(process.env.RABIROUTE_PLAN_STORAGE_STARTUP_ITEM_TIMEOUT_MS
+          ? { itemTimeoutMs: Number(process.env.RABIROUTE_PLAN_STORAGE_STARTUP_ITEM_TIMEOUT_MS) } : {}),
+        ...(process.env.RABIROUTE_PLAN_STORAGE_STARTUP_BATCH_TIMEOUT_MS
+          ? { batchTimeoutMs: Number(process.env.RABIROUTE_PLAN_STORAGE_STARTUP_BATCH_TIMEOUT_MS) } : {})
+      },
       onStatus: snapshot => {
         publishManagerEvent("plan_storage_startup_changed", publicPlanStorageStartupSnapshot(snapshot));
         const level = snapshot.state === "degraded" ? "error" : "info";
