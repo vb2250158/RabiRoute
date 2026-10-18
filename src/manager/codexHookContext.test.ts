@@ -109,11 +109,11 @@ test("async read failure does not stamp context and queued checkpoints retain de
 function fixture(options: {
   readContext?: CodexHookContextServiceOptions["readContext"];
   deliverPlanTaskCompletion?: (delivery: PlanTaskCompletionDelivery) => Promise<void>;
-  deliverAgentCompletion?: (request: CodexHookContextRequest) => Promise<import("./agentCompletionDelivery.js").CompletionDeliveryResult[]>;
+  deliverAgentCompletion?: CodexHookContextServiceOptions["deliverAgentCompletion"];
   hookEnabled?: (request: CodexHookContextRequest) => boolean;
   isManagedAgentSession?: (request: CodexHookContextRequest) => boolean;
   recordAgentRequestStop?: (request: CodexHookContextRequest) => { status: "scheduled"; reason: string; requestIds: string[]; turnId?: string };
-  planStorageReady?: () => boolean;
+  planStorageReady?: CodexHookContextServiceOptions["planStorageReady"];
   memoryConsolidationInputIds?: CodexHookContextServiceOptions["memoryConsolidationInputIds"];
 } = {}): { root: string; rolesRoot: string; roleDir: string; storePath: string; service: CodexHookContextService } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-codex-hook-"));
@@ -277,6 +277,57 @@ test("Stop completion is rejected before internal plan reads or mutations while 
     (error: unknown) => (error as { code?: string }).code === "PLAN_STORAGE_STARTUP_UNAVAILABLE"
   );
   assert.equal(deliveries, 0);
+  assert.equal(fs.existsSync(storePath), false);
+});
+
+test("a recovered bound persona can finish without reading an unrelated persona's plans", async t => {
+  let deliveries = 0;
+  const scopes: Array<readonly string[] | undefined> = [];
+  const completionScopes: Array<readonly string[] | undefined> = [];
+  const { root, rolesRoot, service } = fixture({
+    planStorageReady: roleIds => { scopes.push(roleIds); return roleIds?.every(id => id === "YeYu") === true; },
+    deliverAgentCompletion: async (_request, roleIds) => { completionScopes.push(roleIds); return []; },
+    deliverPlanTaskCompletion: async () => { deliveries++; }
+  });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  service.bindSession("session-plan-worker", "YeYu");
+  const unrelated = path.join(rolesRoot, "UnrecoveredRole");
+  fs.mkdirSync(unrelated);
+  fs.writeFileSync(path.join(unrelated, "persona.md"), "# Unrecovered persona");
+  service.listRoles = () => { throw new Error("Global plan traversal reached an unrecovered persona"); };
+  const result = await service.handleHook({ sessionId: "session-plan-worker", eventName: "Stop",
+    turnId: "recovered-turn", cwd: root, lastAssistantMessage: "Done" });
+  assert.equal(result.planTaskCompletion?.status, "delivered");
+  assert.equal(deliveries, 1);
+  assert.deepEqual(scopes, [["YeYu"]]);
+  assert.deepEqual(completionScopes, [["YeYu"]]);
+  assert.deepEqual(fs.readdirSync(unrelated), ["persona.md"]);
+  service.handleContext({ sessionId: "session-plan-worker", eventName: "PostToolUse", turnId: "changed-turn",
+    cwd: root, toolName: "apply_patch", toolInput: "*** Begin Patch\n*** Update File: src/example.ts\n*** End Patch", toolResponse: "Done!" });
+  const changed = await service.handleHook({ sessionId: "session-plan-worker", eventName: "Stop",
+    turnId: "changed-turn", cwd: root });
+  assert.equal(changed.projectFileChangeReminder?.status, "delivered");
+  assert.deepEqual(changed.projectFileChangeReminder?.files, ["src/example.ts"]);
+});
+
+test("an unrecovered bound persona cannot record a reply or complete its plan", async t => {
+  const { root, roleDir, storePath, service } = fixture({ planStorageReady: () => false });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  service.bindSession("session-plan-worker", "YeYu");
+  const before = fs.readFileSync(storePath, "utf8");
+  await assert.rejects(service.handleHook({ sessionId: "session-plan-worker", eventName: "Stop",
+    turnId: "unrecovered-turn", lastAssistantMessage: "Done" }), /Plan storage recovery is not ready/);
+  assert.equal(fs.readFileSync(storePath, "utf8"), before);
+  assert.deepEqual((await readPersonaChatHistory(roleDir)).entries, []);
+});
+
+test("an unbound Stop still requires global recovery before searching plan task bindings", async t => {
+  const scopes: Array<readonly string[] | undefined> = [];
+  const { root, storePath, service } = fixture({ planStorageReady: roleIds => { scopes.push(roleIds); return false; } });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  await assert.rejects(service.handleHook({ sessionId: "unbound", eventName: "Stop", turnId: "global-turn" }),
+    /Plan storage recovery is not ready/);
+  assert.deepEqual(scopes, [undefined]);
   assert.equal(fs.existsSync(storePath), false);
 });
 

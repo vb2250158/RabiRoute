@@ -431,6 +431,7 @@ import {
 import { isRouteCatalogSnapshotInstalled, routeCatalogStartupUnavailable } from "./routeCatalogStartupHttpGate.js";
 import type { RouteCatalogPersonaPresentation, RouteCatalogSnapshot } from "./routeCatalogTransaction.js";
 import {
+  planStorageReadyForRoles,
   planStorageStartupUnavailable,
   publicPlanStorageStartupSnapshot
 } from "./planStorageStartupHttpGate.js";
@@ -1673,11 +1674,12 @@ function remotePersonaReadContext(): RemotePersonaReadContext {
   };
 }
 const agentCompletionDelivery = new AgentCompletionDeliveryService({
-  rules: request => {
+  rules: (request, roleIds) => {
     const roles = new Set<string>();
     return [...runtimes.values()].flatMap(runtime => {
       const roleId = sanitizeRoleId(runtime.definition.agentRoleId);
       if (!roleId || roles.has(roleId) || runtime.definition.enabled === false || runtime.definition.agentRoleDeviceId) return [];
+      if (roleIds && !roleIds.includes(roleId)) return [];
       roles.add(roleId);
       return [
         ...(agentHookSettingsFor(runtime.definition.codexHooks, request.agentType).completionDeliveries ?? []).map(rule => ({ roleId, rule })),
@@ -1718,8 +1720,8 @@ const codexHookContextService = new CodexHookContextService({
     } : input;
     return managerKnowledgePageWorkerPool.run({ type: "codex_hook_context_read", input: current }, options);
   },
-  deliverAgentCompletion: async request => {
-    const results = await agentCompletionDelivery.handle(request);
+  deliverAgentCompletion: async (request, roleIds) => {
+    const results = await agentCompletionDelivery.handle(request, roleIds);
     for (const result of results) {
       managerOperationalLog.record(result.status === "failed" ? "warn" : "info", "agent_completion_delivery", {
         action: result.ruleId, outcome: result.status, result: result.reason
@@ -1751,7 +1753,7 @@ const codexHookContextService = new CodexHookContextService({
     .map(definition => sanitizeRoleId(definition.agentRoleId))
     .filter((roleId): roleId is string => Boolean(roleId)),
   onChatHistoryChanged: roleId => publishManagerEvent("persona_chat_history_changed", { roleId }),
-  planStorageReady: () => planStorageStartupStatus().state === "ready"
+  planStorageReady: roleIds => planStorageReadyForRoles(planStorageStartupStatus(), roleIds)
 });
 const languageStyleValidator = new LanguageStyleValidator();
 const messageLengthGuard = new AgentSendMessageLengthGuard();

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  planStorageReadyForRoles,
   isPlanStorageMutationRequest,
   planStorageStartupUnavailable,
   publicPlanStorageStartupSnapshot
@@ -19,6 +20,20 @@ const PLAN_STORAGE_MUTATIONS = Object.freeze([
   ["POST", "/api/roles/YeYu/plans/plan-1/feedback"],
   ["POST", "/api/roles/YeYu/plan-agents/plan-1/open"]
 ] as const);
+
+test("partial recovery releases only explicit fully recovered persona scopes", () => {
+  for (const state of ["running", "degraded"] as const) {
+    const current = snapshot(state, { summary: { roles: 2, migrated: 0, reconciled: 0,
+      failures: ["OtherRole:recovery_unavailable"], skipped: false, readyRoleIds: ["ReadyRole"] } });
+    assert.equal(planStorageReadyForRoles(current, ["ReadyRole"]), true);
+    for (const scope of [undefined, [], ["OtherRole"], ["ReadyRole", "OtherRole"]]) {
+      assert.equal(planStorageReadyForRoles(current, scope), false);
+    }
+  }
+  assert.equal(planStorageReadyForRoles(undefined, ["ReadyRole"]), false);
+  assert.equal(planStorageReadyForRoles(snapshot("idle"), ["ReadyRole"]), false);
+  assert.equal(planStorageReadyForRoles(snapshot("ready")), true);
+});
 
 function snapshot(
   state: PlanStorageStartupLifecycleState,

@@ -100,26 +100,26 @@ export async function completionProjectIdentity(directory: string): Promise<stri
 export class AgentCompletionDeliveryService {
   private readonly pending = new Map<string, Promise<CompletionDeliveryResult[]>>();
   constructor(private readonly options: {
-    rules(request: CodexHookContextRequest): CompletionRuleOwner[];
+    rules(request: CodexHookContextRequest, roleIds?: readonly string[]): CompletionRuleOwner[];
     projectIdentity?: typeof completionProjectIdentity;
     taskContext?(owner: CompletionRuleOwner, request: CodexHookContextRequest): CompletionTaskContext | Promise<CompletionTaskContext>;
     deliver(owner: CompletionRuleOwner, request: CodexHookContextRequest, deliveryId: string, context: CompletionTaskContext): Promise<void>;
   }) {}
 
-  handle(request: CodexHookContextRequest): Promise<CompletionDeliveryResult[]> {
+  handle(request: CodexHookContextRequest, roleIds?: readonly string[]): Promise<CompletionDeliveryResult[]> {
     if (!AGENT_HOOK_EVENTS.some(event => event.hookEvent === request.eventName) || !supportsHooks(request.agentType)
       || !request.sessionId?.trim() || !request.turnId?.trim()
       || !request.lastAssistantMessage?.trim()) return Promise.resolve([]);
     const key = JSON.stringify([request.sessionId, request.turnId]);
     const pending = this.pending.get(key);
     if (pending) return pending;
-    const operation = this.deliverMatches(request).finally(() => this.pending.delete(key));
+    const operation = this.deliverMatches(request, roleIds).finally(() => this.pending.delete(key));
     this.pending.set(key, operation);
     return operation;
   }
 
-  private async deliverMatches(request: CodexHookContextRequest): Promise<CompletionDeliveryResult[]> {
-    const owners = this.options.rules(request).filter(({ rule }) => rule.enabled);
+  private async deliverMatches(request: CodexHookContextRequest, roleIds?: readonly string[]): Promise<CompletionDeliveryResult[]> {
+    const owners = this.options.rules(request, roleIds).filter(({ rule }) => rule.enabled);
     if (!owners.length) return [];
     const identify = this.options.projectIdentity ?? completionProjectIdentity;
     const results: CompletionDeliveryResult[] = [];

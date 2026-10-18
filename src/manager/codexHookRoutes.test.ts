@@ -6,13 +6,13 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { CodexHookContextService } from "./codexHookContext.js";
+import { CodexHookContextService, type CodexHookContextServiceOptions } from "./codexHookContext.js";
 import { handleCodexHookApi } from "./codexHookRoutes.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
 import { assertLanAgentBodyAuthority, registerLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
 
-async function fixture(planStorageReady: () => boolean = () => true,
+async function fixture(planStorageReady: NonNullable<CodexHookContextServiceOptions["planStorageReady"]> = () => true,
   beforeRequest?: (request: http.IncomingMessage, response: http.ServerResponse) => boolean) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-codex-hook-api-"));
   const roleDir = path.join(root, "roles", "YeYu");
@@ -78,6 +78,20 @@ test("authenticated remote Hook management needs no binding; source events and d
   writer.end('"YeYu"}');
   assert.equal(await result, 400);
   assert.equal(app.service.getBinding("revoked-target"), null);
+});
+
+test("a persona-bound DSH Stop succeeds over HTTP during unrelated recovery failure", async t => {
+  const app = await fixture(roleIds => roleIds?.length === 1 && roleIds[0] === "YeYu");
+  t.after(async () => { await app.close(); fs.rmSync(app.root, { recursive: true, force: true }); });
+  app.service.bindSession("dsh-session", "YeYu");
+  app.service.listRoles = () => { throw new Error("Unrecovered global catalog"); };
+  const response = await fetch(`${app.baseUrl}/api/codex-hook/context`, { method: "POST",
+    headers: { "content-type": "application/json" }, body: JSON.stringify({ hook_event_name: "Stop",
+      session_id: "dsh-session", agentType: "dsh", turn_id: "dsh-turn", last_assistant_message: "Done" }) });
+  assert.equal(response.status, 200);
+  const reply = await response.json();
+  assert.equal(reply.code, 0);
+  assert.equal(reply.data.planTaskCompletion.status, "ignored");
 });
 
 test("Codex Stop HTTP hook returns recovery gate 503 while ordinary context remains available", async (t) => {
