@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { noteCodexDesktopLateStartForTest } from "../codexDesktopBridge.js";
 import { assertEndpointOwnerDirectory, executeEndpointOnOwner, recoverEndpointOwnerReceipt } from "./ownerExecution.js";
 import type { PreparedEndpointDelivery } from "./endpointDelivery.js";
 import { agentDeliveryPromptHash } from "./store.js";
@@ -71,6 +72,12 @@ test("exact owner recovery accepts a historical suffix only with the original sc
     writeMessage(prompt + suffix, role);
     assert.equal(await recoverEndpointOwnerReceipt(delivery, () => {}), undefined);
   }
+  const releaseLate = noteCodexDesktopLateStartForTest("exact-owner", deliveryId);
+  fs.writeFileSync(rolloutPath, "");
+  assert.equal((await recoverEndpointOwnerReceipt(delivery, () => {}))?.action, "receipt_recovered");
+  assert.equal(await recoverEndpointOwnerReceipt({ ...delivery, deliveryId: `agent-${"c".repeat(64)}` }, () => {}), undefined);
+  releaseLate();
+  assert.equal(await recoverEndpointOwnerReceipt(delivery, () => {}), undefined);
   for (const text of [prompt, prompt + suffix, (prompt + suffix).replace(/\n/g, "\r\n")]) {
     writeMessage(text);
     let checks = 0;

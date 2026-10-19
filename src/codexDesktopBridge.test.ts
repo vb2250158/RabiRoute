@@ -11,8 +11,10 @@ import {
   agentDeliveryMarkerForTest,
   applyCodexSidebarTaskNamesForTest,
   codexDesktopDeepLinkForTest,
+  codexDesktopLateStartAccepted,
   readCodexDesktopThreadsByIds,
-  listCodexDesktopThreadsFromRowsForTest
+  listCodexDesktopThreadsFromRowsForTest,
+  subscribeCodexDesktopDelivery
 } from "./codexDesktopBridge.js";
 
 test("batch history references resolve exact IDs and current sidebar names including archived tasks", t => {
@@ -512,6 +514,86 @@ test("Desktop bridge keeps a timed-out Agent delivery failed when its marker is 
       cwd: process.cwd(),
       sandbox: "workspace-write"
     }), /thread-follower-start-turn-timeout/);
+  } finally {
+    bridge.close();
+    await router.close();
+  }
+});
+
+test("timed-out open turn stays unconfirmed and reconciles a late Desktop acceptance", async () => {
+  const marker = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+  const threadId = "019f0000-0000-7000-8000-000000000153";
+  const events: CodexDesktopDeliveryEvent[] = [];
+  const unsubscribe = subscribeCodexDesktopDelivery(event => events.push(event));
+  const router = await createMockDesktopRouter(async (request) => {
+    if (request.method === "initialize") {
+      return { type: "response", requestId: request.requestId, resultType: "success", method: "initialize", result: { clientId: "rabi" } };
+    }
+    if (request.method === "thread-follower-steer-turn") {
+      return { type: "response", requestId: request.requestId, resultType: "error", error: "no active turn to steer" };
+    }
+    await wait(80);
+    return { type: "response", requestId: request.requestId, resultType: "success", method: request.method, result: {} };
+  });
+  const bridge = new CodexDesktopBridge({
+    pipePaths: [router.pipePath],
+    requestTimeoutMs: 30,
+    deliveryReceiptGraceMs: 0,
+    lateStartReconcileMs: 500,
+    deliveryReceiptReader: () => false
+  });
+  try {
+    await assert.rejects(bridge.deliver({
+      threadId,
+      prompt: `本次投递 deliveryId：${marker}`,
+      cwd: process.cwd(),
+      sandbox: "workspace-write"
+    }), /delivery unconfirmed/);
+    await waitFor(() => codexDesktopLateStartAccepted(threadId, marker));
+    assert.equal(events.some(event => event.stage === "delivery_receipt_confirmed" && event.late === true
+      && event.method === "thread-follower-start-turn" && event.threadId === threadId && event.deliveryMarker === marker), true);
+    assert.equal(codexDesktopLateStartAccepted(threadId, "other-marker"), false);
+  } finally {
+    unsubscribe();
+    bridge.close();
+    await router.close();
+  }
+});
+
+test("timed-out open turn reconciles when the rollout marker appears after the caller was released", async () => {
+  const marker = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff";
+  const threadId = "019f0000-0000-7000-8000-000000000154";
+  let visible = false;
+  const events: CodexDesktopDeliveryEvent[] = [];
+  const router = await createMockDesktopRouter((request) => {
+    if (request.method === "initialize") {
+      return { type: "response", requestId: request.requestId, resultType: "success", method: "initialize", result: { clientId: "rabi" } };
+    }
+    if (request.method === "thread-follower-steer-turn") {
+      return { type: "response", requestId: request.requestId, resultType: "error", error: "no active turn to steer" };
+    }
+    return { type: "response", requestId: request.requestId, resultType: "error", error: "thread-follower-start-turn-timeout" };
+  });
+  const bridge = new CodexDesktopBridge({
+    pipePaths: [router.pipePath],
+    deliveryReceiptGraceMs: 0,
+    lateStartReconcileMs: 500,
+    deliveryReceiptPollMs: 10,
+    deliveryReceiptReader: () => visible,
+    onDeliveryEvent: event => events.push(event)
+  });
+  try {
+    const pending = bridge.deliver({
+      threadId,
+      prompt: `本次投递 deliveryId：${marker}`,
+      cwd: process.cwd(),
+      sandbox: "workspace-write"
+    });
+    await assert.rejects(pending, /delivery unconfirmed/);
+    assert.equal(codexDesktopLateStartAccepted(threadId, marker), false);
+    visible = true;
+    await waitFor(() => events.some(event => event.late === true && event.deliveryMarker === marker));
+    assert.equal(codexDesktopLateStartAccepted(threadId, marker), true);
   } finally {
     bridge.close();
     await router.close();

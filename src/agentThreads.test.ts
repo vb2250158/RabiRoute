@@ -11,6 +11,7 @@ import {
   validateAgentThreadHandoffPromptForTest,
   type AgentThreadDriver
 } from "./agentThreads.js";
+import { encodeGrokBotSessionId } from "./agentAdapters/grokBotClient.js";
 import { listCodexDesktopThreadsFromRowsForTest } from "./codexDesktopBridge.js";
 import { proactiveCommunicationPolicyLines } from "./shared/agentCommunicationPolicy.js";
 import { errorResponsePresentation } from "./shared/errorPresentation.js";
@@ -698,6 +699,234 @@ test("Agent thread create rejects an Agent source without sourceThreadId", async
     messageSource: messageSourceFor("019f0000-0000-7000-8000-000000000003", "提交的旧名称")
   }, { allowedWorkspaces: [process.cwd()] }, driver), /Agent message source requires sourceThreadId verification/);
   assert.equal(createCount, 0);
+});
+
+test("Agent thread create accepts a verified Grok Bot source and still rejects garbage ids", async () => {
+  const native = "s".repeat(400);
+  const sessionId = encodeGrokBotSessionId("example-owner", native);
+  assert.ok(sessionId.startsWith("grokBot:"));
+  assert.ok(sessionId.length > 512 && sessionId.length <= 4096);
+  const reads: string[] = [];
+  let createdPrompt = "";
+  const driver: AgentThreadDriver = {
+    read: async (threadId) => {
+      reads.push(threadId);
+      return {
+        id: threadId,
+        title: "Desktop owner",
+        cwd: process.cwd(),
+        updatedAt: "2026-10-19T00:00:00.000Z"
+      };
+    },
+    create: async (params) => {
+      createdPrompt = params.prompt;
+      return {
+        id: "019f0000-0000-7000-8000-000000000231",
+        title: params.title,
+        updatedAt: "2026-10-19T00:00:00.000Z",
+        source: "test",
+        initialTurnStatus: "started"
+      };
+    },
+    send: async () => undefined
+  };
+  const adapterSessionId = encodeGrokBotSessionId("example-owner", "n".repeat(160));
+  assert.ok(adapterSessionId.length > 80 && adapterSessionId.length <= 300);
+  const readGrokBotSource = async (id: string) => id === sessionId || id === adapterSessionId
+    ? { sessionId: id, sessionName: "已核验的 Bot" }
+    : null;
+  const created = await handleAgentThreadRequest({
+    action: "create",
+    agentAdapter: "codex",
+    title: "Bot 发起的 Codex 任务",
+    prompt: "请处理这件新任务。",
+    cwd: process.cwd(),
+    messageSource: {
+      type: "agent",
+      agentAdapter: "grokBot",
+      sessionId,
+      sessionName: "提交的旧名称"
+    },
+    sourceThreadId: sessionId,
+    sourceAgentType: "agent"
+  }, { allowedWorkspaces: [process.cwd()], readGrokBotSource }, driver);
+  assert.equal(created.statusCode, 201);
+  assert.match(createdPrompt, /处理端：grokBot/);
+  assert.match(createdPrompt, /会话：已核验的 Bot/);
+  assert.match(createdPrompt, new RegExp(sessionId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.doesNotMatch(createdPrompt, /提交的旧名称/);
+  assert.equal(reads.includes(sessionId), false);
+
+  const dshSource = "session-00000000-0000-4000-8000-000000000231";
+  const dsh = await handleAgentThreadRequest({
+    action: "create",
+    agentAdapter: "dsh",
+    title: "Bot 发起的 DSH 会话",
+    prompt: "请处理这件新任务。",
+    cwd: process.cwd(),
+    messageSource: {
+      type: "agent",
+      agentAdapter: "grokBot",
+      sessionId,
+      sessionName: "提交的旧名称"
+    },
+    sourceThreadId: sessionId,
+    sourceAgentType: "agent"
+  }, { allowedWorkspaces: [process.cwd()], readGrokBotSource }, driver);
+  assert.equal(dsh.statusCode, 201);
+
+  let adapterPrompt = "";
+  const adapterDriver: AgentThreadDriver = {
+    read: async () => ({}),
+    create: async (params) => {
+      adapterPrompt = params.prompt;
+      return {
+        id: "019f0000-0000-7000-8000-000000000232",
+        title: params.title,
+        updatedAt: "2026-10-19T00:00:00.000Z",
+        source: "test",
+        initialTurnStatus: "started"
+      };
+    },
+    send: async () => undefined
+  };
+  const adapter = await handleAgentThreadRequest({
+    action: "create",
+    title: "消息端来源任务",
+    prompt: "来自消息端。",
+    cwd: process.cwd(),
+    messageSource: {
+      type: "message_adapter",
+      messageAdapter: "grokBot",
+      conversationType: "private",
+      conversationId: adapterSessionId,
+      messageId: "message-1",
+      senderName: "Example Bot"
+    },
+    sourceThreadId: adapterSessionId
+  }, { allowedWorkspaces: [process.cwd()], readGrokBotSource }, adapterDriver);
+  assert.equal(adapter.statusCode, 201);
+  assert.match(adapterPrompt, /消息端：grokBot/);
+  assert.match(adapterPrompt, new RegExp(adapterSessionId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+
+  const codexSource = "019f0000-0000-7000-8000-000000000233";
+  const codex = await handleAgentThreadRequest({
+    action: "create",
+    title: "原 Codex 来源",
+    prompt: "继续原规则。",
+    cwd: process.cwd(),
+    messageSource: {
+      type: "agent",
+      agentAdapter: "codex",
+      sessionId: codexSource,
+      sessionName: "提交的旧名称"
+    },
+    sourceThreadId: codexSource,
+    sourceAgentType: "agent"
+  }, { allowedWorkspaces: [process.cwd()], readGrokBotSource }, driver);
+  assert.equal(codex.statusCode, 201);
+  assert.equal((codex.data.messageSource as { sessionName?: string }).sessionName, "Desktop owner");
+  assert.equal(reads.includes(codexSource), true);
+
+  const dshOwned = await handleAgentThreadRequest({
+    action: "create",
+    title: "原 DSH 来源",
+    prompt: "继续原规则。",
+    cwd: process.cwd(),
+    messageSource: {
+      type: "agent",
+      agentAdapter: "dsh",
+      sessionId: dshSource,
+      sessionName: "提交的旧名称"
+    },
+    sourceThreadId: dshSource,
+    sourceAgentType: "agent"
+  }, { allowedWorkspaces: [process.cwd()], readGrokBotSource }, driver);
+  assert.equal(dshOwned.statusCode, 201);
+  assert.equal((dshOwned.data.messageSource as { agentAdapter?: string }).agentAdapter, "dsh");
+  assert.equal((dshOwned.data.messageSource as { sessionName?: string }).sessionName, "Desktop owner");
+  assert.equal((dshOwned.data.messageSource as { sessionId?: string }).sessionId, dshSource);
+
+  let sends = 0;
+  const sendDriver: AgentThreadDriver = {
+    read: async (threadId) => ({ id: threadId, title: "目标任务", cwd: process.cwd(), updatedAt: "2026-10-19T00:00:00.000Z" }),
+    create: async () => { throw new Error("not used"); },
+    send: async (params) => {
+      sends += 1;
+      assert.match(params.prompt, /已核验的 Bot/);
+      assert.match(params.prompt, /处理端：grokBot/);
+    }
+  };
+  const sent = await handleAgentThreadRequest({
+    action: "send",
+    threadId: codexSource,
+    prompt: "投给已有任务。",
+    cwd: process.cwd(),
+    messageSource: {
+      type: "agent",
+      agentAdapter: "grokBot",
+      sessionId,
+      sessionName: "提交的旧名称"
+    },
+    sourceThreadId: sessionId,
+    sourceAgentType: "agent",
+    responsePolicy: "none"
+  }, { allowedWorkspaces: [process.cwd()], readGrokBotSource }, sendDriver);
+  assert.equal(sent.data.status, "delivered");
+  assert.equal(sends, 1);
+
+  const rejectCreate = async (sourceThreadId: string, messageSource: Record<string, unknown>) => {
+    let creates = 0;
+    const rejecting: AgentThreadDriver = {
+      read: async () => { throw new Error("Codex Desktop task was not found"); },
+      create: async () => { creates += 1; throw new Error("not used"); },
+      send: async () => undefined
+    };
+    await assert.rejects(handleAgentThreadRequest({
+      action: "create",
+      title: "应拒绝",
+      prompt: "不要创建。",
+      cwd: process.cwd(),
+      messageSource: messageSource as never,
+      sourceThreadId,
+      sourceAgentType: "agent"
+    }, { allowedWorkspaces: [process.cwd()], readGrokBotSource }, rejecting), /Invalid threadId/);
+    assert.equal(creates, 0);
+  };
+  await rejectCreate("not-a-thread", {
+    type: "agent", agentAdapter: "codex", sessionId: "not-a-thread", sessionName: "垃圾"
+  });
+  await rejectCreate("grokBot:!!!", {
+    type: "agent", agentAdapter: "grokBot", sessionId: "grokBot:!!!", sessionName: "垃圾"
+  });
+  await rejectCreate(codexSource, {
+    type: "agent", agentAdapter: "grokBot", sessionId: codexSource, sessionName: "垃圾"
+  });
+  const tooLong = `grokBot:${"a".repeat(4090)}`;
+  await assert.rejects(handleAgentThreadRequest({
+    action: "create",
+    title: "超长",
+    prompt: "不要创建。",
+    cwd: process.cwd(),
+    messageSource: { type: "agent", agentAdapter: "grokBot", sessionId, sessionName: "超长" },
+    sourceThreadId: tooLong,
+    sourceAgentType: "agent"
+  }, { allowedWorkspaces: [process.cwd()], readGrokBotSource }, driver), /sourceThreadId is too long/);
+  await assert.rejects(handleAgentThreadRequest({
+    action: "create",
+    title: "未核验",
+    prompt: "不要创建。",
+    cwd: process.cwd(),
+    messageSource: {
+      type: "message_adapter",
+      messageAdapter: "grokBot",
+      conversationType: "private",
+      conversationId: encodeGrokBotSessionId("missing-owner", "missing-session"),
+      messageId: "message-2",
+      senderName: "Missing"
+    },
+    sourceThreadId: encodeGrokBotSessionId("missing-owner", "missing-session")
+  }, { allowedWorkspaces: [process.cwd()], readGrokBotSource }, adapterDriver), /无法核对来源任务/);
 });
 
 test("Agent thread send renders content, context, and control blocks in order", async () => {

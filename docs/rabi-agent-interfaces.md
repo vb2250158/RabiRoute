@@ -1085,6 +1085,8 @@ Agent 可以主动向自己已经掌握的群号或企业微信群 chat id 发�
 
 会话 ID是不透明字符串，必须原样保留完整值。`send` 的端点校验要求非空、无首尾空白、最多 4096 个 JavaScript 字符单元，且不含 NUL、换行或 Unicode 行分隔符；不要求特殊编码，也不从 ID格式推测 provider。来源缺失返回 HTTP 400，`error.code=AGENT_SESSION_ID_REQUIRED`、`error.field=sourceThreadId` 和具体 `repair`；目标错误对应 `threadId`。
 
+`create` 与本机 `send` 对 Codex、DSH 来源仍按任务 ID 形状核对：Codex 为任务 UUID，DSH 为 `session-` 加 UUID，这类 `sourceThreadId` 最长 512 个字符。以 `grokBot:` 开头且能解码的规范会话 ID 是独立来源身份，不套用上述形状；Manager 向 Grok Bot owner 核对，owner 缺失、名称空或无法解码时失败关闭。这类 `sourceThreadId` 最长 4096 个字符，与端点 `send` 的不透明会话上限一致。`type=message_adapter` 的 `conversationId` 仍最长 300 个字符；更长的 Bot 会话必须使用 `type=agent`。
+
 `system` 是消息展示语义，不能作为公共 `send` 的免来源入口。只有 `eventType/eventName/eventId` 而没有可核验 Agent owner 的系统请求会失败；补上目标 Codex ID也不能建立来源。内部 Manager 系统事件沿用各自的受管事件合同。无来源会话的外部服务须接入自己的服务 owner，不伪造 Desktop 会话。Grok Bot 的配置、发现和传输边界见 [Grok Bot Agent 端接入](grok-bot-agent-adapter.md)。
 
 Bot → Codex 的来源示例如下。占位值须替换成各自 owner 确认的完整会话 ID；两者是不同端点：
@@ -1108,6 +1110,28 @@ Bot → Codex 的来源示例如下。占位值须替换成各自 owner 确认�
 }
 ```
 
+Bot 创建 Codex 或 DSH 会话时使用同一个已核验来源。顶层 `agentAdapter` 是要创建的目标（`codex` 或 `dsh`），不是 `grokBot`。Grok Bot 自己的会话仍不能通过线程桥创建、重命名或打开。调用方复制扫描返回的完整 ID，不自行编码；提交的 `sessionName` 会被 owner 当前名称覆盖。
+
+```json
+{
+  "action": "create",
+  "agentAdapter": "codex",
+  "title": "Bot 发起的任务",
+  "cwd": "C:\\Path\\To\\Your\\Project",
+  "prompt": "请处理这件新任务。",
+  "sourceThreadId": "<scan 返回的来源 Bot 完整会话 ID>",
+  "sourceAgentType": "agent",
+  "messageSource": {
+    "type": "agent",
+    "agentAdapter": "grokBot",
+    "sessionId": "<scan 返回的来源 Bot 完整会话 ID>",
+    "sessionName": "任意旧名称，会被 owner 名称覆盖"
+  }
+}
+```
+
+DSH 目标把 `agentAdapter` 改为 `dsh`，来源字段保持不变。
+
 公共端点投递支持请求体中的稳定 `deliveryId`：非空、无首尾空白、最多 100 字符，不含 NUL 或行分隔符。调用方在第一次请求前保存 ID及完整载荷；Manager 按真实来源隔离幂等键，持久保存原目标、请求摘要、执行参数和受理状态。相同来源、ID及载荷复用原操作；同 ID不同目标或载荷返回 `AGENT_DELIVERY_ID_CONFLICT`，`error.field=deliveryId`。省略该字段会为每次新请求生成新 ID，不能保证调用方重复 POST 幂等。计划 API 的 `Idempotency-Key` 头不替代此字段。
 
 返回的 `communication.deliveryId` 是 Manager 的实际投递标识，可能与调用方提交的 ID不同；保存它供 `reconcile_delivery` 使用。`prepared` 的同键重试可以完成尚未开始的原投递，`dispatching` 只核对原回执，已提交则返回原结果。HTTP 202、超时或 `delivery_unconfirmed` 后保留原载荷与 ID，不换键重发、不启动另一轮；查询或核对仍缺证据时保留未确认状态。正式回复继续带原 `inReplyToRequestId/result/nextAction`，不把回复关联 ID当成来源会话。
@@ -1118,7 +1142,7 @@ Bot → Codex 的来源示例如下。占位值须替换成各自 owner 确认�
 
 Manager 先从原始认证 lease 解析来源和精确目标，再持久化准备结果、渲染一次信封、记录正在投递、交给目标 owner，最后核对回执并提交。完整身份包含 `managerInstanceId`、`instanceId`、`nodeId`、`agentId`、`provider`、原始会话 ID 和授权 incarnation；回执还须匹配原 `deliveryId`、generation 和 prompt hash。连接、Agent 启停、catalog 或批准绑定变化后，不复用旧授权。
 
-发送结果不确定时返回 HTTP 202、`delivery_unconfirmed`、`retryable=false`，保留原正式回复 reservation。不得换投递 ID重发正文。`reconcile_delivery` 只核对原目标的传输证据；启动、连接、catalog、回执和 turn 事件触发有去重的恢复，不轮询、不换 owner、不自动重投。连接器只持有传输 attempt/receipt，不另建业务请求账本。Codex 可从同一个 Desktop owner 的原始用户消息恢复精确 hash；其它 Provider 缺少可读接受证据时继续待确认。
+发送结果不确定时返回 HTTP 202、`delivery_unconfirmed`、`retryable=false`，保留原正式回复 reservation。不得换投递 ID重发正文。`reconcile_delivery` 只核对原目标的传输证据；启动、连接、catalog、回执和 turn 事件触发有去重的恢复，不换 owner、不自动重投。公共核对本身不轮询。打开新轮次的 Desktop IPC 若在调用方等待结束后才成功，或同一 owner 的 rollout 稍后才出现原投递标记，桥接会在默认 60 秒内保留这一次请求并补记回执；确认后按迟到回执提交原投递。追加已有轮次的超时仍只使用原有的短回执宽限。连接器只持有传输 attempt/receipt，不另建业务请求账本。Codex 可从同一个 Desktop owner 的原始用户消息恢复精确 hash；其它 Provider 缺少可读接受证据时继续待确认。
 
 该合同目前是源码实施与回归范围，不代表运行节点已经更新，更不代表两台真实电脑已通过端到端验收。
 
@@ -1245,7 +1269,7 @@ RabiRoute 渲染后的正文固定从以下两段开始，相关上下文和回�
 
 Agent 调用线程桥时通常使用 `type=agent`。`agentAdapter` 填实际 Agent 端，例如 `codex`、`dsh`、`copilotCli`、`marvis` 或 `astrbot`；`sessionName` 和完整 `sessionId` 都不能省略。Agent 间投递还必须提供自己的完整 `sourceThreadId`、`sourceAgentType` 和 `responsePolicy`，且 `messageSource.sessionId` 必须等于 `sourceThreadId`。`sourceAgentType` 可为 `primary_persona`、`message_processing`、`plan_secretary`、`plan_agent` 或通用的 `agent`；`responsePolicy` 只能是 `required` 或 `none`。选择 `required` 时还必须填写 `responseInstruction`，Manager 会生成 `requestId` 并把正式回复参数写进目标任务收到的内容。选择 `none` 表示本次投递不要求目标返回。
 
-带正文的 `create` 与 `send` 使用同一来源核对规则。`type=agent` 时两者都必须提供 `sourceThreadId`；Manager 从实际 owner 读取来源会话名称并覆盖调用方提交的旧名称，包括 Codex Desktop、DSH 和 Grok Bot 服务 owner。计划进展、审批和 QA 等 Manager 计划事件只显示计划名称和计划 ID；只有计划任务本人回传结果时才附带并核对 `sourceAgent`。
+带正文的 `create` 与 `send` 使用同一来源核对规则。`type=agent` 时两者都必须提供 `sourceThreadId`；Manager 从实际 owner 读取来源会话名称并覆盖调用方提交的旧名称，包括 Codex Desktop、DSH 和 Grok Bot 服务 owner。Grok Bot 规范会话 ID 按 Bot owner 核对，不要求它符合 Codex UUID 或 DSH `session-` 形状；这类 `sourceThreadId` 最长 4096 个字符，Codex 与 DSH 来源仍最长 512。消息端来源的 `conversationId` 最长 300 个字符，超长 Bot 会话改用 `type=agent`。计划进展、审批和 QA 等 Manager 计划事件只显示计划名称和计划 ID；只有计划任务本人回传结果时才附带并核对 `sourceAgent`。
 
 `contextBlocks` 排在消息内容之后，`controlBlocks` 再排在上下文之后。回传参数与本次必要的发送要求放入控制块；通用协作段不再注入。两个字段都不能包含 `[消息源]`、`[消息内容]` 或 `[投递源]`。旧 `[投递源]`、旧嵌套信封和旧 Agent 回复会自动迁移；旧重放记录无法还原来源时显示“历史投递记录”，不猜来源身份。
 
@@ -1274,7 +1298,7 @@ Agent 调用线程桥时通常使用 `type=agent`。`agentAdapter` 填实际 Age
 
 普通 Codex 最终回答不算正式回复。目标 Agent 每轮结束时，`Stop` Hook 会检查待回复请求；仍未回复时，从该轮结束起五分钟后向同一个精确任务投递提醒。提醒触发的新一轮结束后仍未回复，会再从该轮结束起等待五分钟。请求状态可通过 `GET /api/agent/requests` 或 `GET /api/agent/requests/:requestId` 查询；维护者可用 `POST /api/agent/requests/:requestId/cancel` 取消不再需要的请求。
 
-Desktop 偶尔会在消息已经写入目标任务后才返回启动或追加轮次超时。Manager 会用正文中的唯一 `deliveryId` 回读目标任务最近的 rollout：确认标记后提交请求/回复状态；有界等待后仍未确认时返回 HTTP `202`、`code=-1`、`status=delivery_unconfirmed` 和 `error.retryable=false`，保留原 `deliveryId`、`requestId` 及 `pending_delivery` 请求，不删除记录、不再次发送。调用方先查询原请求和目标任务，不把 HTTP `202` 当成送达成功。
+Desktop 偶尔会在消息已经写入目标任务后才返回启动或追加轮次超时。启动超时后，同一请求还会在有界窗口内接受迟到的 Desktop 受理，或在 rollout 出现原投递标记时补记回执。Manager 会用正文中的唯一 `deliveryId` 回读目标任务最近的 rollout：确认标记后提交请求/回复状态；有界等待后仍未确认时返回 HTTP `202`、`code=-1`、`status=delivery_unconfirmed` 和 `error.retryable=false`，保留原 `deliveryId`、`requestId` 及 `pending_delivery` 请求，不删除记录、不再次发送。调用方先查询原请求和目标任务，不把 HTTP `202` 当成送达成功。连接中途关闭时同样保留原载荷与 ID，等待这次补核对或显式 `reconcile_delivery`，不换键重发。
 
 原目标任务正式回复一个 `pending_delivery` 请求时，线程桥先核对双方完整任务 ID、工作目录和原目标 rollout 的精确投递标记；按需流式读取该任务记录，不再因标记超出最后 4 MiB 而漏判。证据齐全才恢复为 `awaiting_response` 并继续原回复。缺少标记或身份不符时返回 `error.code=agent_reply_state_conflict`，并包含 `requestId`、`currentState`、`expectedState`、`reason`、`commitState` 和 `nextAction`。原因区分发送任务不符、接收任务不符、工作目录不符、原始接收证据缺失或不可读；`commitState=not_started` 仅表示这次回复没有发送，不能据此重发原任务。迟到的原投递提交不会把已回复请求重新打开。
 
@@ -1310,7 +1334,7 @@ Desktop 偶尔会在消息已经写入目标任务后才返回启动或追加轮
 
 提醒触发前也执行上述核对。证据仍不完整时保留 reservation、写入 `lastReminderError` 并停止本次“未回复”提醒，不无限重试或要求重发；下一次任务结束或显式核对可重新检查。读取超时、身份/合同不符及旧版本已删除的 `404` 请求均不凭猜测重建，必须保留正式回传未记录的差异。
 
-Agent 间 `create` 与 `send` 投递时，Manager 按 `messageSource.agentAdapter + sourceThreadId` 向实际 owner 核对来源会话。Codex 读取 Desktop 任务状态和左侧聊天栏名称；DSH 通过 apiproxy `session.list` 读取会话名称、工作目录和运行状态。来源不存在、工作目录冲突或来源 ID 与 `messageSource.sessionId` 不一致时失败关闭。所有 RabiRoute 非空投递都先显示 `[消息源]`，再显示 `[消息内容]`。消息端来源显示消息端、会话、发送者和消息 ID；Agent 来源显示 Agent 端、会话名称和完整会话 ID；计划来源显示计划名称和计划 ID；系统来源显示事件类型、名称和 ID。提醒、初始化消息、RabiLink 复盘和重放也使用同一信封。
+Agent 间 `create` 与 `send` 投递时，Manager 按 `messageSource.agentAdapter + sourceThreadId` 向实际 owner 核对来源会话。Codex 读取 Desktop 任务状态和左侧聊天栏名称；DSH 通过 apiproxy `session.list` 读取会话名称、工作目录和运行状态。Grok Bot 来源先确认规范 `grokBot:` 会话 ID，再读取 Bot owner 名称；无法解码、owner 缺失或声明的 adapter 不是 `grokBot` 时失败关闭，不退回 Codex/DSH 形状检查放行。来源不存在、工作目录冲突或来源 ID 与 `messageSource.sessionId` 不一致时失败关闭。所有 RabiRoute 非空投递都先显示 `[消息源]`，再显示 `[消息内容]`。消息端来源显示消息端、会话、发送者和消息 ID；Agent 来源显示 Agent 端、会话名称和完整会话 ID；计划来源显示计划名称和计划 ID；系统来源显示事件类型、名称和 ID。提醒、初始化消息、RabiLink 复盘和重放也使用同一信封。
 
 安全边界：
 

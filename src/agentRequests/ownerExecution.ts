@@ -3,7 +3,7 @@ import { agentDeliveryPromptHash } from "./store.js";
 import { deliveryIdFromPrompt } from "../shared/deliveryIdentity.js";
 import type { PreparedEndpointDelivery, EndpointDeliveryReceipt } from "./endpointDelivery.js";
 import { sendCodexThreadMessage } from "../codexRuntime.js";
-import { readCodexDesktopThread } from "../codexDesktopBridge.js";
+import { codexDesktopLateStartAccepted, readCodexDesktopThread } from "../codexDesktopBridge.js";
 import { readDshSession, sendDshSessionMessage } from "../dshSessionBridge.js";
 import { readWorkbuddyThread, sendWorkbuddyThreadMessage } from "../workbuddyThreads.js";
 import { sameCodexWorkspace } from "../codexTaskIdentity.js";
@@ -21,6 +21,11 @@ export function assertEndpointOwnerDirectory(cwd: string | undefined): asserts c
 export async function recoverEndpointOwnerReceipt(delivery: PreparedEndpointDelivery, assertAuthorized: () => void | Promise<void>): Promise<EndpointDeliveryReceipt | undefined> {
   await assertAuthorized();
   if (delivery.target.provider !== "codex") return undefined;
+  if (codexDesktopLateStartAccepted(delivery.target.sessionId, delivery.deliveryId)) {
+    await assertAuthorized();
+    return { deliveryId: delivery.deliveryId, generation: delivery.generation, endpoint: delivery.target, promptHash: delivery.promptHash, executionOptionsHash: delivery.executionOptionsHash,
+      accepted: true, action: "receipt_recovered", transport: "desktop-ipc" };
+  }
   const owner = readCodexDesktopThread(delivery.target.sessionId);
   if (!owner || owner.archived || !owner.rolloutPath) return undefined;
   await assertAuthorized();

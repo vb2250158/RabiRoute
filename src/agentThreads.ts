@@ -60,6 +60,7 @@ import {
   sendWorkbuddyThreadMessage
 } from "./workbuddyThreads.js";
 import { normalizePathForComparison } from "./shared/pathPolicy.js";
+import { decodeGrokBotSessionId } from "./agentAdapters/grokBotClient.js";
 import { parseAgentAdapterType, type AgentAdapterType } from "./agentAdapters/types.js";
 import { agentAdapterSupportsReceiptRecovery } from "./shared/agentAdapterCapabilities.js";
 import {
@@ -76,6 +77,8 @@ import {
 } from "./agentRequests/store.js";
 
 const maxThreadIdLength = 512;
+/** Public opaque session contract shared with endpoint send, longer than a Codex/DSH id. */
+const maxGrokBotSourceIdLength = 4096;
 const maxQueryLength = 240;
 const maxTitleInputLength = 200_000;
 const maxPromptLength = 200_000;
@@ -208,6 +211,11 @@ export type AgentThreadRequestOptions = {
   sessionIndexPath?: string;
   agentRequests?: AgentRequestStore;
   confirmCodexDelivery?: (threadId: string, deliveryId: string) => boolean | Promise<boolean>;
+  /**
+   * Reads the Grok Bot service owner for a canonical `grokBot:` source id.
+   * Codex and DSH sources never use it. Absent or null fails closed.
+   */
+  readGrokBotSource?: (sessionId: string) => Promise<{ sessionId: string; sessionName: string } | null>;
   onMessageProcessingHandoff?: (event: {
     requirementId: string;
     sourceThreadId: string;
@@ -431,6 +439,23 @@ function normalizeThreadId(value: unknown): string {
   return threadId;
 }
 
+function sourceThreadIdText(value: unknown): string {
+  if (value == null || value === "") return "";
+  const text = typeof value === "string" ? value.trim() : "";
+  const limit = text.startsWith("grokBot:") ? maxGrokBotSourceIdLength : maxThreadIdLength;
+  return requiredText(value, "sourceThreadId", limit);
+}
+
+function isCanonicalGrokBotSourceId(value: string): boolean {
+  if (!value.startsWith("grokBot:")) return false;
+  try {
+    decodeGrokBotSessionId(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 type ThreadCapableAgentAdapter = PlanAssistantAgentType;
 
 /**
@@ -634,6 +659,82 @@ async function readAgentThread(
   return { value, summary };
 }
 
+async function requireGrokBotSourceProof(
+  sessionId: string,
+  options: AgentThreadRequestOptions
+): Promise<{ sessionId: string; sessionName: string }> {
+  const proof = await options.readGrokBotSource?.(sessionId);
+  if (!proof || proof.sessionId !== sessionId || !proof.sessionName.trim()) {
+    throw new Error(`无法核对来源任务：${sessionId}`);
+  }
+  return { sessionId: proof.sessionId, sessionName: proof.sessionName.trim() };
+}
+
+/**
+ * Grok Bot session ids are a source identity, not Codex task ids or DSH `session-` ids.
+ * A message-adapter source is checked for existence and then kept as a message source.
+ * An agent or plan source replaces the submitted name with the verified owner name.
+ */
+async function resolveGrokBotThreadSource(
+  request: AgentThreadRequest,
+  options: AgentThreadRequestOptions,
+  messageSource: RabiMessageSource,
+  rawSourceThreadId: string
+): Promise<{
+  messageSource: RabiMessageSource;
+  source: {
+    agentAdapter: AgentAdapterType;
+    agentType: AgentThreadSourceType;
+    agentLabel: string;
+    threadId: string;
+    threadName: string;
+    workspace?: string;
+    nodeId?: string;
+    agentId?: string;
+    endpoint?: AgentRequestEndpoint;
+  };
+} | null> {
+  if (!isCanonicalGrokBotSourceId(rawSourceThreadId)) throw new Error("Invalid threadId.");
+  if (messageSource.type === "message_adapter") {
+    if (messageSource.conversationId !== rawSourceThreadId) {
+      throw new Error("messageSource.conversationId must match sourceThreadId for a Grok Bot message source.");
+    }
+    await requireGrokBotSourceProof(rawSourceThreadId, options);
+    return null;
+  }
+  const sourceIdentity = agentIdentityForMessageSource(messageSource);
+  if (!sourceIdentity) {
+    throw new Error("Agent-to-Agent delivery requires messageSource.type=agent or a plan sourceAgent.");
+  }
+  if (sourceIdentity.sessionId !== rawSourceThreadId) {
+    throw new Error("messageSource.sessionId must match sourceThreadId for Agent-to-Agent delivery.");
+  }
+  if (sourceIdentity.agentAdapter !== "grokBot") {
+    throw new Error("messageSource.agentAdapter must be grokBot when sourceThreadId is a Grok Bot session.");
+  }
+  const proof = await requireGrokBotSourceProof(rawSourceThreadId, options);
+  const agentType = normalizeAgentThreadSourceType(requiredText(request.sourceAgentType, "sourceAgentType", 40));
+  const source = {
+    agentAdapter: "grokBot" as const,
+    agentType,
+    agentLabel: agentThreadSourceLabels[agentType],
+    threadId: rawSourceThreadId,
+    threadName: proof.sessionName
+  };
+  const resolvedAgent = {
+    agentAdapter: "grokBot" as const,
+    agentType: source.agentLabel,
+    sessionId: rawSourceThreadId,
+    sessionName: proof.sessionName
+  };
+  const resolvedMessageSource: RabiMessageSource = messageSource.type === "agent"
+    ? { type: "agent", ...resolvedAgent }
+    : messageSource.type === "plan"
+      ? { ...messageSource, sourceAgent: resolvedAgent }
+      : (() => { throw new Error("Agent-to-Agent delivery requires messageSource.type=agent or a plan sourceAgent."); })();
+  return { messageSource: resolvedMessageSource, source };
+}
+
 async function resolveAgentThreadSendSource(
   request: AgentThreadRequest,
   options: AgentThreadRequestOptions,
@@ -700,7 +801,7 @@ async function resolveAgentThreadSendSource(
       }
     };
   }
-  const rawSourceThreadId = optionalText(request.sourceThreadId, "sourceThreadId", maxThreadIdLength);
+  const rawSourceThreadId = sourceThreadIdText(request.sourceThreadId);
   if (!rawSourceThreadId) {
     if (request.sourceAgentType != null) {
       throw new Error("sourceAgentType requires sourceThreadId.");
@@ -709,6 +810,11 @@ async function resolveAgentThreadSendSource(
       throw new Error("Agent message source requires sourceThreadId verification.");
     }
     return null;
+  }
+
+  const declaredIdentity = agentIdentityForMessageSource(messageSource);
+  if (rawSourceThreadId.startsWith("grokBot:") || declaredIdentity?.agentAdapter === "grokBot") {
+    return resolveGrokBotThreadSource(request, options, messageSource, rawSourceThreadId);
   }
 
   const sourceThreadId = normalizeThreadId(rawSourceThreadId);

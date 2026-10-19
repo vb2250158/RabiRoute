@@ -109,11 +109,15 @@ export type CodexDesktopDeliveryEvent = {
   model?: string;
   modelSource?: "request" | "desktop-default";
   outcome?: "accepted" | "rejected" | "timeout" | "confirmed" | "unconfirmed";
+  /** Set only when an open-turn timeout is reconciled after the caller was already released. */
+  late?: true;
 };
 
 export type CodexDesktopBridgeOptions = {
   pipePaths?: string[];
   requestTimeoutMs?: number;
+  /** How long a timed-out open turn keeps watching for the original acceptance. `0` disables the watch. */
+  lateStartReconcileMs?: number;
   deliveryReceiptGraceMs?: number;
   deliveryReceiptPollMs?: number;
   deliveryReceiptReader?: (threadId: string, marker: string) => boolean | Promise<boolean>;
@@ -385,6 +389,37 @@ function wait(delayMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
+const lateStartEvidenceMs = 10 * 60 * 1000;
+const lateStartAcceptances = new Map<string, number>();
+const desktopDeliverySubscribers = new Set<(event: CodexDesktopDeliveryEvent) => void>();
+
+function lateStartKey(threadId: string, marker: string): string {
+  return `${threadId}\0${marker}`;
+}
+
+/** True when the same open-turn request was accepted after its IPC wait ended. */
+export function codexDesktopLateStartAccepted(threadId: string, marker: string): boolean {
+  if (!threadId || !marker) return false;
+  const expiresAt = lateStartAcceptances.get(lateStartKey(threadId, marker));
+  if (expiresAt == null) return false;
+  if (Date.now() > expiresAt) {
+    lateStartAcceptances.delete(lateStartKey(threadId, marker));
+    return false;
+  }
+  return true;
+}
+
+export function noteCodexDesktopLateStartForTest(threadId: string, marker: string, ttlMs = lateStartEvidenceMs): () => void {
+  const key = lateStartKey(threadId, marker);
+  lateStartAcceptances.set(key, Date.now() + ttlMs);
+  return () => lateStartAcceptances.delete(key);
+}
+
+export function subscribeCodexDesktopDelivery(listener: (event: CodexDesktopDeliveryEvent) => void): () => void {
+  desktopDeliverySubscribers.add(listener);
+  return () => desktopDeliverySubscribers.delete(listener);
+}
+
 function responseError(response: IpcResponse, method: string): Error | null {
   return response.resultType === "success"
     ? null
@@ -453,13 +488,16 @@ function defaultDeliveryReceiptReader(threadId: string, marker: string): boolean
 
 export class CodexDesktopBridge {
   private readonly options: Required<Pick<CodexDesktopBridgeOptions,
-    "requestTimeoutMs" | "deliveryReceiptGraceMs" | "deliveryReceiptPollMs" | "deliveryReceiptReader" | "loadRetryAttempts" | "loadRetryDelayMs" | "openThread">> & CodexDesktopBridgeOptions;
+    "requestTimeoutMs" | "lateStartReconcileMs" | "deliveryReceiptGraceMs" | "deliveryReceiptPollMs" | "deliveryReceiptReader" | "loadRetryAttempts" | "loadRetryDelayMs" | "openThread">> & CodexDesktopBridgeOptions;
   private socket: net.Socket | null = null;
   private connecting: Promise<void> | null = null;
   private clientId = "initializing-client";
   private readBuffer = Buffer.alloc(0);
   private nextFrameLength: number | null = null;
   private readonly pending = new Map<string, PendingRequest>();
+  private readonly lateArrivals = new Map<string, { timer: NodeJS.Timeout; onResponse: (response: IpcResponse) => void }>();
+  private lateWatchGeneration = 0;
+  private readonly lateStartKeys = new Set<string>();
   private readonly activeThreads = new Set<string>();
   private readonly activeThreadSinceMs = new Map<string, number>();
   private readonly deliveryQueues = new Map<string, Promise<CodexDesktopDelivery>>();
@@ -468,6 +506,7 @@ export class CodexDesktopBridge {
     this.options = {
       ...options,
       requestTimeoutMs: options.requestTimeoutMs ?? 30_000,
+      lateStartReconcileMs: Math.max(0, options.lateStartReconcileMs ?? 60_000),
       deliveryReceiptGraceMs: Math.max(0, options.deliveryReceiptGraceMs ?? 5_000),
       deliveryReceiptPollMs: Math.max(10, options.deliveryReceiptPollMs ?? 250),
       deliveryReceiptReader: options.deliveryReceiptReader ?? defaultDeliveryReceiptReader,
@@ -536,6 +575,15 @@ export class CodexDesktopBridge {
       this.options.onBroadcast?.(message);
       return;
     }
+    if (message.type === "response") {
+      const late = this.lateArrivals.get(message.requestId);
+      if (late) {
+        this.lateArrivals.delete(message.requestId);
+        clearTimeout(late.timer);
+        late.onResponse(message);
+        return;
+      }
+    }
     const pending = this.pending.get(message.requestId);
     if (!pending) return;
     this.pending.delete(message.requestId);
@@ -549,6 +597,58 @@ export class CodexDesktopBridge {
       clearTimeout(pending.timer);
       pending.reject(error);
     }
+  }
+
+  private cancelLateArrival(requestId: string): void {
+    const late = this.lateArrivals.get(requestId);
+    if (!late) return;
+    clearTimeout(late.timer);
+    this.lateArrivals.delete(requestId);
+  }
+
+  private clearLateState(): void {
+    this.lateWatchGeneration += 1;
+    for (const requestId of [...this.lateArrivals.keys()]) this.cancelLateArrival(requestId);
+    for (const key of this.lateStartKeys) lateStartAcceptances.delete(key);
+    this.lateStartKeys.clear();
+  }
+
+  private confirmLateStart(params: CodexDesktopTurnDelivery, requestId: string): void {
+    const marker = this.deliveryMarker(params);
+    if (!marker) return;
+    const key = lateStartKey(params.threadId, marker);
+    if (this.lateStartKeys.has(key)) return;
+    this.lateStartKeys.add(key);
+    lateStartAcceptances.set(key, Date.now() + lateStartEvidenceMs);
+    this.cancelLateArrival(requestId);
+    this.deliveryEvent(params, "delivery_receipt_confirmed", {
+      method: "thread-follower-start-turn",
+      requestId,
+      outcome: "confirmed",
+      action: "started",
+      late: true
+    });
+  }
+
+  private watchLateRollout(params: CodexDesktopTurnDelivery, requestId: string): void {
+    const marker = this.deliveryMarker(params);
+    const key = marker ? lateStartKey(params.threadId, marker) : "";
+    if (!marker || this.options.lateStartReconcileMs <= 0 || this.lateStartKeys.has(key)) return;
+    const generation = this.lateWatchGeneration;
+    const deadline = Date.now() + this.options.lateStartReconcileMs;
+    // One-shot deadlines only: each read is armed from the previous miss until the window ends.
+    void (async () => {
+      while (generation === this.lateWatchGeneration && !this.lateStartKeys.has(key) && Date.now() < deadline) {
+        if (await this.options.deliveryReceiptReader(params.threadId, marker)) {
+          if (generation !== this.lateWatchGeneration) return;
+          this.confirmLateStart(params, requestId);
+          return;
+        }
+        const remaining = deadline - Date.now();
+        if (remaining <= 0 || generation !== this.lateWatchGeneration) return;
+        await wait(Math.min(this.options.deliveryReceiptPollMs, remaining));
+      }
+    })().catch(() => undefined);
   }
 
   private async connectPath(pipePath: string): Promise<void> {
@@ -609,12 +709,17 @@ export class CodexDesktopBridge {
     }
   }
 
-  private async request(method: string, params: unknown, version = 1, beforeInitialized = false, requestId = randomUUID(), assertAuthorized?: () => void | Promise<void>): Promise<IpcResponse> {
+  private async request(method: string, params: unknown, version = 1, beforeInitialized = false, requestId = randomUUID(), assertAuthorized?: () => void | Promise<void>, lateArrival?: { holdMs: number; onResponse: (response: IpcResponse) => void }): Promise<IpcResponse> {
     if (!beforeInitialized) await this.connect();
     await assertAuthorized?.();
     const response = new Promise<IpcResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
+        if (lateArrival && lateArrival.holdMs > 0) {
+          const lateTimer = setTimeout(() => this.lateArrivals.delete(requestId), lateArrival.holdMs);
+          lateTimer.unref?.();
+          this.lateArrivals.set(requestId, { timer: lateTimer, onResponse: lateArrival.onResponse });
+        }
         reject(new Error(`Codex Desktop IPC request timed out: ${method}`));
       }, this.options.requestTimeoutMs);
       this.pending.set(requestId, { resolve, reject, timer });
@@ -669,6 +774,9 @@ export class CodexDesktopBridge {
       this.options.onDeliveryEvent?.(event);
     } catch {
       // Diagnostics must not alter the Desktop-owner delivery result.
+    }
+    for (const listener of desktopDeliverySubscribers) {
+      try { listener(event); } catch { /* Recovery listeners cannot change the Desktop result. */ }
     }
   }
 
@@ -814,6 +922,11 @@ export class CodexDesktopBridge {
     const method = "thread-follower-start-turn";
     const requestId = randomUUID();
     const startedAt = Date.now();
+    const marker = this.deliveryMarker(params);
+    let bufferedLate: IpcResponse | undefined;
+    const acceptLate = (response: IpcResponse): void => {
+      if (!responseError(response, method)) this.confirmLateStart(params, requestId);
+    };
     this.deliveryEvent(params, "start_requested", {
       method,
       requestId,
@@ -824,18 +937,27 @@ export class CodexDesktopBridge {
       const response = await this.request(method, {
         conversationId: params.threadId,
         turnStart: this.startTurnEnvelope(params)
-      }, desktopIpcProtocolVersion.followerStartTurn, false, requestId, params.assertAuthorized);
+      }, desktopIpcProtocolVersion.followerStartTurn, false, requestId, params.assertAuthorized, marker && this.options.lateStartReconcileMs > 0
+        ? { holdMs: this.options.lateStartReconcileMs, onResponse: (response) => { bufferedLate = response; acceptLate(response); } }
+        : undefined);
       const error = responseError(response, method);
       if (error) throw error;
+      this.cancelLateArrival(requestId);
       this.deliveryEvent(params, "start_accepted", { method, requestId, elapsedMs: Date.now() - startedAt, outcome: "accepted", action: "started" });
       return false;
     } catch (error) {
       const timedOut = isTurnDeliveryTimeout(error, method);
       this.deliveryEvent(params, "start_rejected", { method, requestId, elapsedMs: Date.now() - startedAt, outcome: timedOut ? "timeout" : "rejected", error: diagnosticErrorMessage(error) });
       if (timedOut) {
-        if (this.deliveryMarker(params) && await this.deliveryReceiptConfirmed(params)) return true;
+        if (marker && await this.deliveryReceiptConfirmed(params)) {
+          this.cancelLateArrival(requestId);
+          return true;
+        }
+        if (bufferedLate) acceptLate(bufferedLate);
+        this.watchLateRollout(params, requestId);
         throw this.unconfirmedDelivery(params, method, error);
       }
+      this.cancelLateArrival(requestId);
       throw error;
     }
   }
@@ -910,6 +1032,7 @@ export class CodexDesktopBridge {
   }
 
   close(): void {
+    this.clearLateState();
     this.socket?.destroy();
     this.socket = null;
     this.clientId = "initializing-client";
