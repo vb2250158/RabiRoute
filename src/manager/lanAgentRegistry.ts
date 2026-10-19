@@ -19,6 +19,7 @@ export type LanAgentNodeHello = {
   agents?: InstanceAgent[];
   terminalShells?: string[];
   computerCapabilities?: string[];
+  taskTargeting?: "explicit-session-v1";
 };
 
 export type LanAgentUpdateState = "idle" | "requested" | "updating" | "updated" | "failed";
@@ -44,6 +45,7 @@ export type LanAgentTask = {
   nodeId: string;
   targetAgent: string;
   agentId?: string;
+  threadId: string;
   message: string;
   cwd?: string;
   status: LanAgentTaskStatus;
@@ -108,6 +110,7 @@ function normalizeHello(value: unknown): LanAgentNodeHello {
     agentTypes: normalizeTextList(raw.agentTypes, 16, 80),
     allowedWorkspaces: normalizeTextList(raw.allowedWorkspaces, 32, 1_024),
     agents: raw.agents === undefined ? undefined : normalizeInstanceAgents(raw.agents),
+    taskTargeting: raw.taskTargeting === "explicit-session-v1" ? raw.taskTargeting : undefined,
     terminalShells: normalizeTextList(raw.terminalShells, 2, 16).filter(shell => ["cmd", "powershell"].includes(shell)),
     computerCapabilities: normalizeTextList(raw.computerCapabilities, 3, 16).filter(capability => ["files", "windows", "screenshots"].includes(capability))
   };
@@ -315,22 +318,28 @@ export class LanAgentRegistry {
     return { ...next, connected: true };
   }
 
-  assignTask(input: { nodeId: string; targetAgent: string; agentId?: string; message: string; cwd?: string; taskId?: string; idempotencyKey?: string }): LanAgentTask {
+  assignTask(input: { nodeId: string; targetAgent: string; agentId?: string; threadId: string; message: string; cwd?: string; taskId?: string; idempotencyKey?: string }): LanAgentTask {
     const nodeId = normalizeNodeId(input.nodeId);
     const targetAgent = typeof input.targetAgent === "string" ? input.targetAgent.trim() : "";
     const message = typeof input.message === "string" ? input.message.trim() : "";
     const cwd = typeof input.cwd === "string" && input.cwd.trim() ? input.cwd.trim() : undefined;
     if (!targetAgent || targetAgent.length > 80) throw new Error("Rabi Agent task targetAgent is required.");
+    if (typeof input.agentId !== "string" || !input.agentId || input.agentId !== input.agentId.trim()) throw new Error("Explicit agentId is required; query /api/lan-agent/instances.");
+    if (typeof input.threadId !== "string" || !input.threadId || input.threadId !== input.threadId.trim()
+      || input.threadId.length > 4096 || /[\0\r\n\u2028\u2029]/u.test(input.threadId)) throw new Error("Explicit full threadId is required; query the Agent thread list.");
     if (!message) throw new Error("Rabi Agent task message is required.");
     const idempotencyKey = typeof input.idempotencyKey === "string" && input.idempotencyKey.trim()
       ? input.idempotencyKey.trim()
       : randomUUID();
     const existing = [...this.tasks.values()].find(task => task.nodeId === nodeId && task.idempotencyKey === idempotencyKey);
     if (existing) {
-      if (existing.targetAgent !== targetAgent || existing.agentId !== input.agentId || existing.message !== message || existing.cwd !== cwd) throw new Error("Remote Agent idempotency key was already used for a different message.");
+      if (existing.targetAgent !== targetAgent || existing.agentId !== input.agentId || existing.threadId !== input.threadId || existing.message !== message || existing.cwd !== cwd) throw new Error("Remote Agent idempotency key was already used for a different message.");
       return { ...existing };
     }
     const connection = this.requireConnection(nodeId);
+    if (this.requireNode(nodeId).taskTargeting !== "explicit-session-v1") {
+      throw new Error("Upgrade the remote connector: explicit-session-v1 task targeting is required; the configured session will not be used as a fallback.");
+    }
     if (this.options.isAgentEnabled && (!input.agentId || !this.options.isAgentEnabled(nodeId, input.agentId))) throw new Error("Manager has not enabled this remote Agent.");
     if (!this.requireNode(nodeId).agentTypes?.includes(targetAgent)) throw new Error("The selected remote node does not support the requested Agent.");
     if (input.agentId) {
@@ -344,6 +353,7 @@ export class LanAgentRegistry {
       nodeId,
       targetAgent,
       agentId: input.agentId,
+      threadId: input.threadId,
       message,
       cwd,
       status: "queued",

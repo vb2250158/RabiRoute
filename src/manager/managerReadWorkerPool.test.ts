@@ -273,7 +273,7 @@ test("manager read workers keep the main event loop responsive during archive qu
 
 test("manager read workers publish a deeply immutable RoleKnowledge catalog", async () => {
   const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-role-catalog-worker-"));
-  const pool = new ManagerReadWorkerPool({ maxConcurrency: 1, maxQueue: 1, timeoutMs: 10_000 });
+  const pool = new ManagerReadWorkerPool({ maxConcurrency: 1, maxQueue: 1 });
   try {
     createPlan(roleDir, {
       id: "worker-catalog",
@@ -297,7 +297,7 @@ test("manager read workers publish a deeply immutable RoleKnowledge catalog", as
 
 test("knowledge plan pages coalesce identical concurrent summary reads", async () => {
   const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-role-plan-page-worker-"));
-  const pool = new ManagerReadWorkerPool({ maxConcurrency: 2, maxQueue: 0, timeoutMs: 10_000 });
+  const pool = new ManagerReadWorkerPool({ maxConcurrency: 2, maxQueue: 0 });
   try {
     for (let index = 0; index < 12; index += 1) {
       createPlan(roleDir, {

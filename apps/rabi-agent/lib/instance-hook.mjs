@@ -7,7 +7,7 @@ export async function requestInstanceHook(input, configPath, fetcher = fetch, { 
   const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
   const sessionId = input.session_id || input.sessionId;
   if (typeof sessionId !== "string" || !sessionId.trim() || (input.session_id && input.sessionId && input.session_id !== input.sessionId)) return undefined;
-  const agents = config.agents || [{ agentId: "default", enabled: true, sessionId: config.agentType === "dsh" ? config.dsh?.sessionId : config.codexDesktop?.threadId }];
+  const agents = config.agents || [];
   const matches = agents.filter(agent => agent.sessionId === sessionId || agent.managedSessionIds?.includes(sessionId));
   if (matches.length !== 1) return undefined;
   const agent = matches[0];

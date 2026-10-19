@@ -115,10 +115,10 @@ test("node credentials bind identity and Manager grants override remote enabled 
   try {
     client = await connectNode(port, "node-fixture", "alpha", [{ agentId: "first", name: "Worker", provider: "codex-desktop", enabled: true }]);
     assert.equal(registry.listInstances()[1]?.agents[0]?.enabled, false);
-    assert.throws(() => registry.assignTask({ nodeId: "alpha", agentId: "first", targetAgent: "codex-desktop", message: "fixture" }), /not enabled/);
+    assert.throws(() => registry.assignTask({ nodeId: "alpha", agentId: "first", targetAgent: "codex-desktop", threadId: "explicit-thread", message: "fixture" }), /not enabled/);
     enabled = true;
     assert.equal(registry.listInstances()[1]?.agents[0]?.enabled, true);
-    assert.throws(() => registry.assignTask({ nodeId: "alpha", targetAgent: "codex-desktop", message: "fixture" }), /not enabled/);
+    assert.throws(() => registry.assignTask({ nodeId: "alpha", targetAgent: "codex-desktop", threadId: "explicit-thread", message: "fixture" }), /agentId/);
     const closed = new Promise<void>(resolve => client!.socket.once("close", () => resolve()));
     credentialValid = false;
     client.socket.send(JSON.stringify({ type: "heartbeat" }));
@@ -160,7 +160,7 @@ test("authenticated hello and catalog register bindings while disabled reconnect
     assert.equal(authority.getApprovedAgentBinding("alpha", "first")?.sessionId, "session-b");
     assert.equal(authority.isAgentEnabled("alpha", "first"), false);
     assert.equal(authority.isAgentEnabled("alpha", "unregistered"), false);
-    assert.throws(() => registry.assignTask({ nodeId: "alpha", agentId: "first", targetAgent: "dsh", message: "blocked-fixture" }), /not enabled/);
+    assert.throws(() => registry.assignTask({ nodeId: "alpha", agentId: "first", targetAgent: "dsh", threadId: "explicit-thread", message: "blocked-fixture" }), /not enabled/);
     assert.throws(() => registry.manageAgent("alpha", "threads", { agentId: "first", action: "read" }), /not enabled/);
     // An old connector's local false is not a hidden second Manager switch.
     client.messages.length = 0;
@@ -169,12 +169,12 @@ test("authenticated hello and catalog register bindings while disabled reconnect
     await client.waitFor("error");
     authority.setAgentEnabled("alpha", "first", true);
     assert.equal(registry.listInstances()[1]?.agents[0]?.enabled, true);
-    const task = registry.assignTask({ nodeId: "alpha", agentId: "first", targetAgent: "dsh", message: "allowed-fixture" });
+    const task = registry.assignTask({ nodeId: "alpha", agentId: "first", targetAgent: "dsh", threadId: "explicit-thread", message: "allowed-fixture" });
     await client.waitFor("assignTask");
     authority.setAgentEnabled("alpha", "first", false);
     // Disable prevents new work but does not rewrite/kill already dispatched work.
     assert.equal(registry.listTasks().find(item => item.taskId === task.taskId)?.status, "delivered");
-    assert.throws(() => registry.assignTask({ nodeId: "alpha", agentId: "first", targetAgent: "dsh", message: "new-blocked-fixture" }), /not enabled/);
+    assert.throws(() => registry.assignTask({ nodeId: "alpha", agentId: "first", targetAgent: "dsh", threadId: "explicit-thread", message: "new-blocked-fixture" }), /not enabled/);
   } finally {
     client?.socket.close(); registry.close(); await closeServer(server);
     fs.rmSync(path.dirname(statePath), { recursive: true, force: true });
@@ -202,7 +202,7 @@ function closeServer(server: http.Server): Promise<void> {
   return new Promise(resolve => server.close(() => resolve()));
 }
 
-async function connectNode(port: number, token: string, nodeId: string, agents?: Array<Record<string, unknown>>): Promise<ConnectedClient> {
+async function connectNode(port: number, token: string, nodeId: string, agents?: Array<Record<string, unknown>>, taskTargeting: string | null = "explicit-session-v1"): Promise<ConnectedClient> {
   const socket = new WebSocket(`ws://127.0.0.1:${port}/api/lan-agent/connect`);
   const messages: Array<Record<string, unknown>> = [];
   const waiters = new Map<string, Array<(message: Record<string, unknown>) => void>>();
@@ -224,7 +224,7 @@ async function connectNode(port: number, token: string, nodeId: string, agents?:
   await new Promise<void>((resolve, reject) => { socket.once("open", () => resolve()); socket.once("error", reject); });
   socket.send(JSON.stringify({ type: "authenticate", token }));
   await waitFor("authenticated");
-  socket.send(JSON.stringify({ type: "hello", node: { nodeId, version: "0.1.0", platform: "win32-x64", agentTypes: ["codex-desktop"], allowedWorkspaces: ["C:/work"], agents } }));
+  socket.send(JSON.stringify({ type: "hello", node: { nodeId, version: "0.1.0", platform: "win32-x64", agentTypes: ["codex-desktop"], allowedWorkspaces: ["C:/work"], agents, taskTargeting } }));
   await waitFor("connected");
   return { socket, messages, waitFor };
 }
@@ -244,15 +244,16 @@ test("LAN Agent registry authenticates, persists state, routes updates, and prot
     invalid.send(JSON.stringify({ type: "authenticate", token: "wrong-token" }));
     await new Promise<void>(resolve => invalid.once("close", () => resolve()));
 
-    alpha = await connectNode(port, "lan-token", "node-alpha");
+    alpha = await connectNode(port, "lan-token", "node-alpha", [{ agentId: "worker", name: "Worker", provider: "codex-desktop", enabled: true }]);
     assert.deepEqual(registry.listNodes().map(node => node.nodeId), ["node-alpha"]);
     const update = registry.requestUpdate("node-alpha", "0.2.0");
     assert.equal(update.updateState, "requested");
     assert.equal((await alpha.waitFor("updateAvailable")).version, "0.2.0");
 
-    const task = registry.assignTask({ nodeId: "node-alpha", targetAgent: "codex-desktop", message: "Inspect the workspace", cwd: "C:/work", idempotencyKey: "task-key" });
+    const task = registry.assignTask({ nodeId: "node-alpha", agentId: "worker", targetAgent: "codex-desktop", threadId: "explicit-thread", message: "Inspect the workspace", cwd: "C:/work", idempotencyKey: "task-key" });
     assert.equal(task.status, "delivered");
-    assert.throws(() => registry.assignTask({ nodeId: "node-alpha", targetAgent: "codex-desktop", message: "Different payload", cwd: "C:/work", idempotencyKey: "task-key" }), /different message/);
+    assert.throws(() => registry.assignTask({ nodeId: "node-alpha", agentId: "worker", targetAgent: "codex-desktop", threadId: "explicit-thread", message: "Different payload", cwd: "C:/work", idempotencyKey: "task-key" }), /different message/);
+    assert.throws(() => registry.assignTask({ nodeId: "node-alpha", agentId: "worker", targetAgent: "codex-desktop", threadId: "other-thread", message: "Inspect the workspace", cwd: "C:/work", idempotencyKey: "task-key" }), /different message/);
     await assert.rejects(registry.waitForTaskAcceptance(task.taskId, 5), /not confirmed/);
     assert.equal(((await alpha.waitFor("assignTask")).task as { taskId?: unknown } | undefined)?.taskId, task.taskId);
     alpha.socket.send(JSON.stringify({ type: "ackTask", taskId: task.taskId }));
@@ -262,7 +263,10 @@ test("LAN Agent registry authenticates, persists state, routes updates, and prot
     alpha.socket.send(JSON.stringify({ type: "progress", taskId: task.taskId, summary: "owner accepted" }));
     assert.equal((await accepted).status, "progress");
 
-    beta = await connectNode(port, "lan-token", "node-beta");
+    beta = await connectNode(port, "lan-token", "node-beta", [{ agentId: "worker", name: "Old connector", provider: "codex-desktop", enabled: true }], null);
+    assert.throws(() => registry.assignTask({ nodeId: "node-beta", agentId: "worker", targetAgent: "codex-desktop", threadId: "explicit-thread", message: "must not fall back" }), /Upgrade.*explicit-session-v1/);
+    assert.equal(registry.listTasks().length, 1);
+    assert.equal(registry.requestUpdate("node-beta", "0.2.3").targetVersion, "0.2.3");
     beta.socket.send(JSON.stringify({ type: "taskResult", taskId: task.taskId, status: "completed", summary: "not allowed" }));
     await beta.waitFor("error");
     assert.equal(registry.listTasks().find(item => item.taskId === task.taskId)?.status, "progress");

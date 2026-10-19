@@ -15,7 +15,7 @@ async function listen(server: http.Server) {
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   return `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}`;
 }
-test("headless instance configures two Agents and dispatches only to the stable selected owner", { timeout: 30_000 }, async () => {
+test("headless instance lists sessions and dispatches an explicit target without rebinding the Agent", { timeout: 30_000 }, async () => {
   const directory = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "rabi-instance-e2e-")));
   const sessions: string[] = [];
   const read = async <T>(request: http.IncomingMessage): Promise<T> => { let raw = ""; for await (const chunk of request) raw += chunk; return JSON.parse(raw || "{}"); };
@@ -61,7 +61,7 @@ test("headless instance configures two Agents and dispatches only to the stable 
   registry.attach(manager, { enabled: () => true, getToken: () => "test-instance" });
   const managerUrl = await listen(manager);
   const configPath = path.join(directory, "config.json");
-  fs.writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, managerUrl, nodeCredential: credential.token, nodeId, releasePublicKeySha256: "a".repeat(64), agentType: "dsh", dsh: { baseUrl: dshUrl, sessionId: "session-11111111-1111-4111-8111-111111111111" }, defaultWorkspace: directory, allowedWorkspaces: [directory] }));
+  fs.writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, managerUrl, nodeCredential: credential.token, nodeId, releasePublicKeySha256: "a".repeat(64), agents: [], defaultWorkspace: directory, allowedWorkspaces: [directory] }));
   const worker = spawn(process.execPath, [path.resolve("apps/rabi-agent/rabi-agent.mjs"), "--run", "--config", configPath], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
   let workerDiagnostic = "";
   for (const stream of [worker.stdout, worker.stderr]) stream.on("data", chunk => { workerDiagnostic = (workerDiagnostic + String(chunk)).slice(-4096).replaceAll(credential.token, "<redacted>"); });
@@ -79,15 +79,28 @@ test("headless instance configures two Agents and dispatches only to the stable 
     const deadline = Date.now() + 8000;
     while (!registry.listNodes()[0]?.connected && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
     assert.equal(registry.listNodes()[0]?.connected, true, workerDiagnostic || 'Fixture connector did not connect.');
-    const created = await request("", { provider: "dsh", name: "Second Agent", sessionId: "session-22222222-2222-4222-8222-222222222222", workspace: directory });
+    const created = await request("", { provider: "dsh", dshBaseUrl: dshUrl, name: "Second Agent", sessionId: "session-22222222-2222-4222-8222-222222222222", workspace: directory });
     assert.equal(created.body.code, 0);
     const second = created.body.result.find((agent: any) => agent.name === "Second Agent");
     assert.ok(second.agentId);
     authority.approveAndEnableAgent(nodeId, second, authority.getSnapshot().revision);
-    const sent = await request(`/${second.agentId}/tasks`, { message: "fixture message", provider: "dsh", idempotencyKey: "delivery-1" });
+    for (const body of [{ message: "missing type", threadId: "session-explicit" }, { message: "missing id", provider: "dsh" }]) {
+      assert.equal((await request(`/${second.agentId}/tasks`, body)).response.status, 400);
+    }
+    const sent = await request(`/${second.agentId}/tasks`, { message: "fixture message", provider: "dsh", threadId: "session-33333333-3333-4333-8333-333333333333", idempotencyKey: "delivery-1" });
     assert.equal(sent.body.result.status, "progress");
-    await request(`/${second.agentId}/tasks`, { message: "fixture message", provider: "dsh", idempotencyKey: "delivery-1" });
-    assert.deepEqual(sessions, ["session-22222222-2222-4222-8222-222222222222"]);
+    await request(`/${second.agentId}/tasks`, { message: "fixture message", provider: "dsh", threadId: "session-33333333-3333-4333-8333-333333333333", idempotencyKey: "delivery-1" });
+    assert.deepEqual(sessions, ["session-33333333-3333-4333-8333-333333333333"]);
+    const legacyTarget = await fetch(`${managerUrl}/api/lan-agent/nodes/${nodeId}/tasks`, { method: "POST",
+      headers: { authorization: "Bearer test-instance", "content-type": "application/json" },
+      body: JSON.stringify({ agentId: second.agentId, threadId: "session-33333333-3333-4333-8333-333333333333", message: "missing provider" }) });
+    assert.equal(legacyTarget.status, 400);
+    assert.deepEqual(sessions, ["session-33333333-3333-4333-8333-333333333333"]);
+    assert.equal(JSON.parse(fs.readFileSync(configPath, "utf8")).agents.find((agent: any) => agent.agentId === second.agentId).sessionId, "session-22222222-2222-4222-8222-222222222222");
+    const listed = await request(`/${second.agentId}/threads`, { action: "list", agentAdapter: "dsh", limit: 100, offset: 0 });
+    assert.equal(listed.body.result.statusCode, 200, JSON.stringify(listed.body));
+    assert.ok(JSON.stringify(listed.body.result.data).includes("session-33333333-3333-4333-8333-333333333333"));
+    assert.equal((await request(`/${second.agentId}/threads`, { action: "list" })).response.status, 400);
     const readTask = await request(`/${second.agentId}/threads`, { action: "read", agentAdapter: "dsh", threadId: "session-22222222-2222-4222-8222-222222222222" });
     assert.equal(readTask.body.code, 0, JSON.stringify(readTask.body));
     assert.equal(readTask.body.result.statusCode, 200);
@@ -107,7 +120,7 @@ test("headless instance configures two Agents and dispatches only to the stable 
     const etag = catalog.headers.get("etag");
     assert.match(etag!, /^"[a-f0-9]{64}"$/);
     const beforeDisable = await catalog.json() as { instances: Array<{ instanceId: string; agents: Array<{ agentId: string }> }> };
-    assert.equal(beforeDisable.instances.find(instance => instance.instanceId === nodeId)?.agents.length, 2);
+    assert.equal(beforeDisable.instances.find(instance => instance.instanceId === nodeId)?.agents.length, 1);
     const disabledGrant = await fetch(`${managerUrl}/api/lan-agent/instances/${nodeId}/agents/${second.agentId}/authorization`, {
       method: "PUT", headers: { authorization: "Bearer test-instance", "content-type": "application/json",
         "if-match": etag!, "idempotency-key": "disable-selected-owner" }, body: JSON.stringify({ enabled: false })
@@ -120,7 +133,7 @@ test("headless instance configures two Agents and dispatches only to the stable 
     assert.equal(state.authorization.nodes.find(node => node.nodeId === nodeId)?.enabledAgentIds.includes(second.agentId), false);
     const disabled = await request(`/${second.agentId}/tasks`, { message: "must not deliver", provider: "dsh" });
     assert.equal(disabled.response.status, 400);
-    assert.deepEqual(sessions, ["session-22222222-2222-4222-8222-222222222222"]);
+    assert.deepEqual(sessions, ["session-33333333-3333-4333-8333-333333333333"]);
     assert.equal(Object.hasOwn(JSON.parse(fs.readFileSync(configPath, "utf8")).agents.find((agent: any) => agent.agentId === second.agentId), "enabled"), false);
   } finally {
     if (worker.exitCode === null && worker.signalCode === null) worker.kill();

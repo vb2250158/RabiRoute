@@ -1,6 +1,6 @@
 {
   "name": "rabi-agent",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
   "type": "module",
   "description": "Single-owner LAN connector with a Windows tray child, forwarding tasks to bound Codex Desktop or DSH sessions.",

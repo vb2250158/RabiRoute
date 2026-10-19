@@ -4,11 +4,7 @@ import { normalizeDshBinding } from "./dsh.mjs";
 
 /** The executing computer owns task settings; enrolled Agent enablement belongs to Manager. */
 export function instanceAgents(config) {
-  return Array.isArray(config.agents) ? config.agents : [{
-    agentId: "default", name: "Agent", provider: config.agentType || "codex-desktop", enabled: true,
-    workspace: config.defaultWorkspace, sessionId: config.agentType === "dsh" ? config.dsh?.sessionId : config.codexDesktop?.threadId,
-    model: config.codexDesktop?.model, reasoningEffort: config.codexDesktop?.reasoningEffort, dsh: config.dsh
-  }];
+  return Array.isArray(config.agents) ? config.agents : [];
 }
 
 export function agentCatalog(config) {
@@ -58,7 +54,11 @@ export function registerManagedSession(config, agentId, sessionId) {
 
 export function resolveInstanceAgent(config, task) {
   const agents = instanceAgents(config);
-  const agent = agents.find(agent => agent.agentId === (task.agentId || "default"));
+  if (typeof task.agentId !== "string" || !task.agentId.trim()) throw new Error("Explicit agentId is required; query the instance Agent catalog.");
+  if (typeof task.targetAgent !== "string" || !task.targetAgent.trim()) throw new Error("Explicit targetAgent is required.");
+  if (typeof task.threadId !== "string" || !task.threadId || task.threadId !== task.threadId.trim()
+    || task.threadId.length > 4096 || /[\0\r\n\u2028\u2029]/u.test(task.threadId)) throw new Error("Explicit full threadId is required; query the Agent thread list.");
+  const agent = agents.find(agent => agent.agentId === task.agentId);
   // Enrolled execution rechecks Manager authority immediately before the host turn.
   if (!agent || (!config.nodeCredential && agent.enabled === false)) throw new Error("The requested instance Agent is missing or disabled.");
   if (task.targetAgent !== agent.provider) throw new Error("The requested provider does not match the bound Agent.");

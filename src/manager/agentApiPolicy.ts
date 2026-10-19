@@ -195,6 +195,11 @@ const roleKnowledge: readonly Definition[] = [
 ];
 
 const catalog: readonly AgentApiOperation[] = Object.freeze([
+  ...operations("instance-agent", "/api/lan-agent/instances", [
+    ["GET", "", "查询电脑与 Agent 列表，取得 instanceId、agentId、provider 及连接状态"],
+    ["POST", "/:instanceId/agents/:agentId/threads", "按明确 agentAdapter 查询会话列表（action=list，limit/offset）或操作明确 threadId"],
+    ["POST", "/:instanceId/agents/:agentId/tasks", "按明确 provider 和完整 threadId 投递；不使用默认 Agent 或修改绑定"]
+  ], ["tasks 每次必须传 provider、threadId、message；agentId 位于路径。先查询实例目录，再以 action=list 查询会话。", "idempotencyKey 同时绑定 provider、agentId、threadId、message 与 cwd；相同键不得更换目标。"]),
   ...operations("remote-terminal", "/api/lan-agent/instances/:instanceId/terminals", [
     ["GET", "", "查询远端 CMD/PowerShell 终端及真实进程状态"],
     ["POST", "", "新增、查询、输入、调整大小或退出远端终端"],

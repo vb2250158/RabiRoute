@@ -73,7 +73,17 @@ test("disposable acquisitions register with RuntimeOwner at their acquisition si
   assert.match(control, /http\.createServer\(managerStartingRequest\);\s*managerRuntimeOwner\.register\("http_server"/);
   assert.match(control, /new RoleStorageApplication\([\s\S]*?\);\s*managerRuntimeOwner\.register\("role_storage"/);
   assert.match(control, /new GenerationRuntime\([\s\S]*?\);\s*managerRuntimeOwner\.register\("manager_plugin_kernel"/);
-  assert.match(control, /startManagerDiscoveryPublisher\([\s\S]*?\);\s*managerRuntimeOwner\.register\("manager_lan_discovery"/);
+  assert.match(control, /managerRuntimeOwner\.register\("manager_lan_discovery", async \(\) => \{[\s\S]*?managerLanDiscoveryFlight\?\.catch[\s\S]*?const startLanDiscovery/);
   assert.match(control, /startConfigWatcher\([\s\S]*?managerRuntimeOwner\.register\("config_watcher"/);
   assert.match(control, /startPluginPackageWatcher\([\s\S]*?managerRuntimeOwner\.register\("plugin_package_watcher"/);
+});
+
+test("deferred discovery reserves its owner before publication and starts after READY", () => {
+  const reserved = control.indexOf('managerRuntimeOwner.register("manager_lan_discovery"');
+  const published = control.indexOf("managerRuntimeOwner.publish(");
+  const ready = control.indexOf("console.log(managerReadyLine(");
+  const started = control.indexOf("void startLanDiscovery().catch");
+  assert.ok(reserved > 0 && reserved < published);
+  assert.ok(published < ready && ready < started);
+  assert.equal(occurrences('managerRuntimeOwner.register("manager_lan_discovery"'), 1);
 });

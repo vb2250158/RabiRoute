@@ -10,8 +10,8 @@ import type {
   PersonaVoiceTranscriptQueryResult
 } from "../personaVoiceTranscriptView.js";
 import {
-  publishRoleKnowledgeCatalogSnapshot,
-  publishRolePlanCatalog,
+  publishRoleKnowledgeCatalogSnapshotAsync,
+  publishRolePlanCatalogAsync,
   type PlanItem,
   type RoleKnowledgeCatalogSnapshot,
   type MemoryLifecyclePresentation,
@@ -350,11 +350,12 @@ export class ManagerReadWorkerPool {
       type: "role_knowledge_catalog_snapshot",
       roleDir
     }, options).then(snapshot => {
-      const current = planReadFence(roleDir);
-      if (current.epoch !== fence.epoch || current.revision !== fence.revision) {
-        throw new Error("PLAN_CATALOG_DIRTY");
-      }
-      return publishRoleKnowledgeCatalogSnapshot(roleDir, snapshot);
+      const assertCurrent = () => {
+        options.signal?.throwIfAborted();
+        const current = planReadFence(roleDir);
+        if (current.epoch !== fence.epoch || current.revision !== fence.revision) throw new Error("PLAN_CATALOG_DIRTY");
+      };
+      return publishRoleKnowledgeCatalogSnapshotAsync(roleDir, snapshot, assertCurrent);
     });
   }
 
@@ -364,12 +365,13 @@ export class ManagerReadWorkerPool {
   ): Promise<RolePlanCatalogRead> {
     const fence = planReadFence(roleDir);
     return this.run<RolePlanCatalogRead>({ type: "role_plan_catalog", roleDir }, options)
-      .then(result => {
-        const current = planReadFence(roleDir);
-        if (current.epoch !== fence.epoch || current.revision !== fence.revision) {
-          throw new Error("PLAN_CATALOG_DIRTY");
-        }
-        return { ...result, plans: [...publishRolePlanCatalog(roleDir, result.plans)] };
+      .then(async result => {
+        const assertCurrent = () => {
+          options.signal?.throwIfAborted();
+          const current = planReadFence(roleDir);
+          if (current.epoch !== fence.epoch || current.revision !== fence.revision) throw new Error("PLAN_CATALOG_DIRTY");
+        };
+        return { ...result, plans: [...await publishRolePlanCatalogAsync(roleDir, result.plans, assertCurrent)] };
       });
   }
 

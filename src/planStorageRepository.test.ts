@@ -7,6 +7,8 @@ import test from "node:test";
 import {
   commitPlanLifecycleTransitionUnderLease,
   readCanonicalPlanStoragePackageUnderLease,
+  readPlanStorageInventoryHash,
+  readPlanStoragePackage,
   recoverPlanLifecycleTransitions,
   recoverPlanStorageTransactions,
   withPlanStorageLease,
@@ -50,6 +52,34 @@ function revision(planId: string, status: "执行中" | "完成", sequence: numb
     packageFile("plan.json", `${JSON.stringify(plan, null, 2)}\n`)
   ];
 }
+
+test("streamed plan revisions match package revisions and invalidate replaced attachments", async t => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "plan-streamed-revision-"));
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const planId = "streamed-plan";
+  withPlanStorageLease(roleDir, planId, lease => commitPlanLifecycleTransitionUnderLease(lease, {
+    transactionId: "stream_create", kind: "plan-create", fromBucket: null, toBucket: "active",
+    files: revision(planId, "执行中", 1)
+  }));
+  const attachment = path.join(roleDir, "plans", "active", planId, "attachments", "large.bin");
+  fs.writeFileSync(attachment, Buffer.alloc(4 * 1024 * 1024, 1));
+  let turns = 0;
+  const timer = setInterval(() => turns++, 1);
+  t.after(() => clearInterval(timer));
+  const first = await readPlanStorageInventoryHash(roleDir, planId, "active");
+  assert.equal(first, readPlanStoragePackage(roleDir, planId, "active").inventoryHash);
+  assert.ok(turns > 0);
+  assert.equal(await readPlanStorageInventoryHash(roleDir, planId, "active"), first);
+  const metadata = fs.statSync(attachment);
+  fs.writeFileSync(`${attachment}.replacement`, Buffer.alloc(metadata.size, 2));
+  fs.utimesSync(`${attachment}.replacement`, metadata.atime, metadata.mtime);
+  fs.renameSync(`${attachment}.replacement`, attachment);
+  const second = await readPlanStorageInventoryHash(roleDir, planId, "active");
+  assert.notEqual(second, first);
+  assert.equal(second, readPlanStoragePackage(roleDir, planId, "active").inventoryHash);
+  fs.writeFileSync(path.join(path.dirname(path.dirname(attachment)), "history.jsonl"), "broken\n");
+  await assert.rejects(readPlanStorageInventoryHash(roleDir, planId, "active"));
+});
 
 test("scoped lifecycle recovery leaves another plan's incomplete and corrupt transactions untouched", t => {
   const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "plan-lifecycle-scope-"));

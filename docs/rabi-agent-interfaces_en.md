@@ -903,6 +903,26 @@ Use `channel=wecom` and provide the exact `params.chatId`. A source response may
 
 Use `channel=rabilink`, `params.proactive=true`, and at least one explicit `targetDeviceIds` or `targetDeviceKinds` selector to enqueue a proactive device message when the selected Route enables RabiLink output and has a Relay configured. A non-proactive send also requires `params.sourceMessageId`. The local handler still goes through Outbox; it must not bypass RabiRoute and call the Relay directly.
 
+## Explicit remote Agent targets and list queries
+
+Query `GET /api/lan-agent/instances` on the current Manager to obtain each computer's `instanceId`, `agentId`, `provider` and connection state. `agentId` identifies the connector's Agent configuration; the full session ID is a separate `threadId`.
+
+List sessions with `POST /api/lan-agent/instances/{instanceId}/agents/{agentId}/threads`:
+
+```json
+{"action":"list","agentAdapter":"codex","limit":100,"offset":0}
+```
+
+Use `limit/offset` to page through results; DSH uses `agentAdapter:"dsh"`. After selecting the full ID, call `POST /api/lan-agent/instances/{instanceId}/agents/{agentId}/tasks`:
+
+```json
+{"provider":"codex-desktop","threadId":"<full session ID>","message":"<task text>","cwd":"<remote workspace>","idempotencyKey":"<stable delivery key>"}
+```
+
+AgentType is the `provider` field and the session Id is `threadId`; both are required for every delivery. Missing identity fails without selecting `default`, the first provider or the configured session. Requests select their own target without rebinding configuration. Existing catalog identities remain intact; legacy single-task settings no longer synthesize a `default` Agent. Configured message Routes also submit their selected provider and full session ID explicitly.
+
+The older `POST /api/lan-agent/nodes/{nodeId}/tasks` likewise requires `agentId`, `targetAgent`, `threadId` and `message`, without provider inference. Idempotency binds the complete target and payload; reconcile an uncertain original operation before another send. Connector 0.2.3 declares `taskTargeting:"explicit-session-v1"` in hello. Task delivery to older clients without this declaration fails with an upgrade message, preventing them from ignoring the new field and sending to their configured session. Computer APIs retain their existing contract.
+
 ## Codex thread bridge
 
 ### External Agent sources and stable delivery IDs

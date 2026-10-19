@@ -10771,10 +10771,6 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   }
   managerRuntimeOwner.register("all_day_recording", () => allDayRecording.dispose());
   managerRuntimeOwner.register("companion_activity", async () => { await companionActivity.dispose(); await companionFrameDelivery.dispose(); });
-  if (!managerReadOnly) {
-    try { await allDayRecording.service.restore(); }
-    catch (error) { console.error("All-day recording could not restore its saved intent:", error); }
-  }
   managerRuntimeOwner.register("request_scoped_resources", () => stopManagerResources());
   managerRuntimeOwner.register("manual_trigger_processes", () => manualTriggerProcesses.stopAll());
 
@@ -10978,6 +10974,10 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         });
         return;
       }
+      if (request.method === "GET" && requestUrl.pathname === "/health") {
+        jsonResponse(response, 200, managerHealthPayload());
+        return;
+      }
       if (await handleAgentDeliveryAuthority(request, requestUrl, response, {
         store: agentRequests,
         managerInstanceId: lanAgentRegistry.localInstanceId,
@@ -11008,10 +11008,6 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         readJson: readJsonBody,
         json: jsonResponse
       })) return;
-      if (request.method === "GET" && requestUrl.pathname === "/health") {
-        jsonResponse(response, 200, managerHealthPayload());
-        return;
-      }
       if (handleSourcePatchApi(request, requestUrl, response, {
         service: managerSourcePatches,
         identity: managerHostIdentity,
@@ -11194,21 +11190,23 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       memoryConsolidationScheduler?.reschedule();
     }
   });
+  let managerLanDiscoveryFlight: ReturnType<typeof startManagerDiscoveryPublisher> | undefined;
+  managerRuntimeOwner.register("manager_lan_discovery", async () => {
+    const publisher = await managerLanDiscoveryFlight?.catch(() => undefined);
+    await publisher?.stop();
+  });
+  const startLanDiscovery = async (): Promise<void> => {
   const lanDiscoveryEnabled = !managerReadOnly
     && managerListensOnLan(managerHost)
     && rabiGlobalConfig.read().webguiLan.enabled;
   if (lanDiscoveryEnabled) {
     try {
-      const managerLanDiscoveryFlight = startManagerDiscoveryPublisher({
+      managerLanDiscoveryFlight = startManagerDiscoveryPublisher({
         port: managerPort,
         applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
         managerInstanceId,
         guid: rabiGlobalConfig.read().rabiGuid,
         onStatus: status => { managerLanDiscoveryStatus = status; }
-      });
-      managerRuntimeOwner.register("manager_lan_discovery", async () => {
-        const publisher = await managerLanDiscoveryFlight.catch(() => undefined);
-        await publisher?.stop();
       });
       await managerLanDiscoveryFlight;
       if (shuttingDown) return;
@@ -11231,6 +11229,8 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       serviceType: "_rabiroute._tcp.local"
     });
   }
+
+  };
 
   activeGatewayDiagnosticsSnapshotService().requestRefresh({ force: true });
   void syncActiveRabiLinkRelay().catch(error => {
@@ -11309,6 +11309,22 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     });
   });
   // Publish the fenced control plane before any NAS recovery worker can start.
+  setImmediate(() => {
+    if (managerRuntimeOwner.isTearingDown()) return;
+    void startLanDiscovery().catch(error => {
+      managerOperationalLog.record("warn", "manager_lan_discovery_failed", {
+        error: managerOperationalError(error, rootDir)
+      });
+    });
+  });
+  if (!managerReadOnly) {
+    setImmediate(() => {
+      if (managerRuntimeOwner.isTearingDown()) return;
+      void allDayRecording.service.restore().catch(error => {
+        console.error("All-day recording could not restore its saved intent:", error);
+      });
+    });
+  }
   planStorageStartupLifecycle.start();
   routeCatalogStartupLifecycle.start();
   } catch (error) {

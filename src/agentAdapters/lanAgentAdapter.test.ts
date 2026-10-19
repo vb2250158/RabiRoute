@@ -8,6 +8,12 @@ test("LAN adapter sends the selected node and stable delivery identity; offline 
   const previous = keys.map(key => process.env[key]);
   const requests: Array<{ url: string | undefined; body: Record<string, unknown> }> = [];
   const server = http.createServer(async (request, response) => {
+    if (request.method === "GET") {
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ code: 0, instances: [{ instanceId: "node-fixture", connected: true,
+        agents: [{ agentId: "agent-fixture", provider: "codex-desktop", enabled: true, sessionId: "configured-thread", workspace: "C:/workspace" }] }] }));
+      return;
+    }
     let raw = "";
     for await (const chunk of request) raw += chunk;
     requests.push({ url: request.url, body: JSON.parse(raw) });
@@ -27,6 +33,7 @@ test("LAN adapter sends the selected node and stable delivery identity; offline 
     assert.equal(requests[0]?.url, "/api/lan-agent/instances/node-fixture/agents/agent-fixture/tasks");
     assert.equal(requests[0]?.body.idempotencyKey, "delivery-fixture");
     assert.equal(requests[0]?.body.provider, "codex-desktop");
+    assert.equal(requests[0]?.body.threadId, "configured-thread");
     await assert.rejects(notifyInstanceAgent("codex", { instanceId: "node-fixture", agentId: "agent-fixture" }, envelope, { imagePaths: ["local.png"] }), /图片/);
     await new Promise<void>(resolve => server.close(() => resolve()));
     await assert.rejects(notifyInstanceAgent("codex", { instanceId: "node-fixture", agentId: "agent-fixture" }, envelope));

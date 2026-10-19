@@ -43,6 +43,7 @@ test("bootstrap exchanges ticket once, persists only credential and registered A
   assert.equal(config.nodeCredential, "fixture-node-credential");
   assert.equal(process.env.RABI_AGENT_BOOTSTRAP_TICKET, undefined);
   assert.equal(config.agents[0].sessionId, "new-task");
+  assert.notEqual(config.agents[0].agentId, "default");
   assert.equal(fs.readFileSync(configPath, "utf8").includes("fixture-ticket"), false);
   delete process.env.RABI_AGENT_BOOTSTRAP_TICKET;
   await __test.bootstrapConfig(configPath, server(requests));
@@ -142,13 +143,14 @@ test("queued task revoked before execution never enters the host", async () => f
   let turns = 0;
   let releaseQueue;
   globalThis.fetch = async (_url, init) => { requests++; assert.equal(init.headers["x-rabiroute-agent-id"], "default"); return Response.json({ code: 403 }, { status: 403 }); };
-  const runtime = new __test.RabiAgentRuntime({ managerUrl: "http://manager.test:54321", nodeId: "fixture-node", nodeCredential: "fixture-node", defaultWorkspace: directory, allowedWorkspaces: [directory], codexDesktop: { threadId: "fixture-session" } }, configPath);
+  const runtime = new __test.RabiAgentRuntime({ managerUrl: "http://manager.test:54321", nodeId: "fixture-node", nodeCredential: "fixture-node", defaultWorkspace: directory, allowedWorkspaces: [directory],
+    agents: [{ agentId: "default", provider: "codex-desktop", sessionId: "fixture-session", workspace: directory }] }, configPath);
   runtime.desktop.startTurn = async () => { turns++; };
   // Exercise authority revocation, not the earlier disconnected-transport guard.
   runtime.connected = true;
   runtime.taskQueue = new Promise(resolve => { releaseQueue = resolve; });
   try {
-    runtime.enqueueTask({ taskId: "fixture-task", targetAgent: "codex-desktop", message: "fixture", cwd: directory });
+    runtime.enqueueTask({ taskId: "fixture-task", agentId: "default", targetAgent: "codex-desktop", threadId: "explicit-target", message: "fixture", cwd: directory });
     assert.equal(requests, 0);
     releaseQueue();
     await runtime.taskQueue;
@@ -192,13 +194,14 @@ test("Manager enablement controls queued execution despite a legacy local disabl
     return enabled ? Response.json(identity("fixture-node")) : Response.json({ code: 403 }, { status: 403 });
   };
   try {
-    await runtime.runTask({ taskId: "enabled-task", agentId: agent.agentId, targetAgent: agent.provider, message: "fixture", cwd: directory });
+    await runtime.runTask({ taskId: "enabled-task", agentId: agent.agentId, targetAgent: agent.provider, threadId: "explicit-target", message: "fixture", cwd: directory });
     assert.equal(turns.length, 1);
-    assert.equal(turns[0].threadId, agent.sessionId);
+    assert.equal(turns[0].threadId, "explicit-target");
+    assert.equal(agent.sessionId, "fixture-session");
     assert.equal(runtime.stateStore.state.tasks["enabled-task"].status, "progress");
     enabled = false;
     const beforeDenied = requests;
-    await runtime.runTask({ taskId: "disabled-task", agentId: agent.agentId, targetAgent: agent.provider, message: "fixture", cwd: directory });
+    await runtime.runTask({ taskId: "disabled-task", agentId: agent.agentId, targetAgent: agent.provider, threadId: "another-target", message: "fixture", cwd: directory });
     assert.ok(requests > beforeDenied);
     assert.equal(turns.length, 1);
     assert.match(runtime.stateStore.state.tasks["disabled-task"].error, /Manager no longer authorizes/);

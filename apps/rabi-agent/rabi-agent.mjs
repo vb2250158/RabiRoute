@@ -196,7 +196,13 @@ async function bootstrapConfig(configPath, fetcher = fetch) {
   }
   // A computer can enroll without installing or opening an Agent backend.
   // Existing catalogs retain their identity; an explicit backend opts into binding.
-  config.agents ??= agentType ? instanceAgents(config) : [];
+  config.agents ??= [];
+  if (agentType && !config.agents.length) {
+    config.agents = configureInstanceAgent(config, { provider: agentType,
+      sessionId: agentType === "dsh" ? dsh.sessionId : codexThreadId, workspace: defaultWorkspace,
+      model: config.codexDesktop?.model, reasoningEffort: config.codexDesktop?.reasoningEffort,
+      dshBaseUrl: dsh?.baseUrl }).agents;
+  }
   delete config.lanLinkToken;
   delete config.bootstrapTicket;
   let response;
@@ -1015,6 +1021,7 @@ class RabiAgentRuntime {
           version: AGENT_VERSION,
           platform: `${process.platform}-${process.arch}`,
           agentTypes: [...new Set(instanceAgents(this.config).map(agent => agent.provider))],
+          taskTargeting: "explicit-session-v1",
           agents: agentCatalog(this.config),
           terminalShells: process.platform === "win32" ? ["cmd", "powershell"] : [],
           computerCapabilities: ["files", ...(process.platform === "win32" ? ["windows", "screenshots"] : [])],
@@ -1164,16 +1171,16 @@ class RabiAgentRuntime {
       const authority = await createManagerClient({ config: this.config, configPath: this.configPath, agentId: agent.agentId }).invoke("GET", "/meta");
       if (!authority.ok || authority.uncertain || authority.identityChanged) throw new Error("Manager no longer authorizes this Agent task; host execution was refused.");
       if (agent.provider === "dsh") {
-        await sendDshTask(agent.dsh, prompt);
+        await sendDshTask({ ...agent.dsh, sessionId: task.threadId }, prompt);
         this.agentExecutionStatus.set(agent.agentId, "宿主已接收");
         this.send({ type: "progress", taskId, summary: "DSH accepted the message into the bound session queue. Read the response in that DSH session." });
         rememberTask(this.stateStore, taskId, { status: "progress" });
         return;
       }
-      if (this.taskByThread.has(agent.sessionId)) throw new Error("The bound Codex task is busy. Wait for its current task to finish before submitting another message.");
-      this.taskByThread.set(agent.sessionId, taskId);
+      if (this.taskByThread.has(task.threadId)) throw new Error("The selected Codex task is busy. Wait for its current task to finish before submitting another message.");
+      this.taskByThread.set(task.threadId, taskId);
       await this.desktop.startTurn({
-        threadId: agent.sessionId,
+        threadId: task.threadId,
         prompt,
         cwd,
         model: agent.model,

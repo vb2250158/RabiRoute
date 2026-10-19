@@ -10,6 +10,10 @@ Rabi Agent 是远端电脑客户端。Windows 提供托盘和状态窗口，macO
 
 集群由一个主控 RabiPC 保存人格、记忆、Skill 和流程。远端客户端在线即可提供终端、文件互传、窗口查询及截图，关联 Codex/DSH 无需启动。电脑接口与使用步骤见[主控与远端电脑客户端](../../docs/remote-computer-client.md)。
 
+## 查询 Agent 与明确投递目标
+
+`GET /api/lan-agent/instances` 返回电脑与 Agent 目录；向对应 Agent 的 `/threads` 接口提交 `action:list` 和明确的 `agentAdapter` 查询会话，再向 `/tasks` 每次提交 `provider`、完整 `threadId` 和正文。投递不再使用隐含 `default` 或先改绑固定任务。完整请求、分页和幂等要求见[远端目标合同](../../docs/rabi-agent-interfaces.md#远端-agent-的明确目标与列表查询)。
+
 ## 远端终端（0.2.2，实验实现）
 
 在主机 WebGUI 的 **RabiLink → 远端智能体** 展开在线电脑，点击 **远端终端**。Windows 默认支持 **CMD** 和 **PowerShell**，无需额外功能开关。
@@ -142,5 +146,5 @@ node rabi-agent.mjs --api POST /api/agent/send --agent <agentId> --body-stdin
 - 新源码在 HTTP/WS 监听前检测旧 `lan-agent-tasks.json`：没有完成标记时，即使注册表为空也轮换 WebGUI Token，成功后写标记，失败中止启动。旧远程浏览器链接失效后须在本机取得新链接。检测范围外曾暴露的密钥也须确认撤销或轮换；未轮换的共享密钥仍可能绕过节点授权。整体部署与 Host 健康不等于旧节点迁移验收，仍须逐节点核对重新接入和旧密钥失效，不能宣称所有现有安装已自动安全迁移。
 - 接入时固定发布公钥 SHA-256 指纹；内容摘要自动更新核对该指纹、Ed25519 与逐文件 hash。IPC 准备、排空、交接、指针提交及失败恢复使用[统一接入合同](../../docs/lan-rabi-agent-bootstrap.md)。
 - 不包含 Manager、Gateway、WebGUI、配对码或设备密码；使用标准 DNS-SD 动态定位原 Manager，不扫描端口。不启动备用 Runtime；Codex owner 或 DSH 绑定不可用时失败，不互相回退。
-- 0.2.0 将电脑作为实例，原单任务配置映射为稳定的 `default` Agent。每个实例可增加多个 Agent；执行配置保存在该电脑，Manager 统一管理。安装发布目录的固定 npm 依赖后，扫描、任务操作与 Hook 安装使用共用管理模块。
+- 电脑作为实例，每个实例可增加多个 Agent；不再从旧单任务配置自动生成 `default` Agent。已有目录身份保留，投递必须明确指定类型和完整会话 ID；执行配置保存在该电脑，Manager 统一管理。
 - 节点在线、任务已入队或本机夹具通过都不等于真实回复完成。跨机连续投递、登录启动、断网与升级恢复，以及高级计划/记忆工作流仍需实机验收。

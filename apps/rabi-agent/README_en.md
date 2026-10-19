@@ -10,6 +10,10 @@ Rabi Agent is a remote computer client. Windows provides a tray and status windo
 
 One controller RabiPC owns personas, memory, skills and workflows. An online remote client provides terminals, file transfer, window queries and screenshots even without running Codex/DSH. See [controller and remote computer clients](../../docs/remote-computer-client_en.md).
 
+## Query Agents and specify the delivery target
+
+`GET /api/lan-agent/instances` returns computers and their Agent catalogs. Query an Agent's `/threads` endpoint with `action:list` and explicit `agentAdapter`, then supply `provider`, the full `threadId` and message on every `/tasks` delivery. Delivery no longer uses an implicit `default` or requires rebinding a configured task first. See the [remote target contract](../../docs/rabi-agent-interfaces_en.md#explicit-remote-agent-targets-and-list-queries) for requests, pagination and idempotency.
+
 ## Remote terminals (0.2.2, experimental)
 
 In the host WebGUI, expand an online computer under **RabiLink → Remote Agents** and choose **Remote terminal**. Windows supports **CMD** and **PowerShell** by default, without another feature switch.
@@ -142,5 +146,5 @@ Require both Manager and channel send receipts. File upload, caption and whole-r
 - Before opening HTTP/WS listeners, the new source checks for old `lan-agent-tasks.json`. Without a completion marker, it rotates the WebGUI Token even if that registry is empty, writes the marker after success, and aborts startup on failure. Obtain new browser remote links locally when old links stop working. Confirm revocation or rotation for exposed keys outside this detection scope too; an unrotated shared key may still bypass node grants. A successful deployment and healthy Host do not establish older-node migration acceptance. Re-enrollment and invalidation of old keys still require per-node verification; do not describe all existing installations as already automatically secured.
 - Bootstrap pins the release public-key SHA-256 fingerprint. Content-digest automatic updates verify this pin, Ed25519 and every file hash. IPC preparation, task draining, connection handoff, pointer commit and rollback follow the [bootstrap contract](../../docs/lan-rabi-agent-bootstrap_en.md).
 - Does not include Manager, Gateway, WebGUI, pairing codes or device passwords. Standard DNS-SD dynamically discovers the enrolled Manager without port scanning. No fallback Runtime is started. An unavailable Codex owner or DSH binding fails without switching to the other host.
-- Version 0.2.0 represents computers as instances and maps old single-task configuration to a stable `default` Agent. Each instance can contain multiple Agents. Execution configuration stays on that computer, with unified Manager administration. Install the fixed npm dependencies in the release directory; scans, task operations and Hook installation use the shared management module.
+- Each computer is an instance with multiple Agents. Legacy single-task settings no longer synthesize a `default` Agent. Existing catalog identities are preserved; each delivery explicitly specifies its provider and full session ID. Execution configuration stays on that computer, with unified Manager administration.
 - A connected node, queued task or passing local fixture does not prove a completed reply. Cross-computer continuous delivery, login startup, disconnect/update recovery and advanced plan/memory workflows still require real-device acceptance.
