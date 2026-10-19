@@ -4,13 +4,17 @@
 
 # 远端智能体接入与更新
 
+连接器 0.2.5 中，复制接入提示词即包含本次接入和凭据修复授权，无需额外审批或主控 Agent 确认。已有有效凭据直接复用；凭据缺失或被拒绝时，用新票据修复原节点，保留 Agent 绑定、工作目录及用户明确设置的禁用项。客户端在兑换前保存当前用户私有的 `config.json.enrollment.json` 恢复记录，只含节点身份与随机恢复凭据，不保存票据。响应丢失时自动用同一凭据查询自身状态；中断后重新运行同一个 `--bootstrap`，即使 Manager 已重启也可核对已完成的同次兑换。已删除节点或已被替换的旧凭据不能用失效票据恢复。恢复文件保持私有，成功后自动删除；只有票据失效或缺失时才需要重新复制提示词。
+
 > 状态：experimental（实验集成）。独立节点凭据、Manager 授权、受限 API、资源读取及上传后群文件发送已完成本机测试、完整构建和部署；`0.3.4-4b5d30118b40` 的 Host/Manager 健康与运行产物已核对。上传闭环通过真实 HTTP 与模拟 NapCat 验证，不代表真实双机、真实群文件或旧节点迁移已验收。后续发现指引与更新机制的审计修复须另行核对最终部署版本。
 
 远端 Agent 只作为执行端接入：在 Agent 区域选择已接入实例及 Agent。消息端菜单、快速配置和设备密码扫描面板中的旧入口已移除。旧 `remoteAgent` 消息端键仅为存量配置兼容保留；完成实例／Agent 绑定迁移和旧任务回执归档后删除，不再用于新增接入。
 
 ## 远端 CMD 与 PowerShell
 
-电脑能力直接由客户端执行，关联 Codex/DSH 无需启动；人格、记忆、Skill 和流程由一个主控 RabiPC 管理。主机 Agent 的输出读取、文件互传、窗口查询及截图见[远端电脑客户端](remote-computer-client.md)。
+电脑能力直接由客户端执行，关联 Codex/DSH 无需启动。主机电脑上的 Rabi 服务承担常驻管理，不依赖单独的主控 Agent；普通已鉴权 Agent 可查询计划、近期与沉淀记忆、Skill。数据由对应 Rabi 服务统一保存。平台能力及使用步骤见[远端电脑客户端](remote-computer-client.md)。
+
+Mac/Linux 的连接器 0.2.4 新增 POSIX 交互终端，按远端实际 shell 返回 Zsh/Bash/sh；依赖 node-pty，安装时保留 optional dependencies。Mac 使用当前用户 LaunchAgent；原生编译可能需要 Xcode Command Line Tools。Windows 的窗口查询与截图尚未迁移到 Mac。Mac 真机终端与 Desktop IPC 验收仍待节点在线。
 
 连接器 0.2.2 在 Windows 默认提供两种终端。主机页面 **RabiLink → 远端智能体 → 在线电脑 → 远端终端** 可新增、查询、切换和退出会话。关闭窗口保留会话，退出终端结束其子程序；断线和主程序退出结束所有终端。操作使用原连接鉴权，命令在远端连接器用户身份下执行。使用与容量边界见 [远端终端](../apps/rabi-agent/README.md#远端终端022实验实现)。
 
@@ -20,7 +24,7 @@
 Windows 连接器 `0.2.1` 提供本地托盘：双击查看状态与日志，菜单控制连接器、打开主机管理页和设置开机启动。一个主程序拥有连接器及托盘子程序，退出时统一释放；Codex/DSH 保持独立。旧节点升级后正常退出原主程序，再用既有启动器启动一次；身份和任务绑定保留。托盘已通过本机隔离验证，真实双机升级和登录启动待验收。详见 [Windows 托盘](../apps/rabi-agent/README.md#windows-托盘021实验实现)。
 
 1. 打开 **RabiLink → 远端智能体**（`#/rabilink?tab=agents`；旧 `#/lan-agents` 自动跳转至此），点击 **复制接入提示词**。一次点击即签发并复制包含完整接入指令与一次性票据的提示词（签发后 30 分钟有效，只能成功兑换一次，成功后立即失效），无需手填 WebGUI 密钥；提示词使用当前 Manager 的局域网地址和发布公钥指纹；本机回环地址会替换为当前局域网地址。Manager 须先启用局域网访问。票据过期或 Manager 重启后重新复制，不复用旧提示词。
-2. 默认只安装电脑客户端：按提示词检查 Node.js 22.13+、下载并验证接入程序，保存空 Agent 列表的私有配置，注册登录启动项并连接主控。此模式不要求 Codex/DSH 已启动，也不发现会话。可使用目标电脑上的安装工具执行提示词；勾选 **同时关联安装时使用的智能体** 才要求当前宿主及真实任务。
+2. 先选择目标系统 Windows、Mac（macOS）或 Linux，再复制对应提示词。只安装电脑客户端：检查 Node.js 22.13+ 与 CPU 架构、验证下载、保存空 Agent 列表的私有配置并注册当前用户登录启动。安装时不关联智能体，不设置默认任务，不要求 Codex/DSH 已启动。原“同时关联安装时使用的智能体”选项已移除。
 3. 电脑上线后可使用电脑接口；需要远端 Agent 执行消息时再添加关联智能体，并从当前路由的 **消息适配器 → 添加 AGENT** 选择 **远端Agent(<IP地址>)**。没有节点时菜单引导接入；电脑使用稳定 instanceId，消息执行另绑定 agentId。
 
 本机与远端电脑统一为实例，页面采用 **实例 → Agent** 两层折叠。本机默认出现，无需接入安装。远端卡片默认显示 **远端智能体（IP 地址）**，点击标题旁的铅笔 **修改名称** 可保存最多 80 个字符的单行名称，离线也可修改。名称保存在本机 Manager 的节点注册表中；刷新、Manager 重启和连接器重连后保留，留空恢复默认名称。卡片保留 IP，路由选择和最近任务也显示名称。名称只用于显示，不改变 `instanceId + agentId`、任务绑定或授权。每台 Manager 独立保存别名，远端连接器无需升级。
@@ -47,7 +51,7 @@ Manager 与连接器分别验收运行状态。双机验收需要远端在线并
 
 ### 旧节点必须重新接入
 
-缺少 `nodeCredential` 的旧配置不能把 `lanLinkToken` 当作新节点凭据。使用新票据重新接入，保留原 `nodeId`、Agent、任务绑定与允许的工作目录；已有独立凭据的重连不重复兑换票据。新源码已加入监听 HTTP/WS 前的安全迁移：发现旧 `lan-agent-tasks.json` 且没有完成标记时，即使旧注册表为空也轮换 WebGUI Token，成功后才写完成标记；迁移失败则中止启动。旧浏览器远程链接会失效，须在本机获取新链接，并更新受信管理客户端。对于检测范围外曾暴露的共享密钥，仍须确认撤销或轮换。**未轮换的旧共享密钥仍可能以管理权限绕过节点授权，关闭 Agent 授权不能撤销它。** 整体部署与 Host 健康不等于旧节点迁移验收；仍须逐节点核对重新接入和旧密钥失效，不能说所有现有安装已自动安全迁移。兑换超时或回执不确定时先核对 Manager 节点状态与本机私有配置，不自动重放兑换。
+缺少 `nodeCredential` 的旧配置不能把 `lanLinkToken` 当作新节点凭据。使用新票据重新接入，保留原 `nodeId`、Agent、任务绑定与允许的工作目录；已有独立凭据的重连不重复兑换票据。新源码已加入监听 HTTP/WS 前的安全迁移：发现旧 `lan-agent-tasks.json` 且没有完成标记时，即使旧注册表为空也轮换 WebGUI Token，成功后才写完成标记；迁移失败则中止启动。旧浏览器远程链接会失效，须在本机获取新链接，并更新受信管理客户端。对于检测范围外曾暴露的共享密钥，仍须确认撤销或轮换。**未轮换的旧共享密钥仍可能以管理权限绕过节点授权，关闭 Agent 授权不能撤销它。** 整体部署与 Host 健康不等于旧节点迁移验收；仍须逐节点核对重新接入和旧密钥失效，不能说所有现有安装已自动安全迁移。兑换超时或回执不确定时由 0.2.5 客户端保存并自动核对同次接入恢复信息，重跑 bootstrap 即可恢复，无需到 Manager 追加授权。
 
 回滚警示：新授权状态在 `schemaVersion: 1` 中增加 `disabledAgentIds`，旧程序严格拒绝未知字段，并非直接向后兼容。回滚须使用与升级前版本匹配的 authority 恢复点，并核对升级后停用变更，防止恢复旧状态重新启用已停用 Agent；不得删除字段来绕过旧程序校验。
 
@@ -174,7 +178,7 @@ node rabi-agent.mjs --api POST /api/agent/send --agent <agentId> --body-stdin
 仅持有节点凭据可做接入诊断；已启用且通过鉴权的 Agent 与本机管理端具有相同公开接口和配置权限。
 
 - `POST /api/lan-agent/enrollments`：受信管理端签发一次性票据。
-- `POST /api/lan-agent/enroll`：以票据兑换独立节点凭据。
+- `POST /api/lan-agent/enroll`：提交 `{ ticket, nodeId, enrollmentSecret }` 兑换或修复原节点凭据。`enrollmentSecret` 由 0.2.5 客户端生成 32 字节随机数并以 base64url 编码（43 字符），在请求前写入私有恢复记录；Manager 只保存摘要。同节点、同恢复凭据的已完成请求可在响应丢失、票据已消耗或 Manager 重启后返回同一结果，不轮换凭据或改变禁用项。其它新增或修复请求仍必须携带有效票据。旧客户端省略此字段时只支持首次接入，不能替换已有节点。
 - `GET /api/lan-agent/self`：节点读取自身身份和连接状态，不列出其他节点。
 - `GET /api/lan-agent/capabilities`、`GET /api/lan-agent/resources`、`GET /api/lan-agent/resources/read?id=<resourceId>`：已授权 Agent 发现操作和读取受限资源。
 - `PUT /api/lan-agent/instances/<instanceId>/agents/<agentId>/authorization`：正式 Agent 启停接口，本机管理端与已启用且鉴权的 Agent 均可调用，快照继续通过 `authorization.nodes[].enabledAgentIds` 投影启用状态，不另设 API 权限开关；启用正文为 `{ "enabled": true, "binding": { "provider": "<provider>", "sessionId": "<sessionId>", "managedSessionIds": [] } }`，其中 `managedSessionIds` 可省略，明确冻结 UI 当前显示的绑定；关闭正文仅为 `{ "enabled": false }`。先 GET instances，PUT 必须携带稳定 `Idempotency-Key` 与其强 ETag 作为 `If-Match`。授权回执持久保留 24 小时；同键同正文返回原回执，不重写授权，异正文返回 409。缺少版本返回 428，版本冲突返回 412。超时先 GET instances 核对当前授权，不自动重试；回执过期后重新读取并确认意图，再用新键与新 ETag。仅持有节点凭据或已被停用的 Agent 不能自行启用。

@@ -1,4 +1,4 @@
-import { createHash, createPublicKey, verify } from "node:crypto";
+import { createHash, createPublicKey, randomBytes, verify } from "node:crypto";
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import net from "node:net";
@@ -10,7 +10,7 @@ import { CodexDesktopIpcClient } from "./lib/codex-desktop-ipc.mjs";
 import { normalizeDshBinding, sendDshTask } from "./lib/dsh.mjs";
 import { runManagerCommand } from "./lib/manager-cli.mjs";
 import { createManagerClient } from "./lib/manager-client.mjs";
-import { createEndpointSession } from "./lib/endpoint-session.mjs";
+import { createEndpointSession, EndpointAuthenticationError } from "./lib/endpoint-session.mjs";
 import { createDesktopPresentation } from "./lib/desktop-presentation.mjs";
 import { TerminalService } from "./lib/terminal-service.mjs";
 import { ComputerService } from "./lib/computer-service.mjs";
@@ -144,23 +144,56 @@ async function verifyNodeIdentity(config, fetcher = fetch, configPath) {
 }
 
 async function bootstrapConfig(configPath, fetcher = fetch) {
+  fs.mkdirSync(path.dirname(configPath), { recursive: true, mode: 0o700 });
+  const canonical = fs.existsSync(configPath) ? fs.realpathSync.native(configPath)
+    : path.join(fs.realpathSync.native(path.dirname(configPath)), path.basename(configPath));
+  const hash = sha256(Buffer.from(process.platform === "win32" ? canonical.toLowerCase() : canonical));
+  const owner = net.createServer(socket => socket.destroy());
+  const target = process.platform === "win32" ? `\\\\.\\pipe\\rabi-agent-bootstrap-${hash}`
+    : { host: "127.0.0.1", port: 32768 + (Number.parseInt(hash.slice(0, 8), 16) % 16384), exclusive: true };
+  await new Promise((resolve, reject) => {
+    owner.once("error", () => reject(new Error("Connection setup is already running or its local ownership address is busy. No enrollment was sent.")));
+    owner.listen(target, resolve);
+  });
+  try { return await bootstrapLockedConfig(canonical, fetcher); }
+  finally { await new Promise(resolve => owner.close(resolve)); }
+}
+
+async function bootstrapLockedConfig(configPath, fetcher) {
+  const original = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : undefined;
   const previous = readJson(configPath, undefined);
   if (fs.existsSync(configPath) && !previous) throw new Error("The existing instance configuration is invalid; refusing to replace its identity.");
   const managerUrl = normalizeManagerUrl(process.env.RABI_MANAGER_URL || previous?.managerUrl);
   const ticket = String(process.env.RABI_AGENT_BOOTSTRAP_TICKET || "").trim();
   delete process.env.RABI_AGENT_BOOTSTRAP_TICKET;
-  // A reconnect never consumes another single-use ticket or replaces existing bindings.
-  if (previous?.nodeCredential) {
-    const config = { ...previous, managerUrl };
-    delete config.lanLinkToken;
-    delete config.bootstrapTicket;
-    const identity = await verifyNodeIdentity(config, fetcher);
-    const nextConfig = { ...config, managerGuid: identity.guid, applicationGenerationId: identity.applicationGenerationId, managerInstanceId: identity.managerInstanceId };
-    writePrivateJson(configPath, nextConfig);
-    return nextConfig;
+  const recoveryPath = `${configPath}.enrollment.json`;
+  let recovery = readJson(recoveryPath, undefined);
+  if (fs.existsSync(recoveryPath) && (!recovery || recovery.managerUrl !== managerUrl
+    || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(recovery.nodeId || "")
+    || !/^[A-Za-z0-9_-]{43}$/.test(recovery.secret || "")
+    || (previous?.nodeId && recovery.nodeId !== previous.nodeId))) {
+    throw new Error("Connection recovery record does not match this Manager and node. Existing configuration was retained.");
   }
-  if (!ticket) throw new Error(previous?.lanLinkToken ? "Legacy lanLinkToken is not accepted; re-enroll using a fresh RABI_AGENT_BOOTSTRAP_TICKET. Existing identities are preserved." : "RABI_AGENT_BOOTSTRAP_TICKET is required for bootstrap.");
-  const defaultWorkspace = resolveRealDirectory(process.env.RABI_AGENT_DEFAULT_CWD || process.cwd(), "RABI_AGENT_DEFAULT_CWD");
+  const commit = config => {
+    const current = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : undefined;
+    if (current !== original) throw new Error("Configuration changed during connection setup; rerun bootstrap to recover without replacing its bindings.");
+    delete config.lanLinkToken; delete config.bootstrapTicket;
+    writePrivateJson(configPath, config);
+    fs.rmSync(recoveryPath, { force: true });
+    return config;
+  };
+  // Validate saved credentials before deciding whether this paste needs its ticket.
+  if (previous?.nodeCredential && !recovery) {
+    const config = { ...previous, managerUrl };
+    try {
+      await verifyNodeIdentity(config, fetcher);
+      return commit(config);
+    } catch (error) {
+      if (!(error instanceof EndpointAuthenticationError) || (!ticket && !recovery)) throw error;
+    }
+  }
+  if (!ticket && !recovery) throw new Error(previous?.lanLinkToken ? "Legacy lanLinkToken is not accepted; re-enroll using a fresh RABI_AGENT_BOOTSTRAP_TICKET. Existing identities are preserved." : "RABI_AGENT_BOOTSTRAP_TICKET is required for bootstrap.");
+  const defaultWorkspace = resolveRealDirectory(previous?.defaultWorkspace || process.env.RABI_AGENT_DEFAULT_CWD || process.cwd(), "RABI_AGENT_DEFAULT_CWD");
   const allowedWorkspaces = normalizeAllowedWorkspaces(parseWorkspaceList(process.env.RABI_AGENT_ALLOWED_CWDS, defaultWorkspace), defaultWorkspace);
 
   const releasePublicKeySha256 = normalizedPublicKeySha256(process.env.RABI_AGENT_RELEASE_PUBLIC_KEY_SHA256);
@@ -176,7 +209,7 @@ async function bootstrapConfig(configPath, fetcher = fetch) {
     dsh: dsh || previous?.dsh,
     managerUrl,
     autoUpdate: previous?.autoUpdate !== false,
-    nodeId: previous?.nodeId || String(process.env.RABI_NODE_ID || "").trim() || randomNodeId(),
+    nodeId: previous?.nodeId || recovery?.nodeId || String(process.env.RABI_NODE_ID || "").trim() || randomNodeId(),
     releasePublicKeySha256,
     managerGuid: String(previous?.managerGuid || "").trim() || undefined,
     applicationGenerationId: String(previous?.applicationGenerationId || "").trim() || undefined,
@@ -205,25 +238,43 @@ async function bootstrapConfig(configPath, fetcher = fetch) {
   }
   delete config.lanLinkToken;
   delete config.bootstrapTicket;
+  if (!recovery) {
+    recovery = { managerUrl, nodeId: config.nodeId, secret: randomBytes(32).toString("base64url") };
+    writePrivateJson(recoveryPath, recovery);
+  } else {
+    const recovered = { ...config, nodeCredential: `lan1:${config.nodeId}:${recovery.secret}` };
+    try {
+      await verifyNodeIdentity(recovered, fetcher);
+      return commit(recovered);
+    } catch (error) {
+      if (!(error instanceof EndpointAuthenticationError)) throw error;
+    }
+  }
+  config.nodeCredential = `lan1:${config.nodeId}:${recovery.secret}`;
   let response;
   let body;
   try {
     response = await fetcher(`${managerUrl}/api/lan-agent/enroll`, {
       method: "POST", redirect: "error", signal: AbortSignal.timeout(30_000),
-      headers: { "content-type": "application/json" }, body: JSON.stringify({ ticket, nodeId: config.nodeId })
+      headers: { "content-type": "application/json" }, body: JSON.stringify({ ticket, nodeId: config.nodeId, enrollmentSecret: recovery.secret })
     });
     body = await response.json();
   } catch {
-    throw new Error("Enrollment result is uncertain (transport, redirect or timeout); do not automatically retry. Verify the node in Manager before obtaining a new ticket.");
+    // The desired credential was saved before POST. A lost response is resolved
+    // by authenticating that exact credential, without replaying a new exchange.
+    try { await verifyNodeIdentity(config, fetcher); }
+    catch { throw new Error("Connection result is uncertain; local recovery information was retained. Rerun the same bootstrap to check the original exchange automatically. No separate approval is required."); }
+    return commit(config);
   }
-  if (!response.ok || body?.code !== 0) throw new Error(`Enrollment ${response.status >= 500 || body?.uncertain ? "result is uncertain" : "failed"} (HTTP ${response.status}); no automatic retry. Verify the node in Manager before reconnecting.`);
-  if (body.data?.nodeId !== config.nodeId || typeof body.data?.token !== "string" || !body.data.token.trim()) throw new Error("Enrollment returned an invalid node identity; result uncertain. Do not retry automatically.");
-  config.nodeCredential = body.data.token;
-  // Persist the successful exchange before the read-only identity check: a timeout
-  // must not lose the only copy of a credential from a consumed ticket.
-  writePrivateJson(configPath, config);
+  if (!response.ok || body?.code !== 0) {
+    if (response.status >= 500 || body?.uncertain) {
+      try { await verifyNodeIdentity(config, fetcher); return commit(config); } catch { /* Retain the exact recovery proof. */ }
+    }
+    throw new Error(`Enrollment failed (HTTP ${response.status}); local recovery information was retained. If the ticket expired, copy a fresh connection prompt; no additional Agent approval is required.`);
+  }
+  if (body.data?.nodeId !== config.nodeId || body.data?.token !== config.nodeCredential) throw new Error("Enrollment returned an invalid node identity; result uncertain. Keep the local recovery record and rerun bootstrap.");
   await verifyNodeIdentity(config, fetcher);
-  return config;
+  return commit(config);
 }
 
 function currentReleasePath(configPath) {
@@ -1023,7 +1074,7 @@ class RabiAgentRuntime {
           agentTypes: [...new Set(instanceAgents(this.config).map(agent => agent.provider))],
           taskTargeting: "explicit-session-v1",
           agents: agentCatalog(this.config),
-          terminalShells: process.platform === "win32" ? ["cmd", "powershell"] : [],
+          terminalShells: this.terminals.shells,
           computerCapabilities: ["files", ...(process.platform === "win32" ? ["windows", "screenshots"] : [])],
           allowedWorkspaces: this.config.allowedWorkspaces
         }

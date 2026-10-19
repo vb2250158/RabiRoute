@@ -6,9 +6,19 @@
 
 # Rabi Agent
 
+连接器 0.2.5 中，复制接入提示词即包含本次接入和凭据修复授权，无需额外审批或主控 Agent 确认。已有有效凭据直接复用；凭据缺失或被拒绝时，用新票据修复原节点，保留 Agent 绑定、工作目录及用户明确设置的禁用项。客户端在兑换前保存当前用户私有的 `config.json.enrollment.json` 恢复记录，只含节点身份与随机恢复凭据，不保存票据。响应丢失时自动用同一凭据查询自身状态；中断后重新运行同一个 `--bootstrap`，即使 Manager 已重启也可核对已完成的同次兑换。已删除节点或已被替换的旧凭据不能用失效票据恢复。恢复文件保持私有，成功后自动删除；只有票据失效或缺失时才需要重新复制提示词。
+
 Rabi Agent 是远端电脑客户端。Windows 提供托盘和状态窗口，macOS/Linux 保持后台运行。它主动连接主控 Rabi Manager，提供电脑接口；可选关联远端 Agent 执行任务，Codex Desktop 使用 IPC，DSH 使用本机 `session.prompt`。
 
-集群由一个主控 RabiPC 保存人格、记忆、Skill 和流程。远端客户端在线即可提供终端、文件互传、窗口查询及截图，关联 Codex/DSH 无需启动。电脑接口与使用步骤见[主控与远端电脑客户端](../../docs/remote-computer-client.md)。
+主机电脑的 Rabi 服务承担常驻管理职责，无需另设主控 Agent。普通已鉴权 Agent 也可查询计划、近期与沉淀记忆、Skill；Route 或是否为主人格不构成额外许可。电脑能力按实际平台提供，关联 Codex/DSH 无需启动。使用步骤见[主机与远端电脑客户端](../../docs/remote-computer-client.md)。
+
+## Mac 接入与终端
+
+接入弹窗先选择 **Mac（macOS）**，再复制对应提示词；Windows 和 Linux 使用各自的选项。安装时不再关联当前智能体，不设置默认任务。Mac 使用与 CPU 架构匹配的 Node.js 22.13+，安装在 `~/Library/Application Support/RabiAgent`，由当前用户 LaunchAgent 启动；没有 Windows 托盘。
+
+连接器 0.2.4 增加 Zsh/Bash/sh 交互终端，列表仅返回该电脑实际存在的 shell。安装使用 `npm install --omit=dev --include=optional`；终端依赖固定版本 node-pty，原生编译可能需要 Xcode Command Line Tools。文件互传和明确类型/会话 ID 的 Agent 投递复用通用接口。窗口列表、截图及 CMD/PowerShell 当前仍是 Windows 能力。
+
+Mac 原生终端与 Desktop IPC 仍需在线真机验收。`401 LAN_AGENT_CREDENTIAL_REQUIRED` 是节点凭据错误，应保留原 nodeId 和配置，不以创建主控 Agent、新节点或反复重装代替修复。
 
 ## 查询 Agent 与明确投递目标
 
@@ -61,11 +71,11 @@ Rabi Agent 是远端电脑客户端。Windows 提供托盘和状态窗口，macO
 
 ## 首次接入
 
-1. 在总控 WebGUI 的 **远端 Agent** 页面复制接入提示词。默认只接入电脑客户端，需要 Node.js 22.13+，不要求 Codex/DSH 已启动；可由目标电脑上的安装工具按提示词执行。选择 **同时关联安装时使用的智能体** 才发现并绑定当前真实任务。
+1. 在主机 WebGUI 的 **远端 Agent** 页面选择目标系统，再复制接入提示词。只安装电脑客户端，需要 Node.js 22.13+，不要求 Codex/DSH 已启动；安装工具不绑定自己的当前任务。
 2. 提示词使用默认 30 分钟有效的一次性票据下载已签名程序，并由 `--bootstrap` 兑换独立 `nodeCredential`。凭据存入当前用户私有配置；Manager 只保存密钥 hash 与授权，登录启动项不含凭据。票据不是共享 WebGUI Token，成功兑换后不可重用。
 3. 连接器自动核对原节点身份；`/api/lan-agent/self` 仅供诊断，`connected=false` 不等于凭据失效，不要求 Agent 手动核验或重绑。新接入的 **是否启用Agent** 默认勾选，启用后按本机 Agent 的方式使用，无需另开 API 或 skills 授权。需要消息投递时，在路由的消息适配器选择 **远端Agent(<IP地址>)** 中的准确 Agent 并保存。
 
-首次只安装客户端时，不设置 `RABI_AGENT_TYPE`、Codex 任务或 DSH 会话变量；`--bootstrap` 保存 `agents: []`，正常启动、登录自启和重连均不要求 Agent 任务。已有配置保留原 Agent 与节点身份。电脑接口由主控调用；以后从主控添加关联 Agent 时才安装对应 Hook、读取主控 Skill 和配置消息路线。
+首次只安装客户端时，不设置 `RABI_AGENT_TYPE`、Codex 任务或 DSH 会话变量；`--bootstrap` 保存 `agents: []`，正常启动、登录自启和重连均不要求 Agent 任务。已有配置保留原 Agent 与节点身份。后续通过正式入口登记 Agent；普通已鉴权 Agent 可通过相同接口读取计划、记忆与 Skill，不以主控身份为条件。
 
 远端启用状态只由 Manager 持有；开关修改后立即 PUT 生效，离线也可停用，不必保存执行参数。已接入节点的 CLI、Hook 与执行入口不再使用旧本地 `enabled` 形成第二道门禁。首次接入时，尚无 Manager 决定的旧显式停用状态迁入 Manager；已有启用或停用决定始终优先，重连不会覆盖。保存任务、工作目录和模型不修改启用状态，并移除远端配置中的旧字段。读取失败显示错误，不假定已启用。连接器更新与真实双机调用须分别验收。
 

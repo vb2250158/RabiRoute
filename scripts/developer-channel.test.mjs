@@ -105,7 +105,7 @@ test("developer candidate overlays only built runtime layers and leaves the immu
     write(tray, "main.py", "new tray\n");
     write(tray, "rabiroute_tray/tray_app.py", "new tray module\n");
     write(host, "RabiRouteHost.Core.dll", "new core\n");
-    for (const filename of ["package.json", "rabi-agent.mjs", "README.md", "README_en.md", "lib/client.mjs", "runtime/management.mjs", "dist/agent-hooks/hook.mjs"]) {
+    for (const filename of ["package.json", "rabi-agent.mjs", "README.md", "README_en.md", "lib/client.mjs", "runtime/management.mjs", "dist/agent-hooks/hook.mjs", "terminal/posix-host.mjs", "terminal/host.ps1", "desktop/tray.ps1", "desktop/computer.ps1"]) {
       write(build, `apps/rabi-agent/${filename}`, "fixture connector asset\n");
     }
     write(build, "apps/rabi-agent/data/route/private.json", "private fixture excluded\n");
@@ -120,6 +120,10 @@ test("developer candidate overlays only built runtime layers and leaves the immu
     });
 
     assert.equal(fs.existsSync(path.join(result.packageRoot, "apps/rabi-agent/data")), false);
+    for (const relative of ["terminal/posix-host.mjs", "terminal/host.ps1", "desktop/tray.ps1", "desktop/computer.ps1"]) {
+      assert.equal(fs.readFileSync(path.join(result.packageRoot, "apps/rabi-agent", relative), "utf8"), "fixture connector asset\n");
+      assert.ok(result.manifest.files.some(entry => entry.path === `apps/rabi-agent/${relative}`));
+    }
     assert.equal(fs.readFileSync(path.join(result.packageRoot, "packages/rabi-companion/presets.json"), "utf8"), fs.readFileSync(path.join(build, "packages/rabi-companion/presets.json"), "utf8"));
     assert.ok(result.manifest.files.some(entry => entry.path === "packages/rabi-companion/presets.json"));
     assert.ok(result.manifest.files.some(entry => entry.path === "packages/rabi-companion/scene-rules.json"));

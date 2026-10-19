@@ -6,9 +6,19 @@
 
 # Rabi Agent
 
+Connector 0.2.5 makes the copied connection prompt sufficient for enrollment and credential repair; no additional Agent approval or controlling Agent is required. Valid saved credentials are reused. If credentials are missing or rejected, the fresh ticket repairs the original node while preserving Agent bindings, workspaces and explicit disables. Before exchange, the client saves a private `config.json.enrollment.json` recovery record containing its node identity and a random recovery secret, never the ticket. A lost response is resolved by authenticating the same credential. After interruption, rerun the same `--bootstrap`; an exact completed exchange can also be recovered after Manager restart. Deleted nodes and replaced credentials cannot be restored with a spent ticket. Keep the recovery file private until success, when it is removed. Only an expired or unavailable ticket requires copying a fresh prompt.
+
 Rabi Agent is a remote computer client. Windows provides a tray and status window; macOS/Linux run in the background. It connects outbound to the controller's Rabi Manager and exposes computer APIs. Associated Agents optionally execute tasks through Codex Desktop IPC or the DSH local `session.prompt` API.
 
-One controller RabiPC owns personas, memory, skills and workflows. An online remote client provides terminals, file transfer, window queries and screenshots even without running Codex/DSH. See [controller and remote computer clients](../../docs/remote-computer-client_en.md).
+The host computer's Rabi service owns persistent management; a separate controlling Agent is not required. Ordinary authenticated Agents can also query plans, recent and consolidated memory, and skills without a primary-persona or Route grant. Computer capabilities depend on the platform and do not require a running Codex/DSH backend. See [host and remote computer clients](../../docs/remote-computer-client_en.md).
+
+## Mac setup and terminals
+
+Select **Mac (macOS)** in the enrollment dialog before copying its platform-specific prompt. Windows and Linux have their own choices. Installation no longer associates the installing Agent or chooses a default task. Mac requires Node.js 22.13+ matching its CPU architecture, installs under `~/Library/Application Support/RabiAgent`, and uses a current-user LaunchAgent without the Windows tray.
+
+Connector 0.2.4 adds interactive Zsh/Bash/sh terminals and advertises only shells present on that computer. Install with `npm install --omit=dev --include=optional`; the pinned node-pty dependency may need Xcode Command Line Tools for native compilation. File transfer and explicitly addressed Agent delivery reuse the shared APIs. Window queries, screenshots, CMD and PowerShell remain Windows capabilities.
+
+Native Mac terminals and Desktop IPC still require online-device acceptance. `401 LAN_AGENT_CREDENTIAL_REQUIRED` is a node credential failure: retain its nodeId and configuration rather than creating a controlling Agent, another node or repeatedly reinstalling.
 
 ## Query Agents and specify the delivery target
 
@@ -61,11 +71,11 @@ Tools cover knowledge search, plan lists/details/status catalogs, memory lists a
 
 ## First connection
 
-1. Copy the setup prompt from **Remote Agent** in the controlling WebGUI. Enrollment defaults to a computer client, requiring Node.js 22.13+ without a running Codex/DSH host; an installation tool on the target can follow the prompt. Choose **Also associate the Agent used for installation** to discover and bind its current real task.
+1. Choose the target operating system under **Remote Agent** in the host WebGUI, then copy its setup prompt. Install only the computer client with Node.js 22.13+; no running Codex/DSH host or binding to the installing Agent's current task is required.
 2. The prompt uses a single-use ticket, valid for 30 minutes by default, to download the signed connector. `--bootstrap` exchanges it for an independent `nodeCredential`. The credential stays in current-user private configuration; Manager stores only the secret hash and grants. Login startup entries contain no credentials. The ticket is not a shared WebGUI Token and cannot be reused after a successful exchange.
 3. The connector automatically verifies the enrolled node identity. `/api/lan-agent/self` is diagnostic only; `connected=false` does not invalidate credentials or require manual verification or rebinding. **Enable Agent** (Chinese label: **是否启用Agent**) is checked by default for new enrollments. Enabled remote Agents are used in the same way as local Agents, without a separate API or skills grant. For message delivery, select the exact Agent under **RemoteAgent(<IP address>)** in the Route's message adapter and save.
 
-For a first computer-only installation, omit `RABI_AGENT_TYPE`, Codex task and DSH session variables. `--bootstrap` saves `agents: []`; normal startup, login startup and reconnection require no Agent task. Existing configurations retain their original Agent and node identities. The controller calls computer APIs directly; add an associated Agent from the controller later before installing its Hook, reading controller-owned skills or configuring message routes.
+For a first computer-only installation, omit `RABI_AGENT_TYPE`, Codex task and DSH session variables. `--bootstrap` saves `agents: []`; normal startup, login startup and reconnection require no Agent task. Existing configurations retain their original Agent and node identities. Register Agents through the supported entry point later; ordinary authenticated Agents use the same plan, memory and skill APIs without a controlling-Agent role.
 
 Manager is the sole owner of remote enablement. Switch changes immediately send a PUT, and disabling works while offline without saving execution parameters. For enrolled nodes, the CLI, Hooks and execution paths no longer use the legacy local `enabled` field as a second gate. On initial enrollment, a legacy explicit disable is migrated only when Manager has no existing decision; existing enable or disable decisions always win across reconnects. Saving tasks, workspaces or models does not change enablement and removes the legacy remote field. Failed reads show an error rather than assuming enabled. Connector updates and actual calls across two computers require separate verification.
 

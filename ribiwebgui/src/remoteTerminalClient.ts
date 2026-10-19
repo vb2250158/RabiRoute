@@ -1,4 +1,6 @@
-export type RemoteTerminal = { terminalId: string; shell: "cmd" | "powershell"; cwd: string; state: string; pid?: number; createdAt: string; nextInputSequence: number; exitCode?: number };
+export type RemoteTerminal = { terminalId: string; shell: "cmd" | "powershell" | "zsh" | "bash" | "sh"; cwd: string; state: string; pid?: number; createdAt: string; nextInputSequence: number; exitCode?: number };
+const remoteShellLabels: Record<string, string> = { cmd: "CMD", powershell: "PowerShell", zsh: "Zsh", bash: "Bash", sh: "Shell" };
+export const remoteShellLabel = (shell: string) => remoteShellLabels[shell] || shell;
 export type TerminalEvent = { sequence: number; type: string; data?: string; exitCode?: number };
 
 export class RemoteTerminalClient {

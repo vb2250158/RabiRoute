@@ -82,7 +82,10 @@ test("authenticated Agent uses APIs without a second secret; malformed and revok
     assert.equal(evaluateLanAgentRequest(make("/meta"), authority, true).kind, "denied");
     authority.setAgentEnabled("node-fixture", "worker", true);
     assert.equal(evaluateLanAgentRequest(make("/meta"), authority, true).kind, "agent");
-    for (const target of ["/api/webgui-access", "/api/unknown-business", "/api/roles/persona-a/skills?view=extra", "/api/codex-hook/sessions/other", "/api/codex-hook/roles", "/api/codex-hook/doctor"]) {
+    for (const target of ["/api/webgui-access", "/api/unknown-business", "/api/roles/persona-a/skills?view=extra",
+      "/api/roles/persona-a/plans?limit=5", "/api/roles/persona-a/memory?kind=recent&limit=5",
+      "/api/roles/persona-a/memory?kind=consolidated&limit=5", "/api/roles/persona-a/knowledge/search?query=example&mode=keywords&limit=5",
+      "/api/codex-hook/sessions/other", "/api/codex-hook/roles", "/api/codex-hook/doctor"]) {
       assert.deepEqual(evaluateLanAgentRequest(make(target), authority, true), {
         kind: "agent", nodeId: "node-fixture", agentId: "worker"
       });

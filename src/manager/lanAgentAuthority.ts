@@ -225,20 +225,32 @@ export class LanAgentAuthority {
     return expiresAt !== undefined && expiresAt > this.now();
   }
 
-  /** Returns the secret once. Failed persistence leaves the ticket available to retry. */
-  enroll(ticket: string, nodeId: string): LanAgentCredential {
+  /** Client-held secrets allow an exact exchange to be recovered after a lost response. */
+  enroll(ticket: string, nodeId: string, enrollmentSecret?: string): LanAgentCredential {
     if (!validId(nodeId)) this.reject("enroll", "Invalid node ID.");
+    if (enrollmentSecret !== undefined && !SECRET_PATTERN.test(enrollmentSecret)) this.reject("enroll", "Invalid enrollment recovery secret.");
+    const secret = enrollmentSecret ?? randomBytes(32).toString("base64url");
+    const credential = { nodeId, token: `lan1:${nodeId}:${secret}` };
+    // Possession proves only the currently active credential. A revoked/replaced
+    // secret cannot recover or recreate a node with a spent ticket.
+    if (enrollmentSecret && this.authenticate(credential.token)) return credential;
     if (!this.validateBootstrapTicket(ticket)) this.reject("enroll", "Invalid or expired bootstrap ticket.");
-    const secret = randomBytes(32).toString("base64url");
     this.mutate("enroll", state => {
+      const existing = state.nodes.find(node => node.nodeId === nodeId);
+      if (enrollmentSecret && existing?.secretHash === hashSecret(secret)) return false;
       if (!this.validateBootstrapTicket(ticket)) this.reject("enroll", "Invalid or expired bootstrap ticket.");
-      if (state.nodes.some(node => node.nodeId === nodeId)) this.reject("enroll", "Node already enrolled.");
+      if (existing) {
+        if (!enrollmentSecret) this.reject("enroll", "Node already enrolled.");
+        existing.secretHash = hashSecret(secret);
+        rotateAuthorizationIncarnation(existing);
+        return true;
+      }
       if (state.nodes.length >= MAX_NODES) this.reject("enroll", "Node capacity reached.");
       state.nodes.push({ nodeId, secretHash: hashSecret(secret), enabledAgentIds: [], disabledAgentIds: [] });
       return true;
     });
     this.tickets.delete(hashSecret(ticket));
-    return { nodeId, token: `lan1:${nodeId}:${secret}` };
+    return credential;
   }
 
   /** Invalid credentials return null; storage corruption/read failure throws (fail closed). */

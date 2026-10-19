@@ -6,6 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.61 - 2026-10-20
+
+- Integrate remote connector 0.2.5 platform enrollment and recovery changes. The enrollment view requires Windows, Mac or Linux selection and installs only the computer client without an installation-time default Agent binding; Mac instructions use a current-user LaunchAgent.
+- A fresh ticket repairs rejected credentials on the original node while preserving Agent bindings, directories and explicit disables. A private recovery credential saved before exchange resolves lost responses and interrupted setup without creating replacement nodes. Concurrent setup and configuration changes refuse to overwrite saved bindings.
+- Add node-pty POSIX terminals for Mac/Linux, show the remote computer's available Zsh/Bash/sh shells, and preserve input receipts and shutdown cleanup. Developer candidates include terminal/desktop assets so terminal hosts are not omitted.
+- Source integration, focused tests and type checks only: no build, installation or restart. Native Mac PTY, login startup and generated-package acceptance remain pending in their target environments.
+
 ## 0.3.60 - 2026-10-19
 
 - Collect the uncommitted message-rule UI from the primary checkout: share message-type navigation between the list and editor, include scheduled tasks in the same workspace, and open the editor directly for new rules while retaining existing filters and Notify Agent / Run script configuration.

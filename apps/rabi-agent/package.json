@@ -1,6 +1,6 @@
 {
   "name": "rabi-agent",
-  "version": "0.2.3",
+  "version": "0.2.5",
   "private": true,
   "type": "module",
   "description": "Single-owner LAN connector with a Windows tray child, forwarding tasks to bound Codex Desktop or DSH sessions.",
@@ -8,6 +8,7 @@
     "node": ">=22.13.0"
   },
   "dependencies": { "@openai/codex": "0.144.1", "bonjour-service": "1.4.4" },
+  "optionalDependencies": { "node-pty": "1.1.0" },
   "scripts": {
     "start": "node rabi-agent.mjs --run",
     "bootstrap": "node rabi-agent.mjs --bootstrap",

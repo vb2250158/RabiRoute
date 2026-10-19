@@ -8,6 +8,7 @@ export function businessReady(meta) { return meta?.health?.requiredReady === tru
 export function sameIdentity(a, b) { return (!a?.rabiGuid || !b?.rabiGuid || a.rabiGuid === b.rabiGuid) && a?.applicationGenerationId === b?.applicationGenerationId && a?.managerInstanceId === b?.managerInstanceId; }
 
 class EndpointConfigurationError extends Error {}
+export class EndpointAuthenticationError extends Error {}
 
 async function acquireEndpointWriter(configPath) {
   // Resolve symlink/directory aliases before hashing and writing. Atomic rename must
@@ -67,7 +68,12 @@ export function createEndpointSession({ config, configPath, fetchImpl = fetch, d
     if (!current.nodeCredential || !current.nodeId) throw new Error("Endpoint verification requires an enrolled node identity.");
     const headers = { authorization: `Bearer ${current.nodeCredential}`, accept: "application/json" };
     const response = await fetchImpl(`${candidate.managerUrl}/api/lan-agent/self`, { headers, redirect: "error", signal });
-    if (!response.ok) throw new Error("Manager node identity verification failed.");
+    if (!response.ok) {
+      if ([401, 403].includes(response.status)) {
+        throw new EndpointAuthenticationError(`Node credential rejected (HTTP ${response.status}). Existing node ID and Agent bindings are preserved; repair this node's credential rather than creating another node or a controlling Agent.`);
+      }
+      throw new Error("Manager node identity verification failed.");
+    }
     const body = await response.json(); const self = body?.data;
     if (body?.code !== 0 || self?.nodeId !== current.nodeId || (candidate.guid && self.guid !== candidate.guid) || (candidate.generation && self.applicationGenerationId !== candidate.generation) || (candidate.instance && self.managerInstanceId !== candidate.instance)) throw new Error("Manager node identity mismatch.");
     candidate = { ...candidate, guid: self.guid, generation: self.applicationGenerationId, instance: self.managerInstanceId };
@@ -90,7 +96,7 @@ export function createEndpointSession({ config, configPath, fetchImpl = fetch, d
     if (!forceDiscovery) {
       try { endpoint = await verify(current.managerUrl); }
       catch (error) {
-        if (error instanceof EndpointConfigurationError) throw error;
+        if (error instanceof EndpointConfigurationError || error instanceof EndpointAuthenticationError) throw error;
         /* One bounded discovery may recover a stale address. */
       }
     }

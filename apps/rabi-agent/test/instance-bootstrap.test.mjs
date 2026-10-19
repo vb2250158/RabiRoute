@@ -24,15 +24,17 @@ function server(requests, nodeId = "fixture-node") {
     requests.push({ url: String(url), init });
     assert.equal(init.redirect, "error");
     if (String(url).endsWith("/enroll")) {
-      assert.deepEqual(JSON.parse(init.body), { ticket: "fixture-ticket", nodeId });
+      const body = JSON.parse(init.body);
+      assert.equal(body.ticket, "fixture-ticket"); assert.equal(body.nodeId, nodeId);
+      assert.match(body.enrollmentSecret, /^[A-Za-z0-9_-]{43}$/);
       assert.equal(init.headers.authorization, undefined);
-      return Response.json({ code: 0, data: { nodeId, token: "fixture-node-credential" } });
+      return Response.json({ code: 0, data: { nodeId, token: `lan1:${nodeId}:${body.enrollmentSecret}` } });
     }
     if (String(url).endsWith("/.well-known/rabiroute-manager")) {
       assert.equal(init.headers.authorization, undefined);
       return Response.json({ code: 0, data: { ...identity(nodeId).data, protocolVersion: "1" } });
     }
-    assert.equal(init.headers.authorization, "Bearer fixture-node-credential");
+    assert.match(init.headers.authorization, new RegExp(`^Bearer lan1:${nodeId}:[A-Za-z0-9_-]{43}$`));
     return Response.json(identity(nodeId));
   };
 }
@@ -40,7 +42,7 @@ function server(requests, nodeId = "fixture-node") {
 test("bootstrap exchanges ticket once, persists only credential and registered Agent, reconnect skips enrollment", async () => fixture(async ({ configPath }) => {
   const requests = [];
   const config = await __test.bootstrapConfig(configPath, server(requests));
-  assert.equal(config.nodeCredential, "fixture-node-credential");
+  assert.match(config.nodeCredential, /^lan1:fixture-node:/);
   assert.equal(process.env.RABI_AGENT_BOOTSTRAP_TICKET, undefined);
   assert.equal(config.agents[0].sessionId, "new-task");
   assert.notEqual(config.agents[0].agentId, "default");
@@ -48,7 +50,7 @@ test("bootstrap exchanges ticket once, persists only credential and registered A
   delete process.env.RABI_AGENT_BOOTSTRAP_TICKET;
   await __test.bootstrapConfig(configPath, server(requests));
   assert.equal(requests.filter(item => item.url.endsWith("/enroll")).length, 1);
-  assert.equal(__test.readConfig(configPath).nodeCredential, "fixture-node-credential");
+  assert.equal(__test.readConfig(configPath).nodeCredential, config.nodeCredential);
 }));
 
 test("computer-only enrollment and normal configuration loading need no Agent session", async () => fixture(async ({ configPath }) => {
@@ -57,7 +59,7 @@ test("computer-only enrollment and normal configuration loading need no Agent se
   const config = await __test.bootstrapConfig(configPath, server(requests));
   assert.deepEqual(config.agents, []); assert.equal(config.codexDesktop, undefined);
   const loaded = __test.readConfig(configPath);
-  assert.deepEqual(loaded.agents, []); assert.equal(loaded.nodeCredential, "fixture-node-credential");
+  assert.deepEqual(loaded.agents, []); assert.equal(loaded.nodeCredential, config.nodeCredential);
   await __test.bootstrapConfig(configPath, server(requests));
   assert.equal(requests.filter(item => item.url.endsWith("/enroll")).length, 1);
 }));
@@ -86,8 +88,12 @@ test("legacy configuration fails closed, then explicit enrollment preserves node
 test("enrollment rejection and timeout never replay or replace existing config", async () => fixture(async ({ configPath }) => {
   for (const failure of [async () => Response.json({ code: 1 }, { status: 403 }), async () => { throw new DOMException("fixture", "TimeoutError"); }]) {
     process.env.RABI_AGENT_BOOTSTRAP_TICKET = "fixture-ticket";
+    fs.rmSync(`${configPath}.enrollment.json`, { force: true });
     let count = 0;
-    await assert.rejects(__test.bootstrapConfig(configPath, async () => { count++; return failure(); }), /no automatic retry|uncertain/);
+    await assert.rejects(__test.bootstrapConfig(configPath, async (url) => {
+      if (String(url).endsWith("/enroll")) { count++; return failure(); }
+      throw new TypeError("offline");
+    }), /Enrollment failed|uncertain/);
     assert.equal(count, 1);
     assert.equal(fs.existsSync(configPath), false);
   }
@@ -96,14 +102,107 @@ test("enrollment rejection and timeout never replay or replace existing config",
   assert.equal(fs.readFileSync(configPath, "utf8"), "invalid");
 }));
 
-test("self identity failure retains successfully exchanged credential for recovery without another ticket", async () => fixture(async ({ configPath }) => {
+test("self identity failure retains the exchange recovery proof without another ticket", async () => fixture(async ({ configPath }) => {
   const requests = [];
   const success = server(requests);
   await assert.rejects(__test.bootstrapConfig(configPath, async (url, init) => String(url).endsWith("/self") ? Response.json(identity("wrong-node")) : success(url, init)), /identity/);
-  assert.equal(JSON.parse(fs.readFileSync(configPath)).nodeCredential, "fixture-node-credential");
+  assert.equal(fs.existsSync(configPath), false);
+  assert.match(JSON.parse(fs.readFileSync(`${configPath}.enrollment.json`)).secret, /^[A-Za-z0-9_-]{43}$/);
   delete process.env.RABI_AGENT_BOOTSTRAP_TICKET;
   await __test.bootstrapConfig(configPath, success);
   assert.equal(requests.filter(item => item.url.endsWith("/enroll")).length, 1);
+}));
+
+test("concurrent bootstrap and concurrent configuration edits cannot replace saved bindings", async () => fixture(async ({ configPath }) => {
+  let release; let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const waiting = new Promise(resolve => { release = resolve; });
+  const success = server([]);
+  const first = __test.bootstrapConfig(configPath, async (url, init) => {
+    if (String(url).endsWith("/enroll")) { entered(); await waiting; }
+    return success(url, init);
+  });
+  await started;
+  await assert.rejects(__test.bootstrapConfig(configPath, success), /already running|busy/);
+  const concurrent = { nodeId: "fixture-node", agents: [{ agentId: "concurrent-binding" }] };
+  fs.writeFileSync(configPath, JSON.stringify(concurrent));
+  release();
+  await assert.rejects(first, /Configuration changed/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(configPath)), concurrent);
+  assert.equal(fs.existsSync(`${configPath}.enrollment.json`), true);
+}));
+
+test("a fresh pasted ticket repairs rejected credentials without changing node, bindings or directories", async () => fixture(async ({ configPath, directory }) => {
+  const agents = [{ agentId: "saved", provider: "dsh", sessionId: "saved-task", workspace: directory }];
+  const original = { schemaVersion: 1, nodeId: "stable-node", nodeCredential: "rejected-credential", managerUrl: process.env.RABI_MANAGER_URL,
+    defaultWorkspace: directory, allowedWorkspaces: [directory], agents };
+  fs.writeFileSync(configPath, JSON.stringify(original));
+  const requests = []; const success = server(requests, "stable-node");
+  const config = await __test.bootstrapConfig(configPath, async (url, init) => {
+    if (String(url).endsWith("/self") && init.headers.authorization === "Bearer rejected-credential") return Response.json({code:-1}, {status:401});
+    return success(url, init);
+  });
+  assert.equal(config.nodeId, original.nodeId); assert.deepEqual(config.agents, agents);
+  assert.equal(config.defaultWorkspace, directory); assert.deepEqual(config.allowedWorkspaces, [directory]);
+  assert.match(config.nodeCredential, /^lan1:stable-node:/);
+  assert.equal(requests.filter(item => item.url.endsWith("/enroll")).length, 1);
+  assert.equal(fs.existsSync(`${configPath}.enrollment.json`), false);
+}));
+
+test("a committed exchange with a lost response is recovered by self authentication without another POST", async () => fixture(async ({ configPath }) => {
+  let credential; let enrollments = 0;
+  const fetcher = async (url, init) => {
+    if (String(url).endsWith("/enroll")) {
+      enrollments++; const body = JSON.parse(init.body); credential = `lan1:${body.nodeId}:${body.enrollmentSecret}`;
+      throw new DOMException("response lost", "TimeoutError");
+    }
+    if (String(url).endsWith("/.well-known/rabiroute-manager")) return Response.json({code:0,data:{...identity("fixture-node").data,protocolVersion:"1"}});
+    assert.equal(init.headers.authorization, `Bearer ${credential}`); return Response.json(identity("fixture-node"));
+  };
+  const config = await __test.bootstrapConfig(configPath, fetcher);
+  assert.equal(config.nodeCredential, credential); assert.equal(enrollments, 1);
+  assert.equal(fs.existsSync(`${configPath}.enrollment.json`), false);
+}));
+
+test("an interrupted first install recovers its original node after restart without another ticket", async () => fixture(async ({ configPath }) => {
+  let credential; let enrollments = 0; let offline = true;
+  const success = server([]);
+  const fetcher = async (url, init) => {
+    if (String(url).endsWith("/enroll")) {
+      enrollments++; const body = JSON.parse(init.body); credential = `lan1:${body.nodeId}:${body.enrollmentSecret}`;
+      throw new DOMException("response lost", "TimeoutError");
+    }
+    if (offline) throw new TypeError("offline");
+    return success(url, init);
+  };
+  await assert.rejects(__test.bootstrapConfig(configPath, fetcher), /uncertain/);
+  assert.equal(fs.existsSync(configPath), false);
+  const recovery = JSON.parse(fs.readFileSync(`${configPath}.enrollment.json`));
+  assert.equal(recovery.nodeId, "fixture-node"); assert.equal(JSON.stringify(recovery).includes("fixture-ticket"), false);
+  if (process.platform !== "win32") assert.equal(fs.statSync(`${configPath}.enrollment.json`).mode & 0o777, 0o600);
+  offline = false; process.env.RABI_NODE_ID = "must-not-replace-node";
+  const config = await __test.bootstrapConfig(configPath, fetcher);
+  assert.equal(config.nodeId, "fixture-node"); assert.equal(config.nodeCredential, credential); assert.equal(enrollments, 1);
+}));
+
+test("pending exchange takes precedence over an older credential that might still be valid", async () => fixture(async ({ configPath, directory }) => {
+  const previous = { schemaVersion: 1, nodeId: "fixture-node", nodeCredential: "older-credential", managerUrl: process.env.RABI_MANAGER_URL,
+    defaultWorkspace: directory, allowedWorkspaces: [directory], agents: [] };
+  fs.writeFileSync(configPath, JSON.stringify(previous));
+  const secret = "r".repeat(43);
+  fs.writeFileSync(`${configPath}.enrollment.json`, JSON.stringify({ managerUrl: previous.managerUrl, nodeId: previous.nodeId, secret }));
+  let committed = false; let exchanges = 0;
+  const config = await __test.bootstrapConfig(configPath, async (url, init) => {
+    assert.notEqual(init.headers.authorization, "Bearer older-credential");
+    if (String(url).endsWith("/enroll")) {
+      exchanges++; assert.equal(JSON.parse(init.body).enrollmentSecret, secret); committed = true;
+      return Response.json({ code: 0, data: { nodeId: previous.nodeId, token: `lan1:${previous.nodeId}:${secret}` } });
+    }
+    if (String(url).endsWith("/.well-known/rabiroute-manager")) return Response.json({code:0,data:{...identity(previous.nodeId).data,protocolVersion:"1"}});
+    return committed ? Response.json(identity(previous.nodeId)) : Response.json({code:-1}, {status:401});
+  });
+  assert.equal(config.nodeCredential, `lan1:${previous.nodeId}:${secret}`); assert.equal(exchanges, 1);
+  assert.equal(fs.existsSync(`${configPath}.enrollment.json`), false);
 }));
 
 test("download uses independent credential, rejects cross origin and redirects", async () => {

@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import type { Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
-import { RemoteTerminalClient, type RemoteTerminal } from "../remoteTerminalClient";
+import { RemoteTerminalClient, remoteShellLabel, type RemoteTerminal } from "../remoteTerminalClient";
 import { userFacingError } from "../userFacingError";
 import { browserUuid } from "../browserUuid";
 import "@xterm/xterm/css/xterm.css";
@@ -23,6 +23,7 @@ async function query() {
   const result = await client.request<{ shells: string[]; sessions: RemoteTerminal[] }>();
   if (disposed) return;
   shells.value = result.shells; sessions.value = result.sessions;
+  if (!shells.value.includes(shell.value)) shell.value = shells.value[0] || "";
 }
 async function refresh() {
   busy.value = true; error.value = "";
@@ -111,7 +112,7 @@ onBeforeUnmount(() => { disposed = true; revision++; stream?.abort(); observer?.
       <v-card-text>
         <v-alert v-if="error" type="error" variant="tonal" density="compact" class="mb-3">{{ error }}</v-alert>
         <div class="d-flex flex-wrap ga-3 align-start mb-3">
-          <v-select v-model="shell" :items="shells.map(value => ({ title: value === 'cmd' ? 'CMD' : 'PowerShell', value }))" label="终端类型" hide-details density="compact" style="max-width: 180px" />
+          <v-select v-model="shell" :items="shells.map(value => ({ title: remoteShellLabel(value), value }))" label="终端类型" hide-details density="compact" style="max-width: 180px" />
           <v-text-field v-model="cwd" label="远端工作目录（留空使用默认目录）" hide-details density="compact" style="min-width: 250px" />
           <v-btn :loading="busy" :disabled="!shells.length" color="primary" prepend-icon="mdi-plus" @click="openTerminal">新增终端</v-btn>
           <v-btn :loading="busy" variant="tonal" prepend-icon="mdi-refresh" @click="refresh">查询终端</v-btn>
@@ -120,7 +121,7 @@ onBeforeUnmount(() => { disposed = true; revision++; stream?.abort(); observer?.
           <v-list class="terminal-sessions" density="compact" border rounded>
             <v-list-subheader>会话 · {{ activeCount }} 个运行中</v-list-subheader>
             <v-list-item v-for="session in sessions" :key="session.terminalId" :active="current?.terminalId === session.terminalId" @click="attach(session).catch(reason => { error = userFacingError(reason); })">
-              <v-list-item-title>{{ session.shell === 'cmd' ? 'CMD' : 'PowerShell' }} · {{ session.pid || '—' }}</v-list-item-title>
+              <v-list-item-title>{{ remoteShellLabel(session.shell) }} · {{ session.pid || '—' }}</v-list-item-title>
               <v-list-item-subtitle>{{ session.state === 'running' ? '运行中' : '已退出' }} · {{ session.cwd }}</v-list-item-subtitle>
               <template #append><v-btn v-if="session.state === 'running'" icon="mdi-stop-circle-outline" variant="text" size="small" title="退出终端并结束子程序" :disabled="busy" @click.stop="exitTerminal(session)" /></template>
             </v-list-item>

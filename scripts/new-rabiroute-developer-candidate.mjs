@@ -167,7 +167,7 @@ function createDeveloperCandidate(options) {
       for (const filename of ["package.json", "rabi-agent.mjs", "README.md", "README_en.md"]) {
         fs.copyFileSync(requireFile(agentSource, filename), path.join(agentTarget, filename));
       }
-      for (const directory of ["lib", "runtime", "dist"]) {
+      for (const directory of ["lib", "runtime", "dist", "terminal", "desktop"]) {
         replaceDirectory(path.join(agentSource, directory), path.join(agentTarget, directory));
       }
     }

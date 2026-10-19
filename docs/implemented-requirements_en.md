@@ -8,6 +8,7 @@ Code integration and installed acceptance are recorded separately. Deployment st
 
 | Requirement | Implementation in main | Installation and validation |
 | --- | --- | --- |
+| Connector 0.2.5 platform enrollment, original-node credential repair and exchange recovery, POSIX terminals and candidate assets | `0.3.61` synchronization changes | Focused source tests and type checks; native POSIX test skipped on Windows. No build, installation or restart; native Mac and generated-package acceptance pending |
 | Explicit remote-session delivery, asynchronous catalog publication and plan revision hashing, control-plane startup and watch backoff | `0.3.59` synchronization changes | Focused source tests and type checking; no build, installation or restart in this task. Generated-package and installed-runtime acceptance pending |
 | Smooth dragging, negative desktop coordinates, release outside the window | `19333c18` | Acceptance machine A: 0.3.53 installed; native Qt drag fixture passed using installed Python |
 | Throw inertia, gravity, bounce, landing recovery and recapture | `19333c18` | Same machine, 0.3.53; physics regressions and installed throwing/landing recovery passed |

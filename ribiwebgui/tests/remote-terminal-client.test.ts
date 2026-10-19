@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { RemoteTerminalClient } from "../src/remoteTerminalClient.js";
+import { RemoteTerminalClient, remoteShellLabel } from "../src/remoteTerminalClient.js";
+
+test("terminal labels preserve each advertised platform shell", () => {
+  assert.deepEqual(["cmd", "powershell", "zsh", "bash", "sh", "custom"].map(remoteShellLabel),
+    ["CMD", "PowerShell", "Zsh", "Bash", "Shell", "custom"]);
+});
 
 test("terminal output decodes split Unicode/SSE frames without polling or automatic replay", async () => {
   const requests: string[] = [];
