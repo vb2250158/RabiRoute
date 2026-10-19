@@ -2,16 +2,16 @@
 <div align="center">English | <a href="./remote-computer-client.md">简体中文</a></div>
 <!-- /docs-language-switch -->
 
-# Controller and remote computer clients
+# Host and remote computer clients
 
-One RabiPC acts as the cluster controller and owns personas, plans, memory, skills, message history and workflow orchestration. Each remote computer runs a Rabi Agent client that connects to that controller and exposes computer operations. While the client connection is online, the host Agent can use terminals, transfer files, query windows and capture images even when associated Codex, DSH or other backends are not running.
+The host computer's Rabi service owns personas, plans, memory, skills, message history and persistent orchestration without a separate controlling Agent. Each remote computer runs a Rabi Agent client exposing its platform's computer capabilities. Ordinary authenticated Agents can query plans, memory and skills and use computer APIs under the same contracts without a primary-persona role.
 
 ```mermaid
 flowchart LR
-  A[Controller RabiPC: data, memory, skills, workflows] --> B[Host Agent]
-  B --> C[Controller public APIs]
+  A[Host Rabi service: data, memory, skills, workflows] --> C[Public APIs]
+  B[Ordinary authenticated Agent] --> C
   C <--> D[Remote client: one main program]
-  D --> E[CMD / PowerShell children]
+  D --> E[Platform terminals: CMD / PowerShell / Zsh / Bash]
   D --> F[Files, windows and screenshots]
   D --> G[Optional associated Codex / DSH]
 ```
@@ -22,9 +22,11 @@ The client does not run another Manager or replicate persona, memory or skill st
 
 Follow [remote client enrollment](lan-rabi-agent-bootstrap_en.md) and keep one main program on each computer. The connector, tray, terminal host and capture helper are child programs. Associated Agents can start later; a private configuration with `agents: []` can also establish a computer connection.
 
-Enrollment defaults to the computer client. Select **Also associate the Agent used for installation** to discover its current task. Omitting `RABI_AGENT_TYPE` and session variables on first enrollment makes `--bootstrap` save an empty Agent catalog, which normal CLI startup accepts. Adding an Agent later preserves computer identity; computer-only installation never clears existing bindings.
+Select Windows, Mac (macOS) or Linux before installing only the computer client. The installation-time Agent association checkbox has been removed. Omitting `RABI_AGENT_TYPE` and session variables on first enrollment makes `--bootstrap` save an empty Agent catalog. Later Agent registration preserves computer identity; each delivery supplies an explicit provider and full session ID.
 
-The host WebGUI provides CMD/PowerShell create, query, switch, input and exit under **RabiLink → Remote Agents → online computer → remote terminal**. Host Agents use the public APIs below for files and images. These operations reuse the authenticated connection without additional capability grants or management passwords and run with the remote client's operating-system user permissions.
+Mac uses a current-user LaunchAgent and supports file transfer plus Zsh/Bash/sh terminals in connector 0.2.4. Terminals require node-pty; native Mac compilation may need Xcode Command Line Tools. Window queries and screenshots remain Windows-only. Native Mac terminals and Desktop IPC still require online-device acceptance.
+
+The host WebGUI provides creation, querying, switching, input and exit for the computer's available shells under **RabiLink → Remote Agents → online computer → remote terminal**. Agents use the public APIs below for files and images. These operations reuse the authenticated connection without additional capability grants or management passwords and run with the remote client's operating-system user permissions.
 
 Discover the complete `managerBaseUrl` from the current Host status, verify `/meta` identity and readiness, then query `/api/lan-agent/instances` and confirm the target name and `instanceId`. Read the `remote-terminal` and `remote-computer` groups in `/api/lan-agent/capabilities` for current contracts.
 
@@ -36,7 +38,7 @@ Discover the complete `managerBaseUrl` from the current Host status, verify `/me
 | `GET /api/lan-agent/instances/:instanceId/terminals/:terminalId/events?after=0` | Live SSE output |
 | `POST /api/lan-agent/instances/:instanceId/computer` | File transfer, window queries and captures |
 
-Terminals use a stable UUID `terminalId` with `shell` set to `cmd` or `powershell`. Input uses increasing `sequence` numbers; commands end with `\r`. JSON reads return `terminal`, `outputEvents`, `nextOutputSequence` and `truncated`; pass the last `nextOutputSequence` as the next `after` cursor. Closing the view retains the terminal; exiting terminates its children. Connection loss or main-program exit closes terminals. After a timeout, query the original session instead of recreating it or replaying input.
+Terminals use a stable UUID `terminalId`. Windows supports `cmd` or `powershell`; Mac/Linux advertise the available `zsh`, `bash` or `sh` shells. Input uses increasing `sequence` numbers; commands end with `\r`. JSON reads return `terminal`, `outputEvents`, `nextOutputSequence` and `truncated`; pass the last `nextOutputSequence` as the next `after` cursor. Closing the view retains the terminal; exiting terminates its children. Connection loss or main-program exit closes terminals. After a timeout, query the original session instead of recreating it or replaying input.
 
 A new terminal admits input only after receiving the actual shell prompt, with a 30-second startup deadline. Desktop helpers also have a 30-second deadline; controller forwarding waits up to 45 seconds. This permits initialization on a busy or freshly logged-in machine without treating process creation as shell readiness.
 

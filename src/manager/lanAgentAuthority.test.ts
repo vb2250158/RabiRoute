@@ -174,6 +174,33 @@ test("duplicate node cannot be replaced by a fresh ticket, including after resta
   assert.equal(restarted.enroll(ticket, "node-b").nodeId, "node-b");
 });
 
+test("recoverable enrollment repairs the same node, preserves explicit disables and recovers after restart", t => {
+  const { authority, statePath } = fixture(t);
+  const original = enroll(authority);
+  authority.registerAgentCatalog(original.token, [{ agentId: "worker", provider: "dsh", sessionId: "saved-task" }, { agentId: "disabled", provider: "dsh" }]);
+  authority.setAgentEnabled("node-a", "disabled", false);
+  const before = authority.getSnapshot().nodes[0];
+  const lease = authority.acquireAuthorizationLease(original.token, "worker")!;
+  const secret = "r".repeat(43); const ticket = authority.issueBootstrapTicket().ticket;
+  const repaired = authority.enroll(ticket, "node-a", secret);
+  assert.equal(authority.authenticate(original.token), null);
+  assert.deepEqual(authority.getSnapshot().nodes[0], before);
+  assert.deepEqual(authority.authorize(repaired.token, "worker"), { nodeId: "node-a" });
+  assert.equal(authority.authorize(repaired.token, "disabled"), null);
+  assert.throws(() => authority.assertAuthorizationLease(original.token, lease), /revoked or replaced/);
+  assert.equal(authority.validateBootstrapTicket(ticket), false);
+  const persisted = fs.readFileSync(statePath, "utf8");
+  assert.equal(persisted.includes(secret), false); assert.equal(persisted.includes(ticket), false);
+  const restarted = new LanAgentAuthority({ statePath });
+  assert.deepEqual(restarted.enroll(ticket, "node-a", secret), repaired);
+  assert.equal(fs.readFileSync(statePath, "utf8"), persisted);
+  assert.throws(() => restarted.enroll(ticket, "node-a", "x".repeat(43)), /expired/);
+  assert.throws(() => restarted.enroll(ticket, "node-b", secret), /expired/);
+  restarted.revokeNode("node-a");
+  assert.throws(() => restarted.enroll(ticket, "node-a", secret), /expired/);
+  assert.throws(() => restarted.enroll(restarted.issueBootstrapTicket().ticket, "node-a", "bad"), /Invalid enrollment/);
+});
+
 test("malformed, wrong-secret and cross-node credentials never authenticate", t => {
   const { authority } = fixture(t);
   const a = enroll(authority, "node-a");

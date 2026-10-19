@@ -111,7 +111,7 @@ function normalizeHello(value: unknown): LanAgentNodeHello {
     allowedWorkspaces: normalizeTextList(raw.allowedWorkspaces, 32, 1_024),
     agents: raw.agents === undefined ? undefined : normalizeInstanceAgents(raw.agents),
     taskTargeting: raw.taskTargeting === "explicit-session-v1" ? raw.taskTargeting : undefined,
-    terminalShells: normalizeTextList(raw.terminalShells, 2, 16).filter(shell => ["cmd", "powershell"].includes(shell)),
+    terminalShells: normalizeTextList(raw.terminalShells, 5, 16).filter(shell => ["cmd", "powershell", "zsh", "bash", "sh"].includes(shell)),
     computerCapabilities: normalizeTextList(raw.computerCapabilities, 3, 16).filter(capability => ["files", "windows", "screenshots"].includes(capability))
   };
 }

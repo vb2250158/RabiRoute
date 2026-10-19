@@ -15,18 +15,18 @@ export class TerminalService {
     this.sessions = new Map(); this.stopped = false;
   }
   get activeCount() { return [...this.sessions.values()].filter(item => item.state !== "exited").length; }
+  get shells() { return process.platform === "win32" ? ["cmd", "powershell"] : ["zsh", "bash", "sh"].filter(shell => fs.existsSync(`/bin/${shell}`)); }
   snapshot(item) {
     return { terminalId: item.id, shell: item.shell, cwd: item.cwd, state: item.state, pid: item.pid,
       createdAt: item.createdAt, nextInputSequence: item.nextInputSequence, exitCode: item.exitCode };
   }
   async execute(input) {
-    if (process.platform !== "win32") throw new Error("CMD and Windows PowerShell require a Windows node.");
     if (this.stopped) throw new Error("The main program is stopping.");
-    if (input.action === "list") return { shells: ["cmd", "powershell"], sessions: [...this.sessions.values()].map(item => this.snapshot(item)) };
+    if (input.action === "list") return { shells: this.shells, sessions: [...this.sessions.values()].map(item => this.snapshot(item)) };
     const id = terminalId(input.terminalId);
     let item = this.sessions.get(id);
     if (input.action === "open") {
-      if (!["cmd", "powershell"].includes(input.shell)) throw new Error("Choose CMD or PowerShell.");
+      if (!this.shells.includes(input.shell)) throw new Error("Choose a shell advertised by this computer.");
       const cwd = input.cwd || this.defaultCwd;
       if (typeof cwd !== "string" || !path.isAbsolute(cwd) || !fs.statSync(cwd).isDirectory()) throw new Error("Working directory must be an existing absolute directory on the remote computer.");
       const canonical = fs.realpathSync(cwd);
@@ -71,9 +71,10 @@ export class TerminalService {
     item.child.stdin.write(`${JSON.stringify(value)}\n`);
   }
   start(item) {
-    const script = fileURLToPath(new URL("../terminal/host.ps1", import.meta.url));
-    const executable = path.join(process.env.SystemRoot || "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe");
-    const child = spawn(executable, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script], {
+    const windows = process.platform === "win32";
+    const script = fileURLToPath(new URL(windows ? "../terminal/host.ps1" : "../terminal/posix-host.mjs", import.meta.url));
+    const executable = windows ? path.join(process.env.SystemRoot || "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe") : process.execPath;
+    const child = spawn(executable, windows ? ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script] : [script], {
       windowsHide: true, stdio: ["pipe", "pipe", "pipe"],
       env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(RABI_|RABIROUTE_|CODEX_)/i.test(key)))
     });
@@ -93,6 +94,7 @@ export class TerminalService {
         try { event = JSON.parse(buffer.slice(0, end)); } catch { buffer = buffer.slice(end + 1); continue; }
         buffer = buffer.slice(end + 1);
         if (event.type === "ready") { item.state = "running"; item.pid = event.pid; clearTimeout(deadline); resolveReady(); this.onChange(); }
+        if (event.type === "error") { rejectReady(new Error(event.message || "Terminal host failed.")); child.stdin.end(); }
         if (event.type === "output" && typeof event.data === "string") publish({ type: "output", data: event.data.slice(0, 16384) });
         if (event.type === "exit") { item.exitCode = event.code; child.stdin.end(); }
       }

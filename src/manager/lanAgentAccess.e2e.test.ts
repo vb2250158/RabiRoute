@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import http from "node:http";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { LanAgentRegistry } from "./lanAgentRegistry.js";
 import { handleLanAgentApi } from "./lanAgentRoutes.js";
@@ -19,6 +20,14 @@ test("HTTP enrollment, explicit admin grant, resources and offline revocation sh
   fs.writeFileSync(path.join(root, "registry.json"), JSON.stringify({ schemaVersion: 2, nodes: [{ nodeId: "node-fixture", version: "1", platform: "fixture", agents: [binding] }], tasks: [] }));
   const registry = new LanAgentRegistry({ statePath: path.join(root, "registry.json") });
   const server = http.createServer((request, response) => {
+    if (request.url === "/.well-known/rabiroute-manager" || request.url === "/meta") {
+      const token = String(request.headers.authorization ?? "").replace(/^Bearer /, "");
+      if (request.url === "/meta" && !authority.authenticate(token)) { response.writeHead(401).end(); return; }
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ code: 0, data: { protocolVersion: "1", guid: "fixture-stable-guid", rabiGuid: "fixture-stable-guid",
+        applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-instance", health: { live: true, requiredReady: true, state: "healthy" } } }));
+      return;
+    }
     const handled = handleLanAgentApi(request, new URL(request.url!, "http://fixture.invalid"), response, {
       authority, registry, resources: new AgentResourceCatalog({ rootDir: root, publicDocs: [] }), enabled: () => true,
       managerIdentity: () => ({ guid: "fixture-stable-guid", applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-instance", health: { live: true, requiredReady: true, state: "healthy" } }),
@@ -81,6 +90,46 @@ test("HTTP enrollment, explicit admin grant, resources and offline revocation sh
     assert.equal(self.managerInstanceId, "fixture-instance");
     assert.equal(self.nodeId, "node-fixture");
     assert.equal(self.connected, false);
+    // Copying a fresh prompt authorizes repair of this node, without a second
+    // grant call. The old catalog and explicit disable remain authoritative.
+    const repairTicket = authority.issueBootstrapTicket().ticket;
+    const repairBody = { ticket: repairTicket, nodeId: "node-fixture", enrollmentSecret: "r".repeat(43) };
+    const repair = () => fetch(`${base}/api/lan-agent/enroll`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(repairBody) });
+    const repairedResponse = await repair();
+    assert.equal(repairedResponse.status, 201);
+    const repaired = (await repairedResponse.json()).data;
+    assert.equal((await fetch(`${base}/api/lan-agent/self`, { headers: { authorization: `Bearer ${token}` } })).status, 401);
+    assert.equal((await fetch(`${base}/api/lan-agent/self`, { headers: { authorization: `Bearer ${repaired.token}` } })).status, 200);
+    assert.equal((await fetch(`${base}/api/lan-agent/resources`, { headers: { authorization: `Bearer ${repaired.token}`, "x-rabiroute-agent-id": "worker" } })).status, 403);
+    const recoveredResponse = await repair();
+    assert.equal(recoveredResponse.status, 201);
+    assert.deepEqual((await recoveredResponse.json()).data, repaired);
+    assert.equal(authority.getApprovedAgentBinding("node-fixture", "worker")?.sessionId, "session-fixture");
+    const clientModuleUrl = pathToFileURL(path.resolve("apps/rabi-agent/rabi-agent.mjs")).href;
+    const { __test: client } = await import(clientModuleUrl);
+    const configPath = path.join(root, "client-config.json");
+    const saved = { schemaVersion: 1, managerUrl: base, managerGuid: "fixture-stable-guid", nodeId: "node-fixture", nodeCredential: token,
+      agents: [binding], defaultWorkspace: fs.realpathSync(root), allowedWorkspaces: [fs.realpathSync(root)], releasePublicKeySha256: "a".repeat(64) };
+    fs.writeFileSync(configPath, JSON.stringify(saved));
+    const variables: Record<string, string | undefined> = { RABI_MANAGER_URL: base, RABI_AGENT_BOOTSTRAP_TICKET: authority.issueBootstrapTicket().ticket,
+      RABI_AGENT_RELEASE_PUBLIC_KEY_SHA256: "a".repeat(64), RABI_AGENT_TYPE: undefined, RABI_AGENT_CODEX_THREAD_ID: undefined };
+    const previous = Object.fromEntries(Object.keys(variables).map(key => [key, process.env[key]]));
+    for (const [key, value] of Object.entries(variables)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    let exchanges = 0;
+    try {
+      const connected = await client.bootstrapConfig(configPath, async (url: string, init: RequestInit) => {
+        const result = await fetch(url, init);
+        if (String(url).endsWith("/enroll")) { exchanges++; assert.equal(result.status, 201); await result.arrayBuffer(); throw new Error("Fixture lost exchange response"); }
+        return result;
+      });
+      assert.equal(connected.nodeId, saved.nodeId); assert.deepEqual(connected.agents, saved.agents);
+      assert.deepEqual(authority.authenticate(connected.nodeCredential), { nodeId: saved.nodeId });
+      assert.equal(authority.authorize(connected.nodeCredential, "worker"), null);
+      assert.equal(exchanges, 1); assert.equal(fs.existsSync(`${configPath}.enrollment.json`), false);
+      assert.equal(authority.getSnapshot().nodes.length, 1);
+    } finally {
+      for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    }
   } finally {
     registry.close();
     server.closeAllConnections();

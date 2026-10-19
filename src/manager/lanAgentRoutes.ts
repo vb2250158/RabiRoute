@@ -132,9 +132,10 @@ export function handleLanAgentApi(
     if (context.enabled?.() !== true) { agentUnauthorized(response, context); return true; }
     response.setHeader("cache-control", "no-store");
     void context.readJsonBody<Record<string, unknown>>(request).then(body => {
-      const credential = context.authority!.enroll(String(body.ticket ?? ""), String(body.nodeId ?? ""));
+      if (body.enrollmentSecret !== undefined && typeof body.enrollmentSecret !== "string") throw new Error("Invalid enrollment recovery secret.");
+      const credential = context.authority!.enroll(String(body.ticket ?? ""), String(body.nodeId ?? ""), body.enrollmentSecret as string | undefined);
       context.jsonResponse(response, 201, { code: 0, data: credential });
-    }).catch(() => context.jsonResponse(response, 400, { code: -1, message: "Enrollment failed. Inspect node status before obtaining another ticket; do not replay an uncertain enrollment." }));
+    }).catch(() => context.jsonResponse(response, 400, { code: -1, message: "Enrollment could not be completed. Keep the local recovery record; if the ticket expired, copy a fresh connection prompt. No separate Agent approval is required." }));
     return true;
   }
   if (requestUrl.pathname === "/api/lan-agent/instances" && request.method === "GET") {

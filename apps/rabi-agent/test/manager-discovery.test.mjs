@@ -10,6 +10,18 @@ import { once } from "node:events";
 import { discoverManager, createDiscoveryCooldown } from "../lib/manager-discovery.mjs";
 import { createEndpointSession, businessReady } from "../lib/endpoint-session.mjs";
 
+test("invalid node credentials fail once without discovery or replacement of the existing identity", async () => {
+  const original = { managerUrl: "http://manager.invalid", managerGuid: "stable", nodeId: "existing-mac", nodeCredential: "fixture-private" };
+  let discovered = false; let authenticatedReads = 0;
+  const session = createEndpointSession({ config: original, discover: async () => { discovered = true; }, fetchImpl: async url => {
+    if (url.endsWith("/.well-known/rabiroute-manager")) return Response.json({ code: 0, data: { protocolVersion: 1, guid: "stable", applicationGenerationId: "g", managerInstanceId: "i" } });
+    authenticatedReads++; return Response.json({ error: "LAN_AGENT_CREDENTIAL_REQUIRED" }, { status: 401 });
+  } });
+  await assert.rejects(session.ensure(), /credential rejected.*401.*preserved/);
+  assert.equal(discovered, false); assert.equal(authenticatedReads, 1);
+  assert.deepEqual(session.config, original);
+});
+
 for (const failure of ["timeout", "generation", "guid"]) {
   test(`final endpoint verification fails closed on ${failure}`, async () => {
     const config = { managerUrl: "http://localhost:5432", managerGuid: "stable", nodeId: "node", nodeCredential: "fixture-credential", applicationGenerationId: "old", managerInstanceId: "old" };

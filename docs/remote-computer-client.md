@@ -2,16 +2,16 @@
 <div align="center"><a href="./remote-computer-client_en.md">English</a> | 简体中文</div>
 <!-- /docs-language-switch -->
 
-# 主控与远端电脑客户端
+# 主机与远端电脑客户端
 
-一个 RabiPC 作为集群主控，统一保存人格、计划、记忆、Skill、消息记录和调度流程。每台远端电脑运行 Rabi Agent 客户端，主动连接原主控，提供电脑操作能力。客户端连接在线时，即使关联的 Codex、DSH 等后端没有启动，主控 Agent 仍能使用远端终端、互传文件、查询窗口和获取画面。
+主机电脑上的 Rabi 服务统一保存人格、计划、记忆、Skill、消息记录和调度流程，承担常驻管理职责，不需要另设主控 Agent。每台远端电脑运行 Rabi Agent 客户端，提供该平台支持的电脑操作能力。普通已鉴权 Agent 均可查询计划、记忆和 Skill，也可按接口合同调用电脑能力；是否为主人格不构成额外许可。
 
 ```mermaid
 flowchart LR
-  A[主控 RabiPC：数据、记忆、Skill、流程] --> B[主机 Agent]
-  B --> C[主控公开接口]
+  A[主机 Rabi 服务：数据、记忆、Skill、流程] --> C[公开接口]
+  B[普通已鉴权 Agent] --> C
   C <--> D[远端客户端：唯一主程序]
-  D --> E[CMD / PowerShell 子程序]
+  D --> E[平台终端：CMD / PowerShell / Zsh / Bash]
   D --> F[文件、窗口与截图]
   D --> G[可选关联 Codex / DSH]
 ```
@@ -22,9 +22,11 @@ flowchart LR
 
 按[远端客户端接入步骤](lan-rabi-agent-bootstrap.md)安装，每台电脑保持一个主程序。连接器、托盘、终端宿主和截图辅助程序均为其子程序。关联 Agent 可以稍后启动；私有配置 `agents: []` 也能建立电脑连接。
 
-接入页面默认只安装电脑客户端；勾选 **同时关联安装时使用的智能体** 才发现当前任务。首次不提供 `RABI_AGENT_TYPE` 或会话变量时，`--bootstrap` 保存空 Agent 列表，正常命令行启动也接受该配置。以后添加 Agent 不替换电脑身份；已有绑定不会被空安装选项清除。
+接入页面先选择 Windows、Mac（macOS）或 Linux，仅安装电脑客户端；安装关联智能体的勾选已移除。首次不提供 `RABI_AGENT_TYPE` 或会话变量时，`--bootstrap` 保存空 Agent 列表。以后登记 Agent 不替换电脑身份；每次投递明确指定类型和完整会话 ID。
 
-主机 WebGUI 的 **RabiLink → 远端智能体 → 在线电脑 → 远端终端** 提供 CMD/PowerShell 的新增、查询、切换、输入和退出。文件与画面通过下列公开接口供主机 Agent 使用。沿用已鉴权连接，不增加功能白名单或管理密码；执行使用远端客户端的系统用户权限。
+Mac 使用当前用户 LaunchAgent，支持文件互传与连接器 0.2.4 的 Zsh/Bash/sh 终端。终端依赖 node-pty；Mac 原生编译可能需要 Xcode Command Line Tools。窗口查询和截图仍仅支持 Windows。Mac 原生终端与 Desktop IPC 仍待在线真机验收。
+
+主机 WebGUI 的 **RabiLink → 远端智能体 → 在线电脑 → 远端终端** 提供该电脑实际支持的 Shell 的新增、查询、切换、输入和退出。文件与画面通过下列公开接口供 Agent 使用。沿用已鉴权连接，不增加功能白名单或管理密码；执行使用远端客户端的系统用户权限。
 
 调用前从当前 Host 状态取得完整 `managerBaseUrl`，核对 `/meta` 身份和就绪状态，再读取 `/api/lan-agent/instances`，用名称及 `instanceId` 确认目标。调用合同见 `/api/lan-agent/capabilities` 的 `remote-terminal`、`remote-computer` 分组。
 
@@ -36,7 +38,7 @@ flowchart LR
 | `GET /api/lan-agent/instances/:instanceId/terminals/:terminalId/events?after=0` | 实时 SSE 输出 |
 | `POST /api/lan-agent/instances/:instanceId/computer` | 文件互传、窗口查询和截图 |
 
-终端使用稳定 UUID `terminalId`，`shell` 为 `cmd` 或 `powershell`。输入使用递增 `sequence`，命令以 `\r` 结尾。JSON 输出字段为 `terminal`、`outputEvents`、`nextOutputSequence`、`truncated`；下一次以 `nextOutputSequence` 作为 `after`。关闭网页保留终端，退出终端结束所属子程序；连接断开或主程序退出结束终端。超时查询原会话，不自动重建或重发输入。
+终端使用稳定 UUID `terminalId`；Windows 的 `shell` 为 `cmd` 或 `powershell`，Mac/Linux 为电脑实际提供的 `zsh`、`bash` 或 `sh`。输入使用递增 `sequence`，命令以 `\r` 结尾。JSON 输出字段为 `terminal`、`outputEvents`、`nextOutputSequence`、`truncated`；下一次以 `nextOutputSequence` 作为 `after`。关闭网页保留终端，退出终端结束所属子程序；连接断开或主程序退出结束终端。超时查询原会话，不自动重建或重发输入。
 
 新终端收到真实 Shell 提示符后才接受输入，启动最多等待 30 秒；桌面辅助操作也有 30 秒期限，主控转发等待最多 45 秒。机器繁忙或刚登录时允许启动过程完成，不以创建了进程代替 Shell 就绪。
 
