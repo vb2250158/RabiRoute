@@ -6,6 +6,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.58 - 2026-10-19
+
+- Non-empty thread `create` accepts a verified Grok Bot source: a canonical `grokBot:` session ID is checked with the Bot owner and is no longer forced through the Codex task UUID or DSH `session-` shape. That `sourceThreadId` may be up to 4096 characters; Codex and DSH sources stay at 512, and IDs that cannot be decoded or verified are still rejected. A message-adapter `conversationId` remains limited to 300 characters, so a longer Bot session uses `type=agent`.
+- After the caller has already been released, a timed-out Desktop open turn can still accept the original request's late success, or record a receipt when the same task rollout shows the original delivery marker, and then commit that original delivery. The delivery ID is not replaced and the message is not sent again.
+
 ## 0.3.57 - 2026-10-18
 
 - Scope bound-persona Codex Stop processing to the recovered current persona: plan follow-ups, file-change reminders and completion notices stay within that persona, and recovery failures in other personas no longer block it. An unrecovered current persona still returns `PLAN_STORAGE_STARTUP_UNAVAILABLE` before writes; unbound sessions still wait for full plan recovery.

@@ -69,7 +69,7 @@ Route 配置片段：
 | `host` | `{ "name": "Grok Bot cloud owner", "required": true }` |
 | `capabilities.managedTasks` | 仅 `agentThreads=true` |
 
-已有会话支持发现、读取和精确投递。当前原生 API没有 create、rename 或 open 操作，对应请求明确失败；必须选择真正已有的会话。计划协助会话、消息处理 Agent 池、记忆整理、Hooks 和自动回执恢复能力均未声明。
+已有会话支持发现、读取和精确投递。当前原生 API没有 create、rename 或 open 操作，对应请求明确失败；必须选择真正已有的会话。这只限制 Grok Bot 自己的会话。已核验的 Bot 来源可以创建 Codex 或 DSH 会话：`action=create`，顶层 `agentAdapter` 为 `codex` 或 `dsh`，`messageSource` 使用 `type=agent`、`agentAdapter=grokBot`，`sessionId` 与 `sourceThreadId` 都等于扫描返回的完整 Bot 会话 ID。Manager 用 owner 名称覆盖提交的 `sessionName`。不能用线程桥新建、重命名或打开一个 Grok 会话。计划协助会话、消息处理 Agent 池、记忆整理、Hooks 和自动回执恢复能力均未声明。
 
 服务端点使用 `kind=service`。Owner 接入、状态和认证读取不自动遍历全部会话；只有显式扫描或精确会话操作读取对应列表。Bot owner 及当前账号变更后必须重新核对原会话，不把同名对象或新账号当作原请求的继任者。
 
@@ -110,6 +110,28 @@ Codex → Bot 的精确投递示例：
 ```
 
 需要 Bot 正式回传时，将 `responsePolicy` 改为 `required` 并填写 `responseInstruction`。Bot 回复时交换原双方目标/来源，来源使用扫描返回的 Bot 完整 ID，带回原 `inReplyToRequestId/result/nextAction`。调用方仍使用同一已鉴权 Rabi 连接，不能用消息正文建立第二层认证。
+
+Bot 发起 Codex 会话的 `create` 示例：
+
+```json
+{
+  "action": "create",
+  "agentAdapter": "codex",
+  "title": "Bot 发起的任务",
+  "cwd": "C:\\Path\\To\\Your\\Project",
+  "prompt": "请处理这件新任务。",
+  "sourceThreadId": "<scan 返回的来源 Bot 完整会话 ID>",
+  "sourceAgentType": "agent",
+  "messageSource": {
+    "type": "agent",
+    "agentAdapter": "grokBot",
+    "sessionId": "<scan 返回的来源 Bot 完整会话 ID>",
+    "sessionName": "任意旧名称，会被 owner 名称覆盖"
+  }
+}
+```
+
+DSH 目标使用 `"agentAdapter": "dsh"`，来源字段相同。完整合同见 [Rabi Agent 接口](rabi-agent-interfaces.md)。
 
 ## 会话复用与未知结果
 

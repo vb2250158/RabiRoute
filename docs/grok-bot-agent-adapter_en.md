@@ -69,7 +69,7 @@ Route configuration fragment:
 | `host` | `{ "name": "Grok Bot cloud owner", "required": true }` |
 | `capabilities.managedTasks` | Only `agentThreads=true` |
 
-Existing sessions support discovery, reads and exact delivery. The current native API has no create, rename or open operation; those requests fail explicitly and an actual existing session is required. Plan-assistant sessions, message-processing pools, memory consolidation, Hooks and automatic receipt recovery are not declared capabilities.
+Existing sessions support discovery, reads and exact delivery. The current native API has no create, rename or open operation; those requests fail explicitly and an actual existing session is required. That limit applies to a Grok Bot session itself. A verified Bot source can create a Codex or DSH session: `action=create`, top-level `agentAdapter` of `codex` or `dsh`, and `messageSource` with `type=agent`, `agentAdapter=grokBot`, where both `sessionId` and `sourceThreadId` equal the complete Bot session ID returned by scan. Manager replaces the submitted `sessionName` with the owner name. The thread bridge still cannot create, rename, or open a Grok session. Plan-assistant sessions, message-processing pools, memory consolidation, Hooks and automatic receipt recovery are not declared capabilities.
 
 The endpoint uses `kind=service`. Connecting an owner or reading status/authentication does not traverse all sessions; only explicit scans or exact-session operations read the relevant list. A changed Bot owner or account requires the original session to be verified again. A same-name object or new account cannot inherit an old request.
 
@@ -110,6 +110,28 @@ Exact Codex-to-Bot delivery:
 ```
 
 For a formal Bot reply, choose `responsePolicy=required` and supply `responseInstruction`. The reply reverses the original endpoints, uses the complete Bot ID from discovery as its source, and returns `inReplyToRequestId/result/nextAction`. Continue through the same authenticated Rabi connection; message-body claims do not create another authentication layer.
+
+Creating a Codex session from the Bot:
+
+```json
+{
+  "action": "create",
+  "agentAdapter": "codex",
+  "title": "Task started by the Bot",
+  "cwd": "C:/Path/To/Your/Project",
+  "prompt": "Handle this new task.",
+  "sourceThreadId": "<complete source Bot session ID returned by scan>",
+  "sourceAgentType": "agent",
+  "messageSource": {
+    "type": "agent",
+    "agentAdapter": "grokBot",
+    "sessionId": "<complete source Bot session ID returned by scan>",
+    "sessionName": "Any stale name; the owner name replaces it"
+  }
+}
+```
+
+A DSH target uses `"agentAdapter": "dsh"` with the same source fields. See [Rabi Agent interfaces](rabi-agent-interfaces_en.md) for the full contract.
 
 ## Session reuse and unknown outcomes
 

@@ -58,7 +58,9 @@ import { normalizeAgentAdapters, parseAgentAdapterType, type AgentAdapterType } 
 import { agentAdapterManifest, isPlanAssistantAgentType, normalizePlanBindingAgentType } from "../shared/agentAdapterCapabilities.js";
 import { agentThreadRequestFailureData, handleAgentThreadRequest as handleLocalAgentThreadRequest, readAgentEndpointSummary, type AgentThreadRequest, type AgentThreadRequestOptions } from "../agentThreads.js";
 import { createAgentEndpointDelivery } from "./agentEndpointDelivery.js";
-import { createGrokBotEndpointBridge } from "./grokBotEndpointBridge.js";
+import { createGrokBotEndpointBridge, readGrokBotNativeOwner } from "./grokBotEndpointBridge.js";
+import { GrokBotError } from "../agentAdapters/grokBotClient.js";
+import { subscribeCodexDesktopDelivery } from "../codexDesktopBridge.js";
 import { handleGrokBotThreadRequest } from "./grokBotThreads.js";
 import { grokBotEndpointConfiguration } from "./grokBotConfiguration.js";
 import { handleAgentDeliveryAuthority } from "./agentDeliveryAuthorityRoutes.js";
@@ -1093,7 +1095,16 @@ function agentThreadRequestOptions(
         ? { dshBaseUrl: runtime.definition.dshBaseUrl }
         : {}),
     ...extra,
-    dshAgentPreset: request.dshAgentPreset?.trim() || extra.dshAgentPreset
+    dshAgentPreset: request.dshAgentPreset?.trim() || extra.dshAgentPreset,
+    readGrokBotSource: async (sessionId) => {
+      try {
+        const owner = await readGrokBotNativeOwner(sessionId, currentGrokBotConfiguration(sessionId));
+        return { sessionId: owner.id, sessionName: owner.bot.name.trim() || owner.agentId };
+      } catch (error) {
+        if (error instanceof GrokBotError && (error.code === "GROK_BOT_SESSION_NOT_FOUND" || error.code === "GROK_BOT_DUPLICATE_OWNER_ID")) return null;
+        throw error;
+      }
+    }
   };
 }
 
@@ -9890,8 +9901,14 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     readLocal: readAgentEndpointSummary, localOptions: request => agentThreadRequestOptions(request) });
   const endpointRecovery = agentEndpointDelivery.recovery;
   const releaseEndpointRecovery = lanAgentRegistry.onDeliveryRecoveryEvent(() => { void endpointRecovery.onEvent(); });
+  const releaseLateDeliveryRecovery = subscribeCodexDesktopDelivery((event) => {
+    if (event.stage === "delivery_receipt_confirmed" && event.late && event.method === "thread-follower-start-turn") {
+      void endpointRecovery.onEvent();
+    }
+  });
   void endpointRecovery.onEvent();
   managerRuntimeOwner.register("lan_agent_registry", () => {
+    releaseLateDeliveryRecovery();
     releaseEndpointRecovery();
     releaseDeviceEndpointRecovery?.();
     releaseDeviceEndpointRecovery = undefined;
