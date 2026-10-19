@@ -6,6 +6,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.60 - 2026-10-19
+
+- Collect the uncommitted message-rule UI from the primary checkout: share message-type navigation between the list and editor, include scheduled tasks in the same workspace, and open the editor directly for new rules while retaining existing filters and Notify Agent / Run script configuration.
+- Include narrow-screen layout, Chinese/English labels and guides, and regression tests for message-type classification and editor entry.
+- Source collection for PR review only: no installation, restart, or merge. Browser and installed-runtime acceptance remain pending.
+
 ## 0.3.59 - 2026-10-19
 
 - Remote Agent delivery requires an explicit instance, Agent, provider and full session ID. Connectors advertise explicit-session targeting, idempotency keys bind the target, and no default Agent or configured-session fallback is synthesized. Manager retains ownership of enablement.

@@ -8,6 +8,10 @@ English | <a href="./personas-and-rules.md">简体中文</a>
 
 A Route decides how messages enter and which handler receives them. A persona supplies identity, background, and decision guidance. They are stored separately and can be reused independently.
 
+## Add message rules and scheduled tasks
+
+In Persona → Automation → Message rules, choose a message type on the left to view its rules and count. Add message rule opens the editor directly with that type selected; the editor also lets you switch types on the left. Choose Scheduled tasks for an interval, daily time, or one-off time, then select Notify Agent or Run script. Finish editing and save the persona to apply changes. On narrow screens, the type bar moves to the top and scrolls horizontally.
+
 ## Select the receiving Agent
 
 In an automation rule, choose **Delivery target** under **Notify Agent**. Select the primary persona, plan secretary, message processing Agent, memory consolidation Agent, or **Custom**. Custom selection includes Agent instance and existing session dropdowns. Agent settings hold recipient bindings and parameters; the rule owns the delivery choice. See [Agent delivery targets](../automation-agent-delivery_en.md).

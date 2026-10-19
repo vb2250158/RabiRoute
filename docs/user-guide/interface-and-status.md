@@ -224,7 +224,7 @@ Manager 只管理自己启动且持有 process lease 的 Route/插件子进程�
 
 同一任务同一轮次发往同一目标只投递一次；重复事件复用发送回执。发送状态不明确时不会自动重发，避免重复通知，可在消息路线的发送日志中检查。缺少完成轮次或最终回复时不发送。规则默认关闭，不会因添加规则立即发送历史消息。
 
-“人格 → 自动化”分为“接收消息”“定制任务”和“Agent Hook”。Hook 设置按 Agent 随人格保存在 `personaConfig.json`；同一人格的消息路线共用对应 Agent 的设置。旧 Route 配置在保存或显式迁移时转入人格文件。
+“人格 → 自动化”分为“消息规则”和“Agent Hook”。消息规则按左侧消息类型查看，定时任务也在其中；点击“新增消息规则”直接打开编辑界面，可切换消息类型并选择通知 Agent 或运行脚本。Hook 设置按 Agent 随人格保存在 `personaConfig.json`；同一人格的消息路线共用对应 Agent 的设置。旧 Route 配置在保存或显式迁移时转入人格文件。
 
 Agent 端只提供“更新 Hook 到 Agent”按钮，用于首次安装或后续更新事件埋点。Codex 使用官方插件安装入口；DSH 安装到本机 `web` profile，重新加载插件或重启 DSH 后生效。两套安装包位于 `plugins/rabi-codex-context/` 和 `plugins/rabi-dsh-context/`。
 
