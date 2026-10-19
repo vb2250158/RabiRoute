@@ -18,6 +18,36 @@ import {
 
 const cleanupRoots: string[] = [];
 
+test("failed watch scans back off even when events arrive during an attempt", async t => {
+  const started: number[] = [];
+  const results: Array<ReturnType<typeof deferred<ConfigWatchSnapshotResult>>> = [];
+  const broker = new ManagerWatchBroker({
+    request: { kind: "plugin_tree", roots: [] },
+    retryDelayMs: 50,
+    attemptTimeoutMs: 30_000,
+    createAttempt: () => {
+      started.push(performance.now());
+      const result = deferred<ConfigWatchSnapshotResult>();
+      results.push(result);
+      return { result: result.promise, closed: Promise.resolve(), terminate() {} };
+    },
+    onSnapshot() {}
+  });
+  t.after(async () => { broker.close(); await broker.closed(); });
+  broker.start();
+  await waitFor(() => results.length === 1);
+  broker.requestRefresh("queued event");
+  const firstFailure = performance.now();
+  results[0].reject(new Error("busy filesystem"));
+  await waitFor(() => results.length === 2, 10_000);
+  assert.ok(started[1] - firstFailure >= 45);
+  broker.requestRefresh("another queued event");
+  const secondFailure = performance.now();
+  results[1].reject(new Error("still busy"));
+  await waitFor(() => results.length === 3, 10_000);
+  assert.ok(started[2] - secondFailure >= 95);
+});
+
 afterEach(() => {
   for (const root of cleanupRoots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });

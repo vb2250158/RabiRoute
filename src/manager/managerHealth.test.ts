@@ -47,7 +47,7 @@ test("background incidents remain visible without blocking unrelated ready APIs"
   assert.equal(health.backgroundState, "degraded");
   assert.equal(health.backgroundIncidentCount, 3);
   assert.match(health.message, /background incidents=3/);
-  assert.equal(buildManagerHealthSnapshot({ ...base, backgroundIncidentCount: 3, planStorageReady: false }).state, "degraded");
+  assert.equal(buildManagerHealthSnapshot({ ...base, backgroundIncidentCount: 3, planStorageReady: false }).state, "healthy");
 });
 
 test("missing required capabilities are not hidden inside generic degraded health", () => {
@@ -85,7 +85,7 @@ test("optional plugin and Route degradation preserve required generation readine
   assert.equal(routeDegraded.state, "degraded");
 });
 
-test("plan storage startup blocks business readiness without rejecting the required generation", () => {
+test("plan storage recovery preserves healthy liveness while reporting business readiness separately", () => {
   const health = buildManagerHealthSnapshot({
     ...base,
     planStorageReady: false
@@ -94,6 +94,6 @@ test("plan storage startup blocks business readiness without rejecting the requi
   assert.equal(health.live, true);
   assert.equal(health.requiredReady, true);
   assert.equal(health.businessReady, false);
-  assert.equal(health.state, "degraded");
-  assert.match(health.message, /plan storage startup recovery is not ready/i);
+  assert.equal(health.state, "healthy");
+  assert.match(health.message, /plan storage recovery continues in the background/i);
 });

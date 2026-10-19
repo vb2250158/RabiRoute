@@ -2,10 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
 import { normalizeAllowedWorkspaces, resolveRealDirectory } from "../lib/cwd-policy.mjs";
-import { agentCatalog, configureInstanceAgent, resolveInstanceAgent, registerManagedSession } from "../lib/instance-agents.mjs";
+import { agentCatalog, configureInstanceAgent, resolveInstanceAgent as resolveTaskAgent, registerManagedSession } from "../lib/instance-agents.mjs";
 
-const config = { defaultWorkspace: resolveRealDirectory(os.tmpdir()), allowedWorkspaces: normalizeAllowedWorkspaces([], os.tmpdir()), agentType: "codex-desktop", codexDesktop: { threadId: "task-a" } };
-test("instance migration retains default identity; several Agents remain independently bound", () => {
+const config = { defaultWorkspace: resolveRealDirectory(os.tmpdir()), allowedWorkspaces: normalizeAllowedWorkspaces([], os.tmpdir()),
+  agents: [{ agentId: "default", name: "Existing Agent", provider: "codex-desktop", enabled: true, workspace: resolveRealDirectory(os.tmpdir()), sessionId: "task-a" }] };
+const resolveInstanceAgent = (config, task) => resolveTaskAgent(config, { threadId: "explicit-task", ...task });
+test("existing catalog identities survive; legacy single-task settings do not synthesize a default Agent", () => {
+  assert.deepEqual(agentCatalog({ agentType: "codex-desktop", codexDesktop: { threadId: "old-task" } }), []);
   assert.equal(agentCatalog(config)[0].agentId, "default");
   const next = configureInstanceAgent(config, { name: "Second", provider: "codex-desktop", sessionId: "task-b" });
   assert.equal(next.agents.length, 2);
@@ -17,6 +20,16 @@ test("instance migration retains default identity; several Agents remain indepen
   assert.equal(resolveInstanceAgent(disabled, { agentId: "default", targetAgent: "codex-desktop" }).sessionId, "task-a");
   assert.throws(() => resolveInstanceAgent(next, { agentId: second.agentId, targetAgent: "dsh" }), /provider/);
   assert.throws(() => configureInstanceAgent(next, { agentId: second.agentId, provider: "dsh" }), /new Agent/);
+});
+
+test("every delivery requires explicit Agent, provider and opaque session identity without rebinding", () => {
+  for (const request of [{ targetAgent: "codex-desktop", threadId: "task-b" }, { agentId: "default", threadId: "task-b" },
+    { agentId: "default", targetAgent: "codex-desktop" }, { agentId: "default", targetAgent: "codex-desktop", threadId: " task-b" }]) {
+    assert.throws(() => resolveTaskAgent(config, request), /Explicit/);
+  }
+  const before = structuredClone(config);
+  assert.equal(resolveTaskAgent(config, { agentId: "default", targetAgent: "codex-desktop", threadId: "task-b" }).sessionId, "task-a");
+  assert.deepEqual(config, before);
 });
 test("enrolled connector uses Manager enablement while preserving exact identity", () => {
   const localDisabled = configureInstanceAgent(config, { agentId: "default", enabled: false });

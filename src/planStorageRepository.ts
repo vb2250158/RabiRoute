@@ -997,6 +997,65 @@ export function readPlanStoragePackage(
   return { ...location, inventoryHash: physical.hash, files: physical.files };
 }
 
+const revisionFileHashes = new Map<string, { fingerprint: string; hash: string }>();
+
+export async function readPlanStorageInventoryHash(
+  roleDir: string,
+  planId: string,
+  bucket: PlanStorageBucket
+): Promise<string> {
+  const location = resolveCanonicalPlanStorageLocation(roleDir, planId);
+  if (!location || location.bucket !== bucket) throw new Error(`Canonical ${bucket} plan package does not exist: ${planId}`);
+  const files: PlanStoragePackageFile[] = [];
+  const pending = [location.directory];
+  while (pending.length) {
+    const directory = pending.pop()!;
+    const directoryStat = await fs.promises.lstat(directory);
+    if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) {
+      throw new Error(`Plan storage inventory root is not one plain directory: ${directory}`);
+    }
+    for (const entry of await fs.promises.readdir(directory, { withFileTypes: true })) {
+      await new Promise<void>(resolve => setImmediate(resolve));
+      const target = path.join(directory, entry.name);
+      const before = await fs.promises.lstat(target);
+      if (before.isSymbolicLink()) throw new Error(`Plan storage contains a symbolic link or junction: ${target}`);
+      if (entry.isDirectory() && before.isDirectory()) { pending.push(target); continue; }
+      if (!entry.isFile() || !before.isFile()) throw new Error(`Plan storage contains an unsupported entry: ${target}`);
+      const fingerprint = `${before.dev}:${before.ino}:${before.size}:${before.mtimeMs}:${before.ctimeMs}`;
+      const relativePath = relativePlanPath(target, location.directory);
+      const validateContent = relativePath === "plan.json" || orderedPlanHistoryPaths([relativePath]).length > 0;
+      const cached = revisionFileHashes.get(target);
+      let content = Buffer.alloc(0);
+      let fileHash = cached?.fingerprint === fingerprint ? cached.hash : undefined;
+      if (!fileHash || validateContent) {
+        const digest = createHash("sha256");
+        const chunks: Buffer[] = [];
+        for await (const chunk of fs.createReadStream(target, { highWaterMark: 64 * 1024 })) {
+          const bytes = chunk as Buffer;
+          digest.update(bytes);
+          if (validateContent) chunks.push(bytes);
+          await new Promise<void>(resolve => setImmediate(resolve));
+        }
+        fileHash = digest.digest("hex");
+        if (validateContent) content = Buffer.concat(chunks);
+      }
+      const after = await fs.promises.lstat(target);
+      if (!after.isFile() || after.isSymbolicLink()
+        || `${after.dev}:${after.ino}:${after.size}:${after.mtimeMs}:${after.ctimeMs}` !== fingerprint) {
+        revisionFileHashes.delete(target);
+        throw new Error(`Plan storage entry changed during inventory: ${target}`);
+      }
+      revisionFileHashes.delete(target);
+      revisionFileHashes.set(target, { fingerprint, hash: fileHash });
+      if (revisionFileHashes.size > 8192) revisionFileHashes.delete(revisionFileHashes.keys().next().value!);
+      files.push({ path: relativePath, size: after.size, sha256: fileHash, content });
+    }
+  }
+  files.sort((left, right) => left.path.localeCompare(right.path));
+  validatePackageIdentity(location.planId, bucket, files);
+  return packageInventoryHash(files);
+}
+
 export function readCanonicalPlanStoragePackageUnderLease(
   lease: PlanStorageLease
 ): ReadPlanStoragePackageResult {

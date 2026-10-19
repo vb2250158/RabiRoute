@@ -31,7 +31,7 @@ import {
 } from "../roleKnowledge.js";
 import { listPlanFeedback, planFeedbackSummary } from "../planFeedback.js";
 import { listPlanFeedbackFromSnapshot } from "../planFeedbackStore.js";
-import { readPlanStoragePackage } from "../planStorageRepository.js";
+import { readPlanStorageInventoryHash, readPlanStoragePackage } from "../planStorageRepository.js";
 import { readRolePanelTimeline } from "../rolePanelTimeline.js";
 import type { RecentMessageContextQuery } from "../messageContextStore.js";
 import { readMessageProcessingProjection, type MessageProcessingReadInput } from "./messageProcessingReadProjection.js";
@@ -229,13 +229,13 @@ function parsePerformanceLines(content: string): PerformanceSample[] {
   return samples;
 }
 
-function planStorageRevision(roleDir: string, plan: { id: string; status: string; archiveStatus: string }): string {
-  const storagePackage = readPlanStoragePackage(
+async function planStorageRevision(roleDir: string, plan: { id: string; status: string; archiveStatus: string }): Promise<string> {
+  const inventoryHash = await readPlanStorageInventoryHash(
     roleDir,
     plan.id,
     plan.archiveStatus === "已归档" ? "archive" : "active"
   );
-  return storageInventoryRevisionToken(storagePackage.inventoryHash);
+  return storageInventoryRevisionToken(inventoryHash);
 }
 
 async function performanceLogFiles(logDirectory: string): Promise<string[]> {
@@ -388,12 +388,12 @@ export async function execute(task: Exclude<ManagerReadWorkerTask, { type: "role
       return { plan, records };
     }
     case "role_storage_plan_feedback_projection": {
-      const plan = getPlan(task.roleDir, task.planId);
+      const plan = await getPlanAsync(task.roleDir, task.planId);
       if (!plan) return null;
       const records = listPlanFeedback(task.roleDir, plan.id);
       return {
         plan,
-        planRevision: planStorageRevision(task.roleDir, plan),
+        planRevision: await planStorageRevision(task.roleDir, plan),
         records,
         recordRevisions: Object.fromEntries(records.map(record => [record.id, storageRevisionToken(record)]))
       };

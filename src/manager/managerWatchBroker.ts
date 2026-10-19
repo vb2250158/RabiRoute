@@ -253,6 +253,7 @@ export class ManagerWatchBroker {
   private started = false;
   private closedFlag = false;
   private restartPending = false;
+  private consecutiveFailures = 0;
   private terminationBlockedAttempt?: ConfigWatchSnapshotAttempt;
   private closeCompletion?: Promise<void>;
   private terminationAttempts = new WeakMap<ConfigWatchSnapshotAttempt, Promise<boolean>>();
@@ -261,7 +262,7 @@ export class ManagerWatchBroker {
   constructor(options: ManagerWatchBrokerOptions) {
     this.options = {
       ...options,
-      attemptTimeoutMs: Math.max(20, options.attemptTimeoutMs ?? 4_000),
+      attemptTimeoutMs: Math.max(20, options.attemptTimeoutMs ?? 30_000),
       terminationCloseTimeoutMs: Math.max(1, options.terminationCloseTimeoutMs ?? 250),
       forceTerminationCloseTimeoutMs: Math.max(1, options.forceTerminationCloseTimeoutMs ?? 1_000),
       retryDelayMs: Math.max(1, options.retryDelayMs ?? 500),
@@ -283,6 +284,10 @@ export class ManagerWatchBroker {
 
   requestRefresh(reason: string): void {
     if (this.closedFlag) return;
+    if (this.pollTimer && this.currentStatus.state === "degraded") {
+      this.queuedReason = reason;
+      return;
+    }
     if (this.pollTimer) clearTimeout(this.pollTimer);
     this.pollTimer = undefined;
     if (this.terminationBlockedAttempt) {
@@ -300,12 +305,12 @@ export class ManagerWatchBroker {
       if (this.terminationBlockedAttempt) return;
       const queued = this.queuedReason;
       this.queuedReason = undefined;
-      if (queued) {
+      if (queued && this.currentStatus.state !== "degraded") {
         queueMicrotask(() => this.requestRefresh(queued));
         return;
       }
       const delay = this.currentStatus.state === "degraded"
-        ? this.options.retryDelayMs
+        ? Math.min(30_000, this.options.retryDelayMs * 2 ** Math.min(6, Math.max(0, this.consecutiveFailures - 1)))
         : this.options.remotePollIntervalMs;
       this.pollTimer = setTimeout(() => {
         this.pollTimer = undefined;
@@ -382,6 +387,7 @@ export class ManagerWatchBroker {
       await this.options.onSnapshot(result, reason);
       if (this.closedFlag) return;
       const errors = [...result.errors, ...localErrors];
+      this.consecutiveFailures = result.partial || errors.length > 0 ? this.consecutiveFailures + 1 : 0;
       this.publish({
         state: result.partial || errors.length > 0 ? "degraded" : "ready",
         partial: result.partial || errors.length > 0,
@@ -390,6 +396,7 @@ export class ManagerWatchBroker {
       });
     } catch (error) {
       if (this.closedFlag) return;
+      this.consecutiveFailures++;
       const timedOut = error instanceof ManagerWatchAttemptTimeoutError;
       this.restartPending = true;
       this.publish({

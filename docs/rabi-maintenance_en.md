@@ -36,6 +36,8 @@ If a bug already has a plan and task binding, forward evidence to that owner and
 
 ## Outage recovery
 
+Plan-storage recovery runs in a separate child process. Pending recovery or retries do not degrade Manager health; `businessReady` separately reports whether plan storage is ready. Affected plan mutations continue to return retryable 503 responses to avoid concurrent writes during recovery. `backgroundLifecycle.planStorageStartup` exposes recovery status and failure summaries. Do not delete records or bypass conflict validation to obtain readiness.
+
 An independent Worker renews durable receipts for ordinary message delivery. Manager awaits heartbeat Worker startup and shutdown asynchronously, retaining the 10-second deadline for each handshake; waiting does not block HTTP health checks. Delivery still rechecks the original connection authority and receipt owner. An uncertain result requires reconciling the original delivery without automatic replay.
 
 Use Rabi for managed delivery while it is healthy. Only current discovery and bounded retries establishing an outage allow the previously verified maintenance binding to receive reports through its existing Desktop owner. Follow the [delivery fallback contract](rabi-agent-interfaces_en.md); failure on an old port is not outage evidence. Do not switch channels while the original outcome is uncertain.
@@ -43,6 +45,12 @@ Use Rabi for managed delivery while it is healthy. Only current discovery and bo
 When plan writes are unavailable, retain a minimal pending report and actual fallback receipt, continue independent local diagnosis, and never directly edit persona plan/callback storage. After recovery, read actual state before reconciling; do not resend delivered content merely to obtain a formal receipt. Host owns installed lifecycle. Do not kill Manager, scan old ports, or start a second Runtime.
 
 ## Repair cycle
+
+After a read worker returns a complete catalog, Manager prepares normalized immutable entries with a `setImmediate` yield between entries. The previous snapshot remains visible during preparation. Read fences and cancellation are rechecked before atomically replacing plan, memory and metadata caches. Do not synchronously normalize and copy the entire catalog repeatedly on the Manager thread or publish partially prepared results.
+
+Optional LAN service discovery also starts after structured READY; Host does not wait for mDNS publication to confirm control-plane readiness.
+
+Single-plan projections execute in read-only child processes. Feedback projection ETags retain the complete-package inventory algorithm, but attachments use 64 KiB streaming hashes instead of copying the entire package. Cached file hashes recheck device, file identity, size, mtime and ctime on every read; atomic replacement invalidates the cache, and plans and history remain validated on every read. Traversal and hashing yield between chunks. Plan detail retains revision and feedback summaries from the same full-package snapshot to avoid mixing versions. All-day recording intent restoration is scheduled after structured READY; failures remain diagnostic. Filesystem watch scans have a default 30-second process budget and exponential failure backoff capped at 30 seconds. Queued events do not bypass failure backoff, preventing repeated scan-process creation under load.
 
 1. Confirm issue ownership, existing user/peer changes, failure scope, and reproduction evidence.
 2. Reproduce or obtain evidence locating the failure. Make a minimal relevant fix and add meaningful behavioral regression coverage.

@@ -95,7 +95,7 @@ Startup covers the connector **after the current user logs in**, not prelogin Co
 
 ## Instance ownership and management
 
-The local instance ID is persisted in private `agent-instance-id.json`; remote instances retain their private nodeId. Existing single-task configuration is projected as agentId=default; new Agents receive UUIDs. Each executing computer owns its configuration. Manager keeps a catalog projection, while local Agents keep their existing route configuration as the source of truth, with the existing concurrent-version guard on saves.
+The local instance ID is persisted in private `agent-instance-id.json`; remote instances retain their private nodeId. Single-task settings no longer synthesize agentId=default. Existing catalog identities remain intact, and new Agents receive UUIDs. Every delivery explicitly supplies its provider and full session ID without rebinding a configured task first; see [remote targets and list queries](rabi-agent-interfaces_en.md#explicit-remote-agent-targets-and-list-queries). Each executing computer owns its configuration. Manager keeps a catalog projection, while local Agents keep their existing route configuration as the source of truth, with the existing concurrent-version guard on saves.
 
 Both transports use `instanceManagement.ts` for scans, tasks and Hook installation. WebSocket RPC responses must belong to the requesting connection. Disconnection fails immediately; refresh after an ambiguous timeout before retrying a change. Hooks validate the registered session and associate an isolated instance identity with the current Manager persona.
 
@@ -183,7 +183,7 @@ A node credential alone permits enrollment diagnostics. An enabled authenticated
 - `GET /api/lan-agent/instances`: local and remote instances with their Agents.
 - `POST /api/lan-agent/instances/<instanceId>/agents`: add an Agent.
 - `POST /api/lan-agent/instances/<instanceId>/agents/<agentId>/<operation>`: configure, scan, threads, hooks, context and tasks.
-- `POST /api/lan-agent/nodes/<nodeId>/tasks`: delivery, defaulting to the node's declared host when `targetAgent` is omitted; deduplicate with `idempotencyKey`.
+- `POST /api/lan-agent/nodes/<nodeId>/tasks`: delivery requires explicit `agentId`, `targetAgent`, full `threadId` and `message`, without default-target inference; deduplicate with `idempotencyKey`.
 - `POST /api/lan-agent/nodes/<nodeId>/update`: update request.
 - `WS /api/lan-agent/connect`: `authenticate → authenticated → hello → connected → heartbeat`.
 

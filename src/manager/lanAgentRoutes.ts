@@ -201,6 +201,9 @@ export function handleLanAgentApi(
     void context.readJsonBody<Record<string, unknown>>(request).then(async body => {
       const instanceId = decodeURIComponent(instanceAction[1]!);
       const agentId = instanceAction[2] ? decodeURIComponent(instanceAction[2]) : undefined;
+      if (instanceAction[3] === "threads" && (typeof body.agentAdapter !== "string" || !body.agentAdapter.trim())) {
+        throw new Error("Explicit agentAdapter is required for thread operations, including list queries.");
+      }
       if (instanceId === context.registry.localInstanceId) {
         if (!agentId || !context.manageLocalAgent) throw new Error("Local Agent management is unavailable.");
         return context.manageLocalAgent(agentId, instanceAction[3] || "configure", body);
@@ -212,8 +215,10 @@ export function handleLanAgentApi(
       if (instanceAction[3] === "tasks") {
         const agent = context.registry.listInstances().find(instance => instance.instanceId === instanceId)?.agents.find(agent => agent.agentId === agentId);
         if (!agent) throw new Error("Instance Agent was not found. Refresh the instance catalog.");
-        if (body.provider && body.provider !== agent.provider) throw new Error("Route provider does not match the bound instance Agent.");
-        const task = context.registry.assignTask({ nodeId: instanceId, agentId, targetAgent: agent.provider, message: String(body.message || ""), idempotencyKey: typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined });
+        if (!body.provider || body.provider !== agent.provider) throw new Error("Explicit provider must match the selected instance Agent; query /api/lan-agent/instances.");
+        const task = context.registry.assignTask({ nodeId: instanceId, agentId, targetAgent: agent.provider,
+          threadId: typeof body.threadId === "string" ? body.threadId : "", cwd: typeof body.cwd === "string" ? body.cwd : undefined,
+          message: String(body.message || ""), idempotencyKey: typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined });
         return context.registry.waitForTaskAcceptance(task.taskId);
       }
       return context.registry.manageAgent(instanceId, instanceAction[3] || "configure", { ...body, agentId }, instanceAction[3] === "hooks" ? 90_000 : 30_000);
@@ -287,7 +292,9 @@ export function handleLanAgentApi(
         }
         const task = context.registry.assignTask({
           nodeId,
-          targetAgent: String(body.targetAgent || context.registry.listNodes().find(node => node.nodeId === nodeId)?.agentTypes?.[0] || ""),
+          targetAgent: typeof body.targetAgent === "string" ? body.targetAgent : "",
+          agentId: typeof body.agentId === "string" ? body.agentId : undefined,
+          threadId: typeof body.threadId === "string" ? body.threadId : "",
           message: String(body.message ?? ""),
           cwd: typeof body.cwd === "string" ? body.cwd : undefined,
           taskId: typeof body.taskId === "string" ? body.taskId : undefined,

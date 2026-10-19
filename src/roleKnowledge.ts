@@ -3188,6 +3188,10 @@ function normalizedPublishedMemories<T extends RecentMemoryItem | ConsolidatedMe
 /** Publishes a normalized worker result into the existing plan catalog cache. */
 export function publishRolePlanCatalog(roleDir: string, rawPlans: unknown): readonly PlanItem[] {
   const plans = immutablePlanCatalog(normalizedPublishedPlans(rawPlans));
+  return storePublishedPlanCatalog(roleDir, plans);
+}
+
+function storePublishedPlanCatalog(roleDir: string, plans: PlanItem[]): readonly PlanItem[] {
   // Read publication is not a managed write and must not advance its fence.
   const cacheKey = planListCacheKey(roleDir);
   planListCache.set(cacheKey, {
@@ -3201,6 +3205,32 @@ export function publishRolePlanCatalog(roleDir: string, rawPlans: unknown): read
   planListDirtyAt.delete(cacheKey);
   planListDirtyFiles.delete(cacheKey);
   return plans;
+}
+
+async function preparePublishedPlans(rawPlans: unknown, assertCurrent: () => void): Promise<PlanItem[]> {
+  assertCurrent();
+  if (!Array.isArray(rawPlans)) throw new Error("Role plan catalog snapshot must contain a plans array.");
+  const plans: PlanItem[] = [];
+  const seen = new Set<string>();
+  for (const raw of rawPlans) {
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assertCurrent();
+    const [plan] = immutablePlanCatalog(normalizedPublishedPlans([raw]));
+    if (seen.has(plan.id)) throw new Error("Role plan catalog snapshot contains duplicate stable plan ids.");
+    seen.add(plan.id);
+    plans.push(plan);
+  }
+  return Object.freeze(uniquePlans(plans)) as PlanItem[];
+}
+
+export async function publishRolePlanCatalogAsync(
+  roleDir: string,
+  rawPlans: unknown,
+  assertCurrent: () => void
+): Promise<readonly PlanItem[]> {
+  const plans = await preparePublishedPlans(rawPlans, assertCurrent);
+  assertCurrent();
+  return storePublishedPlanCatalog(roleDir, plans);
 }
 
 /**
@@ -3248,23 +3278,17 @@ export function publishRoleKnowledgeCatalogSnapshot(
     normalizeConsolidatedMemory,
     "consolidatedMemories"
   );
-  if (!Array.isArray(rawSnapshot.skills)) throw new Error("Role knowledge snapshot must contain a skills array.");
-  const skills = rawSnapshot.skills;
-  const limits: RoleKnowledgeWriteLimits = {
-    plan: mergeLimits(DEFAULT_ROLE_KNOWLEDGE_WRITE_LIMITS.plan, rawSnapshot.limits?.plan),
-    memory: mergeLimits(DEFAULT_ROLE_KNOWLEDGE_WRITE_LIMITS.memory, rawSnapshot.limits?.memory)
-  };
-  const contextInjection = normalizeRoleContextInjection(rawSnapshot.contextInjection);
   const published = immutablePublication({
     plans,
-    planWorkflow: validatePersonaPlanWorkflow(rawSnapshot.planWorkflow),
     recentMemories,
     consolidatedMemories,
-    skills,
-    limits,
-    contextInjection
+    ...normalizedPublishedKnowledgeMetadata(rawSnapshot)
   } satisfies RoleKnowledgeCatalogSnapshot);
-  publishRolePlanCatalog(roleDir, published.plans);
+  return storePublishedKnowledgeCatalog(roleDir, published);
+}
+
+function storePublishedKnowledgeCatalog(roleDir: string, published: RoleKnowledgeCatalogSnapshot): RoleKnowledgeCatalogSnapshot {
+  storePublishedPlanCatalog(roleDir, published.plans);
   memoryCatalogCache.set(memoryCatalogDirectory(roleDir, "recent"), {
     validUntil: Date.now() + MEMORY_CATALOG_CACHE_TTL_MS,
     items: published.recentMemories
@@ -3280,6 +3304,51 @@ export function publishRoleKnowledgeCatalogSnapshot(
     planWorkflow: published.planWorkflow
   });
   return published;
+}
+
+function normalizedPublishedKnowledgeMetadata(rawSnapshot: RoleKnowledgeCatalogSnapshot) {
+  if (!Array.isArray(rawSnapshot.skills)) throw new Error("Role knowledge snapshot must contain a skills array.");
+  return {
+    skills: rawSnapshot.skills,
+    limits: {
+      plan: mergeLimits(DEFAULT_ROLE_KNOWLEDGE_WRITE_LIMITS.plan, rawSnapshot.limits?.plan),
+      memory: mergeLimits(DEFAULT_ROLE_KNOWLEDGE_WRITE_LIMITS.memory, rawSnapshot.limits?.memory)
+    },
+    contextInjection: normalizeRoleContextInjection(rawSnapshot.contextInjection),
+    planWorkflow: validatePersonaPlanWorkflow(rawSnapshot.planWorkflow)
+  };
+}
+
+export async function publishRoleKnowledgeCatalogSnapshotAsync(
+  roleDir: string,
+  rawSnapshot: RoleKnowledgeCatalogSnapshot,
+  assertCurrent: () => void
+): Promise<RoleKnowledgeCatalogSnapshot> {
+  assertCurrent();
+  const plans = await preparePublishedPlans(rawSnapshot.plans, assertCurrent);
+  const memories = async <Memory extends RecentMemoryItem | ConsolidatedMemoryItem>(
+    raw: unknown,
+    normalize: (item: Partial<Memory> & Record<string, unknown>, fallbackId?: string) => Memory | null,
+    label: string
+  ): Promise<Memory[]> => {
+    if (!Array.isArray(raw)) throw new Error(`Role knowledge snapshot must contain a ${label} array.`);
+    const prepared: Memory[] = [];
+    const seen = new Set<string>();
+    for (const item of raw) {
+      await new Promise<void>(resolve => setImmediate(resolve));
+      assertCurrent();
+      const [memory] = normalizedPublishedMemories([item], normalize, label);
+      if (seen.has(memory.id)) throw new Error(`${label} contains duplicate id ${memory.id}.`);
+      seen.add(memory.id);
+      prepared.push(immutablePublication(memory));
+    }
+    return Object.freeze(prepared) as Memory[];
+  };
+  const recentMemories = await memories(rawSnapshot.recentMemories, normalizeRecentMemory, "recentMemories");
+  const consolidatedMemories = await memories(rawSnapshot.consolidatedMemories, normalizeConsolidatedMemory, "consolidatedMemories");
+  const metadata = immutablePublication(normalizedPublishedKnowledgeMetadata(rawSnapshot));
+  assertCurrent();
+  return storePublishedKnowledgeCatalog(roleDir, Object.freeze({ ...metadata, plans, recentMemories, consolidatedMemories }));
 }
 
 /** Reads physical storage; call this only inside a bounded read worker. */

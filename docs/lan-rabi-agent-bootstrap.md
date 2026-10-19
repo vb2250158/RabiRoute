@@ -95,7 +95,7 @@ Codex owner 不可用时失败，不使用 `codex app-server`。DSH API 或绑�
 
 ## 实例身份与管理
 
-本机 instanceId 持久保存在 Manager 私有目录的 `agent-instance-id.json`；远端 instanceId 沿用连接程序私有 `nodeId`。远端原有单任务配置读取时映射为 `agentId=default`，新增 Agent 使用 UUID。Agent 配置由执行电脑持有，Manager 保存目录投影；本机 Agent 继续以原有路由配置为事实源，保存经过原有并发版本检查。
+本机 instanceId 持久保存在 Manager 私有目录的 `agent-instance-id.json`；远端 instanceId 沿用连接程序私有 `nodeId`。不再从单任务配置合成 `agentId=default`，已有目录身份保持不变，新增 Agent 使用 UUID。每次投递明确传递类型与完整会话 ID，不先改绑固定任务；目录与会话列表查询见[远端目标合同](rabi-agent-interfaces.md#远端-agent-的明确目标与列表查询)。Agent 配置由执行电脑持有，Manager 保存目录投影；本机 Agent 继续以原有路由配置为事实源，保存经过原有并发版本检查。
 
 本机与远端共用 `instanceManagement.ts` 的扫描、任务与 Hook 安装逻辑。远端通过有请求 ID 和连接所有权校验的 WebSocket RPC 调用；断线立即失败，超时后必须先刷新再决定是否重试。Hook 通过已注册 Agent 的会话 ID 校验，使用隔离的实例身份关联当前 Manager 人格。
 
@@ -184,7 +184,7 @@ node rabi-agent.mjs --api POST /api/agent/send --agent <agentId> --body-stdin
 - `GET /api/lan-agent/instances`：本机和远端实例及其 Agent。
 - `POST /api/lan-agent/instances/<instanceId>/agents`：添加 Agent。
 - `POST /api/lan-agent/instances/<instanceId>/agents/<agentId>/<operation>`：`configure`、`scan`、`threads`、`hooks`、`context`、`tasks`。
-- `POST /api/lan-agent/nodes/<nodeId>/tasks`：投递；省略 `targetAgent` 时采用节点声明的宿主。使用 `idempotencyKey` 去重。
+- `POST /api/lan-agent/nodes/<nodeId>/tasks`：投递；每次必填 `agentId`、`targetAgent`、完整 `threadId` 与 `message`，不推断默认目标。使用 `idempotencyKey` 去重。
 - `POST /api/lan-agent/nodes/<nodeId>/update`：更新请求。
 - `WS /api/lan-agent/connect`：`authenticate → authenticated → hello → connected → heartbeat`。
 

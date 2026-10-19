@@ -228,7 +228,7 @@ test("first-screen counts and page bypass an occupied catalog lane and preserve 
   const child=Object.assign(childEvents,{pid:process.pid,exitCode:null,signalCode:null,connected:true,
     channel:{unref(){}},unref(){},disconnect(){},send(){return true;},kill(){childEvents.emit("close",0,"SIGTERM");return true;}}) as ManagerReadWorkerChild;
   const catalog=new ManagerReadWorkerPool({maxConcurrency:1,workerFactory:()=>child,setWorkerPriority:()=>{},timeoutMs:30000});
-  const interactive=new ManagerReadWorkerPool({maxConcurrency:2,maxQueue:4,timeoutMs:10000});
+  const interactive=new ManagerReadWorkerPool({maxConcurrency:2,maxQueue:4});
   const occupied=catalog.run({type:"role_knowledge_file_counts",roleDir:root}).catch(error=>error);
   t.after(async()=>{await Promise.all([interactive.stop(),catalog.stop()]);await occupied;fs.rmSync(root,{recursive:true,force:true});});
   const input={cursor:"",limit:8,query:"",view:"current" as const,sort:"status" as const,statuses:[],tags:[],includeFacets:true,summary:true};

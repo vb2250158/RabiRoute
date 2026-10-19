@@ -1075,6 +1075,26 @@ Agent 可以主动向自己已经掌握的群号或企业微信群 chat id 发�
 }
 ```
 
+## 远端 Agent 的明确目标与列表查询
+
+先用当前 Manager 的 `GET /api/lan-agent/instances` 查询电脑及 Agent 目录，取得 `instanceId`、`agentId`、`provider` 和连接状态。`agentId` 是连接器中的 Agent 配置身份，完整会话 ID 另用 `threadId` 传递，两者不能混用。
+
+会话列表使用 `POST /api/lan-agent/instances/{instanceId}/agents/{agentId}/threads`：
+
+```json
+{"action":"list","agentAdapter":"codex","limit":100,"offset":0}
+```
+
+按 `limit/offset` 翻页读取；DSH 使用 `agentAdapter:"dsh"`。取得真实完整 ID 后，调用 `POST /api/lan-agent/instances/{instanceId}/agents/{agentId}/tasks`：
+
+```json
+{"provider":"codex-desktop","threadId":"<完整会话 ID>","message":"<任务正文>","cwd":"<远端执行目录>","idempotencyKey":"<稳定投递键>"}
+```
+
+这里 AgentType 对应 `provider`，会话 Id 对应 `threadId`；每次投递都必填。省略身份会失败，不选择 `default`、第一个类型或配置中的会话，不通过改绑配置决定本轮目标。已有 Agent 目录身份保留；旧单任务配置不再自动生成 `default` Agent。配置好的消息路线读取自己的目标后，也必须显式提交本轮类型与会话 ID。
+
+旧 `POST /api/lan-agent/nodes/{nodeId}/tasks` 同样必须传 `agentId`、`targetAgent`、`threadId` 和 `message`，不再推断类型。幂等键绑定完整目标与正文；换目标必须是独立请求，结果不确定时先核对原操作。连接器 0.2.3 通过 hello 声明 `taskTargeting:"explicit-session-v1"`；未声明的旧客户端拒绝任务投递并提示升级，防止其忽略新字段后仍投向固定会话。电脑接口继续按原合同使用。
+
 ## Codex 正式线程桥
 
 ### 外部 Agent 的来源与稳定投递 ID

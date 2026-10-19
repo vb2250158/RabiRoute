@@ -6,6 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.59 - 2026-10-19
+
+- Remote Agent delivery requires an explicit instance, Agent, provider and full session ID. Connectors advertise explicit-session targeting, idempotency keys bind the target, and no default Agent or configured-session fallback is synthesized. Manager retains ownership of enablement.
+- Large catalog publication yields between entries and checks cancellation and read fences before atomic publication. Plan revision hashing uses asynchronous streams and a bounded file cache. Upstream snapshot-consistent plan detail and feedback reads are preserved.
+- Plan recovery no longer blocks basic health. LAN discovery and recording-intent restoration start after control-plane publication, and failed catalog watches use capped backoff.
+- Source synchronization only: type checking and focused source tests passed. Builds, installation and restarts were excluded by task scope; generated bundles and installed-runtime acceptance remain pending.
+
 ## 0.3.58 - 2026-10-19
 
 - Non-empty thread `create` accepts a verified Grok Bot source: a canonical `grokBot:` session ID is checked with the Bot owner and is no longer forced through the Codex task UUID or DSH `session-` shape. That `sourceThreadId` may be up to 4096 characters; Codex and DSH sources stay at 512, and IDs that cannot be decoded or verified are still rejected. A message-adapter `conversationId` remains limited to 300 characters, so a longer Bot session uses `type=agent`.

@@ -8,6 +8,7 @@ Code integration and installed acceptance are recorded separately. Deployment st
 
 | Requirement | Implementation in main | Installation and validation |
 | --- | --- | --- |
+| Explicit remote-session delivery, asynchronous catalog publication and plan revision hashing, control-plane startup and watch backoff | `0.3.59` synchronization changes | Focused source tests and type checking; no build, installation or restart in this task. Generated-package and installed-runtime acceptance pending |
 | Smooth dragging, negative desktop coordinates, release outside the window | `19333c18` | Acceptance machine A: 0.3.53 installed; native Qt drag fixture passed using installed Python |
 | Throw inertia, gravity, bounce, landing recovery and recapture | `19333c18` | Same machine, 0.3.53; physics regressions and installed throwing/landing recovery passed |
 | Live size slider preview using canvas pixels | `19333c18` | Same machine, 0.3.53; the 512px acceptance canvas produced 128/256/384px at 25%/50%/75%, with decoded frames retained during preview |
