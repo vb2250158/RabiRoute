@@ -24,7 +24,9 @@ export function peerDiscoveryPage<T extends { deviceKind?: string; online: boole
 }
 export async function discoverRabiPeers(relay: { url: string; token: string; deviceId: string; deviceGuid: string }): Promise<DiscoveredRabiPeer[]> {
   if (!relay.url.trim() || !relay.token.trim()) throw new Error("RabiLink Relay is not configured.");
-  const params = new URLSearchParams({ deviceId: relay.deviceId, deviceGuid: relay.deviceGuid });
+  // This is a capability directory: the connected local PC is eligible too.
+  // Transport requests still name their destination explicitly.
+  const params = new URLSearchParams();
   const response = await fetch(`${relay.url.replace(/\/+$/, "")}/api/rabilink/peers?${params}`, {
     headers: { "x-rabilink-token": relay.token }, redirect: "error", signal: AbortSignal.timeout(5_000)
   });
