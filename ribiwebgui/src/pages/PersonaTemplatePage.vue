@@ -3,6 +3,8 @@ import { userFacingError } from "../userFacingError";
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import SpeechParameterSlider from "../components/SpeechParameterSlider.vue";
 import AutomationAgentTarget from "../components/AutomationAgentTarget.vue";
+import AutomationEndpointNav from "../components/AutomationEndpointNav.vue";
+import { automationEndpoint, automationEndpoints } from "../persona/automationEndpoints";
 import PersonaAgentHooks from "../components/PersonaAgentHooks.vue";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
 import PersonaDesktopPetPanel from "../components/PersonaDesktopPetPanel.vue";
@@ -73,7 +75,7 @@ const speech = useSpeechStore();
 const { t } = useI18n();
 const ruleDialog = ref(false);
 const automationDialog = ref(false);
-const automationWorkspaceTab = ref<"messages" | "schedule" | "hooks">("messages");
+const automationWorkspaceTab = ref<"messages" | "hooks">("messages");
 const templateVariablesDialog = ref(false);
 type PersonaPageTab = "profile" | "expression" | "avatar" | "identity" | "context" | "automation" | "chat-history" | "all-day-recording" | "companion";
 const activePersonaPageTab = ref<PersonaPageTab>("profile");
@@ -249,31 +251,17 @@ const scheduleTypeOptions = [
   { title: "每天指定时间", value: "daily_time" },
   { title: "某一天指定时间", value: "once_at" }
 ];
-const actionTypeOptions = [
-  { title: "通知 Agent", value: "deliver_agent", icon: "mdi-message-arrow-right-outline", note: "把当前消息或定时说明交给这个人格处理" },
-  { title: "运行脚本", value: "run_script", icon: "mdi-console-line", note: "运行人格 scripts 目录中的 cmd、bat 或 py 文件" }
-];
-const messageAutomationGroups = computed(() => {
-  const definitions = [
-    { key: "chat", title: "聊天消息", note: "私聊、群聊、回复和 @", kinds: ["private", "group_message", "direct_at", "direct_reply", "indirect_reply", "wecom_message", "weixin_message", "feishu_message"] },
-    { key: "devices", title: "语音与智能设备", note: "米家设备、语音转写、穿戴设备和 RabiLink", kinds: ["xiaomi_home_event", "voice_transcript", "wearable_health_alert", "rabilink"] },
-    { key: "system", title: "手动与系统消息", note: "手动触发、角色面板和兼容事件", kinds: ["manual_trigger", "role_panel_message", "plan_feedback", "heartbeat"] },
-    { key: "other", title: "其他来源", note: "未归入以上分组的消息类型", kinds: [] as string[] }
-  ];
-  const assigned = new Set<string>();
-  return definitions.map(definition => {
-    const items = messageAutomations.value.filter(rule => {
-      if (assigned.has(rule.id) || rule.trigger.type !== "message") return false;
-      const routeKinds = rule.trigger.routeKinds ?? [];
-      const matches = definition.key === "other"
-        ? true
-        : routeKinds.some(kind => definition.kinds.includes(kind));
-      if (matches) assigned.add(rule.id);
-      return matches;
-    });
-    return { ...definition, items };
-  }).filter(group => group.items.length > 0);
+const selectedAutomationEndpoint = ref("napcat");
+const automationEndpointGroups = computed(() => {
+  const groups = new Map(automationEndpoints.map(option => [option.value, [] as PersonaAutomationRuleDefinition[]]));
+  for (const rule of automations.value) groups.get(automationEndpoint(rule))!.push(rule);
+  return groups;
 });
+const automationEndpointCounts = computed(() => Object.fromEntries(
+  [...automationEndpointGroups.value].map(([endpoint, items]) => [endpoint, items.length])
+));
+const visibleAutomations = computed(() => automationEndpointGroups.value.get(selectedAutomationEndpoint.value) ?? []);
+const selectedAutomationEndpointTitle = computed(() => automationEndpoints.find(option => option.value === selectedAutomationEndpoint.value)?.title);
 const activeRuleHasHeartbeat = computed(() => activeRule.value?.routeKinds?.includes("heartbeat") === true);
 const visibleRouteKindDefinitions = computed(() => {
   const query = routeKindQuery.value.trim().toLowerCase();
@@ -675,32 +663,9 @@ const candidateXiaomiEntities = computed(() => {
     }));
 });
 
-const endpointOptions = [
-  { value: "xiaomiHome", title: "米家 / Xiaomi Home", icon: "mdi-home-automation", routeKinds: ["xiaomi_home_event"] },
-  { value: "napcat", title: "QQ (NapCat / OneBot)", icon: "mdi-qqchat", routeKinds: ["direct_at", "direct_reply", "indirect_reply", "group_message", "private"] },
-  { value: "weixin", title: "个人微信 / Weixin", icon: "mdi-wechat", routeKinds: ["weixin_message"] },
-  { value: "wecom", title: "企业微信 / WeCom", icon: "mdi-account-group", routeKinds: ["wecom_message"] },
-  { value: "fennenote", title: "语音转写 (FenneNote)", icon: "mdi-microphone", routeKinds: ["voice_transcript"] },
-  { value: "rolePanel", title: "角色面板 / 桌面入口", icon: "mdi-desktop-classic", routeKinds: ["role_panel_message", "manual_trigger"] },
-  { value: "wearable", title: "智能手表/手环", icon: "mdi-watch", routeKinds: ["wearable_health_alert"] },
-  { value: "schedule", title: "到达时间 (定时任务)", icon: "mdi-calendar-clock-outline", routeKinds: ["heartbeat"] },
-  { value: "webhook", title: "通用 Webhook / 其他", icon: "mdi-webhook", routeKinds: [] }
-];
-
 const selectedEndpoint = computed({
   get() {
-    if (!activeAutomation.value) return "napcat";
-    if (activeAutomation.value.trigger.type === "schedule") return "schedule";
-    const kinds = activeAutomation.value.trigger.routeKinds || [];
-    if (kinds.includes("xiaomi_home_event") || (activeAutomation.value.trigger as any).endpointType === "xiaomiHome") return "xiaomiHome";
-    if (kinds.some(k => ["direct_at", "direct_reply", "indirect_reply", "group_message", "private"].includes(k))) return "napcat";
-    if (kinds.includes("weixin_message")) return "weixin";
-    if (kinds.includes("wecom_message")) return "wecom";
-    if (kinds.includes("voice_transcript")) return "fennenote";
-    if (kinds.includes("wearable_health_alert")) return "wearable";
-    if (kinds.includes("rabilink")) return "rabilink";
-    if (kinds.some(k => ["role_panel_message", "manual_trigger"].includes(k))) return "rolePanel";
-    return "webhook";
+    return activeAutomation.value ? automationEndpoint(activeAutomation.value) : "napcat";
   },
   set(endpoint: string) {
     if (!activeAutomation.value) return;
@@ -710,7 +675,7 @@ const selectedEndpoint = computed({
       if (activeAutomation.value.trigger.type !== "message") {
         setAutomationTriggerType("message");
       }
-      const option = endpointOptions.find(o => o.value === endpoint);
+      const option = automationEndpoints.find(o => o.value === endpoint);
       patchAutomationMessageTrigger({
         routeKinds: option ? [...option.routeKinds] : [],
         endpointType: endpoint
@@ -720,6 +685,10 @@ const selectedEndpoint = computed({
       }
     }
   }
+});
+
+watch(selectedEndpoint, endpoint => {
+  if (automationDialog.value) selectedAutomationEndpoint.value = endpoint;
 });
 
 const activeMessageTrigger = computed(() => {
@@ -734,6 +703,7 @@ const activeScheduleTrigger = computed(() => {
 
 function openAutomation(ruleId: string): void {
   activeAutomationId.value = ruleId;
+  selectedAutomationEndpoint.value = selectedEndpoint.value;
   automationDialog.value = true;
   routeKindQuery.value = "";
   if (selectedEndpoint.value === "xiaomiHome") {
@@ -741,12 +711,12 @@ function openAutomation(ruleId: string): void {
   }
 }
 
-function createAutomation(triggerType: "message" | "schedule", actionType: string): void {
-  const normalizedAction = actionType === "run_script" ? "run_script" : "deliver_agent";
-  const id = store.addAutomation(triggerType, normalizedAction);
+function createAutomation(): void {
+  const endpoint = selectedAutomationEndpoint.value;
+  const id = store.addAutomation(endpoint === "schedule" ? "schedule" : "message", "deliver_agent");
   if (!id) return;
-  automationWorkspaceTab.value = triggerType === "schedule" ? "schedule" : "messages";
   openAutomation(id);
+  selectedEndpoint.value = endpoint;
 }
 
 function patchAutomation(patch: Partial<PersonaAutomationRuleDefinition>): void {
@@ -761,7 +731,7 @@ function setAutomationTriggerType(type: "message" | "schedule"): void {
       ? { type: "schedule", schedule: defaultHeartbeatSchedule(gateway.value, "触发时间") }
       : { type: "message", routeKinds: [], targetGroupId: "", allowedSpeakerNames: [], regex: "" }
   });
-  automationWorkspaceTab.value = type === "schedule" ? "schedule" : "messages";
+
 }
 
 function setAutomationActionType(type: "deliver_agent" | "run_script"): void {
@@ -2030,60 +2000,33 @@ onBeforeUnmount(() => {
         </div>
 
         <v-tabs v-model="automationWorkspaceTab" class="automation-tabs" color="secondary" grow>
-          <v-tab value="messages" prepend-icon="mdi-message-processing-outline">接收消息</v-tab>
-          <v-tab value="schedule" prepend-icon="mdi-calendar-clock-outline">定制任务</v-tab>
+          <v-tab value="messages" prepend-icon="mdi-message-processing-outline">消息规则</v-tab>
           <v-tab value="hooks" prepend-icon="mdi-hook">Agent Hook</v-tab>
         </v-tabs>
 
         <v-window v-model="automationWorkspaceTab" class="automation-window">
           <v-window-item value="messages">
-            <div class="automation-toolbar">
-              <div>
-                <strong>收到哪些消息后做什么</strong>
-                <span>规则按消息来源分组；只有选中的条件和动作参数会显示。</span>
-              </div>
-              <v-menu>
-                <template #activator="{ props }">
-                  <v-btn v-bind="props" color="secondary" variant="tonal" prepend-icon="mdi-plus">新增消息规则</v-btn>
-                </template>
-                <v-list>
-                  <v-list-item
-                    v-for="option in actionTypeOptions"
-                    :key="option.value"
-                    :prepend-icon="option.icon"
-                    :title="option.title"
-                    :subtitle="option.note"
-                    @click="createAutomation('message', option.value)"
-                  />
-                </v-list>
-              </v-menu>
-            </div>
-
-            <div v-if="messageAutomations.length === 0" class="empty-state">
-              <div>
-                <strong>还没有消息规则</strong>
-                <span>新增后，可以把指定消息交给 Agent，也可以运行人格脚本。</span>
-              </div>
-            </div>
-            <div v-else class="automation-groups">
-              <section v-for="group in messageAutomationGroups" :key="group.key" class="automation-group">
-                <div class="automation-group-head">
-                  <div>
-                    <strong>{{ group.title }}</strong>
-                    <span>{{ group.note }}</span>
-                  </div>
-                  <v-chip size="small" variant="tonal">{{ group.items.length }}</v-chip>
+            <div class="automation-rule-layout">
+              <AutomationEndpointNav v-model="selectedAutomationEndpoint" :counts="automationEndpointCounts" />
+              <section class="automation-rule-content" :aria-label="selectedAutomationEndpointTitle">
+                <div class="automation-toolbar">
+                  <strong>{{ selectedAutomationEndpointTitle }}</strong>
+                  <v-btn color="secondary" variant="tonal" prepend-icon="mdi-plus" @click="createAutomation">新增消息规则</v-btn>
                 </div>
-                <div class="automation-card-grid">
-                  <button
-                    v-for="rule in group.items"
-                    :key="rule.id"
-                    type="button"
+                <v-alert v-if="selectedAutomationEndpoint === 'schedule' && !timerInputEnabled" type="warning" variant="tonal" density="compact" class="mb-4">
+                  <div class="d-flex align-center justify-space-between ga-3 flex-wrap">
+                    <span>当前 Route 没有启用定时任务入口，保存任务后也不会自动运行。</span>
+                    <v-btn size="small" color="warning" variant="tonal" @click="enableTimerInput">启用定时任务</v-btn>
+                  </div>
+                </v-alert>
+                <div v-if="visibleAutomations.length === 0" class="empty-state">
+                  <span>此类型还没有规则</span>
+                </div>
+                <div v-else class="automation-card-grid">
+                  <button v-for="rule in visibleAutomations" :key="rule.id" type="button"
                     class="automation-card"
                     :class="{ disabled: rule.enabled === false, warning: automationDiagnostics(rule).length > 0 }"
-                    :title="automationCardTooltip(rule)"
-                    @click="openAutomation(rule.id)"
-                  >
+                    :title="automationCardTooltip(rule)" @click="openAutomation(rule.id)">
                     <span class="automation-card-topline">
                       <strong data-no-i18n>{{ rule.name || rule.id }}</strong>
                       <v-chip size="x-small" :color="automationActionColor(rule)" variant="tonal">{{ automationActionLabel(rule) }}</v-chip>
@@ -2093,88 +2036,12 @@ onBeforeUnmount(() => {
                         <v-icon size="15" :icon="resolveRuleEndpointInfo(rule).icon" :color="resolveRuleEndpointInfo(rule).color" class="mr-1" />
                         {{ automationSourceSummary(rule) }}
                       </span>
-                      <v-icon
-                        v-if="automationDiagnostics(rule).length"
-                        size="14"
-                        color="warning"
-                        class="automation-card-warning-icon"
-                        :title="automationDiagnostics(rule)[0]"
-                      >
-                        mdi-alert-circle-outline
-                      </v-icon>
+                      <v-icon v-if="automationDiagnostics(rule).length" size="14" color="warning"
+                        class="automation-card-warning-icon" :title="automationDiagnostics(rule)[0]">mdi-alert-circle-outline</v-icon>
                     </span>
                   </button>
                 </div>
               </section>
-            </div>
-          </v-window-item>
-
-          <v-window-item value="schedule">
-            <div class="automation-toolbar">
-              <div>
-                <strong>按时间自动运行</strong>
-                <span>支持固定间隔、每天某时和一次性日期时间。</span>
-              </div>
-              <v-menu>
-                <template #activator="{ props }">
-                  <v-btn v-bind="props" color="secondary" variant="tonal" prepend-icon="mdi-plus">新增定时任务</v-btn>
-                </template>
-                <v-list>
-                  <v-list-item
-                    v-for="option in actionTypeOptions"
-                    :key="option.value"
-                    :prepend-icon="option.icon"
-                    :title="option.title"
-                    :subtitle="option.note"
-                    @click="createAutomation('schedule', option.value)"
-                  />
-                </v-list>
-              </v-menu>
-            </div>
-
-            <v-alert v-if="!timerInputEnabled" type="warning" variant="tonal" density="compact" class="mb-4">
-              <div class="d-flex align-center justify-space-between ga-3 flex-wrap">
-                <span>当前 Route 没有启用定时任务入口，保存任务后也不会自动运行。</span>
-                <v-btn size="small" color="warning" variant="tonal" @click="enableTimerInput">启用定时任务</v-btn>
-              </div>
-            </v-alert>
-
-            <div v-if="scheduledAutomations.length === 0" class="empty-state">
-              <div>
-                <strong>还没有定时任务</strong>
-                <span>新增后，RabiRoute 会在本机时间到达时通知 Agent 或运行脚本。</span>
-              </div>
-            </div>
-            <div v-else class="automation-card-grid scheduled-grid">
-              <button
-                v-for="rule in scheduledAutomations"
-                :key="rule.id"
-                type="button"
-                class="automation-card scheduled-card"
-                :class="{ disabled: rule.enabled === false, warning: automationDiagnostics(rule).length > 0 }"
-                :title="automationCardTooltip(rule)"
-                @click="openAutomation(rule.id)"
-              >
-                <span class="automation-card-topline">
-                  <strong data-no-i18n>{{ rule.name || rule.id }}</strong>
-                  <v-chip size="x-small" :color="automationActionColor(rule)" variant="tonal">{{ automationActionLabel(rule) }}</v-chip>
-                </span>
-                <span class="automation-card-bottomline">
-                  <span class="automation-card-source">
-                    <v-icon size="15" :icon="resolveRuleEndpointInfo(rule).icon" :color="resolveRuleEndpointInfo(rule).color" class="mr-1" />
-                    {{ automationSourceSummary(rule) }}
-                  </span>
-                  <v-icon
-                    v-if="automationDiagnostics(rule).length"
-                    size="14"
-                    color="warning"
-                    class="automation-card-warning-icon"
-                    :title="automationDiagnostics(rule)[0]"
-                  >
-                    mdi-alert-circle-outline
-                  </v-icon>
-                </span>
-              </button>
             </div>
           </v-window-item>
           <v-window-item value="hooks">
@@ -2212,7 +2079,7 @@ onBeforeUnmount(() => {
       </v-card>
     </v-dialog>
 
-    <v-dialog v-model="automationDialog" max-width="1040" class="editor-dialog">
+    <v-dialog v-model="automationDialog" max-width="1200" class="editor-dialog" aria-label="自动化规则">
       <v-card v-if="activeAutomation && gateway" class="app-card editor-dialog-card automation-editor">
         <v-card-title class="automation-editor-head">
           <div>
@@ -2234,495 +2101,470 @@ onBeforeUnmount(() => {
         </v-card-title>
 
         <v-card-text>
-          <v-alert v-if="automationDiagnostics(activeAutomation).length" type="warning" variant="tonal" density="compact" class="mb-4">
-            <div v-for="issue in automationDiagnostics(activeAutomation)" :key="issue">{{ issue }}</div>
-          </v-alert>
+          <div class="automation-rule-layout automation-editor-layout">
+            <AutomationEndpointNav v-model="selectedEndpoint" />
+            <div class="automation-rule-content">
+              <v-alert v-if="automationDiagnostics(activeAutomation).length" type="warning" variant="tonal" density="compact" class="mb-4">
+                <div v-for="issue in automationDiagnostics(activeAutomation)" :key="issue">{{ issue }}</div>
+              </v-alert>
 
-          <div class="automation-editor-section identity-section">
-            <span class="automation-step-number">1</span>
-            <div class="automation-editor-section-body">
-              <div class="automation-section-heading">
-                <strong>这条规则叫什么</strong>
-                <span>名称只用于在列表、日志和排障时辨认。</span>
-              </div>
-              <v-text-field
-                :model-value="activeAutomation.name"
-                label="规则名称"
-                @update:model-value="value => patchAutomation({ name: String(value || '') })"
-              />
-            </div>
-          </div>
-
-          <div class="automation-editor-section">
-            <span class="automation-step-number">2</span>
-            <div class="automation-editor-section-body">
-              <div class="automation-section-heading">
-                <strong>选择消息端类型</strong>
-                <span>选择触发这条规则的消息端或时间事件。</span>
-              </div>
-              <v-select
-                v-model="selectedEndpoint"
-                :items="endpointOptions"
-                item-title="title"
-                item-value="value"
-                label="消息端类型"
-                density="compact"
-                variant="outlined"
-                hide-details
-                prepend-inner-icon="mdi-swap-horizontal"
-                class="mt-2"
-              />
-            </div>
-          </div>
-
-          <div class="automation-editor-section">
-            <span class="automation-step-number">3</span>
-            <div class="automation-editor-section-body">
-              <div class="automation-section-heading">
-                <strong>设置消息端参数</strong>
-                <span>根据所选消息端，配置具体的触发条件与过滤参数。</span>
+              <div class="automation-editor-section identity-section">
+                <div class="automation-editor-section-body">
+                  <v-text-field
+                    :model-value="activeAutomation.name"
+                    label="规则名称"
+                    @update:model-value="value => patchAutomation({ name: String(value || '') })"
+                  />
+                </div>
               </div>
 
-              <!-- 米家 / Xiaomi Home -->
-              <template v-if="selectedEndpoint === 'xiaomiHome'">
-                <div class="form-grid mt-2">
-                  <div class="full-span d-flex align-center justify-space-between mb-1">
-                    <span class="text-caption text-medium-emphasis">从 Home Assistant 接入的米家设备中选择触发实体</span>
-                    <v-btn
-                      size="x-small"
-                      variant="text"
-                      color="primary"
-                      :loading="loadingXiaomiResources"
-                      prepend-icon="mdi-refresh"
-                      @click="loadXiaomiResources"
-                    >
-                      刷新设备列表
-                    </v-btn>
+              <div class="automation-editor-section">
+                <div class="automation-editor-section-body">
+                  <div class="automation-section-heading">
+                    <strong>{{ selectedEndpoint === 'schedule' ? '定时任务' : '触发条件' }}</strong>
                   </div>
-                  <!-- 手动输入模式 -->
-                  <template v-if="manualEntityInputMode">
-                    <div class="full-span d-flex align-center ga-2">
+
+                  <!-- 米家 / Xiaomi Home -->
+                  <template v-if="selectedEndpoint === 'xiaomiHome'">
+                    <div class="form-grid mt-2">
+                      <div class="full-span d-flex align-center justify-space-between mb-1">
+                        <span class="text-caption text-medium-emphasis">从 Home Assistant 接入的米家设备中选择触发实体</span>
+                        <v-btn
+                          size="x-small"
+                          variant="text"
+                          color="primary"
+                          :loading="loadingXiaomiResources"
+                          prepend-icon="mdi-refresh"
+                          @click="loadXiaomiResources"
+                        >
+                          刷新设备列表
+                        </v-btn>
+                      </div>
+                      <!-- 手动输入模式 -->
+                      <template v-if="manualEntityInputMode">
+                        <div class="full-span d-flex align-center ga-2">
+                          <v-text-field
+                            :model-value="selectedXiaomiEntityId"
+                            label="触发实体 ID"
+                            placeholder="输入实体 ID（如 event.chuangmi_cn_...）"
+                            density="compact"
+                            variant="outlined"
+                            hide-details
+                            class="flex-grow-1"
+                            @update:model-value="val => patchAutomationMessageTrigger({ targetEntityId: String(val || ''), regex: String(val || '') })"
+                          />
+                          <v-btn
+                            size="small"
+                            variant="tonal"
+                            color="secondary"
+                            prepend-icon="mdi-format-list-bulleted-type"
+                            @click="manualEntityInputMode = false"
+                          >
+                            选择列表
+                          </v-btn>
+                        </div>
+                      </template>
+
+                      <!-- 二级级联选择菜单模式 -->
+                      <template v-else>
+                        <div class="full-span xiaomi-cascader-wrapper">
+                          <v-menu
+                            v-model="cascaderMenuOpen"
+                            :close-on-content-click="false"
+                            location="bottom start"
+                            offset="4"
+                          >
+                            <template #activator="{ props: menuProps }">
+                              <div
+                                v-bind="menuProps"
+                                class="xiaomi-cascader-trigger"
+                                :class="{ active: cascaderMenuOpen, 'has-value': !!selectedEntityInfo }"
+                              >
+                                <div class="xiaomi-cascader-trigger-content">
+                                  <template v-if="selectedEntityInfo && selectedXiaomiEntityId">
+                                    <v-chip
+                                      size="x-small"
+                                      color="primary"
+                                      variant="tonal"
+                                      :prepend-icon="selectedEntityInfo.deviceIcon"
+                                      class="mr-1"
+                                    >
+                                      {{ selectedEntityInfo.deviceName }}
+                                    </v-chip>
+                                    <span class="cascader-trigger-entity">
+                                      <v-icon size="15" class="mr-1">{{ selectedEntityInfo.entityIcon }}</v-icon>
+                                      {{ selectedEntityInfo.cleanName }}
+                                    </span>
+                                    <span class="cascader-trigger-id">({{ selectedEntityInfo.entityId }})</span>
+                                  </template>
+                                  <template v-else>
+                                    <span class="xiaomi-cascader-placeholder">点击选择米家设备及其触发事件 / 实体...</span>
+                                  </template>
+                                </div>
+                                <div class="xiaomi-cascader-trigger-actions">
+                                  <v-icon
+                                    v-if="selectedEntityInfo && selectedXiaomiEntityId"
+                                    size="16"
+                                    icon="mdi-close-circle"
+                                    class="cascader-clear-btn mr-1"
+                                    title="清除选择"
+                                    @click="clearXiaomiEntity"
+                                  />
+                                  <v-icon size="18" icon="mdi-chevron-down" class="cascader-arrow-btn" />
+                                </div>
+                              </div>
+                            </template>
+
+                            <!-- 二级级联下拉面板 -->
+                            <div class="xiaomi-cascader-menu">
+                              <!-- 顶部工具栏：搜索与输入切换 -->
+                              <div class="xiaomi-cascader-toolbar">
+                                <v-icon size="16" icon="mdi-magnify" class="text-medium-emphasis mr-1" />
+                                <input
+                                  v-model="entitySearchQuery"
+                                  type="text"
+                                  placeholder="搜索设备或事件名称..."
+                                  class="cascader-search-input"
+                                  @keydown.stop
+                                />
+                                <v-icon
+                                  v-if="entitySearchQuery"
+                                  size="14"
+                                  icon="mdi-close"
+                                  class="cursor-pointer text-medium-emphasis mr-2"
+                                  @click="entitySearchQuery = ''"
+                                />
+                                <v-btn
+                                  size="x-small"
+                                  variant="text"
+                                  color="secondary"
+                                  prepend-icon="mdi-keyboard-outline"
+                                  @click="manualEntityInputMode = true; cascaderMenuOpen = false"
+                                >
+                                  手动输入
+                                </v-btn>
+                              </div>
+
+                              <!-- 级联双栏主体 -->
+                              <div class="xiaomi-cascader-body">
+                                <!-- 左栏：设备列表（一级） -->
+                                <div class="xiaomi-cascader-device-list">
+                                  <div
+                                    v-if="filteredXiaomiDeviceGroups.length === 0"
+                                    class="pa-4 text-caption text-medium-emphasis text-center"
+                                  >
+                                    没有匹配的米家设备
+                                  </div>
+                                  <div
+                                    v-for="dev in filteredXiaomiDeviceGroups"
+                                    :key="dev.key"
+                                    class="xiaomi-cascader-device-item"
+                                    :class="{ active: activeDeviceGroup?.key === dev.key }"
+                                    @mouseenter="currentHoveredDeviceKey = dev.key"
+                                    @click="currentHoveredDeviceKey = dev.key"
+                                  >
+                                    <v-icon size="18" :icon="dev.icon" class="device-icon" />
+                                    <span class="cascader-device-name" :title="dev.name">{{ dev.name }}</span>
+                                    <span class="cascader-device-count">{{ dev.entities.length }}</span>
+                                    <v-icon size="16" icon="mdi-chevron-right" class="cascader-device-arrow" />
+                                  </div>
+                                </div>
+
+                                <!-- 右栏：事件/实体列表（二级） -->
+                                <div class="xiaomi-cascader-event-list">
+                                  <template v-if="activeDeviceGroup">
+                                    <div class="xiaomi-cascader-event-header">
+                                      <v-icon size="16" :icon="activeDeviceGroup.icon" />
+                                      <strong>{{ activeDeviceGroup.name }}</strong>
+                                      <span class="text-caption text-medium-emphasis">（{{ activeDeviceGroup.entities.length }} 个可用实体）</span>
+                                    </div>
+                                    <div
+                                      v-for="ent in activeDeviceGroup.entities"
+                                      :key="ent.entityId"
+                                      class="xiaomi-cascader-event-item"
+                                      :class="{ selected: selectedXiaomiEntityId === ent.entityId }"
+                                      @click="selectXiaomiEntity(ent)"
+                                    >
+                                      <v-icon size="18" :icon="ent.icon" class="event-icon" />
+                                      <div class="cascader-event-info">
+                                        <span class="cascader-event-title">{{ ent.cleanName }}</span>
+                                        <span class="cascader-event-id">{{ ent.entityId }}</span>
+                                      </div>
+                                      <v-icon
+                                        v-if="selectedXiaomiEntityId === ent.entityId"
+                                        size="16"
+                                        icon="mdi-check"
+                                        color="primary"
+                                        class="ml-auto"
+                                      />
+                                    </div>
+                                  </template>
+                                  <div v-else class="pa-6 text-caption text-medium-emphasis text-center">
+                                    请在左侧选择设备
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </v-menu>
+                        </div>
+                      </template>
+                      <div class="full-span d-flex align-center justify-space-between mt-2 flex-wrap ga-2">
+                        <v-switch
+                          :model-value="(activeMessageTrigger as any)?.saveClip !== false"
+                          label="自动下载并保存该事件的录像切片（MP4）"
+                          color="warning"
+                          inset
+                          density="compact"
+                          hide-details
+                          @update:model-value="val => patchAutomationMessageTrigger({ saveClip: Boolean(val) })"
+                        />
+                        <v-btn
+                          size="small"
+                          variant="tonal"
+                          color="secondary"
+                          prepend-icon="mdi-folder-play-outline"
+                          :loading="openingRecordingsFolder"
+                          @click="openRecordingsFolder"
+                        >
+                          打开记录文件夹
+                        </v-btn>
+                      </div>
+                    </div>
+                  </template>
+
+                  <!-- QQ (NapCat) -->
+                  <template v-else-if="selectedEndpoint === 'napcat'">
+                    <div class="form-grid mt-2">
+                      <div class="full-span">
+                        <div class="text-caption text-medium-emphasis mb-2">触发场景</div>
+                        <div class="route-kind-chip-grid">
+                          <button
+                            v-for="kind in ['direct_at', 'direct_reply', 'indirect_reply', 'group_message', 'private']"
+                            :key="kind"
+                            class="route-kind-chip"
+                            :class="{ active: activeMessageTrigger?.routeKinds?.includes(kind) }"
+                            type="button"
+                            @click="toggleAutomationRouteKind(kind)"
+                          >
+                            <v-icon size="18">{{ activeMessageTrigger?.routeKinds?.includes(kind) ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
+                            <span>{{ routeKindLabels[kind] || kind }}</span>
+                          </button>
+                        </div>
+                      </div>
                       <v-text-field
-                        :model-value="selectedXiaomiEntityId"
-                        label="触发实体 ID"
-                        placeholder="输入实体 ID（如 event.chuangmi_cn_...）"
+                        :model-value="activeMessageTrigger?.targetGroupId"
+                        label="只限这个群（可选）"
+                        placeholder="留空表示不限群"
                         density="compact"
                         variant="outlined"
-                        hide-details
-                        class="flex-grow-1"
-                        @update:model-value="val => patchAutomationMessageTrigger({ targetEntityId: String(val || ''), regex: String(val || '') })"
+                        class="mt-2"
+                        @update:model-value="value => patchAutomationMessageTrigger({ targetGroupId: String(value || '') })"
                       />
-                      <v-btn
-                        size="small"
-                        variant="tonal"
-                        color="secondary"
-                        prepend-icon="mdi-format-list-bulleted-type"
-                        @click="manualEntityInputMode = false"
-                      >
-                        选择列表
-                      </v-btn>
+                      <v-text-field
+                        :model-value="activeMessageTrigger?.regex"
+                        label="消息包含或正则匹配（可选）"
+                        placeholder="例如：需求|报错|构建失败"
+                        density="compact"
+                        variant="outlined"
+                        class="mt-2"
+                        @update:model-value="value => patchAutomationMessageTrigger({ regex: String(value || '') })"
+                      />
                     </div>
                   </template>
 
-                  <!-- 二级级联选择菜单模式 -->
+                  <!-- 语音转写 (FenneNote) -->
+                  <template v-else-if="selectedEndpoint === 'fennenote'">
+                    <div class="form-grid mt-2">
+                      <v-combobox
+                        class="full-span"
+                        :model-value="activeMessageTrigger?.allowedSpeakerNames || []"
+                        label="只限这些说话人（可选）"
+                        chips
+                        multiple
+                        closable-chips
+                        density="compact"
+                        variant="outlined"
+                        placeholder="输入说话人并按回车"
+                        @update:model-value="value => patchAutomationMessageTrigger({ allowedSpeakerNames: Array.isArray(value) ? value.map(String) : [] })"
+                      />
+                      <v-text-field
+                        class="full-span mt-2"
+                        :model-value="activeMessageTrigger?.regex"
+                        label="转写内容包含或正则匹配（可选）"
+                        placeholder="例如：唤醒词|夜雨"
+                        density="compact"
+                        variant="outlined"
+                        @update:model-value="value => patchAutomationMessageTrigger({ regex: String(value || '') })"
+                      />
+                    </div>
+                  </template>
+
+                  <!-- 定时任务 (schedule) -->
+                  <template v-else-if="selectedEndpoint === 'schedule'">
+                    <div class="form-grid mt-2">
+                      <v-select
+                        :model-value="activeScheduleTrigger?.schedule?.type || 'interval'"
+                        :items="scheduleTypeOptions"
+                        label="时间类型"
+                        density="compact"
+                        variant="outlined"
+                        @update:model-value="value => setAutomationScheduleType(String(value || 'interval'))"
+                      />
+                      <template v-if="activeScheduleTrigger?.schedule?.type === 'interval'">
+                        <v-text-field
+                          :model-value="activeScheduleTrigger?.schedule?.intervalSeconds || 900"
+                          type="number"
+                          min="1"
+                          step="1"
+                          label="间隔秒数"
+                          density="compact"
+                          variant="outlined"
+                          @update:model-value="value => patchAutomationSchedule({ intervalSeconds: Number(value || 900) })"
+                        />
+                        <v-text-field
+                          :model-value="activeScheduleTrigger?.schedule?.windowStartTime || ''"
+                          label="每天从几点开始（可选）"
+                          placeholder="09:30"
+                          density="compact"
+                          variant="outlined"
+                          @update:model-value="value => patchAutomationSchedule({ windowStartTime: String(value || '') })"
+                        />
+                        <v-text-field
+                          :model-value="activeScheduleTrigger?.schedule?.windowEndTime || ''"
+                          label="每天到几点结束（可选）"
+                          placeholder="19:00"
+                          density="compact"
+                          variant="outlined"
+                          @update:model-value="value => patchAutomationSchedule({ windowEndTime: String(value || '') })"
+                        />
+                      </template>
+                      <v-text-field
+                        v-else-if="activeScheduleTrigger?.schedule?.type === 'daily_time'"
+                        :model-value="activeScheduleTrigger?.schedule?.timeOfDay || ''"
+                        type="time"
+                        label="每天执行时间"
+                        density="compact"
+                        variant="outlined"
+                        @update:model-value="value => patchAutomationSchedule({ timeOfDay: String(value || '') })"
+                      />
+                      <v-text-field
+                        v-else
+                        :model-value="activeScheduleTrigger?.schedule?.onceAt || ''"
+                        type="datetime-local"
+                        label="执行日期和时间"
+                        density="compact"
+                        variant="outlined"
+                        @update:model-value="value => patchAutomationSchedule({ onceAt: String(value || '') })"
+                      />
+                    </div>
+                    <v-alert v-if="!timerInputEnabled" type="warning" variant="tonal" density="compact" class="mt-3">
+                      <div class="d-flex align-center justify-space-between ga-3 flex-wrap">
+                        <span>当前 Route 还没有启用定时任务入口。</span>
+                        <v-btn size="small" color="warning" variant="tonal" @click="enableTimerInput">现在启用</v-btn>
+                      </div>
+                    </v-alert>
+                  </template>
+
+                  <!-- 其他/通用消息端 (weixin, wecom, rolePanel, etc.) -->
                   <template v-else>
-                    <div class="full-span xiaomi-cascader-wrapper">
-                      <v-menu
-                        v-model="cascaderMenuOpen"
-                        :close-on-content-click="false"
-                        location="bottom start"
-                        offset="4"
-                      >
-                        <template #activator="{ props: menuProps }">
-                          <div
-                            v-bind="menuProps"
-                            class="xiaomi-cascader-trigger"
-                            :class="{ active: cascaderMenuOpen, 'has-value': !!selectedEntityInfo }"
-                          >
-                            <div class="xiaomi-cascader-trigger-content">
-                              <template v-if="selectedEntityInfo && selectedXiaomiEntityId">
-                                <v-chip
-                                  size="x-small"
-                                  color="primary"
-                                  variant="tonal"
-                                  :prepend-icon="selectedEntityInfo.deviceIcon"
-                                  class="mr-1"
-                                >
-                                  {{ selectedEntityInfo.deviceName }}
-                                </v-chip>
-                                <span class="cascader-trigger-entity">
-                                  <v-icon size="15" class="mr-1">{{ selectedEntityInfo.entityIcon }}</v-icon>
-                                  {{ selectedEntityInfo.cleanName }}
-                                </span>
-                                <span class="cascader-trigger-id">({{ selectedEntityInfo.entityId }})</span>
-                              </template>
-                              <template v-else>
-                                <span class="xiaomi-cascader-placeholder">点击选择米家设备及其触发事件 / 实体...</span>
-                              </template>
-                            </div>
-                            <div class="xiaomi-cascader-trigger-actions">
-                              <v-icon
-                                v-if="selectedEntityInfo && selectedXiaomiEntityId"
-                                size="16"
-                                icon="mdi-close-circle"
-                                class="cascader-clear-btn mr-1"
-                                title="清除选择"
-                                @click="clearXiaomiEntity"
-                              />
-                              <v-icon size="18" icon="mdi-chevron-down" class="cascader-arrow-btn" />
-                            </div>
-                          </div>
-                        </template>
-
-                        <!-- 二级级联下拉面板 -->
-                        <div class="xiaomi-cascader-menu">
-                          <!-- 顶部工具栏：搜索与输入切换 -->
-                          <div class="xiaomi-cascader-toolbar">
-                            <v-icon size="16" icon="mdi-magnify" class="text-medium-emphasis mr-1" />
-                            <input
-                              v-model="entitySearchQuery"
-                              type="text"
-                              placeholder="搜索设备或事件名称..."
-                              class="cascader-search-input"
-                              @keydown.stop
-                            />
-                            <v-icon
-                              v-if="entitySearchQuery"
-                              size="14"
-                              icon="mdi-close"
-                              class="cursor-pointer text-medium-emphasis mr-2"
-                              @click="entitySearchQuery = ''"
-                            />
-                            <v-btn
-                              size="x-small"
-                              variant="text"
-                              color="secondary"
-                              prepend-icon="mdi-keyboard-outline"
-                              @click="manualEntityInputMode = true; cascaderMenuOpen = false"
-                            >
-                              手动输入
-                            </v-btn>
-                          </div>
-
-                          <!-- 级联双栏主体 -->
-                          <div class="xiaomi-cascader-body">
-                            <!-- 左栏：设备列表（一级） -->
-                            <div class="xiaomi-cascader-device-list">
-                              <div
-                                v-if="filteredXiaomiDeviceGroups.length === 0"
-                                class="pa-4 text-caption text-medium-emphasis text-center"
-                              >
-                                没有匹配的米家设备
-                              </div>
-                              <div
-                                v-for="dev in filteredXiaomiDeviceGroups"
-                                :key="dev.key"
-                                class="xiaomi-cascader-device-item"
-                                :class="{ active: activeDeviceGroup?.key === dev.key }"
-                                @mouseenter="currentHoveredDeviceKey = dev.key"
-                                @click="currentHoveredDeviceKey = dev.key"
-                              >
-                                <v-icon size="18" :icon="dev.icon" class="device-icon" />
-                                <span class="cascader-device-name" :title="dev.name">{{ dev.name }}</span>
-                                <span class="cascader-device-count">{{ dev.entities.length }}</span>
-                                <v-icon size="16" icon="mdi-chevron-right" class="cascader-device-arrow" />
-                              </div>
-                            </div>
-
-                            <!-- 右栏：事件/实体列表（二级） -->
-                            <div class="xiaomi-cascader-event-list">
-                              <template v-if="activeDeviceGroup">
-                                <div class="xiaomi-cascader-event-header">
-                                  <v-icon size="16" :icon="activeDeviceGroup.icon" />
-                                  <strong>{{ activeDeviceGroup.name }}</strong>
-                                  <span class="text-caption text-medium-emphasis">（{{ activeDeviceGroup.entities.length }} 个可用实体）</span>
-                                </div>
-                                <div
-                                  v-for="ent in activeDeviceGroup.entities"
-                                  :key="ent.entityId"
-                                  class="xiaomi-cascader-event-item"
-                                  :class="{ selected: selectedXiaomiEntityId === ent.entityId }"
-                                  @click="selectXiaomiEntity(ent)"
-                                >
-                                  <v-icon size="18" :icon="ent.icon" class="event-icon" />
-                                  <div class="cascader-event-info">
-                                    <span class="cascader-event-title">{{ ent.cleanName }}</span>
-                                    <span class="cascader-event-id">{{ ent.entityId }}</span>
-                                  </div>
-                                  <v-icon
-                                    v-if="selectedXiaomiEntityId === ent.entityId"
-                                    size="16"
-                                    icon="mdi-check"
-                                    color="primary"
-                                    class="ml-auto"
-                                  />
-                                </div>
-                              </template>
-                              <div v-else class="pa-6 text-caption text-medium-emphasis text-center">
-                                请在左侧选择设备
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </v-menu>
+                    <div class="form-grid mt-2">
+                      <v-text-field
+                        class="full-span"
+                        :model-value="activeMessageTrigger?.regex"
+                        label="消息包含或正则匹配（可选）"
+                        placeholder="留空表示匹配所有该渠道消息"
+                        density="compact"
+                        variant="outlined"
+                        @update:model-value="value => patchAutomationMessageTrigger({ regex: String(value || '') })"
+                      />
+                      <v-text-field
+                        v-if="(activeMessageTrigger?.routeKinds || []).some((kind: string) => ['wecom_message', 'feishu_message'].includes(kind))"
+                        class="full-span"
+                        :model-value="activeMessageTrigger?.targetGroupId"
+                        label="只限这个群（可选）"
+                        placeholder="留空表示不限群"
+                        density="compact"
+                        variant="outlined"
+                        @update:model-value="value => patchAutomationMessageTrigger({ targetGroupId: String(value || '') })"
+                      />
                     </div>
                   </template>
-                  <div class="full-span d-flex align-center justify-space-between mt-2 flex-wrap ga-2">
-                    <v-switch
-                      :model-value="(activeMessageTrigger as any)?.saveClip !== false"
-                      label="自动下载并保存该事件的录像切片（MP4）"
-                      color="warning"
-                      inset
-                      density="compact"
-                      hide-details
-                      @update:model-value="val => patchAutomationMessageTrigger({ saveClip: Boolean(val) })"
-                    />
-                    <v-btn
-                      size="small"
-                      variant="tonal"
-                      color="secondary"
-                      prepend-icon="mdi-folder-play-outline"
-                      :loading="openingRecordingsFolder"
-                      @click="openRecordingsFolder"
-                    >
-                      打开记录文件夹
-                    </v-btn>
-                  </div>
                 </div>
-              </template>
-
-              <!-- QQ (NapCat) -->
-              <template v-else-if="selectedEndpoint === 'napcat'">
-                <div class="form-grid mt-2">
-                  <div class="full-span">
-                    <div class="text-caption text-medium-emphasis mb-2">触发场景</div>
-                    <div class="route-kind-chip-grid">
-                      <button
-                        v-for="kind in ['direct_at', 'direct_reply', 'indirect_reply', 'group_message', 'private']"
-                        :key="kind"
-                        class="route-kind-chip"
-                        :class="{ active: activeMessageTrigger?.routeKinds?.includes(kind) }"
-                        type="button"
-                        @click="toggleAutomationRouteKind(kind)"
-                      >
-                        <v-icon size="18">{{ activeMessageTrigger?.routeKinds?.includes(kind) ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
-                        <span>{{ routeKindLabels[kind] || kind }}</span>
-                      </button>
-                    </div>
-                  </div>
-                  <v-text-field
-                    :model-value="activeMessageTrigger?.targetGroupId"
-                    label="只限这个群（可选）"
-                    placeholder="留空表示不限群"
-                    density="compact"
-                    variant="outlined"
-                    class="mt-2"
-                    @update:model-value="value => patchAutomationMessageTrigger({ targetGroupId: String(value || '') })"
-                  />
-                  <v-text-field
-                    :model-value="activeMessageTrigger?.regex"
-                    label="消息包含或正则匹配（可选）"
-                    placeholder="例如：需求|报错|构建失败"
-                    density="compact"
-                    variant="outlined"
-                    class="mt-2"
-                    @update:model-value="value => patchAutomationMessageTrigger({ regex: String(value || '') })"
-                  />
-                </div>
-              </template>
-
-              <!-- 语音转写 (FenneNote) -->
-              <template v-else-if="selectedEndpoint === 'fennenote'">
-                <div class="form-grid mt-2">
-                  <v-combobox
-                    class="full-span"
-                    :model-value="activeMessageTrigger?.allowedSpeakerNames || []"
-                    label="只限这些说话人（可选）"
-                    chips
-                    multiple
-                    closable-chips
-                    density="compact"
-                    variant="outlined"
-                    placeholder="输入说话人并按回车"
-                    @update:model-value="value => patchAutomationMessageTrigger({ allowedSpeakerNames: Array.isArray(value) ? value.map(String) : [] })"
-                  />
-                  <v-text-field
-                    class="full-span mt-2"
-                    :model-value="activeMessageTrigger?.regex"
-                    label="转写内容包含或正则匹配（可选）"
-                    placeholder="例如：唤醒词|夜雨"
-                    density="compact"
-                    variant="outlined"
-                    @update:model-value="value => patchAutomationMessageTrigger({ regex: String(value || '') })"
-                  />
-                </div>
-              </template>
-
-              <!-- 定时任务 (schedule) -->
-              <template v-else-if="selectedEndpoint === 'schedule'">
-                <div class="form-grid mt-2">
-                  <v-select
-                    :model-value="activeScheduleTrigger?.schedule?.type || 'interval'"
-                    :items="scheduleTypeOptions"
-                    label="时间类型"
-                    density="compact"
-                    variant="outlined"
-                    @update:model-value="value => setAutomationScheduleType(String(value || 'interval'))"
-                  />
-                  <template v-if="activeScheduleTrigger?.schedule?.type === 'interval'">
-                    <v-text-field
-                      :model-value="activeScheduleTrigger?.schedule?.intervalSeconds || 900"
-                      type="number"
-                      min="1"
-                      step="1"
-                      label="间隔秒数"
-                      density="compact"
-                      variant="outlined"
-                      @update:model-value="value => patchAutomationSchedule({ intervalSeconds: Number(value || 900) })"
-                    />
-                    <v-text-field
-                      :model-value="activeScheduleTrigger?.schedule?.windowStartTime || ''"
-                      label="每天从几点开始（可选）"
-                      placeholder="09:30"
-                      density="compact"
-                      variant="outlined"
-                      @update:model-value="value => patchAutomationSchedule({ windowStartTime: String(value || '') })"
-                    />
-                    <v-text-field
-                      :model-value="activeScheduleTrigger?.schedule?.windowEndTime || ''"
-                      label="每天到几点结束（可选）"
-                      placeholder="19:00"
-                      density="compact"
-                      variant="outlined"
-                      @update:model-value="value => patchAutomationSchedule({ windowEndTime: String(value || '') })"
-                    />
-                  </template>
-                  <v-text-field
-                    v-else-if="activeScheduleTrigger?.schedule?.type === 'daily_time'"
-                    :model-value="activeScheduleTrigger?.schedule?.timeOfDay || ''"
-                    type="time"
-                    label="每天执行时间"
-                    density="compact"
-                    variant="outlined"
-                    @update:model-value="value => patchAutomationSchedule({ timeOfDay: String(value || '') })"
-                  />
-                  <v-text-field
-                    v-else
-                    :model-value="activeScheduleTrigger?.schedule?.onceAt || ''"
-                    type="datetime-local"
-                    label="执行日期和时间"
-                    density="compact"
-                    variant="outlined"
-                    @update:model-value="value => patchAutomationSchedule({ onceAt: String(value || '') })"
-                  />
-                </div>
-                <v-alert v-if="!timerInputEnabled" type="warning" variant="tonal" density="compact" class="mt-3">
-                  <div class="d-flex align-center justify-space-between ga-3 flex-wrap">
-                    <span>当前 Route 还没有启用定时任务入口。</span>
-                    <v-btn size="small" color="warning" variant="tonal" @click="enableTimerInput">现在启用</v-btn>
-                  </div>
-                </v-alert>
-              </template>
-
-              <!-- 其他/通用消息端 (weixin, wecom, rolePanel, etc.) -->
-              <template v-else>
-                <div class="form-grid mt-2">
-                  <v-text-field
-                    class="full-span"
-                    :model-value="activeMessageTrigger?.regex"
-                    label="消息包含或正则匹配（可选）"
-                    placeholder="留空表示匹配所有该渠道消息"
-                    density="compact"
-                    variant="outlined"
-                    @update:model-value="value => patchAutomationMessageTrigger({ regex: String(value || '') })"
-                  />
-                  <v-text-field
-                    v-if="(activeMessageTrigger?.routeKinds || []).some((kind: string) => ['wecom_message', 'feishu_message'].includes(kind))"
-                    class="full-span"
-                    :model-value="activeMessageTrigger?.targetGroupId"
-                    label="只限这个群（可选）"
-                    placeholder="留空表示不限群"
-                    density="compact"
-                    variant="outlined"
-                    @update:model-value="value => patchAutomationMessageTrigger({ targetGroupId: String(value || '') })"
-                  />
-                </div>
-              </template>
-            </div>
-          </div>
-
-          <div class="automation-editor-section">
-            <span class="automation-step-number">4</span>
-            <div class="automation-editor-section-body">
-              <div class="automation-section-heading">
-                <strong>触发后做什么</strong>
-                <span>选择接收消息的 Agent，或运行人格脚本。</span>
               </div>
-              <v-btn-toggle
-                :model-value="activeAutomation.action.type"
-                color="secondary"
-                mandatory
-                divided
-                class="automation-type-toggle"
-                @update:model-value="value => setAutomationActionType(value === 'run_script' ? 'run_script' : 'deliver_agent')"
-              >
-                <v-btn value="deliver_agent" prepend-icon="mdi-message-arrow-right-outline">通知 Agent</v-btn>
-                <v-btn value="run_script" prepend-icon="mdi-console-line">运行脚本</v-btn>
-              </v-btn-toggle>
 
-              <template v-if="activeAutomation.action.type === 'deliver_agent'">
-                <AutomationAgentTarget v-if="gateway" :gateway="gateway" :model-value="activeAutomation.action.target"
-                  @update:model-value="target => patchAutomationAction({ target })" />
-                <v-textarea
-                  v-if="activeAutomation.trigger.type === 'schedule'"
-                  class="mt-4"
-                  :model-value="activeAutomation.action.message"
-                  label="到时间后交给 Agent 的任务"
-                  placeholder="例如：检查今天仍未完成的计划，并只报告新增阻塞。"
-                  rows="4"
-                  auto-grow
-                  @update:model-value="value => patchAutomationAction({ message: String(value || '') })"
-                />
-                <v-textarea
-                  class="mt-4"
-                  :model-value="activeAutomation.action.template"
-                  :label="activeAutomation.trigger.type === 'message' ? '给 Agent 的附加说明（可选）' : '额外处理要求（可选）'"
-                  placeholder="RabiRoute 已经附带消息来源、原文、人格路径和必要上下文；这里只写额外判断要求。"
-                  rows="7"
-                  auto-grow
-                  spellcheck="false"
-                  @update:model-value="value => patchAutomationAction({ template: String(value || '') })"
-                />
-              </template>
+              <div class="automation-editor-section">
+                <div class="automation-editor-section-body">
+                  <div class="automation-section-heading">
+                    <strong>触发后做什么</strong>
 
-              <template v-else>
-                <v-alert type="warning" variant="tonal" density="compact" class="mt-4 mb-4">
-                  脚本只能来自当前人格的 <code>scripts/</code> 目录，支持 .cmd、.bat 和 .py。不会执行任意命令文本，也不会把 Manager 中的 token 和密码传给脚本。
-                </v-alert>
-                <div class="form-grid">
-                  <v-text-field
-                    :model-value="activeAutomation.action.scriptPath"
-                    label="脚本相对路径"
-                    placeholder="daily-check.py 或 scripts/daily-check.py"
-                    @update:model-value="value => patchAutomationAction({ scriptPath: String(value || '') })"
-                  />
-                  <v-text-field
-                    :model-value="activeAutomation.action.timeoutSeconds"
-                    type="number"
-                    min="5"
-                    max="3600"
-                    label="最长运行秒数"
-                    @update:model-value="value => patchAutomationAction({ timeoutSeconds: Number(value || 300) })"
-                  />
-                  <v-textarea
-                    class="full-span"
-                    :model-value="scriptArgumentsText(activeAutomation)"
-                    label="脚本参数（每行一个）"
-                    rows="3"
-                    @update:model-value="setScriptArguments"
-                  />
+                  </div>
+                  <v-btn-toggle
+                    :model-value="activeAutomation.action.type"
+                    color="secondary"
+                    mandatory
+                    divided
+                    class="automation-type-toggle"
+                    @update:model-value="value => setAutomationActionType(value === 'run_script' ? 'run_script' : 'deliver_agent')"
+                  >
+                    <v-btn value="deliver_agent" prepend-icon="mdi-message-arrow-right-outline">通知 Agent</v-btn>
+                    <v-btn value="run_script" prepend-icon="mdi-console-line">运行脚本</v-btn>
+                  </v-btn-toggle>
+
+                  <template v-if="activeAutomation.action.type === 'deliver_agent'">
+                    <AutomationAgentTarget v-if="gateway" :gateway="gateway" :model-value="activeAutomation.action.target"
+                      @update:model-value="target => patchAutomationAction({ target })" />
+                    <v-textarea
+                      v-if="activeAutomation.trigger.type === 'schedule'"
+                      class="mt-4"
+                      :model-value="activeAutomation.action.message"
+                      label="到时间后交给 Agent 的任务"
+                      placeholder="例如：检查今天仍未完成的计划，并只报告新增阻塞。"
+                      rows="4"
+                      auto-grow
+                      @update:model-value="value => patchAutomationAction({ message: String(value || '') })"
+                    />
+                    <v-textarea
+                      class="mt-4"
+                      :model-value="activeAutomation.action.template"
+                      :label="activeAutomation.trigger.type === 'message' ? '给 Agent 的附加说明（可选）' : '额外处理要求（可选）'"
+                      placeholder="RabiRoute 已经附带消息来源、原文、人格路径和必要上下文；这里只写额外判断要求。"
+                      rows="7"
+                      auto-grow
+                      spellcheck="false"
+                      @update:model-value="value => patchAutomationAction({ template: String(value || '') })"
+                    />
+                  </template>
+
+                  <template v-else>
+                    <v-alert type="warning" variant="tonal" density="compact" class="mt-4 mb-4">
+                      脚本只能来自当前人格的 <code>scripts/</code> 目录，支持 .cmd、.bat 和 .py。不会执行任意命令文本，也不会把 Manager 中的 token 和密码传给脚本。
+                    </v-alert>
+                    <div class="form-grid">
+                      <v-text-field
+                        :model-value="activeAutomation.action.scriptPath"
+                        label="脚本相对路径"
+                        placeholder="daily-check.py 或 scripts/daily-check.py"
+                        @update:model-value="value => patchAutomationAction({ scriptPath: String(value || '') })"
+                      />
+                      <v-text-field
+                        :model-value="activeAutomation.action.timeoutSeconds"
+                        type="number"
+                        min="5"
+                        max="3600"
+                        label="最长运行秒数"
+                        @update:model-value="value => patchAutomationAction({ timeoutSeconds: Number(value || 300) })"
+                      />
+                      <v-textarea
+                        class="full-span"
+                        :model-value="scriptArgumentsText(activeAutomation)"
+                        label="脚本参数（每行一个）"
+                        rows="3"
+                        @update:model-value="setScriptArguments"
+                      />
+                    </div>
+                  </template>
                 </div>
-              </template>
+              </div>
             </div>
           </div>
         </v-card-text>

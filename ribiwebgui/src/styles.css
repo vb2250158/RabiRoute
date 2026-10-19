@@ -2200,12 +2200,25 @@ button.channel-topology-node:focus-visible {
   text-transform: none;
 }
 
+.automation-rule-layout {
+  display: grid;
+  grid-template-columns: 230px minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.automation-rule-content { min-width: 0; }
+.automation-editor-layout .identity-section { padding-top: 0; }
+
+@media (max-width: 959px) {
+  .automation-rule-layout { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+}
+
 .automation-window {
   padding: 20px 22px 24px;
 }
 
 .automation-toolbar,
-.automation-group-head,
 .automation-card-topline,
 .automation-editor-head {
   display: flex;
@@ -2219,7 +2232,6 @@ button.channel-topology-node:focus-visible {
 }
 
 .automation-toolbar > div:first-child,
-.automation-group-head > div:first-child,
 .automation-section-heading {
   display: grid;
   gap: 3px;
@@ -2227,7 +2239,6 @@ button.channel-topology-node:focus-visible {
 }
 
 .automation-toolbar strong,
-.automation-group-head strong,
 .automation-section-heading strong {
   color: var(--rr-heading);
   font-size: 14px;
@@ -2235,24 +2246,11 @@ button.channel-topology-node:focus-visible {
 }
 
 .automation-toolbar span,
-.automation-group-head span,
 .automation-section-heading span {
   color: var(--rr-muted-soft);
   font-size: 12px;
   font-weight: 620;
   line-height: 1.45;
-}
-
-.automation-groups,
-.automation-group {
-  display: grid;
-  gap: 14px;
-}
-
-.automation-group + .automation-group {
-  margin-top: 8px;
-  padding-top: 20px;
-  border-top: 1px dashed rgba(17, 32, 51, .14);
 }
 
 .automation-card-grid {
@@ -2344,14 +2342,6 @@ button.channel-topology-node:focus-visible {
 
 .automation-card-warning-icon {
   flex-shrink: 0;
-}
-
-.scheduled-grid {
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-}
-
-.scheduled-card {
-  border-left-color: #486f9c;
 }
 
 /* Xiaomi Home Cascader Menu */
@@ -2585,26 +2575,12 @@ button.channel-topology-node:focus-visible {
 
 .automation-editor-section {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  gap: 14px;
-  padding: 20px 0;
+  grid-template-columns: minmax(0, 1fr);
+  padding: 18px 0;
 }
 
 .automation-editor-section + .automation-editor-section {
   border-top: 1px solid rgba(17, 32, 51, .1);
-}
-
-.automation-step-number {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  background: #173f63;
-  color: #fff;
-  font-size: 12px;
-  font-weight: 900;
-  box-shadow: 0 5px 14px rgba(23, 63, 99, .2);
 }
 
 .automation-editor-section-body {
@@ -2641,21 +2617,14 @@ button.channel-topology-node:focus-visible {
 
 
 @media (max-width: 900px) {
-  .automation-card-grid,
-  .scheduled-grid {
+  .automation-card-grid {
     grid-template-columns: 1fr;
   }
 
   .automation-toolbar,
-  .automation-group-head,
   .automation-editor-head {
     align-items: flex-start;
     flex-direction: column;
-  }
-
-  .automation-editor-section {
-    grid-template-columns: 28px minmax(0, 1fr);
-    gap: 10px;
   }
 }
 
