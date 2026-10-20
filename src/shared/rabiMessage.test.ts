@@ -86,6 +86,26 @@ test("plan source renders plan identity and its originating Agent session", () =
   ]);
 });
 
+test("GrokBot delivery headers preserve source identities and content", () => {
+  const identity = { agentAdapter: "grokBot" as const, sessionName: "Example Bot", sessionId: "grokBot:example-session" };
+  const sources = [
+    { type: "agent" as const, ...identity },
+    { type: "plan" as const, planName: "Example plan", planId: "plan-1", sourceAgent: identity },
+    { type: "message_adapter" as const, messageAdapter: "grokBot", conversationType: "private",
+      conversationId: identity.sessionId, senderName: "Example Bot", messageId: "message-1" }
+  ];
+  for (const source of sources) {
+    const before = structuredClone(source);
+    const message = renderRabiDelivery({ messageSource: source, messageContent: "Keep grokBot in user content.", sentAt: "2026/9/7 12:34:56" });
+    assert.match(message, /(?:处理端|消息端)：GrokBot\n/);
+    assert.doesNotMatch(message, /(?:处理端|消息端)：grokBot/);
+    assert.match(message, /会话 ID：grokBot:example-session/);
+    assert.match(message, /\[消息内容\]\nKeep grokBot in user content\.$/);
+    assert.deepEqual(normalizeRabiMessageSource(source), normalizeRabiMessageSource(before));
+    assert.deepEqual(source, before);
+  }
+});
+
 test("system source renders the event and route identity", () => {
   assert.equal(renderRabiMessage({
     type: "system",

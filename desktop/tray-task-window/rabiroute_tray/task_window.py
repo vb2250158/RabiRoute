@@ -41,7 +41,7 @@ from .theme import apply_rabi_menu_theme, normalize_theme, theme_stylesheet
 
 
 VIEW_LABELS = (
-    ("persona", "人格配置"),
+    ("persona", "角色配置"),
     ("current", "当前"),
     ("plans", "计划"),
     ("recent_memory", "近期记忆"),
@@ -1417,7 +1417,7 @@ class TaskWindow(QWidget):
         if self.plans.current:
             self._add_plan_cards(self.plans.current, "当前计划")
         else:
-            self._add_info_card("当前计划", "暂无由当前人格状态配置归入“当前”的计划。", [("计划目录", str(self.plans.plans_dir))], "empty")
+            self._add_info_card("当前计划", "暂无由当前角色状态配置归入“当前”的计划。", [("计划目录", str(self.plans.plans_dir))], "empty")
         self._add_section_header("近期记忆", "Agent 维护的近期上下文条目，只读展示。", "memory")
         if self.context.recent_memory:
             self._add_context_cards(self.context.recent_memory, "近期记忆")
@@ -1444,7 +1444,7 @@ class TaskWindow(QWidget):
             self._add_context_cards(self.context.consolidated_memory, "沉淀记忆")
             has_content = True
         if not has_content:
-            self._add_info_card("已归档", "暂无已归档计划或沉淀记忆。", [("人格目录", str(self.plans.role_dir))], "empty")
+            self._add_info_card("已归档", "暂无已归档计划或沉淀记忆。", [("角色目录", str(self.plans.role_dir))], "empty")
 
     def _render_status(self) -> None:
         assert self.manager is not None
@@ -1459,11 +1459,11 @@ class TaskWindow(QWidget):
             fields.append(("Manager 错误", self.manager.error))
         if gateway:
             fields.extend([
-                ("Gateway 人格", str(gateway.get("agentRoleId", self.plans.role_id))),
+                ("Gateway 角色", str(gateway.get("agentRoleId", self.plans.role_id))),
                 ("Gateway 运行中", str(bool(gateway.get("running")))),
             ])
         fields.extend([
-            ("人格目录", str(self.plans.role_dir)),
+            ("角色目录", str(self.plans.role_dir)),
             ("计划目录", str(self.plans.plans_dir)),
             ("记忆目录", str(self.context.role_dir / "memory")),
             ("路由状态目录", str(self.context.route_dir)),
@@ -1584,7 +1584,7 @@ class TaskWindow(QWidget):
         if entries:
             self._add_context_cards(entries, title)
         else:
-            self._add_info_card(title, "这个视图暂无可展示内容。", [("人格目录", str(self.context.role_dir))], "empty")
+            self._add_info_card(title, "这个视图暂无可展示内容。", [("角色目录", str(self.context.role_dir))], "empty")
 
     def _add_plan_cards(self, plans: list[PlanItem], label: str) -> None:
         for plan in plans:

@@ -152,7 +152,7 @@ class VoiceClientWindow(QMainWindow):
         hero_kicker.setObjectName("heroKicker")
         hero_title = QLabel("声音留在房间，智能留在主机。")
         hero_title.setObjectName("heroTitle")
-        hero_detail = QLabel("客户端只传输 PCM 与播放 WAV。VAD、转写、Route 广播、人格语音和播放队列仍由 RabiSpeech 统一负责。")
+        hero_detail = QLabel("客户端只传输 PCM 与播放 WAV。VAD、转写、Route 广播、角色语音和播放队列仍由 RabiSpeech 统一负责。")
         hero_detail.setObjectName("heroDetail")
         hero_detail.setWordWrap(True)
         hero_copy.addWidget(hero_kicker)

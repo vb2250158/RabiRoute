@@ -83,6 +83,8 @@ export type AgentPacket = {
 };
 
 export type BuildAgentPacketOptions = {
+  /** Explicit full projection for callers needing the existing detailed contract. Default deliveries are brief. */
+  contextDetail?: "brief" | "full";
   /** Manager-fenced projection for an isolated Gateway/Speech child. */
   roleKnowledge?: RoleKnowledgeSnapshot;
   /** Request-scoped remote owner snapshot; never interpreted as a local role directory. */
@@ -563,7 +565,7 @@ function recentMessageContextForDecision(decision: RouteDecision, roleContext: A
     routeProfileId: decision.route.id
   });
   if (!scope?.endpoint) return { limit: 0, text: "- 暂无" };
-  if (decision.routeKind === "heartbeat") {
+  if (decision.routeKind === "heartbeat" || isRolePanelRecord(decision.record) && decision.record.replyContext?.companion) {
     return {
       endpoint: scope.endpoint,
       transport: scope.record.transport,
@@ -1151,6 +1153,79 @@ function buildAgentMessage(
   options: BuildAgentPacketOptions
 ): { messageSource: RabiMessageSource; delivery: RabiDeliveryEnvelope; content: string; message: string; conversationSituation?: ConversationSituation } {
   const record = decision.record;
+  const roleId = String(values.agentRoleId || "").trim();
+  const companion = isRolePanelRecord(record) && Boolean(record.replyContext?.companion);
+  const raw = String(values.message || record.rawMessage || "");
+  const messageSource = messageSourceForDecision(decision, values, roleDir);
+  // Standard wrapper metadata is already in the envelope. Custom task text stays intact.
+  const supplement = /^\s*\[RabiRoute 数据解构\]/.test(userTemplateText)
+    ? "" : userTemplateText.replace(raw, "").trim();
+  const contexts: string[] = [];
+  contexts.push(section("当前情况", [
+    `事件：${companion ? "桌宠陪伴观察" : eventTitleForRoute(decision.routeKind, record)}`,
+    optionalLine("角色", roleId),
+    `路由类型：${decision.routeKind}`,
+    optionalLine("来源设备", values.voiceSourceDeviceId),
+    optionalLine("事件时间", values.time),
+    optionalLine("触发", values.triggerName || values.triggerId),
+    optionalLine("处理主机", values.voiceSourceHostName || values.voiceSourceHostId),
+    optionalLine("声纹", values.voiceprintIds || values.voiceprintId)
+  ]));
+  if (!companion && Number(values.recentMessageLimit || 0) > 0) {
+    const recent = String(values.recentMessages || "").split(/(?=^- )/m)
+      .filter(item => item.trim() && item.trim() !== "- 暂无" && !/messageId=companion-/.test(item)).slice(-3)
+      .map(item => item.trim().slice(0, 300));
+    if (recent.length) contexts.push(section("近期情况", recent));
+  }
+  const attachments = attachmentLines(record);
+  if (attachments.length) contexts.push(section("附件", attachments));
+  const remote = options.remotePersona;
+  if (remote) contexts.push(section("角色入口", [
+    `所属电脑：${remote.deviceId}`,
+    `查询：${remote.knowledgeApiBaseUrl}/api/roles/${encodeURIComponent(remote.roleId)}`
+  ]));
+  // Consolidation is an explicit work item rather than routine message context.
+  if (decision.routeKind === "manual_trigger" && String(values.triggerId || "") === "memory-consolidation") {
+    const trigger = { kind: "message_delivery", source: "rabi_delivery", roleId, roleDir,
+      signalText: raw, includePendingConsolidation: true, consolidationTrigger: "manual" } as const;
+    const knowledge = options.roleKnowledge
+      ? rabiContextManager.resolveProjection(trigger, options.roleKnowledge).knowledge
+      : rabiContextManager.resolve(trigger).knowledge;
+    const pending = knowledge?.pendingConsolidation;
+    if (pending) contexts.push(section("待整理记忆", [
+      `runId：${pending.run.id}`,
+      ...memoryConsolidationResultMutationLines({ endpoint: `/api/roles/${roleId}/memory/consolidation-runs/${pending.run.id}/result`, runId: pending.run.id }),
+      ...pending.memories.map(item => `- ${item.id}：${item.title}\n${item.content}`)
+    ]));
+  }
+  const sendRequest = values.sendRequestJson ? JSON.parse(String(values.sendRequestJson)) : null;
+  const replyLocator = sendRequest ? JSON.stringify({ routeId: sendRequest.routeId, channel: sendRequest.channel, params: sendRequest.params }) : "";
+  const delivery: RabiDeliveryEnvelope = {
+    messageSource,
+    messageContent: [raw, !companion && supplement ? section("补充", [supplement]) : ""].filter(Boolean).join("\n\n"),
+    contextBlocks: contexts.filter(Boolean),
+    controlBlocks: companion ? [] : [section("查询入口", ["GET /api/agent/help", optionalLine("回传定位", replyLocator)])],
+    escapeMessageContentHeaders: false
+  };
+  const identity = roleDir && !remote && !companion ? identityContextsForForward(roleDir, decision.routeKind, record,
+    { gatewayId: process.env.GATEWAY_ID, routeProfileId: decision.route.id }) : [];
+  const scope = messageContextScopeForForward(decision.routeKind, record, { gatewayId: process.env.GATEWAY_ID, routeProfileId: decision.route.id });
+  const conversationSituation = roleDir && !companion ? conversationSituationForDelivery(identity.length === 1 ? identity[0] : undefined,
+    decision.routeKind, record, { conversationId: scope?.record.conversationKey,
+      messageIds: [String(record.messageId || ""), ...(record.messageGroupMessageIds || []).map(String)].filter(Boolean) }) : undefined;
+  return { messageSource, delivery, content: renderRabiDeliveryContent(delivery), message: renderRabiDelivery(delivery), conversationSituation };
+}
+
+function buildDetailedAgentMessage(
+  decision: RouteDecision,
+  values: ForwardTemplateValues,
+  userTemplateText: string,
+  rolePath: string,
+  roleDir: string,
+  dataDir: string,
+  options: BuildAgentPacketOptions
+): { messageSource: RabiMessageSource; delivery: RabiDeliveryEnvelope; content: string; message: string; conversationSituation?: ConversationSituation } {
+  const record = decision.record;
   const routeKind = decision.routeKind;
   const shouldAttachMemoryConsolidation = routeKind === "manual_trigger" && String(values.triggerId || "") === "memory-consolidation";
   const remotePersona = options.remotePersona;
@@ -1468,7 +1543,7 @@ export function buildAgentPacket(
   const rolePath = relativeWorkspacePath(roleContext.rolePath) || "";
   const roleDir = relativeWorkspacePath(roleContext.roleDir) || "";
 
-  const built = buildAgentMessage(
+  const built = (options.contextDetail === "full" ? buildDetailedAgentMessage : buildAgentMessage)(
     decision,
     templateValues,
     userTemplateText,

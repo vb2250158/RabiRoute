@@ -6,6 +6,22 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RabiConversationRulesTest {
+    @Test fun pcCatalogIncludesUnconfiguredAndDisabledPersonasWithoutDuplicatePlaceholders() {
+        fun route(id: String, role: String, owner: String = "pc-a", profile: Boolean = false, enabled: Boolean = false) = com.rabiroute.sdk.RabiRouteInfo(
+            id=id,name=role,configName="",routeName=id,enabled=enabled,running=false,agentRoleId=role,personaDisplayName=role,
+            messageAdapters=emptyList(),agentAdapters=emptyList(),codexCwd="",codexThreadName="",avatarConfigured=false,avatarVersion="",
+            rawJson=org.json.JSONObject().put("ownerWorkerId",owner).put("isPersonaOnly",profile).put("chatAvailable",false))
+        val catalog = listOf(
+            route("route-a","persona-a"),route("route-a-2","persona-a"),
+            route("profile-a","persona-a",profile=true),
+            route("profile-b","persona-b",profile=true),
+            route("profile-peer","persona-a",owner="pc-b",profile=true),
+            route("health",""),route("","persona-empty"))
+        val visible = RabiConversationRules.personaConversations(catalog + catalog.first())
+        assertEquals(listOf("route-a","route-a-2","profile-b","profile-peer"),visible.map { it.id })
+        assertTrue(visible.all { !it.rawJson.getBoolean("chatAvailable") })
+    }
+
     @Test fun wearableRouteIsNotAChatContact() {
         assertFalse(RabiConversationRules.isChatCapable(true, listOf("wearable")))
         assertTrue(RabiConversationRules.isChatCapable(true, listOf("rabilink")))

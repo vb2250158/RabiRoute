@@ -51,7 +51,7 @@ final class RabiEventAsrUploader implements AutoCloseable {
             byte[] audio = wav(pcm.toByteArray());
             RabiLinkRelayConfig relay = relayConfiguration.get();
             if (!relay.getConfigured()) throw new IllegalStateException("RabiLink 尚未配置");
-            List<RabiLinkPc> workers = com.rabi.link.transport.AsrDirectory.INSTANCE.load(relay).getWorkers();
+            List<RabiLinkPc> workers = com.rabi.link.transport.AsrDirectory.INSTANCE.load(context, relay).getWorkers();
             for (RabiLinkPc worker : workers) {
                 if (!current.getAsBoolean()) throw new IllegalStateException("ASR processing context changed");
                 if (!worker.getOnline()) continue;

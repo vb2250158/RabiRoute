@@ -32,7 +32,7 @@ AIUI 页面中的宿主模型是眼镜 Agent 的执行者。PC 提供 HTTP 工�
 
 2026-10-10 补读 [官方 AI 类型参考](https://raw.githubusercontent.com/yodaos-project/AIUI/main/skills/aiui-dev/references/apis/ai.md)。其明确：请求输入允许 `user`、`assistant`，工具事件在请求完成后发送；同一会话保留消息历史，并且同时只能有一个活跃请求。`AgentWorker` 是页面/组件生命周期 Worker，不提供另一个模型结果提交合同。
 
-默认对话现在使用应用管理的决策协议：原生工具声明为空，模型返回完整动作 JSON；应用通过已有受管工具执行后，将实际结果作为 `user` 消息中的明确应用观察交回同一个模型。观察携带工具调用编号、不可信标记及真实结果，身份和权限仍由人格及连接合同拥有。此实现不使用或声称提供原生 `tool` role、`tool_call_id` 或自动 JavaScript 工具执行。
+默认对话现在使用应用管理的决策协议：原生工具声明为空，模型返回完整动作 JSON；应用通过已有受管工具执行后，将实际结果作为 `user` 消息中的明确应用观察交回同一个模型。观察携带工具调用编号、不可信标记及真实结果，身份和权限仍由角色及连接合同拥有。此实现不使用或声称提供原生 `tool` role、`tool_call_id` 或自动 JavaScript 工具执行。
 
 执行器检查当前请求编号、已连接工具、参数、幂等状态及限额，格式无效或半个动作不执行。模型循环的夹具证明结果会进入下一次推理，真实宿主行为仍需验收。详见 [执行循环](agent-turn-runtime.md)。
 
@@ -40,4 +40,4 @@ AIUI 页面中的宿主模型是眼镜 Agent 的执行者。PC 提供 HTTP 工�
 
 必须记录真实宿主版本、应用动作、同一调用编号对应的执行回执及观察驱动的后续推理；再验证取消、超时、重复事件和权限拒绝。现有模拟测试、文档与模型可用性检查均不能替代真机证据。
 
-`rabi_api_help` 和 `rabi_api_call` 使用同一个通用 Manager 传输。可选 `targetDeviceId` 选择已鉴权其他电脑；默认目标在本轮开始时固定。同一 `operationId` 的目标、方法、路径、正文摘要参与操作指纹，未知写入不能换目标重发。Relay 不注册每个业务接口，也不根据人格或配置版本分发。详见[接口传输](generic-api-transport.md)。
+`rabi_api_help` 和 `rabi_api_call` 使用同一个通用 Manager 传输。可选 `targetDeviceId` 选择已鉴权其他电脑；默认目标在本轮开始时固定。同一 `operationId` 的目标、方法、路径、正文摘要参与操作指纹，未知写入不能换目标重发。Relay 不注册每个业务接口，也不根据角色或配置版本分发。详见[接口传输](generic-api-transport.md)。

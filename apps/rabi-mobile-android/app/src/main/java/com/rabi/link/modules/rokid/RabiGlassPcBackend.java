@@ -100,6 +100,9 @@ public final class RabiGlassPcBackend {
     public void archiveAuthorize(String captureId, com.rabi.link.recording.RecordingArchiveCoordinator.Target target) throws Exception {
         archiveOnWriter(() -> { audioSpool.authorizeArchive(captureId,target); return null; });
     }
+    public org.json.JSONObject archiveAuthorizeHistory(com.rabi.link.recording.RecordingArchiveCoordinator.Target target,String after,int limit) throws Exception {
+        return archiveOnWriter(() -> audioSpool.authorizeArchiveHistory(target,after,limit));
+    }
     public java.util.List<String> archiveCandidates(com.rabi.link.recording.RecordingArchiveCoordinator.Target target,int limit) throws Exception {
         return archiveOnWriter(() -> audioSpool.nextArchiveCandidates(target,limit));
     }
@@ -358,7 +361,7 @@ public final class RabiGlassPcBackend {
         try {
             this.audioSpool = new RabiDurableAudioSpool(
                     new File(this.context.getFilesDir(), "rabi-conversation/audio-spool"),
-                    audioPolicy(this.settings));
+                    audioPolicy(this.settings), true);
             this.audioSpool.retireUnscopedUploads();
         } catch (Throwable error) {
             throw new IllegalStateException("无法恢复手机本地录音队列", error);

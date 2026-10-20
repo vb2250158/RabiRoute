@@ -39,7 +39,7 @@ description: 通过 RabiRoute 正式工具发现 Agent 会话、核对绑定、�
 - “让 Rabi 把这段话发给 DSH 的指定会话” → 本技能；核对目标和来源后走正式投递工具。
 - “向 QQ 群发送这段话” → 本技能选择消息端入口，并按 QQ 专项技能核对收件目标。
 - “给 Rabi 新增一种 Agent 宿主” → Agent 适配器接入技能，不把未实现能力当普通绑定问题。
-- “当前 Codex 使用某个人格” → `use-rabi-codex-context`，不属于跨会话消息投递。
+- “当前 Codex 使用某个角色” → `use-rabi-codex-context`，不属于跨会话消息投递。
 
 ## 验收边界
 

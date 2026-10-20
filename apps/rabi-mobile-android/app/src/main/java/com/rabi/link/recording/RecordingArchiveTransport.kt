@@ -19,14 +19,20 @@ import java.security.MessageDigest
 class RecordingArchiveTransport internal constructor(
     private val workerId: String,
     private val ownerId: String,
-    private val channels: () -> Channel
+    private val channels: () -> Channel,
+    private val playbackCache: (() -> RecordingPlaybackObjectCache?)?
 ) : RecordingArchiveCoordinator.Transport {
+    internal constructor(workerId: String, ownerId: String, channels: () -> Channel) : this(workerId,ownerId,channels,null)
     internal data class Reply(val status: Int, val body: ByteArray)
     internal interface Channel : AutoCloseable {
         fun request(method: String, path: String, contentType: String, body: ByteArray): Reply
     }
     constructor(context: Context, relay: RabiLinkRelayConfig, worker: RabiLinkPc) : this(
-        worker.id, RabiMobileDeviceIdentity.load(context), production(context.applicationContext, relay, worker)
+        worker.id, RabiMobileDeviceIdentity.load(context), production(context.applicationContext, relay, worker), {
+            if(RecordingResourceCache.enabled(context)) RecordingPlaybackObjectCache(
+                java.io.File(context.cacheDir,"recording-playback/archive-objects"), RecordingResourceCache.hours(context)*3600000L)
+            else null
+        }
     )
     class HttpFailure(val status: Int) : IOException("Archive request failed ($status)")
     private fun target(t: RecordingArchiveCoordinator.Target) {
@@ -130,6 +136,13 @@ class RecordingArchiveTransport internal constructor(
         hashId(sha256); require(expectedBytes in 1..1024 * 1024)
         return requireNotNull(read(t, "/objects/$sha256")).also { require(it.size == expectedBytes && digest(it) == sha256) }
     }
+    fun readPlaybackObject(t: RecordingArchiveCoordinator.Target, sha256: String, expectedBytes: Int): ByteArray {
+        target(t); hashId(sha256); require(expectedBytes in 1..1024*1024)
+        val cache = playbackCache?.invoke()
+        return cache?.read(sha256,expectedBytes) ?: readObject(t,sha256,expectedBytes).also { bytes ->
+            runCatching { cache?.retain(sha256,bytes) }
+        }
+    }
     /** Verify the exact remote recording and its playback bytes before releasing the phone original. */
     fun verifyArchivedPlayback(t: RecordingArchiveCoordinator.Target, manifest: JSONObject): Boolean {
         val remote = getManifest(t,manifest.getString("recordId"))
@@ -138,22 +151,28 @@ class RecordingArchiveTransport internal constructor(
         var cursor: String? = null
         val cursors = mutableSetOf<String>()
         var visible = false
+        var transcribed = false
         do {
             val page = readCatalog(t,cursor,100,manifest.getLong("startedAt"),manifest.getLong("endedAt"))
             require(!page.optBoolean("offline",false)) { "Archive history is unavailable" }
             val rows = page.getJSONArray("items")
             for(i in 0 until rows.length()) {
                 val row = rows.getJSONObject(i)
-                if(row.getString("recordId") == manifest.getString("recordId") && row.getString("manifestHash") == expectedHash) visible = true
+                if(row.getString("recordId") == manifest.getString("recordId") && row.getString("manifestHash") == expectedHash) {
+                    visible = true; transcribed = row.optString("asrState") == "completed"
+                }
             }
             cursor = if(page.isNull("nextCursor")) null else page.getString("nextCursor")
             require(cursor == null || cursors.add(cursor)) { "Archive history cursor did not advance" }
         } while(!visible && cursor != null)
         require(visible) { "Recording is absent from archive history" }
+        if(!transcribed) return false
         val objects = remote.getJSONArray("objects")
         for(i in 0 until objects.length()) {
             val value = objects.getJSONObject(i)
-            readObject(t,value.getString("sha256"),value.getInt("bytes"))
+            val hash = value.getString("sha256")
+            val bytes = readObject(t,hash,value.getInt("bytes")) // Always PC readback, never a cache hit.
+            runCatching { playbackCache?.invoke()?.retain(hash,bytes) }
         }
         return true
     }

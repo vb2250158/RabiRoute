@@ -15,7 +15,7 @@ export type AllDayEvent = {
   id: string;
   startedAt: number;
   endedAt: number;
-  source: AllDaySource | "mobile" | "session";
+  source: AllDaySource | "mobile" | "session" | "systemAudio";
   deviceId: string;
   kind: "audio" | "image" | "window" | "status" | "device";
   text: string;

@@ -1,6 +1,6 @@
 ---
 name: manage-rabiroute-identity-relations
-description: 处理 RabiRoute 人格身份定位与关系记录时使用。覆盖按账号查“这是谁”、确认人物、纠正错误映射、处理多电脑并发冲突、共用账号、未识别账号、说话习惯档案，以及处理 Agent 在对话中发现新身份线索后提交候选观察；也用于排查“Agent 不认人、叫错人、把人当成项目负责人”。
+description: 处理 RabiRoute 角色身份定位与关系记录时使用。覆盖按账号查“这是谁”、确认人物、纠正错误映射、处理多电脑并发冲突、共用账号、未识别账号、说话习惯档案，以及处理 Agent 在对话中发现新身份线索后提交候选观察；也用于排查“Agent 不认人、叫错人、把人当成项目负责人”。
 ---
 
 # 管理 RabiRoute 身份关系
@@ -11,9 +11,9 @@ description: 处理 RabiRoute 人格身份定位与关系记录时使用。覆�
 
 ## 使用前先确认
 
-1. 确定当前 `roleId`。身份关系属于人格私有数据，不在多个角色之间共享。
+1. 确定当前 `roleId`。身份关系属于角色私有数据，不在多个角色之间共享。
 2. 核对 Manager 地址：安装版执行 `RabiRouteHost.exe --command status --json` 取得 `managerBaseUrl`、`applicationGenerationId`、`managerInstanceId`；源码模式只使用当前结构化 READY 地址。读取 `<managerBaseUrl>/meta`，先核对非空 `applicationGenerationId`、`managerInstanceId` 与当前 Host/READY 身份一致。普通业务请求要求 `health.live=true`、`health.requiredReady=true`，且 `health.state` 为 `healthy` 或 `degraded`；不以 `businessReady=false` 或无关 Route 降级阻断全部请求，具体依赖由目标接口判断。精确 `GET /meta` 诊断只校验身份，不要求业务就绪，此豁免不适用于其它 GET。所有请求仍遵守地址约束、鉴权、最长 12 秒的有界超时、禁止重定向及身份检查。身份变化后重新发现，不缓存旧地址，不扫描端口。
-3. 只操作当前任务实际绑定的人格。不确定 `roleId` 时先问，不遍历全部人格猜测。
+3. 只操作当前任务实际绑定的角色。不确定 `roleId` 时先问，不遍历全部角色猜测。
 4. 只有用户明确要求修正、确认或补录身份时才写。普通问答里顺带看到的线索不等于写入授权。
 
 ## 先读后写
@@ -76,7 +76,7 @@ GET /api/roles/:roleId/identity-relations?platform=:platform&endpointIdentityNam
 
 ## 写操作清单
 
-每次写入后再次有界 `GET /meta`，只复核 `applicationGenerationId`、`managerInstanceId` 与写前一致，不把单纯健康波动当作切代。身份缺失、无法核对或身份变化时标记 `uncertain`，重新发现当前地址，保留原请求及适用的幂等键并先权威读回，不自动重发。身份一致也不能消除原写请求超时、5xx 等已存在的结果不确定性；按目标接口合同读回实际结果，不以再次写入试探。健康门槛的区分不放宽人格范围、写入授权或 Action Gate。
+每次写入后再次有界 `GET /meta`，只复核 `applicationGenerationId`、`managerInstanceId` 与写前一致，不把单纯健康波动当作切代。身份缺失、无法核对或身份变化时标记 `uncertain`，重新发现当前地址，保留原请求及适用的幂等键并先权威读回，不自动重发。身份一致也不能消除原写请求超时、5xx 等已存在的结果不确定性；按目标接口合同读回实际结果，不以再次写入试探。健康门槛的区分不放宽角色范围、写入授权或 Action Gate。
 
 确认一个账号属于某人：
 

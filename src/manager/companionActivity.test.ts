@@ -5,9 +5,22 @@ import os from "node:os";
 import path from "node:path";
 import { readCompanionSceneRules } from "./companionScene.js";
 import { CompanionActivity, lastCompanionSummary, readCompanionPresets, recordCompanionInteraction, saveCompanionSummary, type CompanionPorts } from "./companionActivity.js";
+import { CompanionWindowTypes } from "./companionWindowTypes.js";
 const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString("base64");
 const start = { requestId: "request-first", gatewayId: "route", presetId: "adaptive", title: "", autoReview: false, voice: true, saveSummary: false, observationOwner: "desktop" as const };
 const catalog = readCompanionPresets(JSON.parse(readFileSync("packages/rabi-companion/presets.json", "utf8")));
+
+test("companion reads microphone ASR for the frozen frame interval without a second recognizer",async t=>{
+ const f=fixture(t,{transcripts:async(role,from,to)=>{
+  assert.equal(role,"one");assert.equal(from,1_000_000);assert.equal(to,1_002_000);
+  return {events:[{id:"mic",startedAt:1_000_200,endedAt:1_000_500,source:"microphone",text:"my short sentence"},
+   {id:"playback",startedAt:1_000_700,endedAt:1_001_000,source:"systemAudio",text:"video dialogue"}]};
+ }});
+ const s=(await f.service.start("one",start)).session!;f.advance(2000);f.observe();
+ await f.service.review("one",s.id,s.revision,"");
+ assert.match(f.delivered[0],/my short sentence/);assert.doesNotMatch(f.delivered[0],/video dialogue/);
+ assert.match(f.delivered[0],/"microphone":\{"status":"transcribed"/);
+});
 function fixture(t: import("node:test").TestContext, overrides: Partial<CompanionPorts> = {}) {
   let now = 1_000_000;
   const cancelled: string[] = [], spoken: string[] = [], delivered: string[] = [];
@@ -215,7 +228,8 @@ test("a slow Agent still classifies the current window without playing an old co
   await f.service.reply("one", { sessionId: s.id, revision: s.revision, reviewId: id, text: "old scene comment", activityKind: "watch" });
   assert.equal(f.service.snapshot("one").session!.activityKind, "watch");
   assert.deepEqual(f.spoken, []);
-  assert.match(f.delivered[0], /每次.*回传/);
+  assert.match(f.delivered[0], /回传 activityKind/);
+  assert.doesNotMatch(f.delivered[0], /不得|禁止|只回复此接口|不发送 QQ/);
 });
 
 test("failed dispatch backs off and a later fresh observation recovers", async t => {
@@ -289,4 +303,62 @@ test("mode changes preserve a user pause and validate optional catalog policy fi
   const work = catalog.find(p => p.id === "work")!;
   assert.throws(() => readCompanionPresets({ presets: [{ ...work, activityKind: "invalid" }] }), /kind/);
   assert.throws(() => readCompanionPresets({ presets: [{ ...work, allowAutomaticReplies: "false" }] }), /automatic/);
+});
+
+test("ASR preparation leaves the comment response budget available", async t => {
+  const f = fixture(t, { presets: [{ id: "adaptive", label: "Auto", labelEn: "Auto", reviewSeconds: 25,
+    replyAgeSeconds: 180, reactionAgeSeconds: 90, guidance: "observe" }],
+    transcripts: async () => { f.advance(20_000); return { events: [] }; } });
+  const s = (await f.service.start("one", start)).session!; f.observe();
+  await f.service.review("one", s.id, s.revision, "");
+  const review = f.service.snapshot("one").session!.review!;
+  assert.equal(review.reactionExpiresAt, 1_110_000);
+  f.advance(65_000);
+  await f.service.reply("one", { sessionId: s.id, revision: s.revision, reviewId: review.id, text: "what a twist", activityKind: "watch" });
+  assert.deepEqual(f.spoken, ["what a twist"]);
+  assert.equal(f.service.snapshot("one").session!.review!.outcome, "commented");
+  assert.equal(f.service.snapshot("one").session!.participation!.lastCommentAt, 1_085_000);
+});
+
+test("stalled response refreshes with a new interval once comments expire", async t => {
+  const f = fixture(t, { presets: [{ id: "adaptive", label: "Auto", labelEn: "Auto", reviewSeconds: 25,
+    replyAgeSeconds: 180, reactionAgeSeconds: 90, silenceReviewSeconds: 90, guidance: "observe" }] });
+  const s = (await f.service.start("one", { ...start, autoReview: true })).session!; f.observe();
+  await new Promise(resolve => setImmediate(resolve));
+  const oldReview = f.service.snapshot("one").session!.review!.id;
+  f.advance(91_000); f.observe(2); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.delivered.length, 2);
+  assert.notEqual(f.service.snapshot("one").session!.review!.id, oldReview);
+  await assert.rejects(f.service.reply("one", { sessionId: s.id, revision: s.revision, reviewId: oldReview, text: "late" }), /过期/);
+});
+
+test("quiet replies carry participation context and static footage is reconsidered after silence", async t => {
+  const f = fixture(t, { presets: [{ id: "adaptive", label: "Auto", labelEn: "Auto", reviewSeconds: 25,
+    replyAgeSeconds: 180, reactionAgeSeconds: 90, silenceReviewSeconds: 90, guidance: "observe" }] });
+  const s = (await f.service.start("one", { ...start, autoReview: true })).session!; f.observe();
+  await new Promise(resolve => setImmediate(resolve));
+  await f.service.reply("one", { sessionId: s.id, revision: s.revision,
+    reviewId: f.service.snapshot("one").session!.review!.id, text: "", activityKind: "watch" });
+  assert.equal(f.service.snapshot("one").session!.review!.outcome, "quiet");
+  f.advance(26_000); f.observe(2); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.delivered.length, 1);
+  f.advance(65_000); f.observe(3); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.delivered.length, 2);
+  assert.match(f.delivered[1], /"sinceCommentSeconds":91,"quietReplies":1/);
+  assert.match(f.delivered[1], /已经安静了一会儿/);
+  assert.match(f.delivered[1], /桌宠气泡/);
+  await f.command("pause"); f.advance(100_000); f.observe(1);
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(f.delivered.length, 2);
+});
+
+test("expired comment is diagnosed separately from an intentional quiet reply", async t => {
+  const f = fixture(t, { presets: [{ id: "adaptive", label: "Auto", labelEn: "Auto", reviewSeconds: 25,
+    replyAgeSeconds: 180, reactionAgeSeconds: 90, guidance: "observe" }] });
+  const s = (await f.service.start("one", start)).session!; f.observe();
+  await f.service.review("one", s.id, s.revision, ""); f.advance(91_000);
+  await f.service.reply("one", { sessionId: s.id, revision: s.revision,
+    reviewId: f.service.snapshot("one").session!.review!.id, text: "late", activityKind: "play" });
+  assert.equal(f.service.snapshot("one").session!.review!.outcome, "comment_expired");
+  assert.equal(f.service.snapshot("one").session!.participation!.quietReplies, 0);
+  assert.deepEqual(f.spoken, []);
 });

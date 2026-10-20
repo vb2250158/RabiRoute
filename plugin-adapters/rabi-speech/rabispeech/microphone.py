@@ -30,8 +30,8 @@ class MicrophoneConfig:
     adaptive_multiplier: float = 2.5
     adaptive_margin: float = 0.004
     silence_ms: int = 500
-    min_utterance_ms: int = 1_000
-    max_utterance_ms: int = 60_000
+    min_utterance_ms: int = 300
+    max_utterance_ms: int = 8_000
     input_gain: float = 1.0
     asr_model: str = "faster-whisper/small"
     language: str | None = "zh"
@@ -185,6 +185,8 @@ class MicrophoneService:
         self._lock = asyncio.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stream: Any = None
+        self._delivery_consumer: asyncio.Task[None] | None = None
+        self._deliveries: asyncio.Queue = asyncio.Queue(maxsize=32)
         self._consumer: asyncio.Task[None] | None = None
         self._phrases: asyncio.Queue[tuple[np.ndarray, float, float, SpeechInputSource]] = asyncio.Queue(maxsize=8)
         self._running = False
@@ -267,6 +269,7 @@ class MicrophoneService:
             self._running = True
             self._state = "listening"
             self._consumer = asyncio.create_task(self._consume(), name="rabispeech-microphone-asr")
+            self._delivery_consumer = asyncio.create_task(self._deliver())
             if persist:
                 self._write_config()
             self._emit_event(
@@ -320,6 +323,20 @@ class MicrophoneService:
                     await consumer
                 except asyncio.CancelledError:
                     pass
+            delivery, self._delivery_consumer = self._delivery_consumer, None
+            if delivery is not None:
+                delivery.cancel()
+                try:
+                    await delivery
+                except asyncio.CancelledError:
+                    pass
+            while not self._deliveries.empty():
+                try:
+                    queued = self._deliveries.get_nowait()
+                    queued[-1]["delivery_status"] = "cancelled"
+                    self._deliveries.task_done()
+                except asyncio.QueueEmpty:
+                    break
             while not self._phrases.empty():
                 try:
                     self._phrases.get_nowait()
@@ -538,7 +555,8 @@ class MicrophoneService:
             self._barge_in_voiced_samples = 0
         if self._try_barge_in(playback_active, barge_in_ready):
             return
-        if level >= self.config.transcribe_threshold:
+        # A chunk accepted as speech must not also advance the silence timer.
+        if level >= self._dynamic_threshold:
             self._silence_samples = 0
         else:
             self._silence_samples += chunk.size
@@ -771,99 +789,14 @@ class MicrophoneService:
                             error=f"{type(exc).__name__}: {exc}"[:500],
                         )
                 if self.config.auto_submit:
-                    self._emit_event(
-                        "route",
-                        "route_submission_started",
-                        "保存主机转写，不投递人格" if input_source.processing_policy == "transcribe" else "开始广播到已启用的语音消息端",
-                        session_id=self.config.session_id,
-                    )
                     try:
-                        receipt = await self._submitter(
-                            result,
-                            input_source.session_id or self.config.session_id,
-                            utterance,
-                            input_source,
-                        )
-                        if not isinstance(receipt, dict):
-                            raise RuntimeError("Manager returned no terminal broadcast receipt.")
-                        delivery_status = str(receipt.get("status") or "").strip()
-                        if delivery_status not in {"delivered", "recorded"}:
-                            raise RuntimeError("Manager returned no delivered/recorded broadcast receipt.")
-                        message_id = str(receipt.get("message_id") or receipt.get("messageId") or "").strip()
-                        delivery_reason = str(receipt.get("reason") or "").strip()
-                        deliveries = receipt.get("deliveries") if isinstance(receipt.get("deliveries"), list) else []
-                        item["submitted"] = True
-                        item["delivery_status"] = delivery_status
-                        item["deliveries"] = deliveries
-                        if message_id:
-                            item["message_id"] = message_id
-                        if delivery_reason:
-                            item["delivery_reason"] = delivery_reason
-                        self._submitted += 1
-                        self._last_submit_error = ""
-                        if deliveries:
-                            for delivery in deliveries:
-                                if not isinstance(delivery, dict):
-                                    continue
-                                route_id = str(delivery.get("routeId") or delivery.get("route_id") or "").strip()
-                                route_status = str(delivery.get("status") or "").strip()
-                                route_message_id = str(delivery.get("messageId") or delivery.get("message_id") or "").strip()
-                                route_reason = str(delivery.get("reason") or "").strip()
-                                route_detail = str(delivery.get("detail") or "").strip()
-                                if route_status == "delivered":
-                                    self._delivered += 1
-                                    self._emit_event(
-                                        "route",
-                                        "route_delivery_succeeded",
-                                        "Desktop 目标任务已接收语音消息",
-                                        route_id=route_id,
-                                        session_id=self.config.session_id,
-                                        message_id=route_message_id,
-                                    )
-                                elif route_status == "recorded":
-                                    self._recorded += 1
-                                    self._emit_event(
-                                        "route",
-                                        "route_recorded_only",
-                                        "语音已记录，未唤醒 Agent",
-                                        route_id=route_id,
-                                        session_id=self.config.session_id,
-                                        message_id=route_message_id,
-                                        reason=route_reason,
-                                    )
-                                elif route_status == "failed":
-                                    self._delivery_failed += 1
-                                    self._emit_event(
-                                        "route",
-                                        "route_submission_failed",
-                                        "Route 投递失败",
-                                        level="error",
-                                        route_id=route_id,
-                                        error=route_detail or route_reason or "Unknown Route delivery failure.",
-                                    )
-                        else:
-                            self._recorded += 1
-                            self._emit_event(
-                                "route",
-                                "route_recorded_only",
-                                "语音已记录，当前没有启用的语音消息端",
-                                session_id=self.config.session_id,
-                                message_id=message_id,
-                                reason=delivery_reason,
-                            )
-                    except Exception as exc:
-                        self._delivery_failed += 1
-                        self._submit_failed += 1
-                        self._last_submit_error = f"{type(exc).__name__}: {exc}"[:500]
+                        self._deliveries.put_nowait((result, input_source.session_id or self.config.session_id, utterance, input_source, item))
+                    except asyncio.QueueFull:
                         item["delivery_status"] = "failed"
-                        item["submit_error"] = self._last_submit_error
-                        self._emit_event(
-                            "route",
-                            "route_submission_failed",
-                            "语音广播失败",
-                            level="error",
-                            error=self._last_submit_error,
-                        )
+                        item["submit_error"] = "Speech delivery queue is full; transcription remains saved"
+                        self._submit_failed += 1
+                        self._delivery_failed += 1
+                        self._emit_event("route", "route_submission_failed", "消息投递队列已满，转写已保留", level="error")
                 self._history.appendleft(item)
                 self._error = ""
                 self._state = "listening"
@@ -882,6 +815,110 @@ class MicrophoneService:
                 if target is not None:
                     target.unlink(missing_ok=True)
                 self._phrases.task_done()
+
+    async def _deliver(self) -> None:
+        """Broadcast in order without holding ASR or re-recording a saved utterance."""
+        while True:
+            result, session_id, utterance, input_source, item = await self._deliveries.get()
+            try:
+                self._emit_event(
+                    "route",
+                    "route_submission_started",
+                    "保存主机转写，不投递角色" if input_source.processing_policy == "transcribe" else "开始广播到已启用的语音消息端",
+                    session_id=session_id,
+                )
+                try:
+                    receipt = await self._submitter(
+                        result,
+                        input_source.session_id or session_id,
+                        utterance,
+                        input_source,
+                    )
+                    if not isinstance(receipt, dict):
+                        raise RuntimeError("Manager returned no terminal broadcast receipt.")
+                    delivery_status = str(receipt.get("status") or "").strip()
+                    if delivery_status not in {"delivered", "recorded"}:
+                        raise RuntimeError("Manager returned no delivered/recorded broadcast receipt.")
+                    message_id = str(receipt.get("message_id") or receipt.get("messageId") or "").strip()
+                    delivery_reason = str(receipt.get("reason") or "").strip()
+                    deliveries = receipt.get("deliveries") if isinstance(receipt.get("deliveries"), list) else []
+                    item["submitted"] = True
+                    item["delivery_status"] = delivery_status
+                    item["deliveries"] = deliveries
+                    if message_id:
+                        item["message_id"] = message_id
+                    if delivery_reason:
+                        item["delivery_reason"] = delivery_reason
+                    self._submitted += 1
+                    self._last_submit_error = ""
+                    if deliveries:
+                        for delivery in deliveries:
+                            if not isinstance(delivery, dict):
+                                continue
+                            route_id = str(delivery.get("routeId") or delivery.get("route_id") or "").strip()
+                            route_status = str(delivery.get("status") or "").strip()
+                            route_message_id = str(delivery.get("messageId") or delivery.get("message_id") or "").strip()
+                            route_reason = str(delivery.get("reason") or "").strip()
+                            route_detail = str(delivery.get("detail") or "").strip()
+                            if route_status == "delivered":
+                                self._delivered += 1
+                                self._emit_event(
+                                    "route",
+                                    "route_delivery_succeeded",
+                                    "Desktop 目标任务已接收语音消息",
+                                    route_id=route_id,
+                                    session_id=session_id,
+                                    message_id=route_message_id,
+                                )
+                            elif route_status == "recorded":
+                                self._recorded += 1
+                                self._emit_event(
+                                    "route",
+                                    "route_recorded_only",
+                                    "语音已记录，未唤醒 Agent",
+                                    route_id=route_id,
+                                    session_id=session_id,
+                                    message_id=route_message_id,
+                                    reason=route_reason,
+                                )
+                            elif route_status == "failed":
+                                self._delivery_failed += 1
+                                self._emit_event(
+                                    "route",
+                                    "route_submission_failed",
+                                    "Route 投递失败",
+                                    level="error",
+                                    route_id=route_id,
+                                    error=route_detail or route_reason or "Unknown Route delivery failure.",
+                                )
+                    else:
+                        self._recorded += 1
+                        self._emit_event(
+                            "route",
+                            "route_recorded_only",
+                            "语音已记录，当前没有启用的语音消息端",
+                            session_id=session_id,
+                            message_id=message_id,
+                            reason=delivery_reason,
+                        )
+                except asyncio.CancelledError:
+                    item["delivery_status"] = "cancelled"
+                    raise
+                except Exception as exc:
+                    self._delivery_failed += 1
+                    self._submit_failed += 1
+                    self._last_submit_error = f"{type(exc).__name__}: {exc}"[:500]
+                    item["delivery_status"] = "failed"
+                    item["submit_error"] = self._last_submit_error
+                    self._emit_event(
+                        "route",
+                        "route_submission_failed",
+                        "语音广播失败",
+                        level="error",
+                        error=self._last_submit_error,
+                    )
+            finally:
+                self._deliveries.task_done()
 
     def _read_config(self) -> MicrophoneConfig:
         if not self.state_path.is_file():

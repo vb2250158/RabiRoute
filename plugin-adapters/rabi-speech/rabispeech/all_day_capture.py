@@ -94,7 +94,7 @@ def register_all_day_capture(api, microphone, require_loopback):
             if lease["owned"] and microphone.config.session_id == session_id:
                 await microphone.stop(persist=False)
                 if lease["config"] is not None:
-                    microphone.config = lease["config"]
+                    microphone.config = replace(microphone.config, session_id=lease["config"].session_id)
             lease["id"] = ""
             if lease["deadline"] is not None:
                 lease["deadline"].cancel()
@@ -137,6 +137,19 @@ def register_all_day_capture(api, microphone, require_loopback):
             lease["id"] = session_id
             renew(session_id, 90)
         return {"ok": True, "audioSessionId": lease["audio_session"], "shared": not lease["owned"]}
+
+    @api.post("/v1/all-day/microphone/renew")
+    async def renew_microphone(request: Request, body: dict):
+        authorize(request)
+        async with gate:
+            state = microphone.snapshot()
+            if (not lease["id"] or lease["id"] != body.get("sessionId")
+                    or microphone.config.session_id != lease["audio_session"]
+                    or not state.get("running")
+                    or state.get("audio_stream", {}).get("source") == "remote"):
+                raise HTTPException(409, "Microphone recording lease is no longer active")
+            renew(lease["id"], 90)
+        return {"ok": True}
 
     @api.post("/v1/all-day/microphone/stop")
     async def stop(request: Request, body: dict):

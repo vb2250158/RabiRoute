@@ -89,7 +89,7 @@ POST /api/agent/send
 
 `sender.agentType` 和 `sender.sessionId` 记录是哪类 Agent 的哪个完整会话发起本次发送；两者都必须填写。`channel` 决定唯一发送渠道，`params` 决定该渠道的具体目标；Route 的默认 pipeline 不再替请求猜测或改写渠道。NapCat 群聊还必须保留 `replyToMessageId`：能引用时填写来源消息 ID，明确不引用时填写空字符串 `""`，完全省略会向 Agent 返回可行动错误。发送仍经过对应 `messageAdapterPolicies`。NapCat 使用 `messageAdapterPolicies.napcat`，企业微信使用 `messageAdapterPolicies.wecom`，本机语音使用 `messageAdapterPolicies.speech`。
 
-完成连接鉴权后即可使用已提供的接口，不再增加逐功能或逐人格授权。发送仍须遵守来源身份、目标、消息格式和幂等回执合同。详见[连接与接口使用](connection-access.md)。
+完成连接鉴权后即可使用已提供的接口，不再增加逐功能或逐角色授权。发送仍须遵守来源身份、目标、消息格式和幂等回执合同。详见[连接与接口使用](connection-access.md)。
 
 旧配置如果手写了 `allowedGroups` / `allowedUsers`、`outputMode`、`enabledPipelines` 或 `disabledPipelines`，这些具体过滤字段不再生效。发送关闭或消息类型不在 `supportedOutputs` 内时，会返回 `blocked`，不会调用对应消息端。
 
@@ -101,6 +101,6 @@ POST /api/agent/send
 
 来自 `speech` 消息端的 `voice_transcript` 会在 `AgentPacket` 中强制解析成 `voice_chat`，即使 Route 的通用 preset 仍是 QQ 或 Agent session。来源上下文包含 `characterTtsDialogue=true`，同时注入 `channel=speech` 和对应 `sessionId` 的发送模板；Agent 必须把与屏幕文本同义的语音短句 POST 到 `/api/agent/send`，不能只在 Codex 线程里显示文字。
 
-Outbox 会重新验证来源记录与 `messageAdapterPolicies.speech`，把 Route 的人格 ID、播放策略与原始 `sessionId` 传给本机 `POST /v1/audio/speech`。RabiSpeech 从 `data/roles/<RoleId>/voice/voice-profile.json` 读取 TTS 模型、声线、语言、语速和表达指令；旧 Route TTS 字段只在缺少人格配置时作为兼容回退。`speechAutoPlay=true` 表示生成结果进入主机级 FIFO；接口成功只代表请求或队列已受理，不代表扬声器已经播放完毕。
+Outbox 会重新验证来源记录与 `messageAdapterPolicies.speech`，把 Route 的角色 ID、播放策略与原始 `sessionId` 传给本机 `POST /v1/audio/speech`。RabiSpeech 从 `data/roles/<RoleId>/voice/voice-profile.json` 读取 TTS 模型、声线、语言、语速和表达指令；旧 Route TTS 字段只在缺少角色配置时作为兼容回退。`speechAutoPlay=true` 表示生成结果进入主机级 FIFO；接口成功只代表请求或队列已受理，不代表扬声器已经播放完毕。
 
 FenneNote/OumuQ 输出字段和 `/api/fennenote/*` 仅供旧运行配置迁移，不是新语音 Route 的实现入口，也不得重新引入云端 TTS。

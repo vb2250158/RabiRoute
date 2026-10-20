@@ -18,13 +18,13 @@ Agent 自己需要看的接口说明是 [Agent 需要关注的 Rabi 接口](rabi
 
 ## 消息包精简边界
 
-默认 `focused` 模式只保留一份相关必读清单（ID、摘要、GET 地址），省略空索引及重复召回摘要；Codex Hook 使用相同视图。计划、记忆、跨人格投递和远端任务的完整操作说明改为按需读取 `rabi-agent-interfaces.md` 对应章节，读取失败时停止该操作。包内仍保留权限、动态 Manager 身份、幂等、适用的强 ETag / If-Match 和写后回读要求。显式 `legacy` 配置继续保留旧索引视图，供已有配置回滚使用；唯一迁移入口是将 `contextInjection.mode` 改为 `focused`，待旧配置与回滚需求退出后再移除该兼容分支。
+默认 `focused` 模式只保留一份相关必读清单（ID、摘要、GET 地址），省略空索引及重复召回摘要；Codex Hook 使用相同视图。计划、记忆、跨角色投递和远端任务的完整操作说明改为按需读取 `rabi-agent-interfaces.md` 对应章节，读取失败时停止该操作。包内仍保留权限、动态 Manager 身份、幂等、适用的强 ETag / If-Match 和写后回读要求。显式 `legacy` 配置继续保留旧索引视图，供已有配置回滚使用；唯一迁移入口是将 `contextInjection.mode` 改为 `focused`，待旧配置与回滚需求退出后再移除该兼容分支。
 
 明确发送请求只在 `[回传参数]` 出现一次。`[发送要求]` 保留本次处理流程并引用该模板；发送目标、来源凭据和需求回执字段保持完整。最近消息中已完整显示的同 ID 消息，在紧邻对话或当前讨论片段中只引用 ID；消息被截断、无 ID 或未显示时仍保留片段文字，最近消息额度及引用链不变。
 
 只有本轮提到计划、秘书或委派，或收到计划反馈事件，才列出已配置秘书的任务名称、ID、工作目录和职责。远端任务教程还要求本轮具有远端执行意图且启用了远端消息端。这些条件只控制提示，不创建任务或授予权限；未命中时仍可先读接口文档按需使用能力。
 
-通用包不内置具体人名或人格的陪伴/心跳策略；这些行为由所绑定的人格文件和本次模板定义。身份事实、候选/冲突边界、明确发送目标、附件及引用证据继续保留。
+通用包不内置具体人名或角色的陪伴/心跳策略；这些行为由所绑定的角色文件和本次模板定义。身份事实、候选/冲突边界、明确发送目标、附件及引用证据继续保留。
 
 ## 统一触发管线
 
@@ -43,17 +43,17 @@ Manager 或 UI 预览
 
 入口适配器只提供角色、消息或工具信号、session/turn/event 身份和来源；它们不决定关键词得分、计划归档、记忆活跃窗口或 `viewedAt`。入口默认使用聚焦上下文，推理期触发只注入本轮新增的相关必读项，预览则禁止产生知识副作用。
 
-持久记忆整理 Agent 的一次投递有 Manager 记录的固定候选 ID 集合和明确 `runId`。初始 AgentPacket 与该专用会话的 Hook 召回只列出这批候选近期记忆，不额外列出角色的计划、技能、沉淀记忆或其他近期记忆；继续沿用同一专用会话时，也不能把旧批次的必读项视为新批次。Hook 从 Manager 持有的 Route 专用会话绑定核对适配器、人格及已投递且仍为 `requested` 的批次；没有明确且核验通过的 `runId` 时不进行宽范围召回。普通会话的相关召回和 Rabi API 可用性不变；计划绑定仅用于计划文件变更归属，不是调用 API 的授权前置条件。整理结果仍由处理 Agent 按结果接口合同提交，原始近期记忆保留并标记沉淀状态。
+持久记忆整理 Agent 的一次投递有 Manager 记录的固定候选 ID 集合和明确 `runId`。初始 AgentPacket 与该专用会话的 Hook 召回只列出这批候选近期记忆，不额外列出角色的计划、技能、沉淀记忆或其他近期记忆；继续沿用同一专用会话时，也不能把旧批次的必读项视为新批次。Hook 从 Manager 持有的 Route 专用会话绑定核对适配器、角色及已投递且仍为 `requested` 的批次；没有明确且核验通过的 `runId` 时不进行宽范围召回。普通会话的相关召回和 Rabi API 可用性不变；计划绑定仅用于计划文件变更归属，不是调用 API 的授权前置条件。整理结果仍由处理 Agent 按结果接口合同提交，原始近期记忆保留并标记沉淀状态。
 
 ## 注入原则
 
 默认注入只放轻量信息：
 
-- 当前事件的必要信息；跨人格消息还会带来源/目标人格、两端 Route、会话关联、被回复消息和当前跳数。
+- 当前事件的必要信息；跨角色消息还会带来源/目标角色、两端 Route、会话关联、被回复消息和当前跳数。
 - QQ 消息里的 CQ reply / at 代码解析；引用链会按消息记录递归展开，at 映射集中显示。
-- 当前人格、逻辑消息端和会话下，由 `recentMessageLimits` 允许的最近双向消息；当前事件自身不会再在窗口中重复。`heartbeat` 与独立 `plan_feedback` 事件是固定例外，不读取或注入历史消息。
-- 角色和路由路径，以及精简人格核心指令。
-- Agent 需要关注的接口文档链接，以及查询可联系人格和显式跨人格投递的简短提示。
+- 当前角色、逻辑消息端和会话下，由 `recentMessageLimits` 允许的最近双向消息；当前事件自身不会再在窗口中重复。`heartbeat` 与独立 `plan_feedback` 事件是固定例外，不读取或注入历史消息。
+- 角色和路由路径，以及精简角色核心指令。
+- Agent 需要关注的接口文档链接，以及查询可联系角色和显式跨角色投递的简短提示。
 - 当前输入高相关的少量计划、记忆和技能摘要，默认最多 3 项。
 - 全量计划、记忆和技能的按需查询路径。
 
@@ -70,17 +70,17 @@ Agent 需要更多内容时，应根据上下文里的路径、ID 或接口文�
 
 ## 身份关系上下文
 
-群聊里的显示名、群主/管理员标记、当前 Route、当前工作目录和关键词相似度都不能单独说明“谁是谁”或“这是谁负责的项目”。人格可维护独立的身份关系记忆；消息投递时，RabiRoute 只按 `platform + endpointIdentityNamespace + senderStableId` 精确查找当前账号。Route 配置 ID 只记录投递来源，不参与身份键；NapCat 有机器人 QQ 号时优先用它作为消息端命名空间，实例名只在缺少该标识时回退使用。企业微信、飞书和微信只有在消息记录带有稳定的消息端命名空间时才查询；缺少该标识时宁可不匹配，也不把不同账号下的同名 ID 合并。因此同一个账号换 Route 不会被拆成不同的人，也不会把两个消息端误当成一个账号。
+群聊里的显示名、群主/管理员标记、当前 Route、当前工作目录和关键词相似度都不能单独说明“谁是谁”或“这是谁负责的项目”。角色可维护独立的身份关系记忆；消息投递时，RabiRoute 只按 `platform + endpointIdentityNamespace + senderStableId` 精确查找当前账号。Route 配置 ID 只记录投递来源，不参与身份键；NapCat 有机器人 QQ 号时优先用它作为消息端命名空间，实例名只在缺少该标识时回退使用。企业微信、飞书和微信只有在消息记录带有稳定的消息端命名空间时才查询；缺少该标识时宁可不匹配，也不把不同账号下的同名 ID 合并。因此同一个账号换 Route 不会被拆成不同的人，也不会把两个消息端误当成一个账号。
 
-第一次命中一个稳定但陌生的账号时，系统会自动创建一个独立的“待认识”候选参与者；同一稳定账号以后复用这条候选。显示名只作为候选别名。处理 Agent 发现明确自述、新称呼或可核对的关系时，可以通过候选观察接口追加最小证据；没有新线索时不重复写入。`[身份关系]` 只注入当前账号、已确认参与者、候选参与者、当前群或项目范围内的关系卡，以及尚未解决的冲突。追加事件在多台电脑同步后若形成并发分支，会明确标为冲突；冲突记录不能自动确认身份，需由人格提交一次完整修正来收敛。它不复制聊天正文，也不进入计划/近期记忆的关键词召回和回调流程。候选映射只能用于核对；不能据此称呼真人、授予权限、推断项目归属，或把讨论变成当前项目的计划。
+第一次命中一个稳定但陌生的账号时，系统会自动创建一个独立的“待认识”候选参与者；同一稳定账号以后复用这条候选。显示名只作为候选别名。处理 Agent 发现明确自述、新称呼或可核对的关系时，可以通过候选观察接口追加最小证据；没有新线索时不重复写入。`[身份关系]` 只注入当前账号、已确认参与者、候选参与者、当前群或项目范围内的关系卡，以及尚未解决的冲突。追加事件在多台电脑同步后若形成并发分支，会明确标为冲突；冲突记录不能自动确认身份，需由角色提交一次完整修正来收敛。它不复制聊天正文，也不进入计划/近期记忆的关键词召回和回调流程。候选映射只能用于核对；不能据此称呼真人、授予权限、推断项目归属，或把讨论变成当前项目的计划。
 
 身份关系只回答“谁在说话、已有何种已确认或候选关系”。随后会生成一条 `[情景记录]`：它只读取已经适用于当前会话的项目关系卡，把项目列为讨论线索；不会从 Route、当前工作目录、昵称或关键词推断项目。情景记录明确允许 Agent 自然参与有价值的讨论、澄清问题或提出建议，但默认禁止据此查询、创建、更新或转交项目计划、任务和长期项目记忆。只有另外拿到明确的项目范围、请求和授权，处理端才可以进入项目管理或执行流程。
 
-当这份 AgentPacket 进入实际投递链路后，RabiRoute 会在当前人格下保存一份不含聊天正文的情景记录。记录只保留会话键、消息 ID、路由、身份/项目线索、未解决证据和“可参与 / 不可管理”的判断；人格页可回看最近记录，供人工发现误判。它不改变发送结果，也不自动写计划、任务或记忆；每个人格最多保留最近 200 条。情景记录是可从原始会话和关系卡重建的派生物，不参加多电脑人格同步；原始聊天记录仍以统一会话记录为准。
+当这份 AgentPacket 进入实际投递链路后，RabiRoute 会在当前角色下保存一份不含聊天正文的情景记录。记录只保留会话键、消息 ID、路由、身份/项目线索、未解决证据和“可参与 / 不可管理”的判断；角色页可回看最近记录，供人工发现误判。它不改变发送结果，也不自动写计划、任务或记忆；每个角色最多保留最近 200 条。情景记录是可从原始会话和关系卡重建的派生物，不参加多电脑角色同步；原始聊天记录仍以统一会话记录为准。
 
 ## 统一双向会话账本
 
-最近消息不再从 `group-messages.jsonl`、`voice-transcripts.jsonl`、`wecom-messages.jsonl` 等分散文件各自拼一份单向摘要。它们仍保留为协议审计和兼容证据；Agent 自动上下文的真源是人格目录下的统一账本：
+最近消息不再从 `group-messages.jsonl`、`voice-transcripts.jsonl`、`wecom-messages.jsonl` 等分散文件各自拼一份单向摘要。它们仍保留为协议审计和兼容证据；Agent 自动上下文的真源是角色目录下的统一账本：
 
 ```text
 data/roles/<RoleId>/conversation/current.jsonl
@@ -92,13 +92,13 @@ data/roles/<RoleId>/conversation/archive/index.json
 
 自动注入有三个同时必须满足的范围：
 
-1. 当前绑定人格。
+1. 当前绑定角色。
 2. 当前逻辑消息端，例如 `napcat`、`speech`、`wecom` 或 `remoteAgent`。
 3. 当前会话，例如 QQ 群/私聊对话、WeCom chat 或语音 `sessionId`。
 
 入站和出站合计占用同一条数额度。`personaConfig.json.recentMessageLimits` 对普通消息端分别配置 `0–200`，未设置时默认 `12`；`0` 只关闭该端的自动注入，不停止记录。`heartbeat` 始终按 `0` 处理，即使旧配置保留了非零值也不会读取账本或生成 `[最近消息]` 段。独立的 `plan_feedback` 计划审批事件同样固定为 `0`，并且不写统一会话账本；计划审批 JSONL 本身就是该事件的审计真源。这里没有另一个“只保留 360 条”之类的 `current` 条数上限。
 
-人格可在 `personaConfig.json` 选择注入策略：
+角色可在 `personaConfig.json` 选择注入策略：
 
 ```json
 {
@@ -110,7 +110,7 @@ data/roles/<RoleId>/conversation/archive/index.json
 }
 ```
 
-`focused` 是安全默认值：只注入当前会话窗口、相关摘要和精简人格工作集；`relevantKnowledgeLimit` 限制高相关知识项为 `1–12`，`personaMaxChars` 限制 Codex Hook 人格摘录为 `800–6000` 字符。需要临时回滚旧行为时可设为 `"mode": "legacy"`，恢复全量活动索引、旧 5/12 项召回上限和 3200 字符人格摘录。未包含该字段的旧配置可直接读取，不要求迁移私有值。
+`focused` 是安全默认值：只注入当前会话窗口、相关摘要和精简角色工作集；`relevantKnowledgeLimit` 限制高相关知识项为 `1–12`，`personaMaxChars` 限制 Codex Hook 角色摘录为 `800–6000` 字符。需要临时回滚旧行为时可设为 `"mode": "legacy"`，恢复全量活动索引、旧 5/12 项召回上限和 3200 字符角色摘录。未包含该字段的旧配置可直接读取，不要求迁移私有值。
 
 归档按记录时间戳处理，不是日期一到就删除：归档检查发现任意记录已超过 72 小时时，会把当前文件连续前缀中已超过 24 小时的完整记录收进 `<firstSequence>~<lastSequence>.jsonl`。自动上下文只读 `current.jsonl`；归档不丢失，Agent 可根据注入的路径显式查证。
 
@@ -211,7 +211,7 @@ Agent 需要关注的 Rabi 接口文档链接
 相关性打分覆盖当前仍有操作价值的内容：
 
 - 近期记忆，包括默认已显示的活跃近期记忆，以及不默认显示但尚未沉淀的近期记忆。
-- `archiveStatus=未归档` 的计划；状态配置的 `views` 包含 current 时进入默认当前计划索引，其余计划按各自配置的视图参与筛选。状态名称与顺序都来自所属人格的 `personaConfig.json.planWorkflow`。
+- `archiveStatus=未归档` 的计划；状态配置的 `views` 包含 current 时进入默认当前计划索引，其余计划按各自配置的视图参与筛选。状态名称与顺序都来自所属角色的 `personaConfig.json.planWorkflow`。
 - 沉淀记忆，只参与标题和 `keywords` 打分，不默认注入全文。
 - 角色技能，只参与 `id`、标题、摘要和 `keywords` 打分，不默认注入正文。
 
@@ -240,7 +240,9 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 
 ## 自动包装格式
 
-最终投递给 Agent 的消息由 RabiRoute 自动包装生成。首段固定为 `[消息源]`，下一段固定为 `[消息内容]`。事件信息、最近消息、引用解析和角色路径归入消息内容之后的 `[相关上下文]`；不注入通用协作要求。空字段、未启用能力和没有人格绑定的段落会被省略或替换。
+投递头部的处理端和消息端统一将 `grokBot` 显示为 `GrokBot`，计划中的来源 Agent 同样处理。结构化标识、完整会话 ID 和消息正文保持原值。
+
+最终投递给 Agent 的消息由 RabiRoute 自动包装生成。首段固定为 `[消息源]`，下一段固定为 `[消息内容]`。事件信息、最近消息、引用解析和角色路径归入消息内容之后的 `[相关上下文]`；不注入通用协作要求。空字段、未启用能力和没有角色绑定的段落会被省略或替换。
 
 四种来源分别使用不同身份字段：消息端必须提供 `messageAdapter`、`conversationType`、`conversationId`、`messageId`，以及 `senderName` 或 `senderId`；Agent 必须提供实际 `agentAdapter`、会话名称和完整会话 ID；计划必须提供计划名称和计划 ID；系统必须提供事件类型、名称和 ID，必要时可补充触发方类型、名称和 ID。
 
@@ -284,7 +286,7 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 [记忆与计划]
 操作说明：<agentInterfaceDocPath>
 按需读取：/api/roles/<roleId>/plans、/memory、/skills
-写入、跨人格投递或远端任务前读取对应章节；无法读取时停止该操作。
+写入、跨角色投递或远端任务前读取对应章节；无法读取时停止该操作。
 保留 Action Gate、动态 Manager 身份、幂等、适用的强 ETag / If-Match 和写后回读要求。
 
 [处理前上下文确认]
@@ -304,7 +306,7 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 [回传参数]
 明确发送 API：<sendApiUrl>
 发送请求模板：<sendRequestJson>
-来源上下文（仅供审计和跨人格联系，不可作为发送参数）：<replyContextJson>
+来源上下文（仅供审计和跨角色联系，不可作为发送参数）：<replyContextJson>
 
 [发送要求]
 <按 outputAdapter、replyToSource 和来源消息生成的回传说明>
@@ -318,7 +320,7 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 
 `heartbeat` 和 `plan_feedback` 包都会省略整个 `[最近消息]` 段，并把模板变量 `{recentMessageLimit}` 设为 `0`、`{recentMessages}` 设为空字符串，避免自定义模板重新携带历史正文。心跳日志和统一会话账本仍照常记录；计划审批则只保留专用 feedback 审计、AgentPacket 和投递日志，不重复写角色面板时间线或统一会话账本。
 
-处理端写出的 Codex 最终文本只属于当前任务记录，不代表来源用户、主人格或另一个 Agent 已经收到。需要向消息端发送时，处理端必须从 `sendRequestJson` 开始，填写 `sender.agentType` 和当前完整 `sender.sessionId`，再明确提交 `routeId`、`channel`、渠道专用 `params` 和 `payload`，并取得该渠道回执；不得把 `replyContextJson` 原样提交，也不得根据来源自动猜测目标。NapCat 群聊引用消息含图片时，必须按原图顺序填写 `params.replyImageDescriptions`，逐张写明实际内容和图片表达的意思；不能查看、缺少描述或数量不一致时不得发送。需要交给主人格、秘书或计划 Agent 时，必须调用 Manager 线程桥并携带发送任务自己的完整 ID 和 Agent 类型。只生成回复草稿、审批问题或阶段摘要而没有进入上述出口，不能标记为已回复或已通知。
+处理端写出的 Codex 最终文本只属于当前任务记录，不代表来源用户、主角色或另一个 Agent 已经收到。需要向消息端发送时，处理端必须从 `sendRequestJson` 开始，填写 `sender.agentType` 和当前完整 `sender.sessionId`，再明确提交 `routeId`、`channel`、渠道专用 `params` 和 `payload`，并取得该渠道回执；不得把 `replyContextJson` 原样提交，也不得根据来源自动猜测目标。NapCat 群聊引用消息含图片时，必须按原图顺序填写 `params.replyImageDescriptions`，逐张写明实际内容和图片表达的意思；不能查看、缺少描述或数量不一致时不得发送。需要交给主角色、秘书或计划 Agent 时，必须调用 Manager 线程桥并携带发送任务自己的完整 ID 和 Agent 类型。只生成回复草稿、审批问题或阶段摘要而没有进入上述出口，不能标记为已回复或已通知。
 
 `sendRequestJson` 的 `payload.type` 是待填占位而不是固定的 `text`：只要存在已实际核对、能降低理解成本的图片、截图、效果图、流程图或文档页面，就应提交 `type=image` 并在同一 `payload.text` 里写清图片来源类型与关注点；纯文字是没有可用图片时的退路。NapCat 模板额外给出授权目录内的 `payload.path` 占位，本地图片仍只能取自路由 `allowedFileRoots`，越界即拒发。图片与说明必须落在同一条消息；配图不改变引用、`replyImageDescriptions`、发送回执或 QA 证据边界。
 
@@ -326,13 +328,13 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 
 需要把 Markdown 排版成图片时，NapCat 可直接填 `payload: {"type":"markdown","text":"# 标题\n\n**正文**"}`；混排时改在 `segments` 中加入 `{"type":"markdown","text":"# 标题\n\n**正文**"}`。Markdown 段由 Rabi 本机渲染成 PNG 后占据原顺序位置；原始 HTML、外部图片与脚本不会进入渲染页面。
 
-跨人格能力凭据只证明“当前 AgentPacket 所属 Route 与人格”，不会出现在 `GET /api/personas`、目标 timeline 或投递回执中。`sourceRouteId` 不能单独证明发送身份。目标人格收到跨人格消息后，普通回复不会自动返回来源；需要回复时必须显式反向 POST，并使用收到的会话、引用和跳数字段。
+跨角色能力凭据只证明“当前 AgentPacket 所属 Route 与角色”，不会出现在 `GET /api/personas`、目标 timeline 或投递回执中。`sourceRouteId` 不能单独证明发送身份。目标角色收到跨角色消息后，普通回复不会自动返回来源；需要回复时必须显式反向 POST，并使用收到的会话、引用和跳数字段。
 
 `[消息代码解析]` 只在当前消息或引用链里存在可解析 CQ 码时出现。RabiRoute 会从本 route 的群聊/私聊消息记录中按 `messageId` 追溯 `CQ:reply`；AgentPacket 也会把成功外发的 Outbox 记录作为本地兜底。NapCat 实时入口发现引用 ID 尚未落盘时，会在路由投递前调用 OneBot `get_msg`，把查到的群聊/私聊消息标记为 `lookupSource=onebot_get_msg` 后缓存，再继续追溯下一层引用。接口失败只记录 warning，不阻塞当前消息。展开持续到没有引用、仍无法解析、出现循环或达到安全上限为止。每条引用摘要最多显示 200 字，超过后以 `……(更多信息调用接口查看)` 截断；展开过程中遇到的 `CQ:at` 会去重后集中显示为 `[CQ:at,qq=xxxx] : 群名片或昵称`。本段不额外显示当前消息 ID，也不重复输出纯文本正文。
 
-当 `voice_transcript` 明确来自 RabiPC 的 `speech` 消息端或 RabiSpeech 时，`AgentPacket` 会把本轮输出收敛为 `voice_chat`，在来源上下文写入 `characterTtsDialogue=true`，并生成 `channel=speech`、带当前 `sessionId` 的发送模板。`[发送要求]` 会明确要求 Agent 进入 `character-tts-dialogue` 状态，把与屏幕回复同义的短句 POST 到明确发送 API；Outbox 再按当前人格 `voice/voice-profile.json` 的声线、模型、语言、语速、`sessionId` 和自动播放设置进入 RabiSpeech 主机级 FIFO。同一 `sessionId` 的 ASR 与 TTS 会作为双向上下文共用 `speech` 额度。QQ、角色面板、普通文字和其它 `voice_transcript` 来源不受这个自动切换影响。
+当 `voice_transcript` 明确来自 RabiPC 的 `speech` 消息端或 RabiSpeech 时，`AgentPacket` 会把本轮输出收敛为 `voice_chat`，在来源上下文写入 `characterTtsDialogue=true`，并生成 `channel=speech`、带当前 `sessionId` 的发送模板。`[发送要求]` 会明确要求 Agent 进入 `character-tts-dialogue` 状态，把与屏幕回复同义的短句 POST 到明确发送 API；Outbox 再按当前角色 `voice/voice-profile.json` 的声线、模型、语言、语速、`sessionId` 和自动播放设置进入 RabiSpeech 主机级 FIFO。同一 `sessionId` 的 ASR 与 TTS 会作为双向上下文共用 `speech` 额度。QQ、角色面板、普通文字和其它 `voice_transcript` 来源不受这个自动切换影响。
 
-语音是唯一有这类“先记录、再决定是否唤醒”的专用策略之一：Route `speechPushMode=hot` 时每段 ASR 立即投递；`keyword` 时只在命中人格 `speechTriggerKeywords` 时投递，其他转写仍在账本中。空关键词不回退 `hot`。普通已匹配消息端则直接进入 Desktop `steer/start`；Heartbeat 的忙碌跳过由独立开关控制。
+语音是唯一有这类“先记录、再决定是否唤醒”的专用策略之一：Route `speechPushMode=hot` 时每段 ASR 立即投递；`keyword` 时只在命中角色 `speechTriggerKeywords` 时投递，其他转写仍在账本中。空关键词不回退 `hot`。普通已匹配消息端则直接进入 Desktop `steer/start`；Heartbeat 的忙碌跳过由独立开关控制。
 
 语音处理主机、声纹 ID 和语音账号兼容数据文件路径只会出现在语音转写记录中。QQ、角色面板及其他非音频事件不会显示这些语音专属字段。
 
@@ -371,7 +373,7 @@ Rabi，帮我看看计划和记忆机制怎么设计。
 [记忆与计划]
 操作说明：docs/rabi-agent-interfaces.md
 按需读取：/api/roles/Rabi/plans、/api/roles/Rabi/memory、/api/roles/Rabi/skills
-涉及写入、跨人格投递或远端任务前读取对应章节；无法读取时停止该操作。
+涉及写入、跨角色投递或远端任务前读取对应章节；无法读取时停止该操作。
 保留权限、动态 Manager 身份、幂等、适用的强 ETag / If-Match 和写后回读要求。
 
 [处理前上下文确认]
@@ -387,7 +389,7 @@ Rabi，帮我看看计划和记忆机制怎么设计。
 
 [回传参数]
 明确发送 API：`<managerBaseUrl>/api/agent/send`；安装版从 Host `status --json` 发现本代地址，源码模式由 Manager 标准输出提供。
-发送请求模板：{"deliveryId":"<稳定发送 ID>","sender":{"agentType":"primary_persona","sessionId":"<当前主人格完整会话 ID>"},"routeId":"default-main","channel":"napcat","params":{"target":"group","groupId":"example-group-id","replyToMessageId":"<能引用时填源消息 ID；不引用时填空字符串>","replyImageDescriptions":[]},"payload":{"type":"text","text":"<发送正文>"}}
+发送请求模板：{"deliveryId":"<稳定发送 ID>","sender":{"agentType":"primary_persona","sessionId":"<当前主角色完整会话 ID>"},"routeId":"default-main","channel":"napcat","params":{"target":"group","groupId":"example-group-id","replyToMessageId":"<能引用时填源消息 ID；不引用时填空字符串>","replyImageDescriptions":[]},"payload":{"type":"text","text":"<发送正文>"}}
 所有发送方填写实际 Agent 角色与当前完整会话 ID，按统一投递合同发送。
 来源上下文（仅供审计）：{"runtimeRouteId":"default-main","routeProfileId":"default-main","routeKind":"group_message","targetType":"group","messageId":"example-message-id","groupId":"example-group-id"}
 

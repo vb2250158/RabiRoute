@@ -41,46 +41,59 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
     val view = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
-    // Every preview state occupies the same bounds, so selecting an event never moves the ruler.
+    // Live audio uses compact bounds; review and video reserve room for playback controls.
     private val preview = FrameLayout(context)
+    private var videoPreview = false
+    private val captureCard = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        background = RabiMobileUi.panel(context,RabiMobileUi.surface,Color.TRANSPARENT,14)
+        clipToOutline = true
+    }
     private val previewStage = object : FrameLayout(context) {
         init { contentDescription = "记录预览" }
         override fun onMeasure(widthSpec: Int, heightSpec: Int) {
-            val preferredHeight = View.MeasureSpec.getSize(widthSpec)*9/16
+            val preferredHeight = if(videoPreview || !live) View.MeasureSpec.getSize(widthSpec)*9/16 else dp(72)
             val height = if(View.MeasureSpec.getMode(heightSpec) == View.MeasureSpec.UNSPECIFIED) preferredHeight
                 else minOf(preferredHeight, View.MeasureSpec.getSize(heightSpec))
             super.onMeasure(widthSpec,View.MeasureSpec.makeMeasureSpec(height,View.MeasureSpec.EXACTLY))
         }
     }
     private var controlsVisible = false
-    private var header: View? = null
     private val liveTap = View(context).apply {
         contentDescription = "显示或隐藏记录控制"; setOnClickListener { showControls(!controlsVisible) }
     }
     fun attachHeader(value: LinearLayout) {
-        value.removeViewAt(0)
-        value.addView(position,0,LinearLayout.LayoutParams(0,-1,1f))
-        fun style(v: View) {
-            if(v is TextView) { v.setTextColor(Color.WHITE); v.setShadowLayer(dp(2).toFloat(),0f,0f,Color.BLACK) }
-            if(v is android.view.ViewGroup) for(i in 0 until v.childCount) style(v.getChildAt(i))
-        }
-        style(value)
-        header = value; previewStage.addView(value,FrameLayout.LayoutParams(-1,dp(52),Gravity.TOP)); showControls(controlsVisible)
+        captureCard.addView(value,0,LinearLayout.LayoutParams(-1,-2))
     }
     private fun showControls(shown: Boolean) {
         controlsVisible = shown
-        ruler.visibility = View.VISIBLE
-        header?.visibility = if(shown) View.VISIBLE else View.GONE
-        position.visibility = if(shown) View.VISIBLE else View.GONE
         if(player?.state()?.controlsVisible != shown) player?.setControls(shown)
     }
-    private val position = label("实时", 12f)
+    private fun setVideoPreview(value: Boolean) {
+        if(videoPreview == value) return
+        videoPreview = value; previewStage.requestLayout()
+    }
+    private val position = label("--:--:--",16f).apply {
+        typeface = android.graphics.Typeface.DEFAULT_BOLD; minimumHeight = dp(32)
+        setTextColor(RabiMobileUi.text); setPadding(0,dp(4),0,dp(4))
+    }
     private val dayButton = RabiMobileUi.compactAction(context, "选择日期") {}
     private val ruler = RecordingTimeRuler(context)
     private val reviewColumn = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
     private val eventColumn = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-    private val listStatus = label("", 12f)
-    private val scroll = ListView(context).apply { divider = null; dividerHeight = dp(10); setPadding(dp(12),0,dp(12),dp(12)); clipToPadding = false }
+    private val listStatus = label("",12f).apply {
+        visibility = View.GONE
+        addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun afterTextChanged(s: android.text.Editable?) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { visibility = if(s.isNullOrBlank()) View.GONE else View.VISIBLE }
+        })
+    }
+    private val scroll = ListView(context).apply {
+        divider = android.graphics.drawable.InsetDrawable(android.graphics.drawable.ColorDrawable(RabiMobileUi.border),dp(16),0,dp(16),0)
+        dividerHeight = 1; clipToPadding = false
+        clipToOutline = true
+    }
     private var displayedItems = emptyList<Item>()
     private var sourceFilter = 0
     private var typeFilter = 0
@@ -122,6 +135,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
     private var livePlayer: ExoPlayer? = null
     private var liveUrl = ""
     private var liveWaveform: AudioWaveformView? = null
+    private var idleMessage = ""
     private val images = android.util.LruCache<String, Bitmap>(24)
     private val cards = mutableMapOf<String, View>()
     private val thumbnailWorker = java.util.concurrent.ThreadPoolExecutor(1,1,0L,java.util.concurrent.TimeUnit.MILLISECONDS,
@@ -133,32 +147,58 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
         previewStage.addView(preview,FrameLayout.LayoutParams(-1,-1))
         previewStage.addView(liveTap,FrameLayout.LayoutParams(-1,-1))
         ruler.visibility = View.VISIBLE
-        position.gravity = Gravity.CENTER_VERTICAL
+        position.gravity = Gravity.CENTER
         position.maxLines = 2
-        position.visibility = View.GONE
-        reviewColumn.addView(previewStage,LinearLayout.LayoutParams(-1,-2))
-        reviewColumn.addView(ruler,LinearLayout.LayoutParams(-1,dp(64)))
+        position.setTextColor(RabiMobileUi.text)
+        captureCard.addView(previewStage,LinearLayout.LayoutParams(-1,-2))
+        captureCard.addView(position,LinearLayout.LayoutParams(-1,-2))
+        val timeline = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12),0,dp(10),0)
+            setBackgroundColor(RabiMobileUi.inputSurface)
+            addView(ruler,LinearLayout.LayoutParams(0,dp(76),1f))
+            addView(LinearLayout(context).apply {
+                gravity = Gravity.CENTER; setPadding(dp(8),0,dp(8),0)
+                isFocusable = true; contentDescription = "返回实时"
+                background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(RabiMobileUi.accentBorder),
+                    android.graphics.drawable.InsetDrawable(RabiMobileUi.panel(context,RabiMobileUi.accentSurface,Color.TRANSPARENT,18),0,dp(6),0,dp(6)),null)
+                addView(RabiMobileUi.icon(context,com.rabi.link.R.drawable.ic_ui_live,RabiMobileUi.secondary),LinearLayout.LayoutParams(dp(18),dp(18)))
+                addView(TextView(context).apply {
+                    text = "返回实时"; textSize = 14f; letterSpacing = 0f; setTextColor(RabiMobileUi.secondary)
+                    importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                },LinearLayout.LayoutParams(-2,-2).apply { marginStart = dp(4) })
+                accessibilityDelegate = object : View.AccessibilityDelegate() {
+                    override fun onInitializeAccessibilityNodeInfo(host: View, info: android.view.accessibility.AccessibilityNodeInfo) {
+                        super.onInitializeAccessibilityNodeInfo(host,info); info.className = Button::class.java.name
+                    }
+                }
+                setOnClickListener { enterLive() }
+            },LinearLayout.LayoutParams(dp(96),dp(48)).apply { marginStart = dp(6) })
+        }
+        captureCard.addView(timeline)
+        reviewColumn.addView(captureCard)
         val navigation = LinearLayout(context).apply {
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(12), 0, dp(12), 0)
         }
-        dayButton.textSize = 13f
-        dayButton.setBackgroundColor(android.graphics.Color.TRANSPARENT)
-        navigation.addView(dayButton, LinearLayout.LayoutParams(-2,dp(48)))
-        navigation.addView(RabiMobileUi.compactAction(context, "‹") { adjacent(true) }.apply { contentDescription = "上一个事件" }, LinearLayout.LayoutParams(dp(48),dp(48)))
-        navigation.addView(RabiMobileUi.compactAction(context, "›") { adjacent(false) }.apply { contentDescription = "下一个事件" }, LinearLayout.LayoutParams(dp(48),dp(48)))
-        navigation.addView(RabiMobileUi.compactAction(context, "回到实时") { enterLive() },
-            LinearLayout.LayoutParams(-2, dp(48)).apply { marginStart = dp(4) })
-        navigation.addView(RabiMobileUi.compactAction(context, "刷新") { load() }.apply {
-            contentDescription = "刷新记录和转写"
-        }, LinearLayout.LayoutParams(-2, dp(48)).apply { marginStart = dp(4) })
-        for(i in 1 until navigation.childCount) (navigation.getChildAt(i) as? TextView)?.apply {
-            textSize = 13f; setBackgroundColor(android.graphics.Color.TRANSPARENT)
+        dayButton.textSize = if(context.resources.configuration.screenWidthDp < 380) 15f else 16f
+        dayButton.gravity = Gravity.START or Gravity.CENTER_VERTICAL
+        val calendarIcon = RabiMobileUi.icon(context, com.rabi.link.R.drawable.ic_ui_calendar).drawable.apply { setBounds(0,0,dp(24),dp(24)) }
+        dayButton.setCompoundDrawables(calendarIcon,null,null,null)
+        dayButton.compoundDrawablePadding = dp(6)
+        navigation.addView(dayButton,LinearLayout.LayoutParams(0,dp(48),1f))
+        navigation.addView(RabiMobileUi.iconAction(context,com.rabi.link.R.drawable.ic_ui_left,"上一个事件") { adjacent(true) },LinearLayout.LayoutParams(dp(64),dp(48)))
+        navigation.addView(RabiMobileUi.iconAction(context,com.rabi.link.R.drawable.ic_ui_chevron,"下一个事件") { adjacent(false) },LinearLayout.LayoutParams(dp(64),dp(48)))
+        navigation.addView(View(context),LinearLayout.LayoutParams(0,0,0.3f))
+        navigation.addView(RabiMobileUi.iconAction(context,com.rabi.link.R.drawable.ic_ui_refresh,"刷新记录和转写") { load() },LinearLayout.LayoutParams(dp(48),dp(48)))
+        val controls = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(8),dp(4),dp(8),dp(8))
+            background = RabiMobileUi.panel(context,RabiMobileUi.surface,Color.TRANSPARENT,14)
         }
-        eventColumn.addView(HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false; addView(navigation) })
-        eventColumn.addView(Spinner(context).apply {
-            adapter = ArrayAdapter(context,android.R.layout.simple_spinner_dropdown_item,listOf("全部本机记录（含仅本地和录像）","电脑归档录音"))
-            contentDescription = "切换本机记录与电脑归档"
+        controls.addView(navigation)
+        val filters = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
+        val scope = Spinner(context).apply {
+            adapter = filterAdapter(listOf("本机记录","电脑归档"))
+            contentDescription = "记录范围：本机记录或电脑归档"
             setSelection(if(archiveView) 1 else 0)
             onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
                 override fun onNothingSelected(parent: AdapterView<*>?) = Unit
@@ -171,38 +211,42 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
                     renderRows(); if(loading) reloadPending = true else load()
                 }
             }
-        },LinearLayout.LayoutParams(-1,dp(48)))
-        val filters = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
         }
-        filters.addView(Spinner(context).apply {
-            adapter = ArrayAdapter(context,android.R.layout.simple_spinner_dropdown_item,listOf("全部类型","录音事件","录像"))
+        val types = Spinner(context).apply {
+            adapter = filterAdapter(listOf("全部类型","录音事件","录像"))
             contentDescription = "筛选事件类型"
             onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
                 override fun onNothingSelected(parent: AdapterView<*>?) = Unit
                 override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) { if(typeFilter != position) { typeFilter = position; renderRows(); load() } }
             }
-        },LinearLayout.LayoutParams(0,dp(48),1f))
-        filters.addView(Spinner(context).apply {
-            adapter = ArrayAdapter(context,android.R.layout.simple_spinner_dropdown_item,listOf("全部来源","手机","眼镜"))
+        }
+        val sources = Spinner(context).apply {
+            adapter = filterAdapter(listOf("全部来源","手机","眼镜"))
             contentDescription = "筛选记录来源"
             onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
                 override fun onNothingSelected(parent: AdapterView<*>?) = Unit
                 override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) { if(sourceFilter != position) { sourceFilter = position; renderRows(); load() } }
             }
-        },LinearLayout.LayoutParams(0,dp(48),1f))
-        eventColumn.addView(filters, LinearLayout.LayoutParams(-1,dp(48)))
+        }
+        listOf(scope,types,sources).forEachIndexed { index, spinner ->
+            filters.addView(filterControl(spinner),LinearLayout.LayoutParams(0,dp(48),1f).apply { if(index > 0) marginStart = dp(6) })
+        }
+        controls.addView(filters)
+        eventColumn.addView(controls,LinearLayout.LayoutParams(-1,-2).apply { bottomMargin = dp(8) })
         eventColumn.addView(listStatus)
         eventColumn.addView(archiveNext)
         listStatus.setOnClickListener { listDriving = true; live = false; if(archiveAccess != null) load() else load(true) }
         scroll.adapter = rowAdapter
-        eventColumn.addView(scroll, LinearLayout.LayoutParams(-1,0,1f))
-        val wide = context.resources.configuration.screenWidthDp >= 700
-        if(wide) previewStage.layoutParams = LinearLayout.LayoutParams(-1,0,1f)
+        eventColumn.addView(scroll,LinearLayout.LayoutParams(-1,0,1f))
+        val wide = context.resources.configuration.screenWidthDp >= 600 || context.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        if(wide) {
+            captureCard.layoutParams = LinearLayout.LayoutParams(-1,-1)
+            previewStage.layoutParams = LinearLayout.LayoutParams(-1,0,1f)
+        }
         view.orientation = if(wide) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
-        view.addView(reviewColumn, if(wide) LinearLayout.LayoutParams(0,-1,3f) else LinearLayout.LayoutParams(-1,-2))
-        view.addView(eventColumn, if(wide) LinearLayout.LayoutParams(0,-1,2f) else LinearLayout.LayoutParams(-1,0,1f))
+        view.setPadding(dp(10),dp(8),dp(10),dp(12))
+        view.addView(reviewColumn,if(wide) LinearLayout.LayoutParams(0,-1,1f).apply { marginEnd = dp(12) } else LinearLayout.LayoutParams(-1,-2).apply { bottomMargin = dp(12) })
+        view.addView(eventColumn,if(wide) LinearLayout.LayoutParams(0,-1,1f) else LinearLayout.LayoutParams(-1,0,1f))
         scroll.setOnScrollListener(object : AbsListView.OnScrollListener {
             override fun onScrollStateChanged(list: AbsListView, state: Int) {
                 if(state == AbsListView.OnScrollListener.SCROLL_STATE_TOUCH_SCROLL) { listDriving = true; live = false; ruler.cancelGesture() }
@@ -244,12 +288,31 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
         lastDataSignal = dataSignal()
         updateRange(); showEmpty("实时 · 无画面"); main.post { if(!closed) load() }; refreshLive(); main.postDelayed(liveTick,1000)
     }
+    private fun filterAdapter(values: List<String>) = object : ArrayAdapter<String>(context,android.R.layout.simple_spinner_dropdown_item,values) {
+        override fun getView(position: Int, recycled: View?, parent: android.view.ViewGroup): View =
+            (super.getView(position,recycled,parent) as TextView).apply {
+                textSize = 14f; setTextColor(RabiMobileUi.text); maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setPadding(dp(10),0,dp(24),0); gravity = Gravity.CENTER_VERTICAL
+            }
+        override fun getDropDownView(position: Int, recycled: View?, parent: android.view.ViewGroup): View =
+            (super.getDropDownView(position,recycled,parent) as TextView).apply {
+                setTextColor(RabiMobileUi.text); setBackgroundColor(RabiMobileUi.surface); minimumHeight = dp(48)
+            }
+    }
+    private fun filterControl(spinner: Spinner): View = FrameLayout(context).apply {
+        background = RabiMobileUi.panel(context,RabiMobileUi.inputSurface,RabiMobileUi.border,8)
+        spinner.setBackgroundColor(Color.TRANSPARENT)
+        addView(spinner,FrameLayout.LayoutParams(-1,-1))
+        addView(RabiMobileUi.icon(context,com.rabi.link.R.drawable.ic_ui_chevron,RabiMobileUi.muted).apply { rotation = 90f },
+            FrameLayout.LayoutParams(dp(16),dp(16),Gravity.END or Gravity.CENTER_VERTICAL).apply { marginEnd = dp(6) })
+    }
     private fun dp(value: Int) = (context.resources.displayMetrics.density * value).toInt()
     private fun label(text: String, size: Float = 14f) = TextView(context).apply {
         this.text = text; textSize = size; setTextColor(RabiMobileUi.primary); setPadding(dp(12),dp(5),dp(12),dp(5))
     }
     private fun midnight(time: Long) = Calendar.getInstance().apply { timeInMillis = time; set(Calendar.HOUR_OF_DAY,0); set(Calendar.MINUTE,0); set(Calendar.SECOND,0); set(Calendar.MILLISECOND,0) }.timeInMillis
-    private fun updateRange() { day = midnight(cursor); dayButton.text = SimpleDateFormat("M月d日",Locale.CHINA).format(Date(day)) }
+    private fun updateRange() { position.visibility = View.VISIBLE; day = midnight(cursor); dayButton.text = SimpleDateFormat("M月d日",Locale.CHINA).format(Date(day)) }
     private fun ensureRange() {
         if(listDriving) return
         val range = ruler.visibleRange()
@@ -260,15 +323,22 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
         highlight(id)
     }
     private fun clock(time: Long) = SimpleDateFormat("HH:mm:ss",Locale.CHINA).format(Date(time))
-    private fun releasePlayback() { player?.let { playbackState = it.state(); it.close() }; player = null; livePlayer?.release(); livePlayer = null; liveUrl = ""; liveWaveform = null; liveTap.visibility = View.VISIBLE; preview.removeAllViews() }
+    private fun releasePlayback() { player?.let { playbackState = it.state(); it.close() }; player = null; livePlayer?.release(); livePlayer = null; liveUrl = ""; liveWaveform = null; idleMessage = ""; liveTap.visibility = View.VISIBLE; preview.removeAllViews() }
     private fun showEmpty(message: String) {
         liveWaveform = null
         preview.removeAllViews()
-        preview.addView(label(message, 18f).apply { gravity = Gravity.CENTER; setTextColor(Color.LTGRAY); setBackgroundColor(Color.rgb(25,29,34)) },FrameLayout.LayoutParams(-1,-1))
+        preview.addView(label(message, 18f).apply { gravity = Gravity.CENTER; setTextColor(RabiMobileUi.muted); setBackgroundColor(RabiMobileUi.surface) },FrameLayout.LayoutParams(-1,-1))
+    }
+    private fun showLiveAudioIdle(message: String) {
+        if(message.contains("空间不足") || message.contains("异常")) { showEmpty(message); idleMessage = message; return }
+        liveWaveform = null; idleMessage = message; preview.removeAllViews()
+        preview.addView(AudioWaveformView(context,compact = true).apply {
+            contentDescription = message
+        },FrameLayout.LayoutParams(-1,-1))
     }
     private fun enterLive() {
         ruler.cancelGesture(); listDriving = false; dragging = false; live = true; cursor = System.currentTimeMillis(); selected = null; selection++
-        releasePlayback(); playbackState = RecordingPlaybackPanel.State(); ruler.setPosition(cursor,true); updateRange(); load(); refreshLive()
+        releasePlayback(); setVideoPreview(false); previewStage.requestLayout(); playbackState = RecordingPlaybackPanel.State(); ruler.setPosition(cursor,true); updateRange(); load(); refreshLive()
     }
     /** Called only while visible, from the owner's runtime events; history playback is not reset. */
     fun refreshLive() {
@@ -281,15 +351,21 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
         val runtime = context.getSharedPreferences("rabi_conversation_runtime",Context.MODE_PRIVATE)
         val last = runtime.getLong("captureLastReceivedAt",0)
         val recent = AllDayRecordingSettings.load(context).running && System.currentTimeMillis() - last < 5000
-        position.text = "实时 · ${clock(System.currentTimeMillis())}"
+        position.text = "--:--:--"
         val video = RabiConversationService.currentVideo()
+        val started = AllDayRecordingSettings.load(context).windowStartedAt
+        if((recent || video?.receiving == true) && started > 0) {
+            val seconds = ((System.currentTimeMillis()-started)/1000).coerceAtLeast(0)
+            position.text = String.format(Locale.ROOT,"%02d:%02d:%02d",seconds/3600,seconds/60%60,seconds%60)
+        }
         val url = if(video?.receiving == true) video.previewUrl else ""
         if(url.isBlank()) {
             if(livePlayer != null) releasePlayback()
+            setVideoPreview(false)
             if(recent) {
                 if(liveWaveform == null) {
-                    preview.removeAllViews()
-                    liveWaveform = AudioWaveformView(context,true).also { preview.addView(it,FrameLayout.LayoutParams(-1,-1).apply { bottomMargin = dp(64) }) }
+                    idleMessage = ""; preview.removeAllViews()
+                    liveWaveform = AudioWaveformView(context,true,compact = true).also { preview.addView(it,FrameLayout.LayoutParams(-1,-1)) }
                 }
                 liveWaveform?.state = if(runtime.getBoolean("captureHasSignal",false)) "正在收音" else "收到静音"
             } else {
@@ -302,10 +378,10 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
                     settings.autoResume -> "等待恢复采集"
                     else -> "采集已暂停"
                 }
-                val shown = (preview.getChildAt(0) as? TextView)?.text?.toString()
-                if(liveWaveform != null || shown != message) showEmpty(message)
+                if(liveWaveform != null || idleMessage != message) showLiveAudioIdle(message)
             }
         } else if(url != liveUrl) {
+            setVideoPreview(true)
             releasePlayback(); liveUrl = url
             livePlayer = ExoPlayer.Builder(context).build().also { current ->
                 preview.addView(PlayerView(context).apply { player = current; useController = false },FrameLayout.LayoutParams(-1,-1))
@@ -334,7 +410,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
     private fun matchesFilter(item: Item) = (sourceFilter == 0 || (sourceFilter == 2) == (item.entry.source == "glasses")) && (typeFilter == 0 || (typeFilter == 1) == item.audio)
     private fun load(older: Boolean? = null, adjacent: Boolean = false) {
         // Recover the capture writer before competing with it for tens of thousands of historical files.
-        if(!archiveView && RabiConversationService.recoveringRecording()) { loadAfterRecovery = true; return }
+        if(!archiveView && RabiConversationService.recoveringRecording()) { loadAfterRecovery = true; listStatus.text = "正在恢复记录…"; return }
         if(archiveView) {
             if(!RecordingArchiveReviewAccess.useRemoteHistory(archiveView,RecordingArchiveSession.load(context) != null)) {
                 listStatus.text = "尚未配置电脑归档 · 全部本机记录仍可切换查看"
@@ -406,7 +482,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
                     }
                     loadedRange = requestedRange
                     ruler.setCoverage(items.filter(::matchesFilter).flatMap { item -> item.spans.map { RecordingTimeRuler.Coverage(it.start,it.duration,!item.audio) } })
-                    listStatus.text = if(items.isEmpty()) "此时间范围暂无已保存记录" else "${items.size} 条事件" + if(older == true && reachedOlder) " · 已到最早记录" else if(older == false && reachedNewer) " · 已到最新记录" else ""
+                    listStatus.text = if(items.isEmpty()) "此时间范围暂无已保存记录" else "" + if(older == true && reachedOlder) " · 已到最早记录" else if(older == false && reachedNewer) " · 已到最新记录" else ""
                     renderRows()
                     if(displayedItems.isEmpty() && older == null) main.post { if(!closed) load(true) }
                     if(adjacent) {
@@ -469,6 +545,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
         val anchor = displayedItems.getOrNull(scroll.firstVisiblePosition)?.entry?.id
         val offset = scroll.getChildAt(0)?.top ?: 0
         displayedItems = items.filter(::matchesFilter)
+        scroll.background = if(displayedItems.isEmpty()) null else RabiMobileUi.panel(context,RabiMobileUi.surface,Color.TRANSPARENT,14)
         ruler.setCoverage(displayedItems.flatMap { item -> item.spans.map { RecordingTimeRuler.Coverage(it.start,it.duration,!item.audio) } })
         cards.clear()
         programmaticScroll = true
@@ -482,47 +559,75 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
             val entry = item.entry
             val card = (recycled as? LinearLayout ?: LinearLayout(context)).apply {
                 (tag as? String)?.let { cards.remove(it) }; tag = entry.id; removeAllViews()
-                orientation = LinearLayout.VERTICAL; setPadding(dp(8),dp(8),dp(8),dp(8))
+                orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_VERTICAL; minimumHeight = dp(96); setPadding(dp(16),dp(14),dp(12),dp(14))
                 background = GradientDrawable().apply { setColor(RabiMobileUi.surface); cornerRadius = dp(16).toFloat() }
                 layoutParams = AbsListView.LayoutParams(-1,-2)
+                foreground = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(RabiMobileUi.accentBorder),null,RabiMobileUi.panel(context,Color.WHITE,Color.WHITE,16))
                 isClickable = true; setOnClickListener { ruler.cancelGesture(); listDriving = false; dragging = false; open(item,entry.started); renderRows() }
             }
             cards[entry.id] = card
-            val heading = LinearLayout(context)
-            heading.addView(label("${clock(entry.started)} · ${if(entry.kind == "video") "录像" else "录音事件"} · ${if(entry.source == "glasses") "眼镜" else "手机"}",14f),LinearLayout.LayoutParams(0,-2,1f))
-            if(entry.kind == "video") {
-                val image = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP; contentDescription = "录像缩略图，点击回看" }
-                heading.addView(image,LinearLayout.LayoutParams(dp(94),dp(65)))
-                thumbnail(entry.files.first(),image)
-            }
+            val heading = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
+            heading.addView(FrameLayout(context).apply {
+                background = RabiMobileUi.panel(context,RabiMobileUi.accentSurface,Color.TRANSPARENT,24)
+                addView(RabiMobileUi.icon(context,if(entry.kind == "video") com.rabi.link.R.drawable.ic_ui_video else com.rabi.link.R.drawable.ic_ui_mic,RabiMobileUi.secondary),FrameLayout.LayoutParams(dp(28),dp(28),Gravity.CENTER))
+            },LinearLayout.LayoutParams(dp(52),dp(52)).apply { marginEnd = dp(14) })
+            val seconds = item.spans.sumOf { it.duration } / 1000
+            val duration = if(seconds >= 60) "${seconds/60}分${seconds%60}秒" else "${seconds}秒"
+            heading.addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(label(SimpleDateFormat("HH:mm",Locale.CHINA).format(Date(entry.started)),16f).apply { typeface = android.graphics.Typeface.DEFAULT_BOLD; setPadding(0,0,0,dp(4)) })
+                addView(label(if(entry.kind == "video") "录像" else "语音记录",15f).apply { setTextColor(RabiMobileUi.text); setPadding(0,0,0,dp(3)) })
+                addView(label("$duration · ${if(entry.source == "glasses") "眼镜" else "手机"}",13f).apply { setTextColor(RabiMobileUi.muted); setPadding(0,0,0,0) })
+            },LinearLayout.LayoutParams(0,-2,1f))
+            heading.addView(RabiMobileUi.iconAction(context,com.rabi.link.R.drawable.ic_ui_play,"回看 ${clock(entry.started)} 的记录") {
+                ruler.cancelGesture(); listDriving = false; dragging = false; open(item,entry.started); renderRows()
+            }.apply {
+                imageTintList = android.content.res.ColorStateList.valueOf(RabiMobileUi.secondary)
+                setPadding(dp(14),dp(14),dp(14),dp(14))
+                background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(RabiMobileUi.accentBorder),
+                    android.graphics.drawable.InsetDrawable(RabiMobileUi.panel(context,RabiMobileUi.accentSurface,Color.TRANSPARENT,24),dp(6)),null)
+            },LinearLayout.LayoutParams(dp(48),dp(48)))
             card.addView(heading)
-            item.archiveRow?.let { row -> card.addView(label(if(row.archived) "电脑已归档 · 按块播放" else when(row.uploadState) {
-                "blocked_missing_media" -> "归档受阻 · 本地音频不完整，暂不可播放"
-                "blocked" -> "归档受阻 · 请检查完整性或授权，记录已保留"
-                "retry_wait" -> "本地待上传 · 等待连接恢复"
-                else -> "本地待上传"
-            },12f)) }
-            item.eventTranscript?.let { receipt ->
-                val text = receipt.optString("text").trim()
-                if(text.isNotEmpty()) card.addView(label(text,17f))
-                else card.addView(label("未识别到语音",12f))
-            }
-            if(item.eventTranscript == null) {
-                val status = when(item.asrState) {
-                    "processing", "running" -> "转录中…"
-                    "pending", "queued" -> "待转录"
-                    "blocked", "failed" -> "电脑转录暂不可用 · 原音频已保留"
-                    "ambiguous" -> "转录结果待核对 · 不自动重转"
-                    "unavailable" -> "转录状态暂不可用"
-                    "retry" -> "转录暂未完成 · 等待重试"
-                    "local_only" -> "仅本地保存 · 未转录"
-                    else -> ""
+            val expanded = selected?.entry?.id == entry.id
+            if(expanded) {
+                if(entry.kind == "video" && entry.files.isNotEmpty()) {
+                    val image = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP; contentDescription = "录像缩略图" }
+                    card.addView(image,LinearLayout.LayoutParams(dp(112),dp(64)).apply { topMargin = dp(8); marginStart = dp(56) })
+                    thumbnail(entry.files.first(),image)
                 }
-                if(status.isNotBlank()) card.addView(label(status,13f).apply { setTextColor(RabiMobileUi.muted) })
+                item.archiveRow?.let { row -> card.addView(label(if(row.archived) "电脑已归档 · 按块播放" else when(row.uploadState) {
+                    "blocked_missing_media" -> "归档受阻 · 本地音频不完整，暂不可播放"
+                    "blocked" -> "归档受阻 · 请检查完整性或授权，记录已保留"
+                    "retry_wait" -> "本地待上传 · 等待连接恢复"
+                    else -> "本地待上传"
+                },12f)) }
+                item.eventTranscript?.let { receipt ->
+                    val text = receipt.optString("text").trim()
+                    if(text.isNotEmpty()) card.addView(label(text,17f))
+                    else card.addView(label("未识别到语音",12f))
+                }
+                if(item.eventTranscript == null) {
+                    val status = when(item.asrState) {
+                        "processing", "running" -> "转录中…"
+                        "pending", "queued" -> "待转录"
+                        "blocked", "failed" -> "电脑转录暂不可用 · 原音频已保留"
+                        "ambiguous" -> "转录结果待核对 · 不自动重转"
+                        "unavailable" -> "转录状态暂不可用"
+                        "retry" -> "转录暂未完成 · 等待重试"
+                        "local_only" -> "仅本地保存 · 未转录"
+                        else -> ""
+                    }
+                    if(status.isNotBlank()) card.addView(label(status,13f).apply { setTextColor(RabiMobileUi.muted) })
+                }
+                if(selected?.entry?.id == entry.id) card.addView(label("回看中",12f).apply { setTextColor(RabiMobileUi.secondary) })
+                markers.filter { (it.recordId in item.associatedIds || it.recordId == entry.id) }.forEach { marker ->
+                    card.addView(Button(context).apply { text = "标记 · ${clock(marker.at)}"; setOnClickListener { jump(marker.at) } })
+                }
             }
-            card.addView(label("${item.spans.sumOf { it.duration } / 1000} 秒 · ${if(selected?.entry?.id == entry.id) "回看中" else "点击回看"}",12f).apply { setTextColor(RabiMobileUi.muted) })
-            markers.filter { (it.recordId in item.associatedIds || it.recordId == entry.id) }.forEach { marker ->
-                card.addView(Button(context).apply { text = "标记 · ${clock(marker.at)}"; setOnClickListener { jump(marker.at) } })
+            if(!expanded && item.archiveRow?.uploadState in setOf("blocked_missing_media","blocked")) {
+                card.addView(label("归档受阻 · 记录已保留",12f).apply { setTextColor(RabiMobileUi.warning) })
+            } else if(!expanded && item.asrState in setOf("blocked","failed","ambiguous")) {
+                card.addView(label("转写待核对 · 原音频已保留",12f).apply { setTextColor(RabiMobileUi.warning) })
             }
         return card
     }
@@ -552,6 +657,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
             Toast.makeText(context,"本地音频不完整，记录保留等待核对",Toast.LENGTH_SHORT).show(); return
         }
         live = false
+        setVideoPreview(item.entry.kind == "video"); previewStage.requestLayout()
         val time = at
         val offset = ReviewTimeline.mediaAt(item.spans,time) ?: 0L
         cursor = time; ruler.setPosition(time,false); updateRange(); ensureRange()
@@ -591,7 +697,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
                 val manifest = access.transport.getManifest(access.config.target,row.recordId)
                 require(RecordingArchiveContract.recordingManifestHash(manifest) == row.manifestHash) { "归档清单校验失败" }
                 val factory = ArchivePcmDataSource.Factory(RecordingArchiveReviewAccess.key(row)) {
-                    ArchivePcmDataSource.Session(ArchivePcmReader(manifest) { hash, bytes -> access.transport.readObject(access.config.target,hash,bytes) })
+                    ArchivePcmDataSource.Session(ArchivePcmReader(manifest) { hash, bytes -> access.transport.readPlaybackObject(access.config.target,hash,bytes) })
                 }
                 androidx.media3.exoplayer.source.ProgressiveMediaSource.Factory(factory)
                     .createMediaSource(MediaItem.fromUri(factory.uri()))
@@ -610,6 +716,6 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
             }
         }
     }
-    private fun highlight(id: String?) { cards.forEach { (key, card) -> card.background = com.rabi.link.RabiMobileUi.panel(context,if(key == id) RabiMobileUi.accentSurface else RabiMobileUi.surface,if(key == id) RabiMobileUi.accentBorder else RabiMobileUi.border,16) } }
+    private fun highlight(id: String?) { cards.forEach { (key, card) -> card.background = com.rabi.link.RabiMobileUi.panel(context,if(key == id) RabiMobileUi.accentSurface else RabiMobileUi.surface,if(key == id) RabiMobileUi.accentBorder else Color.TRANSPARENT,if(key == id) 12 else 0) } }
     fun close() { closed = true; revision++; selection++; releasePlayback(); main.removeCallbacksAndMessages(null); ruler.cancelGesture(); worker.shutdown(); mediaWorker.shutdown(); thumbnailWorker.shutdown(); images.evictAll() }
 }

@@ -11,22 +11,55 @@ import com.rabi.link.RabiMobileUi
 import java.util.Locale
 
 /** Mirrors WebGUI SpeechLevelWaveform: bottom-aligned bars, grid, state and measured level. */
-class AudioWaveformView(context: Context, private val live: Boolean = false) : View(context) {
+class AudioWaveformView(context: Context, private val live: Boolean = false, private val compact: Boolean = false) : View(context) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private var levels = floatArrayOf()
+    private val displayed = FloatArray(48)
     var progress = 0f
         set(value) { field = value.coerceIn(0f,1f); invalidate() }
     var state = if(live) "正在收音" else "录音回看"
         set(value) { field = value; invalidate() }
     private val refresh = object : Runnable {
-        override fun run() { levels = AudioLevels.snapshot(SystemClock.elapsedRealtime()); invalidate(); postDelayed(this,100) }
+        override fun run() {
+            levels = AudioLevels.snapshot(SystemClock.elapsedRealtime())
+            invalidate()
+            postDelayed(this,if(compact) 33 else 100)
+        }
     }
     init { contentDescription = "录音柱状声波" }
     fun setLevels(value: FloatArray) { levels = value; invalidate() }
     override fun onAttachedToWindow() { super.onAttachedToWindow(); if(live) post(refresh) }
     override fun onDetachedFromWindow() { removeCallbacks(refresh); super.onDetachedFromWindow() }
+    private fun drawCompact(canvas: Canvas) {
+        val density = resources.displayMetrics.density
+        val inset = 18*density; val center = height/2f
+        val samples = levels.takeLast(48); val peak = samples.maxOrNull() ?: 0f
+        val stride = (width-inset*2)/48
+        canvas.drawColor(RabiMobileUi.surface)
+        val threshold = EventSplitSettings.load(context).signalThreshold.toFloat()
+        val scale = maxOf(0.04f,peak,threshold)*1.15f
+        for(index in 0 until 48) {
+            val value = samples.getOrNull(index-(48-samples.size)) ?: 0f
+            val x = inset+index*stride
+            val target = value/scale
+            displayed[index] += (target-displayed[index]) * if(target > displayed[index]) 0.55f else 0.22f
+            val edge = kotlin.math.sin(Math.PI*(index+0.5)/48).toFloat()
+            val half = maxOf(1.5f*density,displayed[index]*edge*(height-12*density).coerceAtLeast(1f)/2)
+            paint.color = if(displayed[index] > 0.001f) RabiMobileUi.secondary else RabiMobileUi.accentSurface
+            paint.alpha = (55+200*edge*edge).toInt()
+            canvas.drawRoundRect(x,center-half,x+stride*0.48f,center+half,2*density,2*density,paint)
+        }
+        paint.alpha = 255
+        if(live && EventSplitSettings.showTranscribeLine(context)) {
+            val y = center-threshold/scale*(height-12*density).coerceAtLeast(1f)/2
+            paint.color = RabiMobileUi.warning; paint.alpha = 115; paint.strokeWidth = density
+            paint.pathEffect = DashPathEffect(floatArrayOf(6*density,4*density),0f)
+            canvas.drawLine(inset,y,width-inset,y,paint); paint.pathEffect = null; paint.alpha = 255
+        }
+    }
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        if(compact) { drawCompact(canvas); return }
         val density = resources.displayMetrics.density
         val inset = 16 * density; val top = 42 * density; val bottom = height - 18 * density
         val chartWidth = width - inset * 2; val chartHeight = (bottom - top).coerceAtLeast(1f)

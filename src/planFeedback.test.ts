@@ -22,6 +22,30 @@ import {
   type PlanStorageBucket
 } from "./planStorageLayout.js";
 
+import { listPlanFeedbackFromSnapshot } from "./planFeedbackStore.js";
+
+test("feedback snapshot reads are pure and retain latest revisions and attachment paths", () => {
+  const directory = path.join(os.tmpdir(), "snapshot-only-plan");
+  const base = { id: "feedback-1", planId: "plan-1", text: "first", createdAt: "2026-08-01T00:00:00.000Z",
+    attachments: [{ kind: "file", name: "note.txt", path: "feedback-attachments/feedback-1/note.txt",
+      size: 4, sha256: "a".repeat(64) }] };
+  const text = [base, { ...base, text: "latest" }, {
+    id: "feedback-2", planId: "plan-1", text: "newer", createdAt: "2026-08-02T00:00:00.000Z"
+  }].map(record => JSON.stringify(record)).join("\n");
+  const originalRead = fs.readFileSync;
+  const originalMkdir = fs.mkdirSync;
+  fs.readFileSync = (() => { throw new Error("Unexpected filesystem read"); }) as typeof fs.readFileSync;
+  fs.mkdirSync = (() => { throw new Error("Unexpected lease write"); }) as typeof fs.mkdirSync;
+  try {
+    const records = listPlanFeedbackFromSnapshot(text, directory, "plan-1");
+    assert.deepEqual(records.map(record => record.text), ["newer", "latest"]);
+    assert.equal(records[1]!.attachments[0]!.path, path.join(directory, "feedback-attachments", "feedback-1", "note.txt"));
+    assert.deepEqual(listPlanFeedbackFromSnapshot("", directory, "plan-1"), []);
+    assert.throws(() => listPlanFeedbackFromSnapshot(JSON.stringify(base), directory, "other-plan"), /invalid record/);
+    assert.throws(() => listPlanFeedbackFromSnapshot("{broken", directory, "plan-1"), /invalid JSON/);
+  } finally { fs.readFileSync = originalRead; fs.mkdirSync = originalMkdir; }
+});
+
 function canonicalPlanFixture(bucket: PlanStorageBucket = "active") {
   const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-plan-feedback-transaction-"));
   const planId = `plan-${bucket}`;

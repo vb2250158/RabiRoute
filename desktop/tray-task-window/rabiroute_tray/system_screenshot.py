@@ -2704,7 +2704,7 @@ class ScreenshotComposer(QDialog):
         for target in targets:
             self._target.addItem(target.label, target.gateway_id)
         self._text = QPlainTextEdit()
-        self._text.setPlaceholderText("输入要和截图一起发送给人格的文字……")
+        self._text.setPlaceholderText("输入要和截图一起发送给角色的文字……")
         self._text.setMinimumHeight(80)
         self._error = QLabel()
         self._error.setStyleSheet("color: #b42318;")
@@ -2715,7 +2715,7 @@ class ScreenshotComposer(QDialog):
         buttons.accepted.connect(self._send)
         layout = QVBoxLayout(self)
         layout.addWidget(self._preview)
-        layout.addWidget(QLabel("投递至人格"))
+        layout.addWidget(QLabel("投递至角色"))
         layout.addWidget(self._target)
         layout.addWidget(self._text)
         layout.addWidget(self._error)
@@ -2738,7 +2738,7 @@ class ScreenshotComposer(QDialog):
     def _send(self) -> None:
         gateway_id = str(self._target.currentData() or "").strip()
         if not gateway_id:
-            self.set_error("没有可投递的激活人格。")
+            self.set_error("没有可投递的激活角色。")
             return
         self.send_requested.emit(gateway_id, self._text.toPlainText().strip())
 
@@ -3148,7 +3148,7 @@ class SystemScreenshotController(QObject):
             return
         targets = self._delivery_targets_provider()
         if not targets:
-            self._notify("系统截图", "当前没有已激活人格，图片已复制或保存。", True)
+            self._notify("系统截图", "当前没有已激活角色，图片已复制或保存。", True)
             return
         composer = ScreenshotComposer(image_path, targets)
         self._composer = composer

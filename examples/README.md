@@ -8,11 +8,11 @@
 
 这里放可以公开提交、复制和检查的 RabiRoute 示例。示例只使用占位值、localhost、模板变量和脱敏路径；不要写入真实 QQ 号、群号、token、Cookie、本机用户名、私聊内容或运行期 `data/`。
 
-示例不是运行前置依赖。首次启动时，如果 `data/route` 或 `data/roles` 对应目录不存在，Manager 会从 [`examples/data/`](./data/README.md) 分别复制路由和人格示例。现有目录不会被整包覆盖。
+示例不是运行前置依赖。首次启动时，如果 `data/route` 或 `data/roles` 对应目录不存在，Manager 会从 [`examples/data/`](./data/README.md) 分别复制路由和角色示例。现有目录不会被整包覆盖。
 
 ## 从这里开始
 
-想先运行主项目，优先复制 [`examples/data/`](./data/README.md) 到仓库根目录的 `data/`。这会得到一条默认启用的 QQ / NapCat + heartbeat 路由，以及 Rabi 人格、消息规则、计划和记忆结构示例。
+想先运行主项目，优先复制 [`examples/data/`](./data/README.md) 到仓库根目录的 `data/`。这会得到一条默认启用的 QQ / NapCat + heartbeat 路由，以及 Rabi 角色、消息规则、计划和记忆结构示例。
 
 整包中只有 `main` 默认启用。RabiLink、Rokid 原生语音、voice-chat、WeCom、个人微信 Weixin 和 XiaoAI 都是需要凭据、设备、扫码或外部服务的禁用模板，不会在首次复制后自动连接。
 

@@ -22,6 +22,7 @@ from .desktop_capture import capture_desktop_pixels
 from .desktop_pet_motion import foreground_window
 from .desktop_pet_media import foreground_media_evidence
 from .qt_async import start_qt_task
+from .companion_observation_buffer import CompanionRecorder
 
 
 def foreground_observation(sequence: int) -> dict | None:
@@ -93,6 +94,8 @@ class DesktopPetCompanion(QObject):
         self._needs_reconnect = False
         self._reconnect_requested = False
         self._retry_delay = 5000
+        self._observation_policy = None
+        self._recorder = CompanionRecorder(foreground_observation)
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._acquire)
@@ -118,18 +121,26 @@ class DesktopPetCompanion(QObject):
             self._sequence = 0
         if not self._enabled():
             self._timer.stop()
+            self._recorder.stop()
         elif not self.busy and not self.control_busy and not self._timer.isActive():
             self._timer.start(350)
+        if self._enabled() and self._observation_policy:
+            self._recorder.configure((session["id"], session["revision"]), self._observation_policy)
 
     def _enabled(self) -> bool:
         running = self.session.get("status") == "active" or (self.session.get("status") == "paused" and self.session.get("pauseReason") == "capture_lost")
         return not self.closed and running and self.session.get("observationOwner") == "desktop"
+
+    def set_playback_active(self, playing: bool) -> None:
+        with self._recorder.lock:
+            self._recorder.suppressed = playing
 
     def toggle(self) -> None:
         if self.control_busy or self.closed:
             return
         self._epoch += 1
         self._timer.stop()
+        self._recorder.stop()
         def operation():
             snapshot = self._request()
             session = snapshot.get("session") or {}
@@ -179,6 +190,7 @@ class DesktopPetCompanion(QObject):
 
     def pause(self) -> None:
         self._timer.stop()
+        self._recorder.stop()
         if self.closed:
             return
         if self.control_busy:
@@ -237,6 +249,8 @@ class DesktopPetCompanion(QObject):
             if isinstance(result.get("presets"), list):
                 self.presets = [preset for preset in result["presets"]
                                 if isinstance(preset, dict) and isinstance(preset.get("id"), str)]
+            if isinstance(result.get("observationPolicy"), dict):
+                self._observation_policy = result["observationPolicy"]
             session = result.get("session") or {}
             self.accept(session)
             self.changed.emit({"roleId": self._persona_id, "session": session})
@@ -249,7 +263,7 @@ class DesktopPetCompanion(QObject):
                 self.reconnect()
                 return
             if self._enabled() and not self.busy and not self.control_busy:
-                self._timer.start(5000)  # next acquisition deadline after completion; never overlap
+                self._timer.start(int((self._observation_policy or {}).get("uploadSeconds", 5) * 1000))
         start_qt_task(operation, finished)
 
     def _acquire(self) -> None:
@@ -262,12 +276,15 @@ class DesktopPetCompanion(QObject):
         self._sequence += 1
         sequence = self._sequence
         def operation():
-            observation = foreground_observation(sequence)
+            observation = self._recorder.snapshot(captured, sequence) if self._observation_policy else foreground_observation(sequence)
             if observation is None:
                 return {"session": captured}
             session = captured
             if session.get("status") == "paused" and session.get("pauseReason") == "capture_lost":
                 session = self._request("command", {"sessionId": session["id"], "revision": session["revision"], "action": "resume"})["session"]
+                # A resume has a new boundary; acquire it on the next recorder cycle.
+                if self._observation_policy:
+                    return {"session": session}
                 observation = foreground_observation(1)
                 if observation is None:
                     return {"session": session}
@@ -278,10 +295,12 @@ class DesktopPetCompanion(QObject):
 
     def disconnect(self) -> None:
         self._timer.stop()
+        self._recorder.stop()
         self.session = {}
         self._needs_reconnect = True
 
     def close(self) -> None:
         self.closed = True
         self._timer.stop()
+        self._recorder.stop()
         # Manager's bounded liveness lease pauses an interrupted producer.

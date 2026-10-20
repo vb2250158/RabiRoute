@@ -69,7 +69,7 @@ data/roles/<RoleId>/plans/
 data/roles/<RoleId>/memory/
 ```
 
-Route 配置、消息历史、AgentPacket、Outbox 和运行日志通常位于 Route 数据目录。人格正文、规则、计划、记忆和技能位于角色目录。
+Route 配置、消息历史、AgentPacket、Outbox 和运行日志通常位于 Route 数据目录。角色正文、规则、计划、记忆和技能位于角色目录。
 
 ## 不应进入仓库或反馈附件的数据
 
@@ -83,7 +83,7 @@ Route 配置、消息历史、AgentPacket、Outbox 和运行日志通常位于 R
 
 ## 备份与迁移
 
-迁移前停止相关写入或关闭 Manager，备份需要保留的 Route 配置和人格目录。不要把构建产物、`node_modules` 和全部历史日志当成必要配置。
+迁移前停止相关写入或关闭 Manager，备份需要保留的 Route 配置和角色目录。不要把构建产物、`node_modules` 和全部历史日志当成必要配置。
 
 新版本启动前先阅读版本更新日志。配置 Schema 可能归一化旧字段；备份能让你比较保存前后的真实变化。
 

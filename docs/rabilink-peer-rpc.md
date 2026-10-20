@@ -45,10 +45,10 @@ GET /api/rabilink/peer/http/pc-b/manager/api/agent/help
 
 新增 Manager API 或公开请求头不需要增加 Relay 分发代码。三线路共用加密、流复用与授权合同，优先 LAN，再尝试 P2P，最后 Relay；健康连接复用。第三台 PC 使用现有嵌套转发，最多四跳并拒绝重复或本机目标。HTTP/SSE/WebSocket/二进制、未知写入不重放及鉴权中途失效的具体规则见[通用连接](rabilink-peer-tunnel.md)。
 
-人格与权限独立。资料仍由来源 PC 的既有人格、计划和聊天记录接口持有，跨电脑访问不创建同步副本；旧清单接口不是保留数据的必要条件。已有用户数据和历史冲突证据保留，视频继续遵守独立的禁止视频中转合同。
+角色与权限独立。资料仍由来源 PC 的既有角色、计划和聊天记录接口持有，跨电脑访问不创建同步副本；旧清单接口不是保留数据的必要条件。已有用户数据和历史冲突证据保留，视频继续遵守独立的禁止视频中转合同。
 
 ## 兼容退出与验收
 
-旧 `transport.offer` 接收端只为仍受支持客户端保留控制 wire；正式业务只有通用 `manager` 路径。受支持客户端迁移到 `transport.tunnel`、旧信令使用清零且完成设备验收后，删除旧 DataChannel 接收端。`bootstrap-speech/resources/persona` 的签名兼容和人格页面 bootstrap 别名退出条件见通用连接页。
+旧 `transport.offer` 接收端只为仍受支持客户端保留控制 wire；正式业务只有通用 `manager` 路径。受支持客户端迁移到 `transport.tunnel`、旧信令使用清零且完成设备验收后，删除旧 DataChannel 接收端。`bootstrap-speech/resources/persona` 的签名兼容和角色页面 bootstrap 别名退出条件见通用连接页。
 
 本轮 66 项传输测试通过，覆盖本机真实 WebRTC、隔离 Relay、三 Runtime LAN 转发、未知接口和业务头、流式撤权、取消及未知结果不重放。入口为 `src/rabiPeer.test.ts`、`src/rabiPeerClient.test.ts`、`src/manager/rabiPeerRoutes.test.ts` 和 `src/peerTunnel/` 测试。真实双 PC、跨运营商 P2P、持续运行及手机/眼镜升级仍需单独运行证据；本页不宣称这些验收或部署已完成。

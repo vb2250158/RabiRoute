@@ -751,7 +751,7 @@ test("Agent thread create accepts a verified Grok Bot source and still rejects g
     sourceAgentType: "agent"
   }, { allowedWorkspaces: [process.cwd()], readGrokBotSource }, driver);
   assert.equal(created.statusCode, 201);
-  assert.match(createdPrompt, /处理端：grokBot/);
+  assert.match(createdPrompt, /处理端：GrokBot/);
   assert.match(createdPrompt, /会话：已核验的 Bot/);
   assert.match(createdPrompt, new RegExp(sessionId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.doesNotMatch(createdPrompt, /提交的旧名称/);
@@ -806,7 +806,7 @@ test("Agent thread create accepts a verified Grok Bot source and still rejects g
     sourceThreadId: adapterSessionId
   }, { allowedWorkspaces: [process.cwd()], readGrokBotSource }, adapterDriver);
   assert.equal(adapter.statusCode, 201);
-  assert.match(adapterPrompt, /消息端：grokBot/);
+  assert.match(adapterPrompt, /消息端：GrokBot/);
   assert.match(adapterPrompt, new RegExp(adapterSessionId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 
   const codexSource = "019f0000-0000-7000-8000-000000000233";
@@ -854,7 +854,7 @@ test("Agent thread create accepts a verified Grok Bot source and still rejects g
     send: async (params) => {
       sends += 1;
       assert.match(params.prompt, /已核验的 Bot/);
-      assert.match(params.prompt, /处理端：grokBot/);
+      assert.match(params.prompt, /处理端：GrokBot/);
     }
   };
   const sent = await handleAgentThreadRequest({

@@ -152,7 +152,7 @@ model/
 config.json
 ```
 
-运行 `scripts/install.ps1` 会安装 `onnxruntime`、`cn2an`、`pypinyin`、`pyopenjtalk-prebuilt`、`Unidecode`、`inflect` 和 `eng-to-ipa`，并在安装阶段从 OpenJTalk 官方 GitHub release 下载日语离线词典；运行时不会联网补词典。随后在本机 `config.json` 中配置 RabiSpeech 自带 `local_onnx_vits_worker.py`。固定声线调用使用 `voice="speaker:<id>"`，不使用人格参考音频。
+运行 `scripts/install.ps1` 会安装 `onnxruntime`、`cn2an`、`pypinyin`、`pyopenjtalk-prebuilt`、`Unidecode`、`inflect` 和 `eng-to-ipa`，并在安装阶段从 OpenJTalk 官方 GitHub release 下载日语离线词典；运行时不会联网补词典。随后在本机 `config.json` 中配置 RabiSpeech 自带 `local_onnx_vits_worker.py`。固定声线调用使用 `voice="speaker:<id>"`，不使用角色参考音频。
 
 ## 3. ASR 模型
 

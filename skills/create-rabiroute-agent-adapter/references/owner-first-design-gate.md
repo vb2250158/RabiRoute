@@ -87,7 +87,7 @@ RabiRoute event -> adapter -> transport -> exact session/task owner -> turn -> o
 8. 让 owner 缺席、精确 ID cwd 冲突，确认没有第二执行路径。
 9. 在 owner 端改名并让首投改变 SQLite 标题，确认第二条仍进入同一 ID；在 Rabi 设置端输入新名称时确认旧 ID 先被清空，再按新名称重绑或只创建一次。
 10. 记录会话扫描请求：只允许进入设置界面自动一次和用户点击扫描时增加；展开、输入、`blur`、保存与空闲等待不得持续扫描。
-11. 若提供“自动初始化会话”，验证顺序固定为保存/解析名称 + ID → 唯一 owner 投递人格 AgentPacket；零匹配只创建一次，首投失败只重试同一 ID。
+11. 若提供“自动初始化会话”，验证顺序固定为保存/解析名称 + ID → 唯一 owner 投递角色 AgentPacket；零匹配只创建一次，首投失败只重试同一 ID。
 
 ### G. 必测负例
 
@@ -100,7 +100,7 @@ RabiRoute event -> adapter -> transport -> exact session/task owner -> turn -> o
 | owner 改名、默认 cwd 或 SQLite 标题变化 | 完整 ID 仍续投，并使用当前绑定的 workspace，不按名称误建替代任务 |
 | Rabi 显式输入新名称 | UI 清空旧 ID 后按新名称重绑或幂等创建，并持久化新 ID |
 | 设置页长期停留 | 扫描请求次数不随时间、展开、输入、`blur` 或保存增长；仅页面进入和显式刷新触发 |
-| 自动初始化首投 | 先持久化绑定，再由目标 owner 显示人格初始化消息；失败时不重复创建任务、不走备用 Runtime |
+| 自动初始化首投 | 先持久化绑定，再由目标 owner 显示角色初始化消息；失败时不重复创建任务、不走备用 Runtime |
 | 超过 100 个任务、路径别名 | 全部可访问；UNC、映射盘和 extended path 归一比较 |
 | cwd/project 冲突 | 拒绝并显示差异 |
 | active turn | steer 或显式排队，不并发 start |

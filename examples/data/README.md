@@ -14,14 +14,14 @@
 
 - 提供只含目录位置的 `manager.json`；插件 Profile 会在首次启动时创建。
 - 提供一份名为“Rabi Demo”的完整 `data/route/main/adapterConfig.json` 示例；它通过 `agentRoleId: "Rabi"` 绑定 Rabi 本体。
-- 给默认路由配置提供人格 `roles/Rabi`，并提供 RabiLink 专用的 `roles/RabiActive`。
-- 给默认人格提供 `roles/Rabi/personaConfig.json` 自动化规则和最近消息投递数量；示例包含消息通知 Agent 与定时通知 Agent，不默认运行脚本。
-- 给默认人格提供 `roles/Rabi/plans` 和 `roles/Rabi/memory` 的公开示例结构。
-- 给默认人格提供“一计划一任务”跟踪 Skill 范例；它不绑定具体聊天平台、审批人或项目规范。
+- 给默认路由配置提供角色 `roles/Rabi`，并提供 RabiLink 专用的 `roles/RabiActive`。
+- 给默认角色提供 `roles/Rabi/personaConfig.json` 自动化规则和最近消息投递数量；示例包含消息通知 Agent 与定时通知 Agent，不默认运行脚本。
+- 给默认角色提供 `roles/Rabi/plans` 和 `roles/Rabi/memory` 的公开示例结构。
+- 给默认角色提供“一计划一任务”跟踪 Skill 范例；它不绑定具体聊天平台、审批人或项目规范。
 - 提供 `route/RabiLink` 与 `roles/RabiActive` 配套模板，演示 AIUI observation 的 record-first 账本、空闲/周期审阅和任务外主动下行；Relay 地址与 token 仍只在本机全局配置中填写。
 - 提供默认禁用的 `route/weixin` 个人微信实验模板；登录 token、同步游标和 context token 只会在启用后写入本机运行期 `data/`，示例不包含真实账号或凭证。
 - 演示本地路由配置的 `rolesDir` 应该指向 `./data/roles`。
-- 让用户复制后可以直接在 WebUI 里选择并预览示例人格。
+- 让用户复制后可以直接在 WebUI 里选择并预览示例角色。
 
 默认构建包含 `dist/plugins/profiles/desktop.json` 和 28 个独立 Manager 插件包。树外插件可用环境变量选择单一 Profile 和额外包根目录；完整目录、热替换和 SDK 见 [`docs/plugin-bundles.md`](../../docs/plugin-bundles.md)。
 

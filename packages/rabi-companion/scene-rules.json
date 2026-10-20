@@ -3,7 +3,7 @@
   "rules": [
     {"kind":"watch","processPattern":"^(potplayer(mini|mini64)?|vlc|mpv|mpc-hc(64)?|mpc-be(64)?|kmplayer|qqplayer|video[.]ui|mediaplayer)\\.exe$"},
     {"kind":"watch","processPattern":"^(chrome|msedge|firefox|brave|opera)\\.exe$","titlePattern":"(_哔哩哔哩_bilibili|[-–|] YouTube|[-–|] Netflix|番剧|正在播放|视频播放|bilibili.*全屏)"},
-    {"kind":"play","processPattern":"^(game|gameclient|unityplayer|unrealgame|.*-win64-shipping)\\.exe$"},
+    {"kind":"play","processPattern":"^(game|gameclient|unityplayer|unrealgame|htgame|.*-win64-shipping)\\.exe$"},
     {"kind":"play","titlePattern":"(原神|崩坏：?星穹铁道|绝区零|鸣潮|FINAL FANTASY XIV|World of Warcraft|Minecraft|Counter-Strike|Dota 2|League of Legends|ELDEN RING|Stardew Valley)$"},
     {"kind":"work","processPattern":"^(code|code-insiders|devenv|notepad|notepad[+][+]|windowsterminal|powershell|pwsh|winword|excel|powerpnt|onenote|obsidian)\\.exe$"},
     {"kind":"other","processPattern":"^explorer\\.exe$"}

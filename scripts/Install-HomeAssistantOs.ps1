@@ -1,4 +1,4 @@
-﻿param(
+param(
     [ValidateSet('Install', 'Start', 'Recover')][string]$Operation = 'Install',
     [Parameter(Mandatory = $true)][string]$Root,
     [ValidateSet('yes', 'no')][string]$AutoStart = 'no'

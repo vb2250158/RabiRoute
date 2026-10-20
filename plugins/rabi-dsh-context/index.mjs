@@ -9,7 +9,7 @@ function textContent(message) {
 function contextMessage(text) {
   // Mark injected context as plugin-originated so it is not submitted again.
   return { id: randomUUID(), role: 'user', content: [{ type: 'text', text }],
-    source: { kind: 'plugin', plugin: 'rabi-dsh-context', form: 'notice', summary: 'Rabi 人格上下文' } };
+    source: { kind: 'plugin', plugin: 'rabi-dsh-context', form: 'notice', summary: 'Rabi 角色上下文' } };
 }
 
 /** Thin lifecycle adapter: all decisions and context remain owned by Manager. */

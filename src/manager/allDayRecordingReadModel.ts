@@ -11,6 +11,7 @@ const merge = (a: AllDayEvent[], b: AllDayEvent[]) => [...new Map([...a,...b].ma
 export class AllDayRecordingReadModel {
   private readonly entries = new Map<string, Entry>();
   private readonly mediaCache = new Map<string, Buffer>();
+  private readonly liveAudio = new Map<string, Map<string, AllDayEvent>>();
   private disposed = false;
   constructor(private readonly options: {
     directory(role: string): string;
@@ -64,6 +65,13 @@ export class AllDayRecordingReadModel {
   }
   committed(role: string | null, event: AllDayEvent, bytes?: Buffer, indexComplete = false) {
     if(this.disposed) return;
+    if (role && event.kind === "audio") {
+      const rows = this.liveAudio.get(role) ?? new Map<string, AllDayEvent>();
+      rows.set(event.id, event); this.liveAudio.set(role, rows);
+      for (const [id, row] of rows) if (row.endedAt < Date.now() - 600_000) rows.delete(id);
+      while (rows.size > 512) rows.delete(rows.keys().next().value!);
+      while (this.liveAudio.size > 16) this.liveAudio.delete(this.liveAudio.keys().next().value!);
+    }
     const day = dayOf(event.startedAt);
     for(const entry of this.entries.values()) {
       if(role===null ? !entry.mobiles.includes(event.deviceId) : entry.role!==role) continue;
@@ -81,6 +89,12 @@ export class AllDayRecordingReadModel {
     }
     this.trim();
   }
+  async transcripts(role: string, since: number, until: number) {
+    const timeline = await this.timeline(role, since, until);
+    const events = merge(timeline.events, [...(this.liveAudio.get(role)?.values() ?? [])])
+      .filter(row => row.kind === "audio" && ["microphone", "systemAudio"].includes(row.source) && row.startedAt < until && row.endedAt > since);
+    return { ...timeline, events };
+  }
   async media(role: string, day: string, id: string, extension: string, signal?: AbortSignal): Promise<Buffer> {
     const cached=this.mediaCache.get(this.key(role,"media",`media/${day}/${id}.${extension}`));
     if(cached) return cached;
@@ -94,7 +108,7 @@ export class AllDayRecordingReadModel {
     return {events:merge([],pages.flatMap(page=>page.events)).filter(row=>row.startedAt<until&&row.endedAt>=since),loading:pages.some(page=>page.loading),pendingDays:[...new Set(pages.flatMap(page=>[...(page.pendingDays??[]),...page.incompleteDays]))],readError:pages.find(page=>page.readError)?.readError};
   }
   async page(role: string, direction:"older"|"newer", cursor:{time:number;id:string}, source="all", limit=100, type="all") {
-    if(!Number.isFinite(cursor.time)||cursor.time<0||cursor.id.length>512||!["all",...ALL_DAY_SOURCES,"mobile","session"].includes(source)||!["all","asr","image","window","status","device"].includes(type)) throw new Error("Invalid event cursor");
+    if(!Number.isFinite(cursor.time)||cursor.time<0||cursor.id.length>512||!["all",...ALL_DAY_SOURCES,"mobile","session","systemAudio"].includes(source)||!["all","asr","image","window","status","device"].includes(type)) throw new Error("Invalid event cursor");
     const overview=await this.catalog(role), cursorDay=dayOf(cursor.time);
     const days=overview.days.filter(day=>direction==="older"?day<=cursorDay:day>=cursorDay).sort(); if(direction==="older") days.reverse();
     const events:AllDayEvent[]=[]; let loading=!!overview.loading; const pendingDays:string[]=[];
@@ -108,5 +122,5 @@ export class AllDayRecordingReadModel {
     const result=events.slice(0,limit),last=result.at(-1);
     return {events:result.sort(order),hasMore:loading||events.length>limit,loading,pendingDays,readError,cursor:last?{time:last.startedAt,id:last.id}:cursor};
   }
-  dispose() {this.disposed=true;for(const entry of this.entries.values()) entry.abort.abort();this.entries.clear();this.mediaCache.clear();}
+  dispose() {this.disposed=true;for(const entry of this.entries.values()) entry.abort.abort();this.entries.clear();this.mediaCache.clear();this.liveAudio.clear();}
 }

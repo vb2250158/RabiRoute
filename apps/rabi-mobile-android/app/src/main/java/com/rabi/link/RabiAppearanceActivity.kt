@@ -19,8 +19,8 @@ class RabiAppearanceActivity : Activity() {
         }
         content.addView(LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
-            addView(RabiMobileUi.title(this@RabiAppearanceActivity, "皮肤与外观", 22f), LinearLayout.LayoutParams(0, -2, 1f))
-            addView(RabiMobileUi.compactAction(this@RabiAppearanceActivity, "返回") { finish() }, LinearLayout.LayoutParams(dp(72), dp(48)))
+            addView(RabiMobileUi.iconAction(this@RabiAppearanceActivity, R.drawable.ic_ui_back, "返回") { finish() }, LinearLayout.LayoutParams(dp(48), dp(48)))
+            addView(RabiMobileUi.title(this@RabiAppearanceActivity, "皮肤与外观", 20f), LinearLayout.LayoutParams(0, -2, 1f))
         })
         content.addView(RabiMobileUi.note(this, "选择后立即生效，自动保存在这台手机。"))
         val selected = RabiMobileTheme.preference(this)

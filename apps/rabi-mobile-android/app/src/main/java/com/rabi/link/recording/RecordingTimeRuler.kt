@@ -102,36 +102,31 @@ class RecordingTimeRuler(context: Context) : View(context) {
         super.onDraw(canvas)
         val range = visibleRange(); val center = width / 2f
         fun x(value: Long) = center + ((value-time).toDouble()/window*width).toFloat()
-        // A thin visual track retains a 64dp touch surface inside the preview.
-        canvas.drawColor(0xB3191D22.toInt())
-        paint.color = android.graphics.Color.LTGRAY; paint.textSize = d(10); paint.textAlign = Paint.Align.LEFT
-        canvas.drawText("绿色 ASR · 青色 录像",d(10),d(58),paint)
-        paint.textAlign = Paint.Align.RIGHT; canvas.drawText("双指缩放",width-d(10),d(58),paint)
+        canvas.drawColor(RabiMobileUi.inputSurface)
         val step = TimelineRulerMath.majorStep(window,width/density)
         val minor = step/5
         var tick = Math.floorDiv(range.first,minor)*minor
         val format = SimpleDateFormat(if(step >= 86_400_000) "M/d" else if(step < 60_000) "HH:mm:ss" else "HH:mm",Locale.CHINA)
         paint.strokeWidth = density; paint.textSize = d(10); paint.textAlign = Paint.Align.CENTER
-        while(tick <= range.last && tick <= System.currentTimeMillis()) {
+        while(tick <= range.last) {
             val major = tick % step == 0L
-            paint.color = if(major) android.graphics.Color.LTGRAY else 0x88FFFFFF.toInt()
-            canvas.drawLine(x(tick),d(24),x(tick),d(if(major) 31 else 28),paint)
-            if(major && kotlin.math.abs(x(tick)-center)>d(38)) canvas.drawText(format.format(Date(tick)),x(tick),d(17),paint)
+            paint.color = if(major) RabiMobileUi.muted else RabiMobileUi.borderStrong
+            canvas.drawLine(x(tick),d(35),x(tick),d(if(major) 43 else 40),paint)
+            if(major) canvas.drawText(format.format(Date(tick)),x(tick).coerceIn(d(17),maxOf(d(17),width-d(17))),d(18),paint)
             tick += minor
         }
-        paint.color = 0x55FFFFFF; paint.strokeWidth = d(2)
-        canvas.drawLine(0f,d(37),width.toFloat(),d(37),paint)
+        paint.color = RabiMobileUi.accentSurface
+        canvas.drawRoundRect(0f,d(50),width.toFloat(),d(58),d(4),d(4),paint)
         coverage.forEach { span ->
             if(TimelineRulerMath.overlaps(span.start,span.duration,range)) {
-                paint.color = if(span.video) RabiMobileUi.secondary else android.graphics.Color.rgb(38,185,120)
+                paint.color = RabiMobileUi.secondary; paint.alpha = if(span.video) 225 else 130
                 val left = x(span.start).coerceAtLeast(0f); val right = x(span.start+span.duration).coerceAtMost(width.toFloat())
-                canvas.drawRoundRect(left,d(if(span.video) 39 else 34),maxOf(left+d(2),right),d(if(span.video) 42 else 37),d(1),d(1),paint)
+                canvas.drawRoundRect(left,d(49),maxOf(left+d(2),right),d(59),d(2),d(2),paint)
+                paint.alpha = 255
             }
         }
-        paint.color = android.graphics.Color.WHITE; paint.strokeWidth = d(1)
-        canvas.drawLine(center,d(23),center,d(44),paint)
-        canvas.drawCircle(center,d(37),d(3),paint)
-        paint.textSize = d(11); paint.textAlign = Paint.Align.CENTER
-        canvas.drawText((if(live) "实时 · " else "")+SimpleDateFormat("HH:mm:ss",Locale.CHINA).format(Date(time)),center,d(17),paint)
+        paint.color = RabiMobileUi.secondary; paint.strokeWidth = d(2)
+        canvas.drawLine(center,d(35),center,d(67),paint)
+        canvas.drawCircle(center,d(54),d(4),paint)
     }
 }

@@ -159,7 +159,7 @@ class DesktopPetManager(QObject):
         for persona_id, controller in self._controllers.items():
             submenu = self._menu.addMenu(controller.persona_name)
             submenu.addAction(
-                "打开人格配置",
+                "打开角色配置",
                 lambda _checked=False, selected=persona_id: self._open_persona(selected),
             )
             submenu.addAction("隐藏桌宠", controller.hide)

@@ -1078,14 +1078,16 @@ test("mobile PCM speech ingress reaches only its RabiLink persona with a stable 
     const packetRows = fs.readFileSync(path.join(mobileRoleDir, "agent-packets.jsonl"), "utf8")
       .trim().split(/\r?\n/).map(line => JSON.parse(line) as { text: string });
     assert.equal(packetRows.length, 1);
-    assert.match(packetRows[0].text, /"sourceDeviceId":"phone-one"/);
-    assert.match(packetRows[0].text, /"sourceStreamId":"phone-one-audio-stream-7"/);
+    assert.match(packetRows[0].text, /来源设备：phone-one/);
+    assert.doesNotMatch(packetRows[0].text, /"sourceStreamId"/);
     assert.match(packetRows[0].text, /"targetDeviceIds":\["phone-one"\]/);
     assert.doesNotMatch(packetRows[0].text, /"targetDeviceIds":\["phone-one-audio-stream-7"\]/);
 
-    const contextMatch = packetRows[0].text.match(/来源上下文（只用于核对来源，不可直接作为发送参数）：(\{[^\r\n]+\})/);
+    const contextMatch = packetRows[0].text.match(/回传定位：(\{[^\r\n]+\})/);
     assert.ok(contextMatch?.[1]);
-    const replyContext = JSON.parse(contextMatch[1]) as Record<string, unknown>;
+    const locator = JSON.parse(contextMatch[1]);
+    const replyContext = { routeProfileId: locator.routeId, roleId: "Ilias", adapterType: locator.channel,
+      targetType: locator.channel, messageId: locator.params.sourceMessageId, targetDeviceIds: locator.params.targetDeviceIds };
     let relayBody: Record<string, unknown> = {};
     const relay = http.createServer((request, response) => {
       const chunks: Buffer[] = [];

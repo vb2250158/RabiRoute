@@ -1962,7 +1962,7 @@ onBeforeUnmount(() => {
                 <v-alert v-if="selectedAutomationEndpoint === 'schedule' && !timerInputEnabled" type="warning" variant="tonal" density="compact" class="mb-4">
                   <div class="d-flex align-center justify-space-between ga-3 flex-wrap">
                     <span>当前 Route 没有启用定时任务入口，保存任务后也不会自动运行。</span>
-                    <v-btn size="small" color="warning" variant="tonal" @click="enableTimerInput">启用定时任务</v-btn>
+                    <v-btn size="small" color="warning" variant="tonal" @click="enableTimerInput">前往路由配置</v-btn>
                   </div>
                 </v-alert>
                 <div v-if="visibleAutomations.length === 0" class="empty-state">

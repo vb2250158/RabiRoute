@@ -25,6 +25,107 @@ class FakeStream:
         self.closed = True
 
 
+def test_short_phrase_and_quieter_speech_do_not_get_discarded_or_count_as_silence(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async def transcribe(_path, _config):
+            return TranscriptionResult(text="short phrase", language="en", duration=1.0, provider="fake", model="fake")
+        async def submit(*_args):
+            return {"status": "recorded"}
+        service = MicrophoneService(state_path=tmp_path / "mic.json", temp_dir=tmp_path / "temp", transcriber=transcribe,
+                                    submitter=submit, playback_active=lambda: False, stream_factory=lambda *_args: FakeStream())
+        await service.start({"sample_rate": 8000, "pre_roll_ms": 0, "adaptive_threshold": False})
+        for _ in range(3):
+            service.feed_for_test(np.full(800, 0.02, dtype=np.float32))
+        for _ in range(5):
+            service.feed_for_test(np.zeros(800, dtype=np.float32))
+        assert service.snapshot()["stats"]["captured"] == 1
+        service.feed_for_test(np.full(800, 0.02, dtype=np.float32))
+        for _ in range(6):
+            service.feed_for_test(np.full(800, 0.012, dtype=np.float32))
+        assert service.snapshot()["utterance_active"] is True
+        assert service.snapshot()["stats"]["captured"] == 1
+        for _ in range(5):
+            service.feed_for_test(np.zeros(800, dtype=np.float32))
+        assert service.snapshot()["stats"]["captured"] == 2
+        await asyncio.sleep(0.05)
+        await service.stop()
+    asyncio.run(scenario())
+
+
+def test_continuous_speech_segments_within_default_eight_seconds(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async def transcribe(_path, _config):
+            return TranscriptionResult(text="continuous", language="en", duration=8.0, provider="fake", model="fake")
+        async def submit(*_args):
+            return {"status": "recorded"}
+        service = MicrophoneService(state_path=tmp_path / "mic.json", temp_dir=tmp_path / "temp", transcriber=transcribe,
+                                    submitter=submit, playback_active=lambda: False, stream_factory=lambda *_args: FakeStream())
+        await service.start({"sample_rate": 8000, "pre_roll_ms": 0, "adaptive_threshold": False})
+        for _ in range(80):
+            service.feed_for_test(np.full(800, 0.02, dtype=np.float32))
+        assert service.snapshot()["stats"]["captured"] == 1
+        assert service.snapshot()["utterance_active"] is False
+        await asyncio.sleep(0.05)
+        await service.stop()
+    asyncio.run(scenario())
+
+
+def test_blocked_broadcast_never_blocks_asr_and_preserves_fifo_and_owner_cleanup(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        gate = asyncio.Event()
+        persisted, delivered = [], []
+        async def transcribe(_path, _config):
+            return TranscriptionResult(text=f"phrase-{len(persisted)}", language="en", duration=0.3, provider="fake", model="fake")
+        async def submit(result, *_args):
+            await gate.wait()
+            delivered.append(result.text)
+            return {"status": "recorded"}
+        service = MicrophoneService(state_path=tmp_path / "mic.json", temp_dir=tmp_path / "temp", transcriber=transcribe,
+                                    submitter=submit, record_transcription=lambda result, *_args: persisted.append(result.text),
+                                    playback_active=lambda: False, stream_factory=lambda *_args: FakeStream())
+        await service.start({"sample_rate": 8000, "pre_roll_ms": 0, "adaptive_threshold": False, "silence_ms": 200})
+        for _ in range(3):
+            for _ in range(3):
+                service.feed_for_test(np.full(800, 0.02, dtype=np.float32))
+            for _ in range(2):
+                service.feed_for_test(np.zeros(800, dtype=np.float32))
+        await asyncio.sleep(0.05)
+        assert len(persisted) == 3
+        assert len(service.snapshot()["history"]) == 3
+        assert service.snapshot()["stats"]["recognized"] == 3
+        assert delivered == []
+        gate.set()
+        await asyncio.sleep(0.05)
+        assert delivered == persisted
+        await service.stop()
+        assert service._delivery_consumer is None
+        assert service._deliveries.empty()
+    asyncio.run(scenario())
+
+
+def test_stop_cancels_broadcast_but_retains_the_already_saved_transcript(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        gate = asyncio.Event()
+        async def transcribe(_path, _config):
+            return TranscriptionResult(text="retained", language="en", duration=0.3, provider="fake", model="fake")
+        async def submit(*_args):
+            await gate.wait()
+            return {"status": "recorded"}
+        service = MicrophoneService(state_path=tmp_path / "mic.json", temp_dir=tmp_path / "temp", transcriber=transcribe,
+                                    submitter=submit, playback_active=lambda: False, stream_factory=lambda *_args: FakeStream())
+        await service.start({"sample_rate": 8000, "pre_roll_ms": 0, "adaptive_threshold": False, "silence_ms": 200})
+        for _ in range(3):
+            service.feed_for_test(np.full(800, 0.02, dtype=np.float32))
+        for _ in range(2):
+            service.feed_for_test(np.zeros(800, dtype=np.float32))
+        await asyncio.sleep(0.05)
+        await service.stop()
+        assert service.snapshot()["history"][0]["text"] == "retained"
+        assert service.snapshot()["history"][0]["delivery_status"] == "cancelled"
+        assert service._delivery_consumer is None
+    asyncio.run(scenario())
+
+
 def test_resident_microphone_segments_transcribes_and_submits(tmp_path: Path) -> None:
     async def scenario() -> None:
         stream = FakeStream()

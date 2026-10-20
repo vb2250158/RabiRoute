@@ -44,7 +44,7 @@ export function recordingPreview(roleId: string): AllDayEvent[] {
   try {
     const cached = previews.get(roleId) ?? JSON.parse(localStorage.getItem(`all-day-preview:${roleId}`) || "null");
     if (cached && Date.now() - cached.at < 86400_000 && Array.isArray(cached.events)) {
-      return cached.events.filter((row: AllDayEvent) => row && typeof row.id === "string" && Number.isFinite(row.startedAt) && Number.isFinite(row.endedAt) && ["microphone", "screen", "window", "camera", "homeAssistant", "mobile", "session"].includes(row.source) && isReviewEvent(row));
+      return cached.events.filter((row: AllDayEvent) => row && typeof row.id === "string" && Number.isFinite(row.startedAt) && Number.isFinite(row.endedAt) && ["microphone", "screen", "window", "camera", "homeAssistant", "mobile", "session", "systemAudio"].includes(row.source) && isReviewEvent(row));
     }
   } catch { /* The server owns history; disabled storage cannot block entry. */ }
   return [];

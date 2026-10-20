@@ -66,12 +66,12 @@ class RecordingPlaybackPanel(private val context: Context, files: List<File>, vi
         val pictureFrame = FrameLayout(context).apply { setBackgroundColor(android.graphics.Color.rgb(25,29,34)) }
         val noPicture = TextView(context).apply { text = "无画面"; gravity = android.view.Gravity.CENTER; setTextColor(android.graphics.Color.LTGRAY) }
         pictureFrame.addView(noPicture, FrameLayout.LayoutParams(-1,-1))
-        waveform?.let { pictureFrame.addView(it, FrameLayout.LayoutParams(-1,-1).apply { bottomMargin = dp(64) }) }
+        waveform?.let { pictureFrame.addView(it, FrameLayout.LayoutParams(-1,-1).apply { bottomMargin = 0 }) }
         picture?.let { pictureFrame.addView(it, FrameLayout.LayoutParams(-1,-1)) }
         view.addView(pictureFrame, FrameLayout.LayoutParams(-1,-1))
         // A transparent tap target sits above both video and waveform, below interactive controls.
         view.addView(View(context).apply { contentDescription = "显示或隐藏播放控制"; setOnClickListener { setControls(this@RecordingPlaybackPanel.overlay.visibility != View.VISIBLE) } },FrameLayout.LayoutParams(-1,-1))
-        view.addView(time,FrameLayout.LayoutParams(-1,dp(24),android.view.Gravity.BOTTOM).apply { bottomMargin = dp(112) })
+        view.addView(time,FrameLayout.LayoutParams(-1,dp(24),android.view.Gravity.BOTTOM).apply { bottomMargin = dp(48) })
         val controls = LinearLayout(context).apply { setBackgroundColor(0xCC192122.toInt()) }
         fun action(title: String, run: () -> Unit) = control(title).apply { setOnClickListener { run(); setControls(true) } }
         controls.addView(action("−3秒") { seekBy(-3000) }, LinearLayout.LayoutParams(0,-1,1f))
@@ -92,7 +92,7 @@ class RecordingPlaybackPanel(private val context: Context, files: List<File>, vi
             }
         }.apply { contentDescription = "记录操作" },LinearLayout.LayoutParams(0,-1,1f))
         overlay.addView(controls,LinearLayout.LayoutParams(-1,dp(48)))
-        view.addView(overlay,FrameLayout.LayoutParams(-1,dp(48),android.view.Gravity.BOTTOM).apply { bottomMargin = dp(64) })
+        view.addView(overlay,FrameLayout.LayoutParams(-1,dp(48),android.view.Gravity.BOTTOM).apply { bottomMargin = 0 })
         play.setOnClickListener {
             if(player.isPlaying) player.pause() else {
                 if(player.playbackState == Player.STATE_ENDED) seekTo(0)

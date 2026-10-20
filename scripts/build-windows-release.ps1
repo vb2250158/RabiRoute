@@ -80,6 +80,7 @@ foreach ($legacyRuntimeFile in @(
 $requiredPortableRuntimeFiles = @(
     "packages/rabi-companion/presets.json",
     "packages/rabi-companion/scene-rules.json",
+    "packages/rabi-companion/observation.json",
     "scripts/Resolve-RabiRouteManagerUrl.ps1",
     "scripts/resolve-manager.mjs",
     "scripts/lib/discover-manager-url.mjs",

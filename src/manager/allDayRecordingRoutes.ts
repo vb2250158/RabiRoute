@@ -1,3 +1,4 @@
+import { watchAllDaySpeechEvents } from "./allDaySpeechEvents.js";
 import type http from "node:http";
 import { requestLocalSpeech, requestLocalSpeechJson } from "../speech/localSpeechClient.js";
 import { AllDayRecordingService, AllDayRecordingStore, recordingOperation, type RecordingAuthorization, type RecordingSample } from "./allDayRecording.js";
@@ -41,11 +42,22 @@ export function createAllDayRecording(options: {
     if (result.status !== 200) throw new Error(result.data.detail || `Capture service HTTP ${result.status}`);
     return result.data;
   }
+  function microphoneEvent(row: Record<string, unknown>, sessionId: string): AllDayEvent | null {
+    if (row.session_id !== sessionId || row.kind !== "asr" || row.source_device_kind !== "pc_microphone") return null;
+    const startedAt = Number(row.time) * 1000;
+    if (!Number.isFinite(startedAt)) throw new Error("Speech record has no capture timestamp");
+    const transcriptionState = ["pending","processing","ready","empty","error"].includes(String(row.transcription_state)) ? row.transcription_state as AllDayEvent["transcriptionState"] : "ready";
+    return { id: `speech:${row.id}`, speechRecordId: String(row.id), startedAt, endedAt: startedAt + Math.max(0, Number(row.duration) || 0) * 1000,
+      source: "microphone", deviceId: options.hostId, kind: "audio", text: String(row.text || ""), state: "saved", transcriptionState };
+  }
   const service = new AllDayRecordingService(store, {
+    watchAudio: (changed, failed) => watchAllDaySpeechEvents(options.speechUrl, changed, failed),
+    audioRecord: async (id, sessionId) => microphoneEvent(await speech<Record<string, unknown>>(`/v1/records/${encodeURIComponent(id)}`), sessionId),
     changed: options.changed,
     prepare: options.ensureSpeech,
     stopCapture: async (sessionId, authorize) => { await speech("/v1/all-day/capture/stop", { sessionId }, authorize); },
     renewCapture: async sessionId => { await speech("/v1/all-day/capture/renew", { sessionId }); },
+    renewMicrophone: async sessionId => { await speech("/v1/all-day/microphone/renew", { sessionId }); },
     startMicrophone: async (sessionId, authorize) => (await speech<{ audioSessionId: string }>("/v1/all-day/microphone/start", { sessionId }, authorize)).audioSessionId,
     stopMicrophone: async (sessionId, authorize) => { await speech("/v1/all-day/microphone/stop", { sessionId }, authorize); },
     audioFile: async (recordId, authorize) => {
@@ -63,10 +75,8 @@ export function createAllDayRecording(options: {
         const data = await speech<{ data: Array<Record<string, unknown>> }>(`/v1/records?${query}`, undefined, authorize);
         const rows = data.data;
         for (const row of rows) {
-          if (row.session_id !== sessionId || row.kind !== "asr" || row.source_device_kind !== "pc_microphone") continue;
-          const startedAt = Number(row.time) * 1000;
-          const transcriptionState = ["pending","processing","ready","empty","error"].includes(String(row.transcription_state)) ? row.transcription_state as AllDayEvent["transcriptionState"] : "ready";
-          events.set(String(row.id), { id: `speech:${row.id}`, speechRecordId: String(row.id), startedAt, endedAt: startedAt + Math.max(0, Number(row.duration) || 0) * 1000, source: "microphone", deviceId: options.hostId, kind: "audio", text: String(row.text || ""), state: "saved", transcriptionState });
+          const event = microphoneEvent(row, sessionId);
+          if (event) events.set(event.id, event);
         }
         if (rows.length < 1000) return [...events.values()];
         const earliest = Math.min(...rows.map(row => Number(row.time)));
@@ -135,6 +145,7 @@ export function allDayRecordingHandler(runtime: ReturnType<typeof createAllDayRe
         if (direction !== "older" && direction !== "newer") throw new Error("Invalid event direction");
         data = await runtime.reads.page(roleId, direction, { time: Number(url.searchParams.get("time")), id: url.searchParams.get("id") || "" }, url.searchParams.get("source") || "all", 100, url.searchParams.get("type") || "all");
       }
+      else if (request.method === "GET" && action === "transcripts") data = await runtime.reads.transcripts(roleId, Number(url.searchParams.get("since")), Number(url.searchParams.get("until")));
       else if (request.method === "GET" && action === "events") data = await runtime.reads.timeline(roleId, Number(url.searchParams.get("since")), Number(url.searchParams.get("until")));
       else if (request.method === "PUT" && action === "settings") { data = await runtime.service.configure(roleId, await recordingOperation(authorize, () => options.readBody(request)),authorize); runtime.reads.invalidate(roleId); }
       else if (request.method === "POST" && action === "start") data = await runtime.service.start(roleId,authorize);

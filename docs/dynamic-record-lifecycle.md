@@ -28,18 +28,18 @@ triggerAfterHours = 72
 
 | 数据 | 真源 | 当前动作 | 时间语义 |
 | --- | --- | --- | --- |
-| 人格统一双向账本 | `data/roles/<RoleId>/conversation/current.jsonl` | 动态归档 | 有记录超过 72 小时时，将超过 24 小时的最大连续前缀移入序号归档 |
+| 角色统一双向账本 | `data/roles/<RoleId>/conversation/current.jsonl` | 动态归档 | 有记录超过 72 小时时，将超过 24 小时的最大连续前缀移入序号归档 |
 | 账本历史 | `conversation/archive/<first>~<last>.jsonl` 和 `index.json` | 保留 | 按稳定序号检索，不按自然日删除 |
 | 近期记忆 | `memory/recent/*.md`，兼容旧 JSON | 沉淀 | 只有没有 `consolidatedAt` 的记录属于近期记忆；可编辑/默认显示按 `updatedAt` 与 `viewedAt`；24/72 沉淀按 `updatedAt` 与 `recalledAt`，并固定原始触发时的候选上限 |
 | 已归档记忆来源 | `memory/recent/*.md` 中带 `consolidatedAt` 的记录 | 追溯保留 | 不再计入近期记忆，也不再次沉淀；在“已归档”中与归档计划一起查看 |
 | 沉淀记忆 | `memory/consolidated/*.md`，兼容旧 JSON | 稳定保留 | 整理触发后生成，在独立“沉淀记忆”分类中继续参与召回 |
 | 公共语音消息 | `data/speech/messages/YYYY-MM-DD.jsonl` | 日期分卷的审计流水 | 当前按自然日物理分片；这本身不是归档或沉淀 |
 | 公共语音 Markdown 导出 | `data/speech/exports/transcript-*.md` | 按需重建的阅读视图 | 从公共语音消息按指定左闭右开时间段生成，不是真源 |
-| RabiSpeech 诊断记录 | `plugin-adapters/rabi-speech/output/records/YYYY-MM-DD.jsonl` | 日期分卷的诊断流水 | 与人格路由记录分离 |
+| RabiSpeech 诊断记录 | `plugin-adapters/rabi-speech/output/records/YYYY-MM-DD.jsonl` | 日期分卷的诊断流水 | 与角色路由记录分离 |
 | 音频流收发与处理事件 | `plugin-adapters/rabi-speech/output/audio-stream-events/current.jsonl` | 动态归档的运行账本 | 稳定 `id/sequence`；有事件超过 72 小时时，将超过 24 小时的最大连续前缀移入 `archive/<first>~<last>.jsonl` 并原子更新索引 |
-| 人格语音兼容记录 | `data/roles/<RoleId>/voice-transcripts.jsonl` | 兼容/审计记录 | 不替代统一双向账本 |
+| 角色语音兼容记录 | `data/roles/<RoleId>/voice-transcripts.jsonl` | 兼容/审计记录 | 不替代统一双向账本 |
 | 符合归档条件的终态计划 | `plans/active/<planId>/plan.json` 与 `personaConfig.json.planWorkflow` | 延迟归档 | 状态配置同时满足 `terminal=true` 与 `archiveEligible=true` 时，从 `updatedAt` 起等待 `planWorkflow.archiveAfterHours`，只将 `archiveStatus` 改为 `已归档`，保留状态 key，并把整个目录移入 `plans/archive/<planId>/`；默认模板为 72 小时 |
-| TTS 音频缓存 | 人格或 RabiSpeech 音频缓存 | 到期回收 | 独立保留策略，不从账本归档规则推导 |
+| TTS 音频缓存 | 角色或 RabiSpeech 音频缓存 | 到期回收 | 独立保留策略，不从账本归档规则推导 |
 | ASR 短语音缓存 | `plugin-adapters/rabi-speech/output/asr-audio/` | 24 小时到期回收 | 只保存实际送入识别的 VAD 语段，供本机回听；不保存全天连续 PCM |
 
 ## 归档合同
@@ -53,7 +53,7 @@ triggerAfterHours = 72
 5. 保持记录内容、稳定 ID、顺序和总数守恒。
 6. 保留跨分卷恢复路径；当前文件找不到起点时先查索引。
 
-人格消息追加复用统一文件锁：锁记录保存 owner token、主机与 PID；活的本机 owner 不因 mtime 超过 30 秒被夺锁，释放只删除本次 token，旧 PID-only 本机记录保守按活 owner 处理。等待仍有 5 秒期限，超时不是锁已失效的证据，不删活锁、延长等待或重发消息。
+角色消息追加复用统一文件锁：锁记录保存 owner token、主机与 PID；活的本机 owner 不因 mtime 超过 30 秒被夺锁，释放只删除本次 token，旧 PID-only 本机记录保守按活 owner 处理。等待仍有 5 秒期限，超时不是锁已失效的证据，不删活锁、延长等待或重发消息。
 
 `conversation/archive/index.json` 为各不可变分卷保留可重建的重复键位图摘要与文件大小/mtime、摘要校验值。缺失或损坏的摘要在追加锁外读取历史证据重建，取得锁后重新核对索引；归档时同次生成摘要。明确不可能命中的新消息不再逐档解析正文；可能命中仍读取原记录精确核对，位图假阳性不能被当作重复。完整消息、稳定 ID、顺序与 24/72 小时窗口不变，摘要不是第二套消息真源，也不授权清理历史分卷。首次旧索引迁移仍需要一次历史读取，锁外重建不代表完全无 I/O 或线上性能已经验收。
 
@@ -79,7 +79,7 @@ Manager 会为最早的 72 小时触发点设置一次性任务；到点时重�
 - 记忆已被总结；
 - 数据已到期或被删除。
 
-公共 ASR 可以继续按日期分卷，同时由人格 Route 把对应记录写入角色统一账本；后者独立执行动态归档。
+公共 ASR 可以继续按日期分卷，同时由角色 Route 把对应记录写入角色统一账本；后者独立执行动态归档。
 
 ## 新数据集接入清单
 

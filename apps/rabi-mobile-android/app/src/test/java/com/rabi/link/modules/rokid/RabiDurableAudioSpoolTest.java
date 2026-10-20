@@ -26,6 +26,90 @@ import static org.junit.Assert.assertTrue;
 public final class RabiDurableAudioSpoolTest {
     @Rule public final TemporaryFolder temporary = new TemporaryFolder();
 
+    @Test public void historicalArchiveEnrollmentIsBoundedAndRetainsMissingOrForeignMedia() throws Exception {
+        File root=temporary.newFolder();
+        RabiDurableAudioSpool spool=new RabiDurableAudioSpool(root,policy(8L),()->1000L,file->Long.MAX_VALUE);
+        com.rabi.link.recording.RecordingArchiveCoordinator.Target target=new com.rabi.link.recording.RecordingArchiveCoordinator.Target("pc","11111111-1111-4111-8111-111111111111","phone",1,true);
+        for(String capture:new String[]{"a-good","b-foreign","c-missing","d-good"})
+            assertTrue(spool.appendCompleteEvent(new byte[8],"phone","",capture,"transcribe",1000L,"received",capture).accepted);
+        spool.authorizeArchive("b-foreign",new com.rabi.link.recording.RecordingArchiveCoordinator.Target("other","11111111-1111-4111-8111-111111111111","phone",1,true));
+        try(com.rabi.link.recording.RecordingArchiveCoordinator.Snapshot snapshot=spool.acquireArchiveSnapshot("c-missing",authorize(spool,"c-missing",target))) {
+            // Locate only this event's original, then simulate media missing before explicit migration.
+            File[] rows=new File(root,"segments").listFiles((dir,name)->name.endsWith(".json"));
+            for(File row:rows) { JSONObject value=new JSONObject(new String(Files.readAllBytes(row.toPath()),StandardCharsets.UTF_8));
+                if("c-missing".equals(value.optString("captureId"))) assertTrue(new File(root,"segments/"+value.getString("pcmFileName")).delete()); }
+        }
+        Files.delete(new File(root,"archive-target-c-missing.json").toPath());
+        JSONObject first=spool.authorizeArchiveHistory(target,"",1);
+        assertEquals("a-good",first.getString("cursor"));assertTrue(first.getBoolean("more"));
+        assertTrue(spool.isArchiveAuthorizedCapture("a-good"));assertFalse(spool.isArchiveAuthorizedCapture("d-good"));
+        JSONObject rest=spool.authorizeArchiveHistory(target,first.getString("cursor"),32);
+        assertFalse(rest.getBoolean("more"));assertEquals(2,rest.getInt("conflicts"));
+        assertFalse(spool.isArchiveAuthorizedCapture("c-missing"));assertTrue(spool.isArchiveAuthorizedCapture("d-good"));
+        assertEquals(java.util.Arrays.asList("a-good","d-good"),spool.nextArchiveCandidates(target,32));spool.close();
+    }
+    private static com.rabi.link.recording.RecordingArchiveCoordinator.Target authorize(RabiDurableAudioSpool spool,String capture,com.rabi.link.recording.RecordingArchiveCoordinator.Target target) throws Exception { spool.authorizeArchive(capture,target);return target; }
+
+    @Test public void allDayRetentionAppliesDuringRecoveryBeforeBackendStarts() throws Exception {
+        File root = temporary.newFolder();
+        RabiDurableAudioSpool original = new RabiDurableAudioSpool(root, policyWithRetention(4L, 60000L), () -> 1000L, file -> Long.MAX_VALUE);
+        original.append(new byte[]{1,2,3,4}, "phone", "route-a");
+        original.append(new byte[]{5,6,7,8}, "phone", "route-a");
+        RabiDurableAudioSpool.Segment first = original.assignServerSequence(original.nextUpload(), 1L);
+        assertTrue(original.acknowledge(first.id, 1L, first.bytes, first.sha256));
+        original.close();
+        RabiDurableAudioSpool recovered = new RabiDurableAudioSpool(root, policy(4L), true);
+        assertTrue("All-day startup must retain acknowledged audio", first.pcmFile.isFile());
+        assertTrue(first.metadataFile.isFile());
+        assertEquals(0L, recovered.health().getLong("quarantineItems"));
+        assertTrue(recovered.health().getBoolean("accountingBalanced"));
+        recovered.close();
+    }
+
+    @Test public void restartRetainsValidEventSealAndRepairsInvalidSeal() throws Exception {
+        File root = temporary.newFolder();
+        RabiDurableAudioSpool spool = new RabiDurableAudioSpool(root, policy(8L), () -> 1000L, file -> Long.MAX_VALUE);
+        assertTrue(spool.appendCompleteEvent(new byte[]{1,2,3,4}, "phone", "", "capture", "transcribe", 1000L, "received", "event").accepted);
+        spool.close();
+        File marker = new File(root, "event-event.json");
+        assertTrue(marker.setLastModified(1000L));
+        RabiDurableAudioSpool recovered = new RabiDurableAudioSpool(root, policy(8L), () -> 2000L, file -> Long.MAX_VALUE);
+        assertEquals(1000L, marker.lastModified());
+        recovered.close();
+        Files.write(marker.toPath(), "broken".getBytes(StandardCharsets.UTF_8));
+        RabiDurableAudioSpool repaired = new RabiDurableAudioSpool(root, policy(8L), () -> 3000L, file -> Long.MAX_VALUE);
+        assertTrue(new JSONObject(new String(Files.readAllBytes(marker.toPath()), StandardCharsets.UTF_8)).getBoolean("complete"));
+        assertTrue(repaired.health().getBoolean("accountingBalanced"));
+        repaired.close();
+    }
+
+    @Test public void retainedQuarantineRecoveryScansOnceAndPreservesAccountingAcrossRestart() throws Exception {
+        File root = temporary.newFolder();
+        for (int i = 0; i < 256; i++) {
+            File item = new File(root, "quarantine/audio-" + i);
+            assertTrue(item.mkdirs());
+            Files.write(new File(item, "retained.pcm").toPath(), new byte[]{1,2,3,4});
+            JSONObject manifest = new JSONObject().put("accountingRecorded", true).put("gapRecorded", true)
+                    .put("quarantinedAudioBytes", 4L).put("capturedGapBytes", 2L);
+            Files.write(new File(item, "manifest.json").toPath(), manifest.toString().getBytes(StandardCharsets.UTF_8));
+        }
+        for (int restart = 0; restart < 2; restart++) {
+            AtomicLong scans = new AtomicLong();
+            RabiDurableAudioSpool spool = new RabiDurableAudioSpool(root, policy(8L), () -> 1000L,
+                    file -> Long.MAX_VALUE,
+                    (from,to) -> Files.move(from.toPath(),to.toPath(),java.nio.file.StandardCopyOption.REPLACE_EXISTING),
+                    stage -> { if ("quarantine_scan".equals(stage)) scans.incrementAndGet(); });
+            assertEquals("Recovery must not rescan the full tree for every manifest", 1L, scans.get());
+            JSONObject health = spool.health();
+            assertEquals(1024L, health.getLong("quarantinedAudioBytes"));
+            assertEquals(512L, health.getLong("capturedGapBytes"));
+            assertTrue(health.getBoolean("accountingBalanced"));
+            assertEquals(256L, spool.quarantineManifest().getLong("items"));
+            assertArrayEquals(new byte[]{1,2,3,4}, Files.readAllBytes(new File(root,"quarantine/audio-255/retained.pcm").toPath()));
+            spool.close();
+        }
+    }
+
     @Test public void endpointIdentityPublicationDoesNotWaitForHistoryIo() throws Exception {
         RabiDurableAudioSpool spool = new RabiDurableAudioSpool(temporary.newFolder(), policy(8), () -> 1000L, file -> Long.MAX_VALUE);
         ExecutorService worker = Executors.newSingleThreadExecutor();

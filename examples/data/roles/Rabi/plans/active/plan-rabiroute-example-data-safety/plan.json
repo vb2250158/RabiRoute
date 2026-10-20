@@ -5,7 +5,7 @@
   "archiveStatus": "未归档",
   "priority": "high",
   "kind": "maintenance",
-  "currentStep": "examples/data 只保留可公开复制的路由、人格式、计划和记忆示例",
+  "currentStep": "examples/data 只保留可公开复制的路由、角色式、计划和记忆示例",
   "nextAction": "每次新增示例时检查真实 QQ 号、群号、token、Cookie、本机用户名、私有路径和运行期 data 日志是否被误提交",
   "waitingFor": "",
   "project": {

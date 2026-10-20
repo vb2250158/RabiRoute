@@ -41,6 +41,9 @@ test("role and Route selectors are exclusive and use their own stores", () => {
   assert.match(app, /computed\(\(\) => showsRouteSwitcher\(route.path\)\)/);
   assert.match(topbar, /:model-value="store.selectedGatewayId"/);
   assert.match(topbar, /:items="routeOptions"/);
+  assert.match(topbar, /:model-value="roles.selectedRoleId"/);
+  assert.match(topbar, /selectRole\(String\(value/);
+  assert.match(app, /const title = String\(gateway.routeName \|\| gateway.name \|\| gateway.id\)/);
   assert.match(topbar, /@update:model-value="value => selectGateway\(String\(value \|\| ''\)\)"/);
   assert.match(styles, /\.topbar-context\.has-route-switcher\b[^{}]*\{[^}]*flex-direction: column/);
   assert.doesNotMatch(styles, /(?:^|\n)\.route-picker\s*\{/);

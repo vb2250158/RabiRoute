@@ -14,7 +14,7 @@ A role becomes an independently managed object. Users select a role to edit its 
 
 The requested behavior is:
 
-- Replace the product term “Persona” with “Role” (人格 → 角色 in Chinese).
+- Replace the product term “Persona” with “Role” (角色 → 角色 in Chinese).
 - Order the first three sidebar entries as **Role configuration, Plans and memories, Route configuration**. Route configuration takes over all settings from Message adapters.
 - Include every unarchived role in role selectors, regardless of Route bindings, enablement or runtime health.
 - Add role archival and an **Archived roles** button in Settings. The resulting list supports permanent deletion.

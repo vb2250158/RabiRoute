@@ -164,7 +164,7 @@ export async function handleHookInput(input, options = {}) {
     const message = error instanceof Error ? error.message : String(error);
     return hookOutput(
       eventName,
-      `[Rabi WorkBuddy]\nRabi PC Manager 当前不可用：${message}\n本轮没有注入人格、计划、记忆或角色技能；不得使用插件本地缓存补造上下文。`,
+      `[Rabi WorkBuddy]\nRabi PC Manager 当前不可用：${message}\n本轮没有注入角色、计划、记忆或角色技能；不得使用插件本地缓存补造上下文。`,
       "Rabi PC context service is unavailable; WorkBuddy continued without invented Rabi context."
     );
   }

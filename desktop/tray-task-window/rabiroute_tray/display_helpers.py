@@ -52,13 +52,13 @@ def route_label(gateway: dict | None) -> str:
     return _text(gateway.get("routeName") or gateway.get("name") or gateway.get("configName") or gateway.get("id")) or "未命名航线"
 
 
-def role_id_label(gateway: dict | None, fallback: str = "未指定人格") -> str:
+def role_id_label(gateway: dict | None, fallback: str = "未指定角色") -> str:
     if not gateway:
         return fallback
     return _text(gateway.get("agentRoleId")) or fallback
 
 
-def role_label(gateway: dict | None, fallback: str = "未指定人格") -> str:
+def role_label(gateway: dict | None, fallback: str = "未指定角色") -> str:
     if not gateway:
         return fallback
     profile_name = _first_role_route_name(gateway) or _text(gateway.get("configName")) or _text(gateway.get("id"))

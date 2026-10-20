@@ -48,9 +48,9 @@ npm run start:manager
 RabiRoute 内部保存完整任务 ID，并在每次投递时单独指定工作目录。任务保存的默认 cwd 不同、在 Desktop 中改名或完成 goal 后，只要 ID 仍有效就会继续复用，不会重复创建。
 
 
-## 第 3 步：确认人格
+## 第 3 步：确认角色
 
-人格可以先使用已有示例，也可以留空。无人格 Route 会生成基础规则；有明确角色行为需求时，再进入“人格配置”编辑正文和规则。
+角色可以先使用已有示例，也可以留空。无角色 Route 会生成基础规则；有明确角色行为需求时，再进入“角色配置”编辑正文和规则。
 
 点击“保存配置”。保存会写入本地 Route 配置，并可能启动或重载当前 Route。
 
@@ -92,7 +92,7 @@ RabiRoute 内部保存完整任务 ID，并在每次投递时单独指定工作�
 | --- | --- |
 | 顶栏显示 Manager 未连接 | 安装版检查 Host `status --json` 的 generation/instance/URL；源码模式检查本次标准输出 URL |
 | Route 已启用但未运行 | 日志诊断中的启动按钮和最近日志 |
-| 没有可触发规则 | 人格页是否有 `heartbeat` 或 `manual_trigger` 规则 |
+| 没有可触发规则 | 角色页是否有 `heartbeat` 或 `manual_trigger` 规则 |
 | Codex 显示未绑定 | 工作目录、任务选择和重新扫描结果 |
 | 出现 `no-client-found` | Desktop 是否已启动并能加载目标任务 |
 | 触发成功但任务没消息 | 最后投递协议、任务 ID、工作目录和最近日志 |
@@ -103,4 +103,4 @@ RabiRoute 内部保存完整任务 ID，并在每次投递时单独指定工作�
 
 - 接入 QQ：阅读 [Route 与消息端](routes-and-adapters.md)。
 - 让消息进入固定项目任务：阅读 [Agent、项目与任务](agents-and-sessions.md)。
-- 设置群消息、私聊或定时规则：阅读 [人格与消息规则](personas-and-rules.md)。
+- 设置群消息、私聊或定时规则：阅读 [角色与消息规则](personas-and-rules.md)。

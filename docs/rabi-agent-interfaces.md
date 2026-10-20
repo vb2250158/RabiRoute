@@ -16,7 +16,7 @@ Windows Host 在启动成功和生命周期变化时原子生成状态目录中�
 
 解析结果只用于当前请求批次；写入后的身份复核、幂等与不确定结果处理继续遵守下文合同。Host 缓存改动须随 Host 版本发布，Manager 源码热补丁无法替换运行中的 .NET Host。
 
-完成连接鉴权后即可使用已提供的接口，不再增加逐功能或逐人格授权。发送仍须遵守来源身份、目标、消息格式和幂等回执合同。详见[连接与接口使用](connection-access.md)。
+完成连接鉴权后即可使用已提供的接口，不再增加逐功能或逐角色授权。发送仍须遵守来源身份、目标、消息格式和幂等回执合同。详见[连接与接口使用](connection-access.md)。
 
 本机 Agent、已鉴权 RabiLink 和已启用远端 Agent 共用配置接口权限。`POST/DELETE /api/agent-adapters/dsh/connection` 接受可信本机 Agent 不带浏览器 `Origin` 的请求；浏览器跨站请求、伪造连接标记和已撤销连接仍被拒绝。配置版本、参数和写后回读要求保持有效。
 
@@ -24,22 +24,22 @@ Windows Host 在启动成功和生命周期变化时原子生成状态目录中�
 
 家庭设备、音箱播报和媒体控制使用[家庭设备 Agent 接口](home-device-agent-api.md)：先发现资源与参数，再提交带状态版本、生命周期围栏和幂等键的动作，通过原键只读查询回执。服务受理不表示声音已播放。
 
-人格的电脑/手机时间轴查询、来源选择与采集控制见[人格全天记录接口](persona-all-day-recording.md#本机接口)。读取事件不代表已经开启采集，空列表不证明全天没有活动。
+角色的电脑/手机时间轴查询、来源选择与采集控制见[角色全天记录接口](persona-all-day-recording.md#本机接口)。读取事件不代表已经开启采集，空列表不证明全天没有活动。
 
 > 状态：现行 Agent 接口指南。远端 Agent 设备链路仍为实验能力；其它接口按当前 Manager API 和测试核对。
 
 本文说明 Agent 在处理 RabiRoute 消息时需要关注的 Rabi 内置接口。它不是普通用户操作手册，而是给 Agent 注入上下文后使用的接口说明。
 
-这些接口用于让 Agent 主动维护计划和记忆，并把普通回复交回 RabiRoute。RabiRoute 负责存储、权限边界、符合人格配置条件的计划延迟归档、到点或显式发起的记忆整理请求、上下文注入和回复回传；Agent 需要关注的是：什么时候新增或更新计划、什么时候记录近期记忆、收到记忆整理请求时如何返回沉淀记忆，以及需要普通聊天回复时把内容交给回传接口。
+这些接口用于让 Agent 主动维护计划和记忆，并把普通回复交回 RabiRoute。RabiRoute 负责存储、权限边界、符合角色配置条件的计划延迟归档、到点或显式发起的记忆整理请求、上下文注入和回复回传；Agent 需要关注的是：什么时候新增或更新计划、什么时候记录近期记忆、收到记忆整理请求时如何返回沉淀记忆，以及需要普通聊天回复时把内容交给回传接口。
 
 ### Agent 转投的模型设置
 
-`POST /api/agent/threads` 的 `action=send` 优先使用调用方明确指定的 `model`；未指定时使用目标任务唯一所属 Route 的 `agentModel`，仍未配置则省略模型字段，沿用对应 Desktop Agent 的默认设置。不要因读取不到任务模型名而停止转投，也不要读取当前编码 Agent 的配置替代目标配置。主人格需要另选模型时，在原任务投递请求中传入 `model`，可同时指定 `reasoningEffort`；保留原 `taskBinding`。该设置用于新轮次，活跃轮次继续 `steer`。回执不确定时先核对原投递，不自动改投或重发。
+`POST /api/agent/threads` 的 `action=send` 优先使用调用方明确指定的 `model`；未指定时使用目标任务唯一所属 Route 的 `agentModel`，仍未配置则省略模型字段，沿用对应 Desktop Agent 的默认设置。不要因读取不到任务模型名而停止转投，也不要读取当前编码 Agent 的配置替代目标配置。主角色需要另选模型时，在原任务投递请求中传入 `model`，可同时指定 `reasoningEffort`；保留原 `taskBinding`。该设置用于新轮次，活跃轮次继续 `steer`。回执不确定时先核对原投递，不自动改投或重发。
 
 
 ## 计划与记忆写入合同
 
-`focused` 消息包只给出本节入口。涉及计划、近期记忆、反馈或整理结果的写入前，必须先读本节及目标接口章节；文档不可读时停止该操作。写入复用连接鉴权，并遵守当前任务授权与投递合同。计划状态先读取当前人格的 `plan-statuses`，不猜 key；附件通过计划 `attachments` 提交。
+`focused` 消息包只给出本节入口。涉及计划、近期记忆、反馈或整理结果的写入前，必须先读本节及目标接口章节；文档不可读时停止该操作。写入复用连接鉴权，并遵守当前任务授权与投递合同。计划状态先读取当前角色的 `plan-statuses`，不猜 key；附件通过计划 `attachments` 提交。
 
 1. 从 Host 状态（安装版）、结构化 READY（源码版）或测试显式注入取得当前完整 Manager URL。每次请求设置最长 12 秒的有界超时。写入前 GET `/meta`，核对非空 `applicationGenerationId`、`managerInstanceId` 与当前 Host/READY 身份；普通业务请求要求 `health.live=true`、`health.requiredReady=true`，且 `health.state` 为 `healthy` 或 `degraded`。`businessReady=false` 或无关 Route 降级不阻断全部请求，计划恢复、目标路线等依赖由 Manager 对应接口判断。
 2. 每项逻辑写入先生成并保存稳定 `Idempotency-Key` 与完整请求体。PATCH 计划/近期记忆、POST 计划反馈或回传记忆整理结果前，先 GET 对应单项资源或 feedback，把返回的强 ETag 原样放入 `If-Match`。禁止使用弱 ETag、`*` 或 `updatedAt` 替代版本。新增计划、新增近期记忆和发起整理带幂等键，不带 `If-Match`。
@@ -51,11 +51,11 @@ Windows Host 在启动成功和生命周期变化时原子生成状态目录中�
 
 命令行发现脚本在 Host 启动或切换时，会在有限总时限内重新读取状态；端点暂未发布表示服务过渡，不表示 Agent 缺少权限。取得完整端点后不再把 Host 的汇总状态当作第二层许可，普通请求仍按上述 `/meta` 合同判断可用性。超时应保留最后的启动、连接或身份不一致原因。Windows `healthy` 与 `degraded` 均可提供端点，读取 GUI Host 输出须等待进程并捕获标准输出。连接同一实例的合法地址别名以 generation 和实例身份核验，不以 URL 字符串相等代替身份校验；切换后重新发现，不复用旧端口或自动重放写入。
 
-跨人格投递另读“查询其它人格并投递消息”，保留 deliveryId、来源能力、目标 Route 和跳数合同；远端任务另读“远端 Agent 设备接口”。按需加载说明不会放宽这些要求。
+跨角色投递另读“查询其它角色并投递消息”，保留 deliveryId、来源能力、目标 Route 和跳数合同；远端任务另读“远端 Agent 设备接口”。按需加载说明不会放宽这些要求。
 
 ## 消息投递：Rabi 可用时统一走 Rabi
 
-此规则覆盖 Rabi 管理的群聊/私聊、附件、跨人格、持久 Agent 任务正文与续投、任务结果、callback / knowledge-callback 和 Outbox。普通界面对用户的答复、只读任务核对及同一任务内临时子 Agent 协作不属于旁路投递。发送仍须有原动作授权。
+此规则覆盖 Rabi 管理的群聊/私聊、附件、跨角色、持久 Agent 任务正文与续投、任务结果、callback / knowledge-callback 和 Outbox。普通界面对用户的答复、只读任务核对及同一任务内临时子 Agent 协作不属于旁路投递。发送仍须有原动作授权。
 
 先调用 `GET /api/agent/help` 获取当前 Agent API 目录，并可按 `operationId`、方法或路径查询单个接口帮助。返回项会标明 `contractLevel`：`baseline` 是尚未完成精确 schema 核验的帮助，不代表接口不能调用；应读取权威专题合同补齐 `coverage.missing` 后再调用。`auditLevel: implementation-summary` 仅表示已有实现审计摘要，不等于 `verified`。能力汇总仅在 verified 标签、请求与响应精确标记均为 true 且 missing 为空时计入 `verifiedCount`；未知等级或矛盾声明计入 `unverifiedCount`。三类计数 baselineCount + verifiedCount + unverifiedCount 等于 operationCount，不把未知项当成已验证。
 
@@ -65,7 +65,7 @@ Windows Host 在启动成功和生命周期变化时原子生成状态目录中�
 
 Help 查询参数为 `operationId`、`path`、`method`，每项最多一次且非空，多个条件取交集；`path` 使用目录中的精确路径模板，`method` 不区分大小写。处理器对未知、重复或空参数返回 400 `AGENT_HELP_INVALID_QUERY` 和修复指引；LAN 权限层可能先拒绝非法查询。指定 `operationId` 未匹配返回 404 `AGENT_HELP_NOT_FOUND`；仅按路径或方法查无结果仍返回 200 空列表以兼容现有调用。错误不回显查询值，不得把凭据放入查询参数。
 
-插件层还提供 `node scripts/agent-api-route-inventory.mjs`：它输出 exact method/path、`dispatchScopes`（prefix）和 `unresolved`（通配或未展开项）三类清单。扫描使用 TypeScript AST，不执行插件；支持属性换序和带引号属性，忽略注释中的伪声明，动态路径、动态方法与 spread 声明记入 unresolved。它只识别显式含 routeId 的对象，无法覆盖完全由导入或工厂生成的声明；exact 数量按文件与 routeId 区分，不是全局唯一 URL 数量。不要把 prefix 或单一 Agent 目录数量当成全部 Rabi API。群聊/私聊和文件使用 `POST /api/agent/send`。发送前可再调用 `GET /api/agent/send/capabilities` 获取当前渠道、参数说明和示例。内置目录的 `params` 键与发送校验共用字段白名单；字段类型、条件必填和权限仍由实际校验器执行，不应把说明文本当作完整 JSON Schema。QQ/NapCat 使用 `channel: "napcat"`，不能写 `channel: "qq"`。未知渠道会返回 `errorCode`、`help`、`repair` 和支持渠道；其他参数错误的帮助完整度以具体处理器为准；跨人格使用 `POST /api/personas/{targetPersonaId}/messages`；持久任务正文与续投使用 Rabi 线程桥 `POST /api/agent/threads`；正式 callback 按来源需求合同调用。保留原 taskBinding、来源身份、requestId、tracking、引用和稳定幂等字段。Rabi 的 adapter 最终调用 NapCat、Desktop IPC 或其它平台是链路的一部分；调用方绕开 Rabi 才属于旁路。
+插件层还提供 `node scripts/agent-api-route-inventory.mjs`：它输出 exact method/path、`dispatchScopes`（prefix）和 `unresolved`（通配或未展开项）三类清单。扫描使用 TypeScript AST，不执行插件；支持属性换序和带引号属性，忽略注释中的伪声明，动态路径、动态方法与 spread 声明记入 unresolved。它只识别显式含 routeId 的对象，无法覆盖完全由导入或工厂生成的声明；exact 数量按文件与 routeId 区分，不是全局唯一 URL 数量。不要把 prefix 或单一 Agent 目录数量当成全部 Rabi API。群聊/私聊和文件使用 `POST /api/agent/send`。发送前可再调用 `GET /api/agent/send/capabilities` 获取当前渠道、参数说明和示例。内置目录的 `params` 键与发送校验共用字段白名单；字段类型、条件必填和权限仍由实际校验器执行，不应把说明文本当作完整 JSON Schema。QQ/NapCat 使用 `channel: "napcat"`，不能写 `channel: "qq"`。未知渠道会返回 `errorCode`、`help`、`repair` 和支持渠道；其他参数错误的帮助完整度以具体处理器为准；跨角色使用 `POST /api/personas/{targetPersonaId}/messages`；持久任务正文与续投使用 Rabi 线程桥 `POST /api/agent/threads`；正式 callback 按来源需求合同调用。保留原 taskBinding、来源身份、requestId、tracking、引用和稳定幂等字段。Rabi 的 adapter 最终调用 NapCat、Desktop IPC 或其它平台是链路的一部分；调用方绕开 Rabi 才属于旁路。
 
 只有按上节动态发现、核对身份并有界重试后确认 Rabi 不可用，才允许在原授权内使用已核实的当前平台入口。旧端口拒绝连接、Hook 概括提示、参数错误、权限/策略拒绝、owner 未加载或接口能力不足，都不能单独证明 Rabi 已挂。截图或旧任务中的地址不能替代当前 generation。Rabi 健康时应解决具体接口问题，不因工具方便而直发。
 
@@ -113,7 +113,7 @@ GET /api/agent/qq/messages/<messageId>/attachments/0?routeId=<routeId>&kind=grou
 
 **覆盖与成本限制（Agent 调用前必读）**
 
-- 查询范围是该人格已保存的消息。`includeArchives` 默认关闭；`includeArchives=1` 纳入已保存归档，不保证聊天平台的全部历史。
+- 查询范围是该角色已保存的消息。`includeArchives` 默认关闭；`includeArchives=1` 纳入已保存归档，不保证聊天平台的全部历史。
 - 返回最近的匹配片段，每条消息按既有顺序排列。`limit` 默认 50、最多 200；`maxChars` 默认及最多 200,000，预算含文本、分段和记录开销，首条消息可超出预算。`count` 仅是本次返回数量，`coverage` 仅标注角色、归档开关及筛选范围，不是总条数或完整性证明。少于 `limit` 也可能受字符预算影响。
 - 本接口没有 `cursor`、`offset`、`nextCursor` 或完整结束标记。不要用这批结果计算整月消息分布，也不要用“最早时间减一秒”模拟分页：同秒多条消息会遗漏。全量统计先核验来源及时间覆盖；受管 QQ 历史分页也不保证平台全部历史。
 - 响应的 `coverage` 明示 `recordScope=saved_role_messages`、`resultMode=latest_matches`、`completenessUnknown=true`、`paginationSupported=false`、有效 `limit/maxChars/from/to` 和 `limitReducesArchiveScan=false`。传 `cursor` 或 `offset` 返回 400 `MESSAGE_HISTORY_PAGINATION_UNSUPPORTED`，读取前拒绝，防止重复取得同一片段。
@@ -163,7 +163,7 @@ docs/rabi-agent-interfaces.md
 
 ### 身份关系记忆接口
 
-身份关系记录“这个消息端账号可能对应谁，以及哪些人与人、组织或项目关系已确认或待确认”，不等同于聊天记录、计划或当前发言立场。关系记录本身不分长期或短期；当前消息里的临时角色由情景记录表示。身份关系由人格私有保存。只有受支持消息端从真实发送者字段提供稳定 `senderStableId` 与 `endpointIdentityNamespace`，并且消息实际进入命中的 Route 投递时，系统才会自动建立“待认识”的候选参与者。昵称、群权限、一次自报或正文里转述的身份都不能触发确认。账号查询键必须同时提供 `platform`、`endpointIdentityNamespace` 和 `senderStableId`；不要使用 Route ID 代替其中任何一项。
+身份关系记录“这个消息端账号可能对应谁，以及哪些人与人、组织或项目关系已确认或待确认”，不等同于聊天记录、计划或当前发言立场。关系记录本身不分长期或短期；当前消息里的临时角色由情景记录表示。身份关系由角色私有保存。只有受支持消息端从真实发送者字段提供稳定 `senderStableId` 与 `endpointIdentityNamespace`，并且消息实际进入命中的 Route 投递时，系统才会自动建立“待认识”的候选参与者。昵称、群权限、一次自报或正文里转述的身份都不能触发确认。账号查询键必须同时提供 `platform`、`endpointIdentityNamespace` 和 `senderStableId`；不要使用 Route ID 代替其中任何一项。
 
 ```text
 GET /api/roles/:roleId/identity-relations
@@ -172,7 +172,7 @@ PUT /api/roles/:roleId/identity-relations
 POST /api/roles/:roleId/identity-relations/observations
 ```
 
-`GET` 不带查询参数时返回账号、参与者和关系卡的当前视图；带完整账号键时返回该账号的解析上下文。`PUT` 一次只写一种记录：`endpoint_account`、`participant` 或 `relation_card`，用于人工确认、纠正和冲突处理。`POST .../observations` 供处理 Agent 在对话中发现新身份线索时使用：它只能更新当前账号已经关联的候选参与者和候选关系，不能写成 `confirmed`，也不能覆盖冲突记录。写入要附最小化证据引用，例如消息 ID、消息端、群/私聊会话或简短核对说明；不要复制整段私人聊天正文。多电脑同步后，若同一记录存在不一致的并发事件头，视图会标记 `conflicted`，给出 `conflictEventIds`，并在 `conflictCandidates` 中保留每个候选的完整记录，供人格页比较后修正；这类记录不会参与自动确认。要收敛冲突，`PUT` 必须明确提供该记录的全部关键字段，新的事件会替代所有当前事件头。
+`GET` 不带查询参数时返回账号、参与者和关系卡的当前视图；带完整账号键时返回该账号的解析上下文。`PUT` 一次只写一种记录：`endpoint_account`、`participant` 或 `relation_card`，用于人工确认、纠正和冲突处理。`POST .../observations` 供处理 Agent 在对话中发现新身份线索时使用：它只能更新当前账号已经关联的候选参与者和候选关系，不能写成 `confirmed`，也不能覆盖冲突记录。写入要附最小化证据引用，例如消息 ID、消息端、群/私聊会话或简短核对说明；不要复制整段私人聊天正文。多电脑同步后，若同一记录存在不一致的并发事件头，视图会标记 `conflicted`，给出 `conflictEventIds`，并在 `conflictCandidates` 中保留每个候选的完整记录，供角色页比较后修正；这类记录不会参与自动确认。要收敛冲突，`PUT` 必须明确提供该记录的全部关键字段，新的事件会替代所有当前事件头。
 
 稳定账号键只能证明“这是同一个消息端账号”，不能单独证明“始终是同一个人在使用”。共用账号或证据互相矛盾时，`participantLinks` 可以保留多个候选；当前账号只有一个候选参与者时，观察请求可以省略 `participantId`，存在多个候选时则必须先通过带完整账号键的 `GET` 读取候选 ID，再明确指定。系统不会根据昵称、最近发言或最高置信度自行选择。
 
@@ -216,7 +216,7 @@ POST /api/roles/:roleId/identity-relations/observations
 }
 ```
 
-人格页把同一读取结果投影为“已识别身份”和“未识别身份”。已识别人物使用整张卡片作为入口，在同一个身份工作区内查看和编辑参与者资料、说话习惯、消息端账号与关系；参与者、账号和关系仍通过独立 `PUT` 保存，不构成一次事务。独占账号放在唯一人物中；已经知道使用者范围的共用账号同时出现在每个可能使用者中，并标记“共用”，但解析结果仍保持多人候选。“未识别身份”按 QQ、微信、声纹等消息端分类，容纳尚不知道对应人物、候选尚未指向已识别人物或存在冲突的账号。页面会在身份修正或人格同步事件后刷新；共用账号的单条消息归因、其他候选和冲突仍只能作为核对材料，不能被当作项目归属或执行授权。
+角色页把同一读取结果投影为“已识别身份”和“未识别身份”。已识别人物使用整张卡片作为入口，在同一个身份工作区内查看和编辑参与者资料、说话习惯、消息端账号与关系；参与者、账号和关系仍通过独立 `PUT` 保存，不构成一次事务。独占账号放在唯一人物中；已经知道使用者范围的共用账号同时出现在每个可能使用者中，并标记“共用”，但解析结果仍保持多人候选。“未识别身份”按 QQ、微信、声纹等消息端分类，容纳尚不知道对应人物、候选尚未指向已识别人物或存在冲突的账号。页面会在身份修正或角色同步事件后刷新；共用账号的单条消息归因、其他候选和冲突仍只能作为核对材料，不能被当作项目归属或执行授权。
 
 声纹在概念上也是消息端账号。当前通用账号键使用 `platform=voice`、`endpointIdentityNamespace=host:<处理主机 ID>` 和 `senderStableId=voiceprintId`；一段多人录音可以关联多个账号。当前版本已把语音归类工具放进同一个“身份定位”区域，但旧数据仍由下文的 `voice-identities` 兼容接口和文件保存。不要同时向两套接口重复写同一条判断；完成统一数据迁移前，声纹的“这是我 / 其他人”、覆盖率和冲突读回仍以下文接口为准。
 
@@ -275,11 +275,11 @@ npm run manager
 
 ### Codex Hook 上下文接口
 
-已启用并鉴权的远端 Agent 可以调用 Hook 人格目录、诊断与会话绑定管理接口，无需工作区、人格或 Route 绑定。提交 `/context` 时须提供该 Agent 真实拥有的会话和匹配的 `agentType`；默认值为 `codex`。读取请求体后、写入前再次核验原连接仍有效，避免撤销后的请求继续写入。消息组登记同样使用公共接口，不再单独限制远端调用方。
+已启用并鉴权的远端 Agent 可以调用 Hook 角色目录、诊断与会话绑定管理接口，无需工作区、角色或 Route 绑定。提交 `/context` 时须提供该 Agent 真实拥有的会话和匹配的 `agentType`；默认值为 `codex`。读取请求体后、写入前再次核验原连接仍有效，避免撤销后的请求继续写入。消息组登记同样使用公共接口，不再单独限制远端调用方。
 
 通用入口接受 `GET/HEAD/POST/PUT/PATCH/DELETE/OPTIONS`，不按 Windows 文件名限制资源 ID，也不按接口目录拒绝未来路径。普通业务正文可以是数组、标量或包含 `sender`、`worker` 等目标配置字段，具体 Schema 由目标接口校验；来源身份检查只用于真实消息投递、处理决策和 Hook 事件。
 
-Codex 插件必须把 Hook 原始事件提交给 Manager，而不是在插件内复制人格、计划、记忆或召回逻辑：
+Codex 插件必须把 Hook 原始事件提交给 Manager，而不是在插件内复制角色、计划、记忆或召回逻辑：
 
 ```http
 POST /api/codex-hook/context
@@ -324,25 +324,25 @@ POST  /api/roles/:roleId/health/observations
 
 `state` 和 `summary` 都包含时效信息；`unknown` 或 `stale` 不得解释成确定的睡着、醒来或健康状态。经 RabiLink Relay 输入并命中心率/睡眠规则的观测会形成 `wearable_health_alert` Agent 事件。认证秘钥、Relay token 和原始敏感元数据不得作为观测字段传入。完整字段、配置和验收边界见 [`rabilink-wearable-health.md`](./rabilink-wearable-health.md)。
 
-### 读取远端人格配置（0.3.19 实验实现）
+### 读取远端角色配置（0.3.19 实验实现）
 
-本机 Route 的 `agentRoleDeviceId` 非空时，`agentRoleId` 属于该远端 PC。0.3.19 新增下列实验来源接口；来源 PC 缺少接口时需要升级，不能改读本机同名人格：
+本机 Route 的 `agentRoleDeviceId` 非空时，`agentRoleId` 属于该远端 PC。0.3.19 新增下列实验来源接口；来源 PC 缺少接口时需要升级，不能改读本机同名角色：
 
 ```http
 GET /api/roles/:roleId/persona-reference?file=persona.md
 ```
 
-`file` 只接受人格目录内的单个 `.md` / `.markdown` 文件名。成功返回 `{code:0,data}`，其中 `data` 包含 `schemaVersion:1`、真实 `roleId`、`file`、`document`、规范化 `personaConfig`、SHA-256 `revision`、`applicationGenerationId` 和 `managerInstanceId`。正文上限 2 MiB，配置上限 256 KiB；路径越界、损坏 JSON 或超限均拒绝，不返回冒充完整结果的截断内容。
+`file` 只接受角色目录内的单个 `.md` / `.markdown` 文件名。成功返回 `{code:0,data}`，其中 `data` 包含 `schemaVersion:1`、真实 `roleId`、`file`、`document`、规范化 `personaConfig`、SHA-256 `revision`、`applicationGenerationId` 和 `managerInstanceId`。正文上限 2 MiB，配置上限 256 KiB；路径越界、损坏 JSON 或超限均拒绝，不返回冒充完整结果的截断内容。
 
-通过当前本机 Manager 的 `/api/rabilink/peer/http/<设备>/persona/...` 访问来源 PC。首次使用通过 `POST /api/rabilink/peer/persona/bootstrap` 提交 `{deviceId}`，复用 RabiLink 已鉴权的应用连接、签名握手和 P2P / Relay 传输，自动固定双方公钥并建立限定的人格服务权限；无需另授完整 `manager` 权限。来源必须声明 `persona-reference-v1` 能力。已有手工条目的明确限权不会被自动扩大，应用停用、凭据变化或撤销权限后拒绝访问。实际 Gateway 解析还核对当前 Route capability、已保存引用和两端 Manager 身份；切代、离线、鉴权失败或绑定变化时停止投递，无同名本机回退。
+通过当前本机 Manager 的 `/api/rabilink/peer/http/<设备>/persona/...` 访问来源 PC。首次使用通过 `POST /api/rabilink/peer/persona/bootstrap` 提交 `{deviceId}`，复用 RabiLink 已鉴权的应用连接、签名握手和 P2P / Relay 传输，自动固定双方公钥并建立限定的角色服务权限；无需另授完整 `manager` 权限。来源必须声明 `persona-reference-v1` 能力。已有手工条目的明确限权不会被自动扩大，应用停用、凭据变化或撤销权限后拒绝访问。实际 Gateway 解析还核对当前 Route capability、已保存引用和两端 Manager 身份；切代、离线、鉴权失败或绑定变化时停止投递，无同名本机回退。
 
-本机实际处理 Agent 与消息端保留原 Route 配置，使用远端人格正文、消息规则和最近消息额度。计划、记忆与技能通过来源入口按需查询；本机 `roleDir`、`rolePath` 为空，投递审计留在本机 Route 目录。远端定时/脚本、计划秘书、记忆整理和 Hook 权限不会因此在本机启用。本机人格目录不把该 Route 挂到同名本机人格下，本机跨人格消息接口也拒绝冒充远端发件人格。
+本机实际处理 Agent 与消息端保留原 Route 配置，使用远端角色正文、消息规则和最近消息额度。计划、记忆与技能通过来源入口按需查询；本机 `roleDir`、`rolePath` 为空，投递审计留在本机 Route 目录。远端定时/脚本、计划秘书、记忆整理和 Hook 权限不会因此在本机启用。本机角色目录不把该 Route 挂到同名本机角色下，本机跨角色消息接口也拒绝冒充远端发件角色。
 
-对外回复需要语言风格检查时，读取远端人格当前配置，向来源 PC 的 `POST /api/roles/:roleId/persona-reference/language-style` 仅提交 `{text,file,revision}`。来源从该人格已保存配置读取风格资料，拒绝调用方提供风格地址；不能把来源路径用于本机读文件。前后核对两端身份和来源快照 revision。显式单次 `styleValidation=0` 按既有合同处理，但不能绕过远端配置读取、离线或鉴权失败。人格通道只允许限定读取及此项检查，不提供远端知识写入或完整管理操作。页面与完整边界见[远端人格引用](remote-persona-reference.md)；真实双 PC 投递仍需单独验收。
+对外回复需要语言风格检查时，读取远端角色当前配置，向来源 PC 的 `POST /api/roles/:roleId/persona-reference/language-style` 仅提交 `{text,file,revision}`。来源从该角色已保存配置读取风格资料，拒绝调用方提供风格地址；不能把来源路径用于本机读文件。前后核对两端身份和来源快照 revision。显式单次 `styleValidation=0` 按既有合同处理，但不能绕过远端配置读取、离线或鉴权失败。角色通道只允许限定读取及此项检查，不提供远端知识写入或完整管理操作。页面与完整边界见[远端角色引用](remote-persona-reference.md)；真实双 PC 投递仍需单独验收。
 
-### 查询其它人格并投递消息
+### 查询其它角色并投递消息
 
-“人格”是面向用户和 Agent 的正式名称；现有 `roleId`、`/api/roles/*` 和 `data/roles/` 是兼容保留的内部名称。人格列表提供专用接口，不需要从 Route 管理结果中拆解：
+“角色”是面向用户和 Agent 的正式名称；现有 `roleId`、`/api/roles/*` 和 `data/roles/` 是兼容保留的内部名称。角色列表提供专用接口，不需要从 Route 管理结果中拆解：
 
 ```http
 GET /api/personas
@@ -350,9 +350,9 @@ GET /api/personas?addressable=true
 GET /api/personas/:personaId
 ```
 
-列表返回人格的 `personaId`、显示名称、是否可以接收消息，以及绑定的 Route。`addressable=true` 只返回至少绑定一个已启用 Route 的人格；只有一个已启用 Route 时会同时返回 `defaultRouteId`。
+列表返回角色的 `personaId`、显示名称、是否可以接收消息，以及绑定的 Route。`addressable=true` 只返回至少绑定一个已启用 Route 的角色；只有一个已启用 Route 时会同时返回 `defaultRouteId`。
 
-当前人格需要联系另一个人格时，使用目标人格路径，并从当前 `AgentPacket.replyContext` 读取 `runtimeRouteId` 和 `personaMessagingCapability`。凭据同时绑定 Route 与人格，不能用另一个 Route 或人格的身份复用：
+当前角色需要联系另一个角色时，使用目标角色路径，并从当前 `AgentPacket.replyContext` 读取 `runtimeRouteId` 和 `personaMessagingCapability`。凭据同时绑定 Route 与角色，不能用另一个 Route 或角色的身份复用：
 
 ```http
 POST /api/personas/:targetPersonaId/messages
@@ -376,15 +376,15 @@ Content-Type: application/json
 GET /api/personas/messages/receipts/:deliveryId
 ```
 
-发送 Route 和接收 Route 都必须已启用；目标人格有多个已启用 Route 时必须提供 `targetRouteId`，不能猜测；不能通过这个接口给自己发送消息。`hopCount` 必须是非负整数，最大为 `8`。成功响应为 HTTP `202` 且 `status=delivered`，表示消息已经沿目标 Route 的现有 `role_panel_message` 路径交给目标处理端。服务只在处理端接收后记录 `status=sent`；失败记录只代表一次尝试。
+发送 Route 和接收 Route 都必须已启用；目标角色有多个已启用 Route 时必须提供 `targetRouteId`，不能猜测；不能通过这个接口给自己发送消息。`hopCount` 必须是非负整数，最大为 `8`。成功响应为 HTTP `202` 且 `status=delivered`，表示消息已经沿目标 Route 的现有 `role_panel_message` 路径交给目标处理端。服务只在处理端接收后记录 `status=sent`；失败记录只代表一次尝试。
 
-跨人格投递是显式的单向消息，不会自动建立双向聊天。目标人格的普通回复只留在自己的角色面板。需要回复来源人格时，目标人格必须再次调用 POST：把新的 `deliveryId` 用于本次回复，沿用收到的 `personaConversationId`，令 `inReplyToMessageId` 等于当前消息 ID，并把 `personaMessageHopCount` 加一。超过 `personaMessageMaxHops` 时停止继续互投。
+跨角色投递是显式的单向消息，不会自动建立双向聊天。目标角色的普通回复只留在自己的角色面板。需要回复来源角色时，目标角色必须再次调用 POST：把新的 `deliveryId` 用于本次回复，沿用收到的 `personaConversationId`，令 `inReplyToMessageId` 等于当前消息 ID，并把 `personaMessageHopCount` 加一。超过 `personaMessageMaxHops` 时停止继续互投。
 
 需要向消息端发送内容时，AgentPacket 会同时给出明确发送接口、已经按当前来源生成的请求模板，以及只读来源上下文：
 
 ```text
 明确发送 API：`<managerBaseUrl>/api/agent/send`；安装版从 Host `status --json` 发现本代地址，源码模式由 Manager 标准输出提供。
-明确发送请求模板：{"deliveryId":"<stable-id>","sender":{"agentType":"primary_persona","sessionId":"<当前 Codex 主人格完整会话 ID>"},"routeId":"main","channel":"napcat","styleValidation":1,"params":{"target":"group","groupId":"456","instanceId":"default","replyToMessageId":"<能引用时填源消息 ID；不引用时填空字符串>","replyImageDescriptions":[]},"payload":{"type":"text","text":"<正文>"}}
+明确发送请求模板：{"deliveryId":"<stable-id>","sender":{"agentType":"primary_persona","sessionId":"<当前 Codex 主角色完整会话 ID>"},"routeId":"main","channel":"napcat","styleValidation":1,"params":{"target":"group","groupId":"456","instanceId":"default","replyToMessageId":"<能引用时填源消息 ID；不引用时填空字符串>","replyImageDescriptions":[]},"payload":{"type":"text","text":"<正文>"}}
 来源上下文（只用于核对来源，不可直接作为发送参数）：{"routeKind":"direct_at","messageId":"123","groupId":"456"}
 ```
 
@@ -405,7 +405,7 @@ POST /api/agent/send
 - `channel`：发送渠道；
 - `params`：该渠道的目标参数；
 - `payload`：`text`、`image`、`voice`、`file`；NapCat 另支持把 `markdown` 渲染成图片；
-- `styleValidation`：枚举值 `1 | 0`，默认 `1`。`1` 使用人格绑定的目标语言风格 Skill 校验文本；`0` 跳过本次校验；
+- `styleValidation`：枚举值 `1 | 0`，默认 `1`。`1` 使用角色绑定的目标语言风格 Skill 校验文本；`0` 跳过本次校验；
 - `messageLengthConfirmation`：NapCat 超限响应返回的单次确认凭据；第一次请求省略，复核后以完整原请求和同一 `deliveryId` 再次提交。
 - `tracking.requirementId`：可选，用于关联消息处理看板，不能决定发送目标；回复已登记的消息处理需求时必须填写；
 - `tracking.sendContextReviewToken`：消息处理需求在发送前完成最新群聊上下文核对后取得的短期凭证，只对同一需求、发送者会话、目标和正文有效。
@@ -448,7 +448,7 @@ QQ 群文本示例：
 
 QQ 系统小表情可在文字中使用 `[CQ:face,id=<QQ 表情 ID>]`。收藏表情先调用 `GET /api/agent/qq/stickers?routeId=<Route ID>&instanceId=<实例 ID>&count=1000`；`instanceId` 在该 Route 只有一个启用账号时可省略，`count` 范围为 1–1000。返回当前账号的 `items { id, name, description, previewUrl }`，`name` 来自 QQ 原生收藏描述，不含原始媒体地址或凭据。`previewUrl` 是同一 Manager 的只读图片接口。旧 NapCat 可安装[名字兼容插件](../plugins/napcat-stickers/README.md)；没有该插件或收藏本身未命名时，名字为空，选择前查看预览。数量上限和 `completenessUnknown` 不证明收藏列表完整。
 
-发送沿用 `POST /api/agent/send`、原来源和稳定 `deliveryId`，使用 `"payload":{"type":"sticker","stickerId":"<列表中的 id>","text":"可选说明"}`，`channel=napcat`，`params` 与普通群聊/私聊一致。发送时重新从所选账号的收藏列表解析 ID，保留表情图片子类型；表情被移除时返回失败，不跨账号寻找替代品。表情属于现有 `image` 输出能力，沿用 Route 显式设置、引用、文字长度、文风、幂等与回执检查。不能同时提供 `path`、`url` 或 `segments`。QQ 内添加或删除收藏后，下一次查询直接读取当前内容；代码没有预置人格、固定图册或日常随机发送计划。
+发送沿用 `POST /api/agent/send`、原来源和稳定 `deliveryId`，使用 `"payload":{"type":"sticker","stickerId":"<列表中的 id>","text":"可选说明"}`，`channel=napcat`，`params` 与普通群聊/私聊一致。发送时重新从所选账号的收藏列表解析 ID，保留表情图片子类型；表情被移除时返回失败，不跨账号寻找替代品。表情属于现有 `image` 输出能力，沿用 Route 显式设置、引用、文字长度、文风、幂等与回执检查。不能同时提供 `path`、`url` 或 `segments`。QQ 内添加或删除收藏后，下一次查询直接读取当前内容；代码没有预置角色、固定图册或日常随机发送计划。
 
 NapCat 图文混排使用 `payload.type=image` 和有序的 `payload.segments`，一次发送一条群聊或私聊消息：
 
@@ -478,7 +478,7 @@ NapCat 图文混排使用 `payload.type=image` 和有序的 `payload.segments`�
 
 Rabi 使用本机 Chromium、Chrome 或 Edge 的无脚本浏览器进程渲染 Markdown，自动检测常见安装位置；也可通过 `RABIROUTE_MARKDOWN_BROWSER_PATH` 指定浏览器可执行文件的绝对路径。标题、列表、表格、引用和代码块会出现在 PNG 中。原始 HTML 转义，链接不可点击，Markdown 图片语法只显示说明占位，不加载本地或远程资源。单段 Markdown 上限 32 KiB、图片高度 4096 像素、PNG 4 MiB；同一消息的 Markdown 图片合计上限 8 MiB。浏览器不可用或渲染失败时，整条消息不进入 NapCat 发送。
 
-人格可在 `personaConfig.json.languageStyle.styleSkillUrl` 绑定自己的语言风格 Skill。不同人格可以绑定不同 URL。URL 可指向 Skill 目录、`SKILL.md` 或 `references/style-data.json`；Manager 从其中读取程序化 JSON 规则。
+角色可在 `personaConfig.json.languageStyle.styleSkillUrl` 绑定自己的语言风格 Skill。不同角色可以绑定不同 URL。URL 可指向 Skill 目录、`SKILL.md` 或 `references/style-data.json`；Manager 从其中读取程序化 JSON 规则。
 
 ### NapCat 长消息确认
 
@@ -490,11 +490,11 @@ Agent 应先检查和精简。一条说不清时，按完整意思拆成少量�
 
 原请求还没有发送回执时，可保留 `deliveryId` 修改正文并重新检查，不携带旧确认凭据。确需保留单条原文时，用同一 `deliveryId` 和完整原请求再次调用，只增加 `messageLengthConfirmation=messageLengthValidation.confirmationToken`。凭据有效期十分钟，绑定发送身份、目标、原文、附件与当前阈值；改内容、目标、编号或阈值，凭据过期或 Manager 重启后都需重新检查。成功回执按原编号读取，超时或不确定时先核对原回执，不换编号重发。
 
-长度确认与文风校验独立。超限响应也会带当前文风结果；文风失败仍需改写或按下节合同显式确认，`styleValidation=0` 不跳过长度确认。该参数是单次内容复核，不改变连接权限、Route 输出设置或人格风格绑定。
+长度确认与文风校验独立。超限响应也会带当前文风结果；文风失败仍需改写或按下节合同显式确认，`styleValidation=0` 不跳过长度确认。该参数是单次内容复核，不改变连接权限、Route 输出设置或角色风格绑定。
 
 ### 外发文风校验
 
-`styleValidation=1` 且校验不通过时，Manager 返回 `409` 和 `status=style_confirmation_required`，附带规则编号、段落、原因和命中证据，消息尚未进入 Outbox。Agent 确认原文符合本次需求后，使用同一 `deliveryId` 重发，并把 `styleValidation` 改为 `0`。这次跳过不修改人格绑定，后续发送恢复默认校验。
+`styleValidation=1` 且校验不通过时，Manager 返回 `409` 和 `status=style_confirmation_required`，附带规则编号、段落、原因和命中证据，消息尚未进入 Outbox。Agent 确认原文符合本次需求后，使用同一 `deliveryId` 重发，并把 `styleValidation` 改为 `0`。这次跳过不修改角色绑定，后续发送恢复默认校验。
 
 通用校验接口只分析文本，不发送消息：
 
@@ -554,7 +554,7 @@ GET /api/message-processing/requirements/:requirementId/send-context?sourceMessa
 
 单条回复必须传本次准备引用的 `sourceMessageId`。响应保留有界上下文，并把 `requiredReviewIds` 缩小为该主消息和从消息记录解析出的明确回复链；同一聚合需求里的其它消息仍参与上下文版本计算，但不要求逐条声明为本次正文依据。Agent 判断拟发送内容仍合适后，把这次精确发送请求作为 `proposedSend` 提交审核：
 
-来源消息较早、已超出近期窗口时，Manager 只会从该需求所属人格的正式 `group-messages.jsonl` 恢复同 Route、同 `sourceMessageId` 的唯一记录。找不到、出现重复记录或 Route 证据冲突时，GET 失败关闭，不会扩大到其它群或其它历史需求。
+来源消息较早、已超出近期窗口时，Manager 只会从该需求所属角色的正式 `group-messages.jsonl` 恢复同 Route、同 `sourceMessageId` 的唯一记录。找不到、出现重复记录或 Route 证据冲突时，GET 失败关闭，不会扩大到其它群或其它历史需求。
 
 上下文读取使用同一有界交互读池。发送校验才额外恢复完整来源和附件证据，并与最近上下文合并在一次读任务中；GET 和审批不增加这项额外恢复。最近窗口沿用 80 条、24,000 字符预算，必要时允许附加 1 条精确来源；记录与来源、附件元数据合计的 UTF-8 JSON 最多 1 MiB，超限拒绝，不截断证据。读取前后发现相关文件清单或元数据变化会失败关闭；这不是跨文件原子快照。
 
@@ -599,7 +599,7 @@ POST /api/message-processing/requirements/:requirementId/send-context
 
 受跟踪发送在引用和图片检查阶段只使用本次审批绑定的精确正式来源证据。需求里过时的 `conversationKey` 或 `replyContext.groupId` 不能把来源改到另一群；正式群、Route、实例与发送目标不一致，来源记录不唯一，或图片附件没有标为已审核时都会拒绝发送。普通未跟踪发送仍按原 Route 历史查找，不使用这项恢复。
 
-这项检查适用于所有 Agent 类型。只要 `replyToMessageId` 指向已登记消息处理需求的来源消息，主人格或其它 Agent 也不能省略 `tracking.requirementId` 绕过看板和发送前核对。
+这项检查适用于所有 Agent 类型。只要 `replyToMessageId` 指向已登记消息处理需求的来源消息，主角色或其它 Agent 也不能省略 `tracking.requirementId` 绕过看板和发送前核对。
 
 普通群讨论可以决定不回复，但必须说明原因。直接 @、直接回复、私聊和计划进展通知不能用泛化的 `agent_judgement` 关闭，只接受重复、他人已回答、消息撤回、来源无效等受限原因：
 
@@ -680,11 +680,11 @@ Manager 从投递时起为未完成回调设置一小时期限。到期后，它
 }
 ```
 
-已有同一记录时使用 `status=duplicate` 并提供带类型的 `record`、证据和核对时间。计划使用 `{ "type": "plan", "planId": "..." }`，记忆使用 `{ "type": "memory", "memoryId": "..." }`，项目文档使用 `{ "type": "document", "relativePath": "docs/..." }`。文档路径必须相对于当前项目，绝对路径和跳出项目目录的路径会被拒绝。尚未完成判断或记录时只能 `handoff` 给秘书、计划 Agent 或主人格，`reply` 和 `no_reply` 都会被 Manager 拒绝。消息处理看板的 `factAssessmentOpen` 用于发现尚未完成 Agent 语义判断的需求，`criticalFactOpen` 用于发现已判断为项目事实但尚未登记完成的需求。
+已有同一记录时使用 `status=duplicate` 并提供带类型的 `record`、证据和核对时间。计划使用 `{ "type": "plan", "planId": "..." }`，记忆使用 `{ "type": "memory", "memoryId": "..." }`，项目文档使用 `{ "type": "document", "relativePath": "docs/..." }`。文档路径必须相对于当前项目，绝对路径和跳出项目目录的路径会被拒绝。尚未完成判断或记录时只能 `handoff` 给秘书、计划 Agent 或主角色，`reply` 和 `no_reply` 都会被 Manager 拒绝。消息处理看板的 `factAssessmentOpen` 用于发现尚未完成 Agent 语义判断的需求，`criticalFactOpen` 用于发现已判断为项目事实但尚未登记完成的需求。
 
 Manager 还会按 `record` 的类型读取对应计划、记忆或项目文档，确认记录真实存在并至少包含一个原始群消息 ID。仅提交一个看似有效的业务 ID、路径，或只在 `evidence` 中自述“已更新”，都不能关闭事项。
 
-转交秘书、计划 Agent 或主人格时，调用 `/api/agent/threads` 的 `send` 动作，并增加结构化字段。Manager 只在目标 Desktop owner 接受后把看板改为“已转交”；如已确定计划，应同时传 `planId`，让后续计划进展能够回到原群或私聊：
+转交秘书、计划 Agent 或主角色时，调用 `/api/agent/threads` 的 `send` 动作，并增加结构化字段。Manager 只在目标 Desktop owner 接受后把看板改为“已转交”；如已确定计划，应同时传 `planId`，让后续计划进展能够回到原群或私聊：
 
 ```json
 {
@@ -770,21 +770,21 @@ GET /api/agent/send/traces?channel=napcat&sentMessageId=:platformMessageId&route
 
 只有回执返回 `status=sent` 且包含目标通道要求的真实标识（QQ 文本为 `sentMessageId`）时，调用方才能继续做平台回读并把业务状态标成已发送。`deliveryId` 只提供 Outbox 请求幂等，不代替 NapCat/外部平台的真实存在验证，也不是自动重试队列。公开示例应使用占位 ID，不把运行期回执文件提交到仓库。
 
-### 语音消息端人格回复
+### 语音消息端角色回复
 
-当来源上下文显示 `routeKind=voice_transcript`、`adapterType=speech` 和 `characterTtsDialogue=true` 时，本轮来自 RabiPC 语音消息端。Agent 使用注入模板调用 `/api/agent/send`，明确填写 `channel=speech`、当前 `routeId`、`params.sessionId` 和文本 payload。Outbox 从 Route 读取人格、声线、TTS 模型、语言和自动播放设置；成功时表示请求进入 RabiSpeech 合成或主机级 FIFO，不表示 QQ、企业微信或其它渠道已经发送。
+当来源上下文显示 `routeKind=voice_transcript`、`adapterType=speech` 和 `characterTtsDialogue=true` 时，本轮来自 RabiPC 语音消息端。Agent 使用注入模板调用 `/api/agent/send`，明确填写 `channel=speech`、当前 `routeId`、`params.sessionId` 和文本 payload。Outbox 从 Route 读取角色、声线、TTS 模型、语言和自动播放设置；成功时表示请求进入 RabiSpeech 合成或主机级 FIFO，不表示 QQ、企业微信或其它渠道已经发送。
 
 这个状态只由 `speech` / RabiSpeech 消息端的转写事件注入。不要把 QQ、角色面板或其它文字入口手工标记成语音状态，也不要绕过 Outbox 直连 worker，否则会丢失来源绑定、策略检查和会话隔离。
 
 手机音频流虽然复用同一套 RabiSpeech ASR，但来源是 `rabilink`。发送回原设备时必须明确填写 `channel=rabilink`、`params.sourceMessageId` 和 `params.targetDeviceIds`；注入模板只使用稳定 `sourceDeviceId`，不会把临时 `sourceStreamId` 当设备。它不是 `speech` 发送，因此不会误触发独立语音端的 TTS/FIFO 规则。
 
-### 声纹证据与人格身份解释
+### 声纹证据与角色身份解释
 
-RabiRoute 投给人格的语音记录只保留不透明声纹/聚类 ID、`Speaker 1` 等分段标签、分数和判定证据，不携带人名，也不把任何声纹标成“用户”。收到记录的人格应结合自己的关系、记忆和会话上下文解释身份；不同人格可以对同一声纹形成不同关系认知。
+RabiRoute 投给角色的语音记录只保留不透明声纹/聚类 ID、`Speaker 1` 等分段标签、分数和判定证据，不携带人名，也不把任何声纹标成“用户”。收到记录的角色应结合自己的关系、记忆和会话上下文解释身份；不同角色可以对同一声纹形成不同关系认知。
 
-每条新语音同时携带 `sourceHostId/sourceHostName`。声纹 ID 只在产生它的处理主机范围内解释，因此人格身份键是“处理主机 + 声纹 ID”，不能把两台 PC 恰好相同的 cluster 字符串当成同一个人。人格自己的结构化解释以追加式文件 `data/roles/<RoleId>/voice/voice-identities.jsonl` 为真源；它会随人格目录同步，而 RabiSpeech、Manager 和 Route 都不会替人格填写 `displayName`、`relationship` 或 `isUser`。
+每条新语音同时携带 `sourceHostId/sourceHostName`。声纹 ID 只在产生它的处理主机范围内解释，因此角色身份键是“处理主机 + 声纹 ID”，不能把两台 PC 恰好相同的 cluster 字符串当成同一个人。角色自己的结构化解释以追加式文件 `data/roles/<RoleId>/voice/voice-identities.jsonl` 为真源；它会随角色目录同步，而 RabiSpeech、Manager 和 Route 都不会替角色填写 `displayName`、`relationship` 或 `isUser`。
 
-查询或更新当前人格的解释：
+查询或更新当前角色的解释：
 
 ```http
 GET /api/roles/:roleId/voice-identities
@@ -802,27 +802,27 @@ Content-Type: application/json
   "relationship": "我的用户",
   "isUser": true,
   "aliases": ["老板"],
-  "notes": "由当前人格结合持续会话确认"
+  "notes": "由当前角色结合持续会话确认"
 }
 ```
 
 `isUser` 没有系统默认值；未知时应省略，而不是写成 `false`。重复提交相同解释不会新增事件；修正会追加新事件，`deleted=true` 会追加 tombstone，不会原地改写共享历史。每个新事件会自动记录它收敛的上一组事件，调用方不需要也不能手工维护父事件。
 
-两台 PC 从同一共同版本并发修改同一个 `sourceHostId + voiceprintId` 时，JSONL 并集合并会保留两个事件头，不再按文件顺序静默选择最后一条。`GET` 返回 `conflicted=true`、`conflictFields` 和带 `eventId/deleted` 的 `conflictCandidates`。如果 `isUser` 或删除状态发生分歧，`voice-transcripts` 把相关分段归为 `conflict`；只有称呼、关系或备注分歧但所有分支的 `isUser` 一致时，用户/他人分类仍可保留，同时关系资料继续标记待收敛。人格再次 `PUT` 自己确认的最终解释时，Manager 会自动 supersede 当前全部事件头，下一次多电脑同步即可收敛。AgentPacket 会提供 `voiceIdentitiesPath`、处理主机、全部声纹 ID、已知关系和待收敛字段；这些内容明确标记为“人格记录”，不是主机推断。
+两台 PC 从同一共同版本并发修改同一个 `sourceHostId + voiceprintId` 时，JSONL 并集合并会保留两个事件头，不再按文件顺序静默选择最后一条。`GET` 返回 `conflicted=true`、`conflictFields` 和带 `eventId/deleted` 的 `conflictCandidates`。如果 `isUser` 或删除状态发生分歧，`voice-transcripts` 把相关分段归为 `conflict`；只有称呼、关系或备注分歧但所有分支的 `isUser` 一致时，用户/他人分类仍可保留，同时关系资料继续标记待收敛。角色再次 `PUT` 自己确认的最终解释时，Manager 会自动 supersede 当前全部事件头，下一次多电脑同步即可收敛。AgentPacket 会提供 `voiceIdentitiesPath`、处理主机、全部声纹 ID、已知关系和待收敛字段；这些内容明确标记为“角色记录”，不是主机推断。
 
-需要从一天或一段时间的会话中区分“当前人格确认的用户、其他人、未知或冲突声纹”时，使用人格级只读视图，而不是自行修改原始消息：
+需要从一天或一段时间的会话中区分“当前角色确认的用户、其他人、未知或冲突声纹”时，使用角色级只读视图，而不是自行修改原始消息：
 
 ```http
 GET /api/roles/:roleId/voice-transcripts?from=<ISO>&to=<ISO>&speaker=user&limit=200&includeArchives=true
 ```
 
-`speaker` 可为 `user`、`other`、`unknown` 或 `conflict`。返回结果在读取时联结 `conversation/current.jsonl`（可选归档）与当前人格的 `voice/voice-identities.jsonl`，提供整条记录的 `personaClassification`、逐分段 `classification` 和匹配身份。`mixed` 表示同一录音包含多种分段结论。这个视图不把称呼或 `isUser` 回写到主机原始消息和人格会话账本；人格关系修正后再次查询会立即得到新解释。
+`speaker` 可为 `user`、`other`、`unknown` 或 `conflict`。返回结果在读取时联结 `conversation/current.jsonl`（可选归档）与当前角色的 `voice/voice-identities.jsonl`，提供整条记录的 `personaClassification`、逐分段 `classification` 和匹配身份。`mixed` 表示同一录音包含多种分段结论。这个视图不把称呼或 `isUser` 回写到主机原始消息和角色会话账本；角色关系修正后再次查询会立即得到新解释。
 
-响应中的 `matchedCount` 和 `summary` 都基于完整筛选结果计算，不受明细 `limit` 截断。`summary` 给出总录音/分段数、录音时长、说话人时长、`user/other/unknown/conflict` 分类统计、已解释时长和 `coverageRate`；`unresolvedVoiceprints` 按 `sourceHostId + voiceprintId` 汇总仍未知或冲突的声纹、分段数、时长和最后出现时间。它们只是读取时派生的覆盖率视图，不是新的账本，也不会写回人格文件。
+响应中的 `matchedCount` 和 `summary` 都基于完整筛选结果计算，不受明细 `limit` 截断。`summary` 给出总录音/分段数、录音时长、说话人时长、`user/other/unknown/conflict` 分类统计、已解释时长和 `coverageRate`；`unresolvedVoiceprints` 按 `sourceHostId + voiceprintId` 汇总仍未知或冲突的声纹、分段数、时长和最后出现时间。它们只是读取时派生的覆盖率视图，不是新的账本，也不会写回角色文件。
 
-当前路由消息明确询问声纹、说话人、“哪些是我/用户说的、哪些是别人说的”或全天录音归类时，AgentPacket 会把上述时间范围查询、四类 speaker 过滤、关系 GET/PUT 和追加事件规则注入当前人格任务；普通消息不携带这段说明。Agent 应执行当前请求所需的一次查询，不能周期轮询覆盖率；`unknown` 或 `conflict` 只能根据当前人格自己的会话、记忆和用户确认来收敛，不能直接采用主机候选名称或高分。
+当前路由消息明确询问声纹、说话人、“哪些是我/用户说的、哪些是别人说的”或全天录音归类时，AgentPacket 会把上述时间范围查询、四类 speaker 过滤、关系 GET/PUT 和追加事件规则注入当前角色任务；普通消息不携带这段说明。Agent 应执行当前请求所需的一次查询，不能周期轮询覆盖率；`unknown` 或 `conflict` 只能根据当前角色自己的会话、记忆和用户确认来收敛，不能直接采用主机候选名称或高分。
 
-下面的本机接口仍作为 RabiSpeech 操作员诊断兼容入口：当人工已确认某条录音标签时，可以创建/复用诊断资料并绑定当前 `recordId + speakerLabel`。这些名字不会进入 RabiRoute 主机通用消息或人格账本，不能作为 Agent 判断用户身份的真源：
+下面的本机接口仍作为 RabiSpeech 操作员诊断兼容入口：当人工已确认某条录音标签时，可以创建/复用诊断资料并绑定当前 `recordId + speakerLabel`。这些名字不会进入 RabiRoute 主机通用消息或角色账本，不能作为 Agent 判断用户身份的真源：
 
 ```http
 PUT /api/speech/speaker-identities
@@ -843,9 +843,9 @@ Content-Type: application/json
 
 人工入口仍位于 WebGUI「语音服务 → ASR 语音识别 → 说话人 / 声纹设置」，和 Agent 接口共用 `output/speaker-profiles.json`。界面按未知/已知说话人折叠，并为每个分段人物预览最近 10 句话，帮助人工确认或纠正。
 
-这个接口写的是 RabiSpeech 本机诊断元数据和显式录音绑定。Manager 在通用消息入口删除人名，只转发不透明声纹/聚类证据；对应人格拥有“是谁、是不是用户”的最终解释权。只有能力发现明确返回已校准支持时，才可以把分数描述成声纹匹配证据，但仍不能把主机匹配直接等同于人格关系。
+这个接口写的是 RabiSpeech 本机诊断元数据和显式录音绑定。Manager 在通用消息入口删除人名，只转发不透明声纹/聚类证据；对应角色拥有“是谁、是不是用户”的最终解释权。只有能力发现明确返回已校准支持时，才可以把分数描述成声纹匹配证据，但仍不能把主机匹配直接等同于角色关系。
 
-### Agent 触发多电脑人格同步
+### Agent 触发多电脑角色同步
 
 使用同一个 RabiLink 应用 token 的 PC 可以由本机 Agent 查询并显式同步：
 
@@ -862,18 +862,18 @@ Content-Type: application/json
 }
 ```
 
-省略 `roleId` 表示同步全部人格。同步器优先局域网直连，失败后经 Relay 受限中转。Agent 必须检查逐文件结果、`fileConflicts` 和 `semanticConflicts`；后者会在同一次同步响应中列出已成功并集合并、但仍有并发分支的语音账号兼容归类或通用身份关系。语音项包含处理主机、声纹、字段和事件候选；身份关系项包含记录类型、记录 ID 和事件候选，不需要另行轮询覆盖率。`conflicts > 0` 或 HTTP `409` 表示仍有待处理冲突，不能声称同步完成。
+省略 `roleId` 表示同步全部角色。同步器优先局域网直连，失败后经 Relay 受限中转。Agent 必须检查逐文件结果、`fileConflicts` 和 `semanticConflicts`；后者会在同一次同步响应中列出已成功并集合并、但仍有并发分支的语音账号兼容归类或通用身份关系。语音项包含处理主机、声纹、字段和事件候选；身份关系项包含记录类型、记录 ID 和事件候选，不需要另行轮询覆盖率。`conflicts > 0` 或 HTTP `409` 表示仍有待处理冲突，不能声称同步完成。
 
-普通文件冲突由本机 Agent 使用 `GET /api/persona-sync/conflicts`、`GET /api/persona-sync/conflicts/content` 和 `POST /api/persona-sync/conflicts/resolve` 处理。解决动作支持 `keep_local`、`use_remote`、`use_merged`，并应携带列表返回的 `expectedLocalHash` 防止覆盖刚发生的新修改。三条冲突控制接口仅允许回环调用，不经 LAN listener 或 Relay 暴露。底层 manifest、文件读取、单文件 merge 和完整请求字段见 [多电脑人格数据同步](persona-data-sync.md)。
+普通文件冲突由本机 Agent 使用 `GET /api/persona-sync/conflicts`、`GET /api/persona-sync/conflicts/content` 和 `POST /api/persona-sync/conflicts/resolve` 处理。解决动作支持 `keep_local`、`use_remote`、`use_merged`，并应携带列表返回的 `expectedLocalHash` 防止覆盖刚发生的新修改。三条冲突控制接口仅允许回环调用，不经 LAN listener 或 Relay 暴露。底层 manifest、文件读取、单文件 merge 和完整请求字段见 [多电脑角色数据同步](persona-data-sync.md)。
 
-当当前路由消息明确提到多台电脑、人格/角色同步或 persona sync 时，AgentPacket 会把上述回环地址、当前 `roleId`、一次性执行要求和冲突判定直接注入绑定人格的当前任务；普通聊天不注入这段能力说明。默认只同步当前人格，只有用户明确要求时才允许省略 `roleId` 同步全部人格；peer 不唯一时必须先确认目标，不能猜测，也不能用轮询等待覆盖率。
+当当前路由消息明确提到多台电脑、角色/角色同步或 persona sync 时，AgentPacket 会把上述回环地址、当前 `roleId`、一次性执行要求和冲突判定直接注入绑定角色的当前任务；普通聊天不注入这段能力说明。默认只同步当前角色，只有用户明确要求时才允许省略 `roleId` 同步全部角色；peer 不唯一时必须先确认目标，不能猜测，也不能用轮询等待覆盖率。
 
 NapCat 群聊始终需要提交 `params.replyToMessageId`。能取得来源消息时尽量填写真实消息 ID：
 
 ```json
 {
   "deliveryId": "send-qq-progress-001",
-  "sender": { "agentType": "primary_persona", "sessionId": "<当前 Codex 主人格完整会话 ID>" },
+  "sender": { "agentType": "primary_persona", "sessionId": "<当前 Codex 主角色完整会话 ID>" },
   "routeId": "main",
   "channel": "napcat",
   "params": {
@@ -899,7 +899,7 @@ Outbox 会在字符串消息前添加 OneBot `[CQ:reply,id=123]`，或在消息�
 ```json
 {
   "deliveryId": "send-qq-file-001",
-  "sender": { "agentType": "primary_persona", "sessionId": "<当前 Codex 主人格完整会话 ID>" },
+  "sender": { "agentType": "primary_persona", "sessionId": "<当前 Codex 主角色完整会话 ID>" },
   "routeId": "main",
   "channel": "napcat",
   "params": { "target": "group", "groupId": "456", "instanceId": "default", "replyToMessageId": "123" },
@@ -1001,7 +1001,7 @@ node rabi-agent.mjs --api GET /api/agent/uploads/<UUID> --agent <agentId>
 }
 ```
 
-- `planAttachment` 只接受 `type=image` 或 `type=file`，与 `path`/`url`/`fileId` 互斥；`roleId` 为拥有该计划的人格角色 ID。
+- `planAttachment` 只接受 `type=image` 或 `type=file`，与 `path`/`url`/`fileId` 互斥；`roleId` 为拥有该计划的角色角色 ID。
 - Manager 每次请求从真实计划存储解析该附件，并再次核对解析结果仍位于该计划的附件目录内；计划或附件不存在、类型不符、逃出目录都拒发。它**不**扩大 `allowedFileRoots`，普通 `path` 流程的根目录检查完全照旧。
 - 与 `fileId` 一样，信任边界是「按 ID 引用对象」，不是「任意路径可读」；未接入该 resolver 的运行环境会明确失败而不是退回读取原路径。
 
@@ -1018,7 +1018,7 @@ Agent 可以主动向自己已经掌握的群号或企业微信群 chat id 发�
 ```json
 {
   "deliveryId": "send-rabilink-active-001",
-  "sender": { "agentType": "primary_persona", "sessionId": "<当前 Codex 主人格完整会话 ID>" },
+  "sender": { "agentType": "primary_persona", "sessionId": "<当前 Codex 主角色完整会话 ID>" },
   "routeId": "RabiLink",
   "channel": "rabilink",
   "params": { "proactive": true, "source": "scheduler", "targetDeviceKinds": ["glasses"] },
@@ -1035,7 +1035,7 @@ Agent 可以主动向自己已经掌握的群号或企业微信群 chat id 发�
 ```json
 {
   "deliveryId": "send-wecom-001",
-  "sender": { "agentType": "primary_persona", "sessionId": "<当前 Codex 主人格完整会话 ID>" },
+  "sender": { "agentType": "primary_persona", "sessionId": "<当前 Codex 主角色完整会话 ID>" },
   "routeId": "main",
   "channel": "wecom",
   "params": { "chatId": "wrCHATID", "userId": "zhangsan", "reqId": "REQ_ID" },
@@ -1360,7 +1360,7 @@ Agent 间 `create` 与 `send` 投递时，Manager 按 `messageSource.agentAdapte
 
 - Codex / DSH 的 `create` / `send` 使用当前 RabiRoute 已配置的工作区，不能在任意路径启动会话。Grok Bot 服务会话不要求本地文件目录；不为它伪造 `cwd` 或启动本地 Runtime。
 - 所有带有非空 `prompt` 的 `create` / `send` 都必须提供完整 `messageSource`。`type=agent` 时，`agentAdapter`、`sessionName` 和完整 `sessionId` 都必填；Agent 互投还必须提供可核对的 `sourceThreadId`，并保证它与 `messageSource.sessionId` 相同。`sourceAgentType` 只声明发送方当前职责，任务名以对应 owner 查询结果为准。
-- Agent 互投正文必须是针对目标任务重新编写的交接内容。Manager 拒绝含 `[rabi:bind]`、消息处理 Agent 初始化或计划秘书初始化的正文，也拒绝来源与目标为同一任务；整份注入上下文不能跨任务复制。消息处理 Agent 的任务 ID如果与主人格 ID相同，消息池会拒绝初始化和投递。
+- Agent 互投正文必须是针对目标任务重新编写的交接内容。Manager 拒绝含 `[rabi:bind]`、消息处理 Agent 初始化或计划秘书初始化的正文，也拒绝来源与目标为同一任务；整份注入上下文不能跨任务复制。消息处理 Agent 的任务 ID如果与主角色 ID相同，消息池会拒绝初始化和投递。
 - `sandbox` 字段仅为接口兼容参数，不能覆盖目标 Desktop 任务的模型、工具、沙箱或审批；这些能力以 Desktop owner 为唯一真源。
 - 创建线程使用固定的调查边界；没有明确实施授权时，只能调查、整理证据和输出方案。
 - `create` 的固定开发说明和所有 `send` 续投都会追加工作区交付约束；未经当前用户明确授权，不得新建额外工作副本、稀疏检出、复制工程或旁路目录；工作区 `AGENTS.md` 有更严格限制时以它为准。具体项目允许的工作副本、同步方向及历史指令的有效性由该工作区当前规则决定。只有改动已经进入用户实际运行或验收的目标工作区，并完成适用的资源关联、构建或编译及运行验证，才能称为“已修复”或“可验收”。
@@ -1375,7 +1375,7 @@ Agent 间 `create` 与 `send` 投递时，Manager 按 `messageSource.agentAdapte
 
 ## 计划接口
 
-计划是 Agent 需要关注的事项。计划不按短期、长期拆目录，而是通过状态和字段表达当前进展、优先级、项目归属和下一步。`plan.status` 只保存当前人格 `personaConfig.json.planWorkflow.statuses` 中启用状态的 key；下面十项是默认模板，不是代码枚举。
+计划是 Agent 需要关注的事项。计划不按短期、长期拆目录，而是通过状态和字段表达当前进展、优先级、项目归属和下一步。`plan.status` 只保存当前角色 `personaConfig.json.planWorkflow.statuses` 中启用状态的 key；下面十项是默认模板，不是代码枚举。
 
 ```text
 分析中
@@ -1407,7 +1407,7 @@ GET /roles/:roleId/plans
 GET /roles/:roleId/plans/:planId
 ```
 
-查询和维护人格计划状态：
+查询和维护角色计划状态：
 
 ```http
 GET    /api/roles/:roleId/plan-statuses
@@ -1465,13 +1465,13 @@ POST /roles/:roleId/plans
 }
 ```
 
-新增计划必须提供有序的 `steps`。`plan.status` 只能写当前人格状态目录中的 enabled key。`archiveStatus` 独立，只允许“未归档、已归档”。步骤不保存独立状态；`currentStepId` 表示当前步骤，`completedAt` 表示已经完成。Manager 返回 key 及其配置的 label、description、palette、order 和 views，WebGUI 与托盘只消费这些字段。
+新增计划必须提供有序的 `steps`。`plan.status` 只能写当前角色状态目录中的 enabled key。`archiveStatus` 独立，只允许“未归档、已归档”。步骤不保存独立状态；`currentStepId` 表示当前步骤，`completedAt` 表示已经完成。Manager 返回 key 及其配置的 label、description、palette、order 和 views，WebGUI 与托盘只消费这些字段。
 
 仍在调查、分析完成但无法形成可审批具体方案、完整审批等待和获批执行分别写 `planWorkflow.roles.analysis`、`roles.informationNeeded`、`roles.approval`、`roles.execution` 所指的 key。包体、QA、讨论和暂停同样通过 roles 查找；步骤名称、说明、`waitingFor` 与审批合同不再覆盖 `plan.status`。
 
 只有代码、Prefab、资源、配置等会产生项目内容变动的计划才应采用“实施/开发验证/适用同步提交 → 等待打包 → 等待 QA 验收 → QA 通过完成；失败回实施”的流程。调查、设计评审、运营、资料收集、外部依赖与控制面维护按自身真实步骤推进；Agent 或批处理不得为这些计划虚构 package 或 QA 步骤。Manager 不根据标题、说明或 `kind` 自动补流程。
 
-`attachments` 可选。新附件可提供本机 `path`，或提供 `name`、可选 `mimeType` 与 `contentBase64`；单次新增最多 8 个，单个不超过 10 MiB、新内容合计不超过 25 MiB；保留的旧附件不占本次额度。Manager 把内容复制到人格私有 `plans/attachments/<planId>/`，计划文件只保留安全元数据，不保存 Base64。PATCH 未提供 `attachments` 时保留原列表，提供空数组时清空记录；如需在 PATCH 中保留指定旧附件，可把 GET 返回的对应附件对象原样带回。Manager 对外计划 DTO 不返回本机 `path`。
+`attachments` 可选。新附件可提供本机 `path`，或提供 `name`、可选 `mimeType` 与 `contentBase64`；单次新增最多 8 个，单个不超过 10 MiB、新内容合计不超过 25 MiB；保留的旧附件不占本次额度。Manager 把内容复制到角色私有 `plans/attachments/<planId>/`，计划文件只保留安全元数据，不保存 Base64。PATCH 未提供 `attachments` 时保留原列表，提供空数组时清空记录；如需在 PATCH 中保留指定旧附件，可把 GET 返回的对应附件对象原样带回。Manager 对外计划 DTO 不返回本机 `path`。
 
 读取附件：
 
@@ -1483,11 +1483,11 @@ GET /api/roles/:roleId/plans/:planId/attachments/:attachmentId
 
 请求审批前，Agent 应 PATCH 当前步骤的完整 `approvalRequest`。Manager 的完整性判断不阻止计划保存，但缺项时返回 `presentation.approval.state=incomplete`、`enabled=false` 和 `missing[]`；计划卡列出缺项，并禁用审批输入、附件与提交。Agent 必须在同一计划补齐审批人、决定、推荐与备选、reason、真实路径、完整命令、外部目标、验证、回退、排除范围、请求来源与回执后，才允许正式审批。
 
-`taskBinding` 可在 POST 或 PATCH 中写入，用于精确绑定一个 Codex 执行会话。当前只接受 `agentType=codex` 和非空完整 `sessionId`；`completionHook.enabled` 必须是布尔值。启用后，Codex `Stop` Hook 把官方 `last_assistant_message` 交给 Manager，Manager 再经同人格的角色面板 / Forwarding / AgentPacket 链提醒目标处理会话。`gatewayId` 在同人格有多个 Route 时必填。提醒按 `sessionId + turnId` 去重，不会自动 PATCH 计划、推进步骤或写记忆。
+`taskBinding` 可在 POST 或 PATCH 中写入，用于精确绑定一个 Codex 执行会话。当前只接受 `agentType=codex` 和非空完整 `sessionId`；`completionHook.enabled` 必须是布尔值。启用后，Codex `Stop` Hook 把官方 `last_assistant_message` 交给 Manager，Manager 再经同角色的角色面板 / Forwarding / AgentPacket 链提醒目标处理会话。`gatewayId` 在同角色有多个 Route 时必填。提醒按 `sessionId + turnId` 去重，不会自动 PATCH 计划、推进步骤或写记忆。
 
-完成提醒来自计划独立业务任务。主人格必须在同一轮安排计划管理秘书消费结果、更新计划与记忆，并在计划仍可推进时使用 `/api/agent/threads` 的 `send` 动作向计划自身 `taskBinding.sessionId + workspace` 精确续投业务任务。秘书 ID 不得写入 `taskBinding`，秘书轮转或计划暂停也不得清空业务绑定。主人格检查全部未终态计划、秘书槽与业务任务，结束前满足“可推进但无人管理的计划数 = 0”以及“可推进但空闲的业务任务数 = 0”；这些决策与写入属于 Agent，不由 Stop Hook 或 Manager 自动执行。
+完成提醒来自计划独立业务任务。主角色必须在同一轮安排计划管理秘书消费结果、更新计划与记忆，并在计划仍可推进时使用 `/api/agent/threads` 的 `send` 动作向计划自身 `taskBinding.sessionId + workspace` 精确续投业务任务。秘书 ID 不得写入 `taskBinding`，秘书轮转或计划暂停也不得清空业务绑定。主角色检查全部未终态计划、秘书槽与业务任务，结束前满足“可推进但无人管理的计划数 = 0”以及“可推进但空闲的业务任务数 = 0”；这些决策与写入属于 Agent，不由 Stop Hook 或 Manager 自动执行。
 
-完成提醒失败不会阻断源 Codex 最终回答，但会记录失败并返回非阻塞系统警告。workspace、人格、gateway 或源/目标任务冲突均失败关闭；未完成双真实 Desktop 任务验收前，该接口能力为实验状态。
+完成提醒失败不会阻断源 Codex 最终回答，但会记录失败并返回非阻塞系统警告。workspace、角色、gateway 或源/目标任务冲突均失败关闭；未完成双真实 Desktop 任务验收前，该接口能力为实验状态。
 
 ### 计划引导与审批意见接口
 
@@ -1510,7 +1510,7 @@ RibiWebGUI 用该接口记录 `presentation.acceptsGuidance=true` 且未进入�
 }
 ```
 
-审批意见继续关联审批步骤。用户 `approval_suggestion` durable 保存时，反馈、附件与计划标记变更在同一 WAL 事务发布，`markerStatus` 取人格 `planWorkflow.roles.approved` 指向的 key，`activationStatus` 不变。`presentation.approval.state=approved` 表示意见已提交，不表示全部选项获批，也不自动实施。`notifyAgent=false` 只保存；`notifyAgent=true` 先保存再投递，只有 confirmed 成功回执匹配同一 `feedbackId` 且计划版本未变时，才更新为 `roles.analysis`。`pending/failed` 或不确定回执不能触发该转换；旧回执不能覆盖新提交或后续计划变更。`guidance` 与 Agent 回复不触发上述状态转换。
+审批意见继续关联审批步骤。用户 `approval_suggestion` durable 保存时，反馈、附件与计划标记变更在同一 WAL 事务发布，`markerStatus` 取角色 `planWorkflow.roles.approved` 指向的 key，`activationStatus` 不变。`presentation.approval.state=approved` 表示意见已提交，不表示全部选项获批，也不自动实施。`notifyAgent=false` 只保存；`notifyAgent=true` 先保存再投递，只有 confirmed 成功回执匹配同一 `feedbackId` 且计划版本未变时，才更新为 `roles.analysis`。`pending/failed` 或不确定回执不能触发该转换；旧回执不能覆盖新提交或后续计划变更。`guidance` 与 Agent 回复不触发上述状态转换。
 
 结构化审批表单使用可选 `formData: { questions: PlanQuestion[], approvalContract?: PlanApprovalRequest, answers: Record<string, PlanQuestionAnswer>, text: string }`；共用类型位于 `src/shared/planFeedbackFormData.ts`。`questions` 保存源 `currentStep.questions` 快照，`answers` 使用 `question:<id>` 及默认 `approval-decision` 答案 ID，`text` 保存补充文字。审批表单的 `approvalContract` 必须与当前 `step.approvalRequest` 匹配；只有问题与审批合同快照均匹配才可回填。Manager 从 `formData` 生成权威 `feedback.text`，不采用与表单冲突的手写正文；可选 `reuseFeedbackId` 从同计划原反馈复用全部附件，不接收本机路径。重新提交追加新记录，同一提交重试保持原 `feedbackId`、表单与完整正文。审批合同变化后必须重新确认，不能复用旧选择。以下示例为不带结构化表单的审批意见：
 
@@ -1531,17 +1531,17 @@ RibiWebGUI 用该接口记录 `presentation.acceptsGuidance=true` 且未进入�
 }
 ```
 
-`attachments` 可选。每项使用 `name`、可选 `mimeType` 和 `contentBase64`；最多 8 个，单个不超过 10 MiB、总计不超过 25 MiB。Manager 校验后把内容保存到人格私有的 `plans/feedback/attachments/<feedbackId>/`，记录与 Agent 通知只携带安全元数据和本地路径。同一 `feedbackId` 重试必须保持相同文字、步骤和附件内容。
+`attachments` 可选。每项使用 `name`、可选 `mimeType` 和 `contentBase64`；最多 8 个，单个不超过 10 MiB、总计不超过 25 MiB。Manager 校验后把内容保存到角色私有的 `plans/feedback/attachments/<feedbackId>/`，记录与 Agent 通知只携带安全元数据和本地路径。同一 `feedbackId` 重试必须保持相同文字、步骤和附件内容。
 
 `planAttachmentIds` 也可选，用于引用当前计划顶层 `attachments` 中已有的附件；最多 8 个且必须唯一。RibiWebGUI 在审批输入框键入 `@` 时显示当前计划附件候选，选中后插入可读的 `@附件「文件名」` 标记，并提交对应附件 ID。Manager 以 ID 校验附件确实属于当前计划，把附件元数据与本地路径作为本次审批审计快照保存，并随同一 `plan_feedback` 投递给 Agent；WebGUI 不读取或提交任意本机路径。同一 `feedbackId` 重试也必须保持相同的计划附件引用。
 
 当反馈关联当前结构化 `qa-* / verify-*` 步骤时，Manager 只把用户或外部入口提交的 `approval_suggestion` 视为 QA 判定候选。`guidance`、`guidance_response`、`approval_response`、`author=agent` 的执行报告，以及正文里的裸 `passed / verified` 测试计数都只作普通反馈记录，不会完成或回退 QA。候选正文明确表示失败或仍复现时，Manager 在同一计划插入或复用 `investigate-<qaStepId>`，清除 QA 步骤的 `completedAt`，按问题类型把最小缺失证据写入 `waitingFor`；证据齐全后继续原 `taskBinding.sessionId + workspace`。只有“QA 明确通过”“验收通过”“确认未再复现”等明确结论才完成当前 QA 步骤。
 
-当 `notifyAgent=true` 时，POST 在反馈成功落盘后立即以 HTTP `202` 返回，通常为 `deliveryStatus=pending`。计划引导与审批意见复用同一 `taskBinding` 投递链：存在完整绑定时，Manager 只通过 `/api/agent/threads` 的 Desktop IPC 主链投向原业务任务；绑定不完整时才把完整反馈交给人格 Agent。owner 未加载时保持 `pending` 并有界重试，只有目标 owner 接受 `start/steer` 才记录 `delivered`。事件不写角色面板 timeline 或统一会话账本，也不注入最近消息；终态通过 `plan_feedback_changed` 通知。
+当 `notifyAgent=true` 时，POST 在反馈成功落盘后立即以 HTTP `202` 返回，通常为 `deliveryStatus=pending`。计划引导与审批意见复用同一 `taskBinding` 投递链：存在完整绑定时，Manager 只通过 `/api/agent/threads` 的 Desktop IPC 主链投向原业务任务；绑定不完整时才把完整反馈交给角色 Agent。owner 未加载时保持 `pending` 并有界重试，只有目标 owner 接受 `start/steer` 才记录 `delivered`。事件不写角色面板 timeline 或统一会话账本，也不注入最近消息；终态通过 `plan_feedback_changed` 通知。
 
 Agent 处理计划引导时使用 `kind=guidance_response`、`author=agent`、`source=agent`、`notifyAgent=false`，只回写 `planId`，不带 `stepId`。Agent 必须先读取整个计划，按引导更新计划说明、范围、优先级或路径，并在需要时调整后续步骤。审批处理仍使用 `kind=approval_response` 并关联 `planId / stepId`。两类 Agent 记录都按 `record_only` 保存，不改变状态；这不同于用户审批保存及确认投递触发的配置标记转换。
 
-AgentPacket 的共用计划 API 提示会直接包含上述计划引导、审批记录入口与“记录后另行 PATCH 计划”的约束，因此不要求每个人格 Skill 重复维护同一套接口。
+AgentPacket 的共用计划 API 提示会直接包含上述计划引导、审批记录入口与“记录后另行 PATCH 计划”的约束，因此不要求每个角色 Skill 重复维护同一套接口。
 
 更新计划：
 
@@ -1556,7 +1556,7 @@ PATCH /roles/:roleId/plans/:planId
 - 更新全部步骤及唯一的当前步骤。
 - 更新下一步、等待对象和阻塞原因。
 - 更新关键词。
-- 将状态改为当前人格状态目录中的 enabled key；需要表达生命周期语义时，通过 `planWorkflow.roles` 选择对应 key。
+- 将状态改为当前角色状态目录中的 enabled key；需要表达生命周期语义时，通过 `planWorkflow.roles` 选择对应 key。
 - 暂停或讨论结束后，按实际阶段恢复为 analysis 或 execution role 指向的 key。
 - 验收完成后使用 completed role；取消、失效或由后继计划替代时使用 closed role。
 
@@ -1747,7 +1747,7 @@ API 返回示例：
     {
       "title": "计划和记忆维护边界",
       "focus": "计划和记忆的维护责任",
-      "content": "计划和记忆由 Agent 主动维护；RabiRoute 负责提供接口、注入索引、按人格配置归档符合条件的计划，并触发记忆沉淀流程。"
+      "content": "计划和记忆由 Agent 主动维护；RabiRoute 负责提供接口、注入索引、按角色配置归档符合条件的计划，并触发记忆沉淀流程。"
     }
   ]
 }
@@ -1773,7 +1773,7 @@ RabiRoute 负责写入沉淀记忆、记录整理轮次和标记近期记忆已�
 
 安全边界：
 
-- 本机 loopback 调用用于 WebGUI 和本机人格线程。
+- 本机 loopback 调用用于 WebGUI 和本机角色线程。
 - RabiGUI/manager 先扫描局域网远端 bridge，再由用户输入设备密码连接。bridge 不再提供公知默认密码：未配置时每次启动生成高熵临时密码并只显示在远端终端；长期部署应设置至少 16 字节的 `REMOTE_AGENT_PASSWORD`。协议 v3 使用逐连接、角色分离的双向 HMAC-SHA256 challenge，不在 WebSocket 中发送密码原文；连接成功后只在本机运行期数据中记住密码。
 - bridge 连接设备本机由远端 Agent 自己拥有的 runtime；不得通过用户级 endpoint 把桌面应用改成依赖 RabiRoute。远端 task 只能在 `REMOTE_AGENT_ALLOWED_CWDS` 内使用 `workspaceWrite`，默认禁止网络，不存在 `dangerFullAccess` 路径。
 - WebSocket 控制通道只传 role-separated HMAC proof，不传密码原文。默认 `ws://` 只提供双方身份确认，不提供链路加密；跨不可信网络时应放在受信 VPN 内，或由 TLS 终结层提供 `wss://` 并通过严格的 `REMOTE_AGENT_PUBLIC_CONTROL_URL` 公布入口。
@@ -1817,7 +1817,7 @@ POST /api/remote-agent/tasks
 - 同一“规范 cwd + 线程名”的任务会一直串行到 terminal；恢复到仍有活跃 turn 的线程时先有限等待，无法安全复用就创建独立线程，不把不同任务 steer 进同一个 turn。
 - Manager 会把回传文件保存到 `data/remote-agent-files/<taskId>/`，并在任务事件的 `savedFiles` 中记录本机保存路径、大小和 sha256。
 
-远端结果会先回到本机 RabiRoute，再投递回发起任务的本机人格线程。远端 Agent 不应直接回复 QQ；是否回复 QQ 仍由本机人格通过明确发送接口决定。
+远端结果会先回到本机 RabiRoute，再投递回发起任务的本机角色线程。远端 Agent 不应直接回复 QQ；是否回复 QQ 仍由本机角色通过明确发送接口决定。
 
 查询整理轮次：
 
@@ -1887,7 +1887,7 @@ GET /roles/:roleId/skills/:skillId
 
 ### 下载指定技能目录
 
-`GET /api/roles/:roleId/skills/:skillId/download` 返回该技能的完整 ZIP；`GET /roles/:roleId/skills/:skillId/download` 是同权限别名。不接受查询参数、任意文件路径或批量人格导出。远端调用复用已登记节点凭据及准确 Agent 身份，不要求该人格另有 Route 绑定或逐技能授权；本机使用当前连接。
+`GET /api/roles/:roleId/skills/:skillId/download` 返回该技能的完整 ZIP；`GET /roles/:roleId/skills/:skillId/download` 是同权限别名。不接受查询参数、任意文件路径或批量角色导出。远端调用复用已登记节点凭据及准确 Agent 身份，不要求该角色另有 Route 绑定或逐技能授权；本机使用当前连接。
 
 目录型技能保留所有普通文件、子目录和字节，包括 `scripts/`、`references/`、`agents/`、隐藏文件及二进制配套文件，ZIP 顶层为 `<skillId>/`。平面 Markdown 技能只生成 `<skillId>/SKILL.md`。按技能索引 ID 找真实入口，不假定 frontmatter `id` 等于目录名；重复 ID 返回冲突。不沿 Markdown 引用追踪根外路径或其他技能，需要另一技能时单独下载。下载的是当前 Manager 管理的技能内容，不会将其复制到公开 `resources` 或发布包。
 
@@ -1906,8 +1906,8 @@ node rabi-agent.mjs --api GET "/api/roles/<roleId>/skills/<skillId>/download" --
 | HTTP | 含义与处理 |
 | --- | --- |
 | 401 | 凭据缺失或无效；核对已登记连接配置，不公开凭据。 |
-| 403 | 节点/Agent 连接已停用或来源证明失效，或技能路径/链接不安全；核对当前连接或由技能拥有者检查源目录，不要求追加人格绑定。 |
-| 404 | 人格或技能不存在；刷新技能列表并核对 ID。 |
+| 403 | 节点/Agent 连接已停用或来源证明失效，或技能路径/链接不安全；核对当前连接或由技能拥有者检查源目录，不要求追加角色绑定。 |
+| 404 | 角色或技能不存在；刷新技能列表并核对 ID。 |
 | 409 | 技能 ID/归档名称冲突或生成期间源内容变化；由拥有者解决后重新下载。 |
 | 413 | 文件、条目、深度或包大小超限；明确缩小技能包，不接受残缺文件。 |
 | 503 | 队列忙、超时或工作进程退出未确认；不当作空技能包，不自动反复重试。 |
@@ -1915,7 +1915,7 @@ node rabi-agent.mjs --api GET "/api/roles/<roleId>/skills/<skillId>/download" --
 
 整个 Manager 最多同时持有 4 份下载租约，覆盖生成、慢客户端传输和退出未确认的隔离工件；超过上限在创建临时目录前返回 503。成包后的传输限时 30 秒，超时断流并清理，不让慢客户端无限占盘。客户端断连取消生成/传输并清理私有临时工件；退出未确认时保留隔离工件和名额至工作进程实际关闭；清理失败也不提前释放名额。Mac 上的 Node 可以下载 `.ps1`，但这不证明已安装 PowerShell、脚本路径适用于 Mac 或脚本已通过执行门禁。下载成功仅证明文件完整性，不是执行授权。本合同面向已登记 Rabi Agent 到配置 Manager 的连接；公网 RabiLink 大包转发和实际跨机下载仍须单独验收，不能以本地测试代替。
 
-计划可选 `messageChannels` 列表，Agent 可在创建计划或 PATCH 时绑定；省略或 `[]` 均合法，不阻断建计划、执行或人格事件投递。每项为 `{channel, gatewayId, params}`，复用事件投递的 NapCat 群／个人 QQ 与语音参数。计划渠道只用于绑定 Codex 任务的最终结果；与人格规则共同匹配，同一任务、轮次、目标去重。Hook 自动通知不要求原始群消息编号，也不被旧引用式进度通知的失败阻断；Agent 主动回复仍尽量引用来源。
+计划可选 `messageChannels` 列表，Agent 可在创建计划或 PATCH 时绑定；省略或 `[]` 均合法，不阻断建计划、执行或角色事件投递。每项为 `{channel, gatewayId, params}`，复用事件投递的 NapCat 群／个人 QQ 与语音参数。计划渠道只用于绑定 Codex 任务的最终结果；与角色规则共同匹配，同一任务、轮次、目标去重。Hook 自动通知不要求原始群消息编号，也不被旧引用式进度通知的失败阻断；Agent 主动回复仍尽量引用来源。
 
 
 计划与记忆摘要搜索及自动增量缓存接口见 [搜索合同](knowledge-search.md)。
@@ -1938,19 +1938,19 @@ Agent 使用 `POST /api/desktop-pet/roles/:roleId/motion`，并用
 
 ## 聊天发送前索引核对
 
-所有聊天渠道（QQ、企业微信、微信、飞书、RabiLink、语音、FenneNote 消息、人格聊天面板）共用 `/api/agent/send` 的 `conversationContext`：
+所有聊天渠道（QQ、企业微信、微信、飞书、RabiLink、语音、FenneNote 消息、角色聊天面板）共用 `/api/agent/send` 的 `conversationContext`：
 
 ```json
 { "conversationContext": { "lastReadMessageIndex": "c1.<会话范围>.<账本序号>", "confirmationToken": "<需要确认时，使用本次返回的凭证>" } }
 ```
 
 - 已读索引与目标会话当前索引相同，正常进入发送；不再有其它发送检查阻塞才会投递。索引是 Rabi 双向聊天账本序号，包含别人和 Agent 的消息，不是 QQ 等平台的消息 ID。AgentPacket 的已读索引只覆盖本轮已展示的消息。
-- 请求未带索引时，优先读取同一 `sender.agentType + sender.sessionId + 人格/账号/会话` 的已核对缓存；缓存没有记录时返回最近 50 条并要求确认。缓存仅为当前 Manager 生命周期内的派生状态，24 小时不用即过期，重启后重新核对。不会把发出提示或发送期间新到的消息自动标为已读。
+- 请求未带索引时，优先读取同一 `sender.agentType + sender.sessionId + 角色/账号/会话` 的已核对缓存；缓存没有记录时返回最近 50 条并要求确认。缓存仅为当前 Manager 生命周期内的派生状态，24 小时不用即过期，重启后重新核对。不会把发出提示或发送期间新到的消息自动标为已读。
 - 索引落后时返回其后的新增消息；默认最多 100 条。超过时返回索引后的最早 50 条和最新 50 条，说明省略数量及 `omittedRange`。配置为奇数时，前段多一条。错误会话索引或超前索引按重新初始化处理。
 - 返回 HTTP 409、`conversation_context_confirmation_required`、`conversationContext.messages`、`latestMessageIndex`、`confirmationToken`、`expiresAt` 和搜索范围；此时未创建新的发送回执或 Outbox 项。Agent 应阅读消息，重新判断正文是否适合，必要时搜索省略内容；再次调用传最新索引和确认凭证，保留原 deliveryId。修改正文需要重新确认。凭证十分钟有效，并绑定 Agent、deliveryId、渠道、目标和正文；确认后又有新消息仍会再次阻止发送。
 - 同一会话的发送按顺序核对并执行，不同会话可并行；不同 Agent 的缓存和确认凭证独立。同群另一个 Agent 的回复也会令旧索引过期。已有发送回执的重试按原幂等合同处理，不重发；回执返回当前索引或明确的 `conversationContextError`，不会因发送后的读取失败隐藏已提交回执。发送期间新增消息会随结果返回，并留待下一次发送核对。
 - 每个消息端的 `messageAdapterPolicies.<消息端>.conversationReview` 可设置 `initialMessageCount`（1–500，默认 50）及 `maxIncrementalMessages`（2–500，默认 100）；WebGUI 在消息端设置的“发送前聊天核对”编辑同一配置。单条超长正文最多返回 6000 字并标记 `textTruncated`，全文可查询。
-- 省略内容使用返回的 `search.path`（`GET /api/agent/chat-history`）：传 `routeId`、`channel`、JSON 编码的 `params`、`afterSequence`（不含）、`beforeSequence`（含）、`query` 和 `limit`（最多 200）。它按发送目标读取同一正式账本，不要求人格绑定；返回数量仍不代表全部历史。已有 `message-endpoint-history` 同样支持这两个序号范围过滤，不能用平台消息 ID 代替序号。
+- 省略内容使用返回的 `search.path`（`GET /api/agent/chat-history`）：传 `routeId`、`channel`、JSON 编码的 `params`、`afterSequence`（不含）、`beforeSequence`（含）、`query` 和 `limit`（最多 200）。它按发送目标读取同一正式账本，不要求角色绑定；返回数量仍不代表全部历史。已有 `message-endpoint-history` 同样支持这两个序号范围过滤，不能用平台消息 ID 代替序号。
 - 已初始化账本缺失 `conversation/current.jsonl` 或归档索引，或读取遇到损坏索引、损坏记录、缺失分卷时，历史查询与发送前检查返回错误；先恢复原账本，再重试。首次使用且尚无账本时仍可按空会话完成确认。已有发送回执保持原幂等处理。
 
 计划审批反馈和 FenneNote 纯播放属于结构化动作，不使用聊天索引。既有来源引用、图片、发送前事实核验、文风、长度和幂等检查继续生效；聊天索引核对不改变接口权限。
@@ -1965,4 +1965,4 @@ Agent 使用 `POST /api/desktop-pet/roles/:roleId/motion`，并用
 - POST 同一路径：action 为 open、list、get、input、resize 或 close。open 需要稳定 UUID terminalId、shell=cmd|powershell，可选已有绝对目录 cwd；get/close 需要 terminalId；input 需要 terminalId、从 1 递增的 sequence 和最多 16 KiB 的 data；resize 需要 cols=20..400、rows=5..200。
 - GET /api/lan-agent/instances/:instanceId/terminals/:terminalId/events?after=0：SSE 输出。事件含递增 sequence、type=output|exit|gap|disconnected，以及 data 或 exitCode。after 仅用于断线后补漏，不用于轮询；早于 256 KiB 有界缓存时先返回 gap。
 
-同一 terminalId 的重复 open 只返回原会话，类型或目录不同拒绝。input 同序号同内容只返回原接收事实；不同内容、过期回执或跳号拒绝。接收成功仅表示输入已交给原终端，不表示命令成功执行。超时、5xx 或断线后使用 list/get 核对 nextInputSequence，不更换 ID、自动重建或重发。窗口关闭仅断开查看；close 结束会话及子程序。节点连接变化结束原终端和旧流。命令与输出不进入人格、计划或持久日志。容量与进程生命周期见 [连接器说明](../apps/rabi-agent/README.md)。
+同一 terminalId 的重复 open 只返回原会话，类型或目录不同拒绝。input 同序号同内容只返回原接收事实；不同内容、过期回执或跳号拒绝。接收成功仅表示输入已交给原终端，不表示命令成功执行。超时、5xx 或断线后使用 list/get 核对 nextInputSequence，不更换 ID、自动重建或重发。窗口关闭仅断开查看；close 结束会话及子程序。节点连接变化结束原终端和旧流。命令与输出不进入角色、计划或持久日志。容量与进程生命周期见 [连接器说明](../apps/rabi-agent/README.md)。

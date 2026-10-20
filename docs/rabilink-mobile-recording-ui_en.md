@@ -1,5 +1,8 @@
 # Rabi mobile: all-day recording, messages and devices
 
+
+Android 0.3.61-dev (64) brings the Records page into the shared teal theme. The Records title and devices action remain visible above a capture-status card. Compact live waveforms use measured audio levels and honor the transcription-reference-line setting. Date, adjacent-event and refresh actions share a row; scope, type and source use three dropdowns. Event rows preserve real timestamps, duration, source, transcripts and archival status, with review opening the existing player. The ruler and bottom navigation remain separate. Scrubbing, zooming, paging, capture consent and persistence keep their existing owners. Missing input displays the actual starting, recovery, paused or error state, without demo waveforms or records. Landscape uses a preview/list split and both themes use existing tokens.
+
 The event list supports bidirectional cursor pagination, appending 100 events across empty dates until the actual boundary. Memory retains at most 1000 events; evicted pages can be loaded again. Time plus event ID ordering preserves equal-timestamp records. Audio remains independently visible and linked to its video. Read failures preserve the list and player. Current source caches metadata after the first read and updates incrementally on file changes, without recurring full-directory reads or loading/update messages. This process-local cache does not establish a persistent index.
 
 English | [简体中文](rabilink-mobile-recording-ui.md)
@@ -201,3 +204,13 @@ Persistent indexed pagination is not complete: audio still uses its existing met
 
 
 Current review correction (implementation in progress; deployment acceptance pending): the event list, historical timeline, pagination and previous/next navigation include every saved recording, without filtering for successful ASR or non-blank text. Valid recordings remain visible and playable in local-only, pending, processing, failed and empty-transcript states; existing recordings are retained. Acoustic validation must keep invalid audio out of the spool instead of saving it and hiding it in the UI. Events keep their original capture time and stable identity, not transcription completion time. Audio/video type and device source remain independent filters. Live mode retains the microphone waveform. Historical UI acceptance above does not cover this correction.
+
+Android 0.3.64-dev (67) further matches the Records visual reference: compact cards, a pale timeline, a bold status with a separate source subtitle, a pill switch, measured symmetric waveforms, a centered timer and a Return to live action. Event rows show time, type, then duration/source with circular play controls. Selecting an event expands its transcript, thumbnail and markers; blocked states remain visible. Missing input uses a flat placeholder and an unstarted timer, without demo levels or records. Bottom-tab labels and selection geometry are refined consistently.
+
+## Startup recovery and live waveform
+
+Retained quarantine entries recover as one startup batch. Directory size and quarantine accounting reconcile after the batch instead of rescanning the entire tree for every entry. Original files, quarantine evidence, and idempotent accounting are preserved. The live waveform uses PCM from the existing capture owner, with centered rounded bars, faded edges, and smoothed levels; without fresh audio it stays at a flat baseline.
+
+## PC connection and transcription directory
+
+Verify the connection owner separately from the chat target; a saved computer does not prove the owner binding is complete. ASR directory and priority requests use the native Manager transport, preserving LAN, P2P, and Relay connection order instead of falling back to the old buffered proxy through a transport-less SDK. Directory request transports close after use; short-term caching and existing snapshots on failure retain their prior behavior. Read-only device acceptance verifies the current PC GUID, Manager generation, and ASR directory without sending chats or historical recordings.

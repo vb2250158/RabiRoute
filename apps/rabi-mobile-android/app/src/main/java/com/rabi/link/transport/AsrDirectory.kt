@@ -12,12 +12,16 @@ object AsrDirectory {
     private var scope = ""
     private var checkedAt = 0L
     private var snapshot: RabiLinkAsrSettings? = null
-    @Synchronized fun load(relay: RabiLinkRelayConfig): RabiLinkAsrSettings {
+    @Synchronized fun load(context: android.content.Context, relay: RabiLinkRelayConfig): RabiLinkAsrSettings {
         val current = relay.baseUrl + "\n" + relay.token
         if(scope != current) { scope = current; snapshot = null; checkedAt = 0 }
         if(snapshot != null && System.nanoTime() - checkedAt < 30_000_000_000L) return snapshot!!
         checkedAt = System.nanoTime()
-        return try { RabiRouteSdk().mobileAsrSettings(relay.baseUrl,relay.token).also { snapshot = it } }
+        return try {
+            RabiManagerHttpTransport(context).use { transport ->
+                RabiRouteSdk(managerTransport = transport).mobileAsrSettings(relay.baseUrl,relay.token).also { snapshot = it }
+            }
+        }
         catch(error: Exception) { snapshot ?: throw error }
     }
     @Synchronized fun update(relay: RabiLinkRelayConfig, value: RabiLinkAsrSettings) {

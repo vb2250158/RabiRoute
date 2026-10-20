@@ -53,7 +53,7 @@ export const aiuiConversationPageMethods = {
             return item.final ? [] : [{ ...item, userConfirmed: true }];
           });
           wx.setStorageSync(KEY, { ...latest, rows });
-          this.setData({ deviceAgentProfileStatus: '聊天记录已保存到当前使用的人格' });
+          this.setData({ deviceAgentProfileStatus: '聊天记录已保存到当前使用的角色' });
         } catch (_) { this.setData({ deviceAgentProfileStatus: '聊天记录待同步，已保留原记录；下轮或刷新时再核对' }); return; }
       }
     })();

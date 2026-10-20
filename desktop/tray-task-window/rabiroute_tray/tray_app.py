@@ -234,8 +234,8 @@ def run(
     webgui_action = QAction("打开 RabiRoute WebGUI")
     desktop_pet_menu = QMenu("虚拟形象") if desktop_pet_enabled else None
     status_action = QAction("状态：加载中")
-    persona_heading_action = QAction("人格配置")
-    more_personas_menu = QMenu("更多人格")
+    persona_heading_action = QAction("角色配置")
+    more_personas_menu = QMenu("更多角色")
     quit_action = QAction(lifecycle.exit_label)
     status_action.setEnabled(False)
     persona_heading_action.setEnabled(False)
@@ -383,7 +383,7 @@ def run(
         def render_selected_gateway() -> None:
             if selected_gateway_id != active_gateway_id:
                 return
-            role_id = role_id_from_gateway(gateway, "未指定人格")
+            role_id = role_id_from_gateway(gateway, "未指定角色")
             if state["loaded_gateway_id"] != active_gateway_id:
                 state["plans"], state["context"] = empty_desktop_read_model(state_root, gateway, role_id)
                 state["loaded_gateway_id"] = active_gateway_id
@@ -442,7 +442,7 @@ def run(
                 tray,
                 tray_available,
                 "虚拟形象",
-                f"Manager 当前没有提供 {persona_id} 的人格入口。",
+                f"Manager 当前没有提供 {persona_id} 的角色入口。",
                 QSystemTrayIcon.Warning,
                 4000,
             )
@@ -694,8 +694,8 @@ def run(
     _show_message(
         tray,
         tray_available,
-        "RabiRoute / 当前人格",
-        "桌面入口已启动。点击托盘菜单中的人格即可打开对应航线的人格配置。",
+        "RabiRoute / 当前角色",
+        "桌面入口已启动。点击托盘菜单中的角色即可打开对应航线的角色配置。",
         QSystemTrayIcon.Information,
         3000,
     )
@@ -862,7 +862,7 @@ def _quit(
     _show_message(
         tray,
         tray_available,
-        "RabiRoute / 当前人格",
+        "RabiRoute / 当前角色",
         "正在退出 RabiRoute...",
         QSystemTrayIcon.Information,
         2500,
@@ -873,7 +873,7 @@ def _quit(
             _show_message(
                 tray,
                 tray_available,
-                "RabiRoute / 当前人格",
+                "RabiRoute / 当前角色",
                 "RabiRoute Host 未接受退出请求，桌面入口保持运行。请检查 Host 状态后再退出。",
                 QSystemTrayIcon.Warning,
                 5000,
@@ -914,7 +914,7 @@ def _send_plan_feedback(
     pending_tasks: set[QtAsyncTask],
 ) -> None:
     if not gateway_id or not role_id or not plan_id:
-        panel.complete_plan_feedback(plan_id, False, "当前计划缺少可用的 Route 或人格绑定。", "error")
+        panel.complete_plan_feedback(plan_id, False, "当前计划缺少可用的 Route 或角色绑定。", "error")
         return
     panel.set_plan_feedback_pending(plan_id, True)
 
@@ -983,7 +983,7 @@ def _panel_actions(
     registry: DesktopExtensionRegistry,
     execute_handler,
 ) -> list[tuple[str, object, bool]]:
-    role_id = role_id_from_gateway(gateway, "未指定人格")
+    role_id = role_id_from_gateway(gateway, "未指定角色")
     role_dir = role_dir_from_gateway(state_root, gateway, role_id)
     services = {
         "desktop.open-role-directory": lambda: desktop.open_path(role_dir),
@@ -1049,14 +1049,14 @@ def _rebuild_persona_menu(
 
     direct_actions: list[QAction] = []
     if not manager_snapshot.connected:
-        offline_action = QAction("Manager 离线，无法读取人格")
+        offline_action = QAction("Manager 离线，无法读取角色")
         offline_action.setEnabled(False)
         menu.insertAction(insert_before, offline_action)
         menu._rabiroute_persona_actions = [offline_action]
         _warm_menu_layout(menu)
         return
     if not manager_snapshot.gateways:
-        empty_action = QAction("暂无可用的人格航线")
+        empty_action = QAction("暂无可用的角色航线")
         empty_action.setEnabled(False)
         menu.insertAction(insert_before, empty_action)
         menu._rabiroute_persona_actions = [empty_action]
@@ -1074,7 +1074,7 @@ def _rebuild_persona_menu(
             selected_gateway is not None and str(gateway.get("id") or "") == str(selected_gateway.get("id") or "")
         )
         label = route_menu_label(gateway)
-        action_text = f"人格配置 · {label}" if is_selected else label
+        action_text = f"角色配置 · {label}" if is_selected else label
         if index >= MAX_DIRECT_PERSONAS:
             continue
         action = _action(
@@ -1090,7 +1090,7 @@ def _rebuild_persona_menu(
     overflow_gateways = gateways[MAX_DIRECT_PERSONAS:]
     if overflow_gateways:
         more_personas_menu._rabiroute_pending_personas = overflow_gateways
-        loading_action = more_personas_menu.addAction("展开以加载更多人格")
+        loading_action = more_personas_menu.addAction("展开以加载更多角色")
         loading_action.setEnabled(False)
         menu.insertMenu(insert_before, more_personas_menu)
     menu._rabiroute_persona_actions = direct_actions

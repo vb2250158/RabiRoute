@@ -19,6 +19,7 @@ class RecordingArchiveSession(context: Context, private val backend: RabiGlassPc
     private val wakeup = ArchiveWakeup()
     @Volatile private var closed = false
     private val retryUsed = AtomicBoolean(false)
+    private var awaitingProcessing = false
     class FrozenConfig internal constructor(val target: RecordingArchiveCoordinator.Target, private val raw: String) {
         fun createTransport(context: Context): RecordingArchiveTransport {
             val json = JSONObject(raw)
@@ -41,6 +42,12 @@ class RecordingArchiveSession(context: Context, private val backend: RabiGlassPc
                 require(worker.getString("id") == t.workerId)
                 FrozenConfig(t, worker.toString())
             }.getOrNull()
+        }
+        /** Explicit authorization for complete historical transcription events; incomplete/foreign files stay local. */
+        @JvmStatic fun authorizeExisting(context: Context) {
+            check(load(context)?.target?.uploadAllowed == true) { "Archive is not configured" }
+            check(prefs(context).edit().putBoolean("historyAuthorized",true).putString("historyCursor","").putInt("historyConflicts",0).commit())
+            com.rabi.link.RabiConversationService.kickArchive()
         }
         /** Explicit UI action, blocking capability verification: invoke on an IO worker, never main. */
         @JvmStatic fun configure(context: Context, worker: RabiLinkPc, namespace: String, bindingRevision: Long, uploadAllowed: Boolean): FrozenConfig {
@@ -77,9 +84,17 @@ class RecordingArchiveSession(context: Context, private val backend: RabiGlassPc
             wakeup.consume()
             var more = false
             var failed = false
+            awaitingProcessing = false
             try {
                 val cfg = load(app)
                 if (cfg != null && cfg.target.uploadAllowed) {
+                    if(prefs(app).getBoolean("historyAuthorized",false)) {
+                        val batch = backend.archiveAuthorizeHistory(cfg.target,prefs(app).getString("historyCursor","").orEmpty(),32)
+                        prefs(app).edit().putString("historyCursor",batch.getString("cursor"))
+                            .putBoolean("historyAuthorized",batch.getBoolean("more"))
+                            .putInt("historyConflicts",prefs(app).getInt("historyConflicts",0)+batch.getInt("conflicts")).apply()
+                        more = batch.getBoolean("more")
+                    }
                     val ids = backend.archiveCandidates(cfg.target, 16)
                     val transport = cfg.createTransport(app)
                     val coordinator = RecordingArchiveCoordinator(
@@ -99,13 +114,14 @@ class RecordingArchiveSession(context: Context, private val backend: RabiGlassPc
                         val result = coordinator.runOne(id)
                         if (result.archiveState != "committed") { failed = true; break }
                     }
-                    more = ids.size == 16 && !failed
+                    more = more || ids.size == 16 && !failed
                     if (!closed) more = refreshCleanupPending(cfg) || more
                 }
             } catch (_: Exception) { failed = true }
             finally {
                 scheduled.set(false)
                 if (!closed && (more || wakeup.consume())) schedule(0)
+                else if (!closed && awaitingProcessing) schedule(60)
                 else if (!closed && failed && retryUsed.compareAndSet(false, true)) schedule(60)
             }
         }, delaySeconds, TimeUnit.SECONDS) } catch (_: java.util.concurrent.RejectedExecutionException) { scheduled.set(false) }
@@ -127,11 +143,13 @@ class RecordingArchiveSession(context: Context, private val backend: RabiGlassPc
                 .putBoolean("cleanupPendingMayHaveMore", pending.size == 32)
                 .putBoolean("cleanupPendingKnown", true)
                 .putString("cleanupState", if(retained == 0) "verified" else "waiting_for_playback_release").apply()
+            awaitingProcessing = retained > 0
             return pending.size == 32 && retained == 0
         } catch (_: Exception) {
             // Do not overwrite a previously observed count with a false zero or schedule a cleanup loop.
             prefs(app).edit().putBoolean("cleanupPendingKnown", false)
                 .putString("cleanupState", "unavailable").apply()
+            awaitingProcessing = prefs(app).getInt("cleanupPendingObserved",0) > 0
             return false
         }
     }

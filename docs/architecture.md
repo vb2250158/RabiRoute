@@ -38,7 +38,7 @@ RabiRoute 不应该做成：
 
 - `完整个人 Agent OS Lite`：不内置一个完整长期记忆、自主规划、技能生成、cron 和工具系统的大 Agent。
 - `执行桥 Lite`：不重复实现完整的执行项目、provider、session 和 cron 管理。
-- `聊天机器人框架 Lite`：不把所有平台插件、LLM 插件、聊天人格和自动回复都塞进一个聊天机器人框架。
+- `聊天机器人框架 Lite`：不把所有平台插件、LLM 插件、聊天角色和自动回复都塞进一个聊天机器人框架。
 - `工作流平台 Lite`：不做完整 workflow 平台。
 - `某个具体 AI 工具的外壳`：不把某个处理端当作产品本体。
 
@@ -91,10 +91,10 @@ Codex/ChatGPT Desktop 同时是用户可见宿主和任务 owner；Codex 是 age
 
 当前实现：
 
-- 已验证：NapCat / OneBot、Heartbeat、Manager 内置角色面板和 Manual trigger。人格目录与跨人格投递已通过自动化合同测试，但尚未完成真实双人格 Desktop 验收。
+- 已验证：NapCat / OneBot、Heartbeat、Manager 内置角色面板和 Manual trigger。角色目录与跨角色投递已通过自动化合同测试，但尚未完成真实双角色 Desktop 验收。
 - 实验支持：Remote Agent、RabiSpeech 语音消息端、小爱、RabiLink、通用 Webhook 和 WeCom。FenneNote 已退役，只保留旧配置兼容。
 - NapCat HTTP Server 用于状态查询和外发；NapCat 插件只负责页面入口和配置桥接，不启动、修复或关闭 Manager。
-- Remote Agent、角色面板和 `/api/personas` 是 Manager 级入口，不应被误写成 Gateway 子进程 listener。跨人格消息经过与本地角色面板相同的固定 `role_panel_message` 投递服务；发送身份由当前 Route 与人格共同绑定的凭据校验，Manager 不让调用方只靠正文声明发送者。
+- Remote Agent、角色面板和 `/api/personas` 是 Manager 级入口，不应被误写成 Gateway 子进程 listener。跨角色消息经过与本地角色面板相同的固定 `role_panel_message` 投递服务；发送身份由当前 Route 与角色共同绑定的凭据校验，Manager 不让调用方只靠正文声明发送者。
 
 未来可扩展：
 
@@ -308,7 +308,7 @@ Windows 应用的运行主干不属于普通插件：`RabiRouteHost.exe` 创建�
 
 当前 `RouteDecision`、`AgentPacket`、多 Agent adapter、Webhook-like 入口、Outbox 和 delivery replay 都已存在。下一阶段更实际的顺序是：
 
-1. 给人格规则和 `AgentPacket` 增加无副作用 dry-run 预览，并明确它不能刷新 `viewedAt` 或写日志。
+1. 给角色规则和 `AgentPacket` 增加无副作用 dry-run 预览，并明确它不能刷新 `viewedAt` 或写日志。
 2. 把通用 Action Queue / 审批中心建立在现有 Outbox 结果之上，而不是重新实现各平台发送。
 3. 为 Copilot CLI、AstrBot、WeCom、RabiLink、Remote Agent 和小爱补真实端到端验收矩阵。
 4. 继续拆分过大的 Manager endpoint 群，并让 WebGUI 功能地图从共享 Schema/元数据生成，减少硬编码文档漂移。

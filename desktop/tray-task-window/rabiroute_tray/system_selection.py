@@ -811,8 +811,8 @@ class SelectionActionBar(QWidget):
         self.read_button.setCursor(Qt.PointingHandCursor)
         self.deliver_button = QPushButton("投递至 ▾")
         self.deliver_button.setObjectName("selectionDeliverButton")
-        self.deliver_button.setAccessibleName("投递选中文字至人格")
-        self.deliver_button.setToolTip("移动到这里查看所有激活人格")
+        self.deliver_button.setAccessibleName("投递选中文字至角色")
+        self.deliver_button.setToolTip("移动到这里查看所有激活角色")
         self.deliver_button.setCursor(Qt.PointingHandCursor)
         layout.addWidget(self.read_button)
         layout.addWidget(self.deliver_button)
@@ -856,7 +856,7 @@ class SelectionActionBar(QWidget):
         self.set_read_visible(can_read)
         self.deliver_button.setEnabled(can_deliver)
         self.deliver_button.setToolTip(
-            "移动到这里查看所有激活人格" if can_deliver else "暂无激活人格"
+            "移动到这里查看所有激活角色" if can_deliver else "暂无激活角色"
         )
         self.adjustSize()
         screen = QApplication.screenAt(anchor) or QApplication.primaryScreen()
@@ -919,7 +919,7 @@ class SelectionActionBar(QWidget):
         self._delivery_targets = {target.gateway_id: target for target in targets}
         self._delivery_menu.clear()
         if not targets:
-            empty_action = self._delivery_menu.addAction("暂无激活人格")
+            empty_action = self._delivery_menu.addAction("暂无激活角色")
             empty_action.setEnabled(False)
         else:
             for target in targets:
@@ -1369,14 +1369,14 @@ class SystemSelectionController(QObject):
         if selected is None or self._action_task is not None:
             return
         if not gateway_id or not label:
-            self._notify("系统划词", "激活人格列表已更新，请重新划词后选择。", True)
+            self._notify("系统划词", "激活角色列表已更新，请重新划词后选择。", True)
             return
 
         def completed(task: QtAsyncTask, result: RolePanelSendResult) -> None:
             if self._action_task is task:
                 self._action_task = None
             if result.ok:
-                self._notify("系统划词", f"已投递至 {label or '当前人格'}。", False)
+                self._notify("系统划词", f"已投递至 {label or '当前角色'}。", False)
             else:
                 self._notify("系统划词", f"投递失败：{result.message or '未知错误'}", True)
 

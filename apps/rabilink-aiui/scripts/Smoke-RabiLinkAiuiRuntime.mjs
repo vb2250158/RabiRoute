@@ -729,7 +729,7 @@ try {
   let invocationRequests = 0;
   invokedPage.reportRuntimeProof = () => Promise.resolve(false);
   invokedPage.executeConfigurationIntent = async (text, source) => {
-    if (text === "查看当前人格配置") invocationRequests += 1;
+    if (text === "查看当前角色配置") invocationRequests += 1;
     assert(source === "native-agent", "Deferred configuration execution must retain native Agent provenance.");
     return true;
   };
@@ -738,14 +738,14 @@ try {
     mode: "configuration",
     surface: "config",
     panel: "persona",
-    intent: "查看当前人格配置",
+    intent: "查看当前角色配置",
     targetDeviceId: "pc-bound"
   });
   assert(invokedPage.data.token === "tool-token-value", "Agent invocation should provide a transient tool token.");
   assert(invokedPage.data.mode === "configuration" && invokedPage.data.isConfigurationMode, "Configuration tool invocation should open configuration mode.");
   assert(invokedPage.data.surfaceId === "config-persona", "Agent invocation should open the requested configuration surface.");
   assert(invokedPage.data.panelId === "persona", "Agent invocation should select the requested configuration panel.");
-  assert(invokedPage.data.invocationIntent === "查看当前人格配置", "Agent invocation should preserve the original intent.");
+  assert(invokedPage.data.invocationIntent === "查看当前角色配置", "Agent invocation should preserve the original intent.");
   assert(invokedPage.data.targetDeviceId === "pc-bound", "Agent invocation should honor an explicit PC target.");
   assert(invocationRequests === 0, "Agent invocation must not submit work during synchronous onLoad.");
   invokedPage.onReady();

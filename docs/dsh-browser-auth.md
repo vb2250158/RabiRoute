@@ -31,7 +31,7 @@ RabiRoute 仍只通过当前 DSH Web owner 的会话接口访问任务；不启�
 
 浏览器登录复用只发生在用户点击连接时：浏览器自动携带的 HttpOnly Cookie 由后端按 DSH 的 hostname 和端口选择，DSH 验证其签名后才保存原有效期；不读取浏览器凭据库或签名密钥，不延长授权期限，也不转发其它 Cookie。`localhost` 与 `127.0.0.1` 是不同 hostname，需在相同 hostname 的控制台连接，或使用登录链接。已移除/过期的记录不会自行恢复；用户显式点击连接并提供有效浏览器登录才可重新保存。
 
-授权只保存在当前电脑的 `stateRoot/data/dsh-connections/`，不属于人格同步数据。Windows 使用当前用户 DPAPI；其他平台使用本机受限权限密钥加密。DSH 目前授予的是整个 Web owner 的访问权限，不支持仅投递或单会话 scope。移除授权只停止 RabiRoute 使用，不会撤销其他客户端的登录。
+授权只保存在当前电脑的 `stateRoot/data/dsh-connections/`，不属于角色同步数据。Windows 使用当前用户 DPAPI；其他平台使用本机受限权限密钥加密。DSH 目前授予的是整个 Web owner 的访问权限，不支持仅投递或单会话 scope。移除授权只停止 RabiRoute 使用，不会撤销其他客户端的登录。
 
 同地址、同签名配置的正常 DSH 重启可沿用未过期授权。换 hostname/端口、授权过期或 DSH 更换签名配置时重新连接；不扫描端口或自动切换到另一个实例。远端/Relay 页面不能配置本机授权，应到运行 RabiRoute 的电脑操作。跨电脑分别连接各自的 DSH，通过远端 Agent 功能协作，不共享 Cookie。
 

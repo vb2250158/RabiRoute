@@ -122,7 +122,7 @@ test("remote AgentPacket uses inline remote persona and remote knowledge, never 
     const record = { time: 1, rawMessage: "remote hello", messageId: "message-remote", userId: 42, senderName: "User" };
     const packet = buildAgentPacket({ route: effective, routeKind: "private", record, extraValues: {}, matchedRules: [rule], routeVariables: {}, routeText: record.rawMessage }, rule,
       { roleId: request.roleId, roleDir: localRoleDir, rolePath: poison, routeDataDir: original.dataDir!, personaDataDir: localRoleDir },
-      { remotePersona: remote });
+      { remotePersona: remote, contextDetail: "full" });
     assert.match(packet.content, /远端角色正文/);
     assert.match(packet.content, /只采用远端角色的明确设定/);
     assert.ok(packet.content.includes(`${remote.knowledgeApiBaseUrl}/api/roles/${request.roleId}/knowledge/search`));

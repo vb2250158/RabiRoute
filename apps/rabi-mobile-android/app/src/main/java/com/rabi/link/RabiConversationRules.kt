@@ -1,5 +1,7 @@
 package com.rabi.link
 
+import com.rabiroute.sdk.RabiRouteInfo
+
 data class RabiAdapterPresentation(
     val type: String,
     val label: String,
@@ -21,6 +23,27 @@ object RabiConversationRules {
         return enabled
             && messageAdapters.any { it.equals("rabilink", ignoreCase = true) }
             && disabledAdapters.none { it.equals("rabilink", ignoreCase = true) }
+    }
+
+    /** Preserve PC identities and distinct routes; a configured route replaces only its catalog placeholder. */
+    fun personaConversations(catalog: List<RabiRouteInfo>): List<RabiRouteInfo> {
+        val candidates = catalog.distinctBy { it.id }.filter { route ->
+            route.id.isNotBlank() && (route.agentRoleId.isNotBlank() || route.rawJson.optBoolean("isPersonaOnly") ||
+                isChatCapable(route.enabled,route.messageAdapters))
+        }
+        fun personaKey(route: RabiRouteInfo) = route.rawJson.optString("ownerWorkerId") to route.agentRoleId
+        val configured = candidates.filter { !it.rawJson.optBoolean("isPersonaOnly") && it.agentRoleId.isNotBlank() }
+            .map(::personaKey).toSet()
+        return candidates.filterNot { it.rawJson.optBoolean("isPersonaOnly") && it.agentRoleId.isNotBlank() && personaKey(it) in configured }
+    }
+
+    fun personaComputerName(route: RabiRouteInfo?): String {
+        val raw = route?.rawJson ?: return "来源待确认"
+        raw.optString("personaSourceComputerName").trim().takeIf { it.isNotEmpty() }?.let { return it }
+        val source = raw.optString("personaSourceWorkerId").trim()
+        val owner = raw.optString("ownerWorkerId").trim()
+        if(source.isNotEmpty() && source != owner) return "来源待确认"
+        return raw.optString("ownerComputerName").trim().ifBlank { "来源待确认" }
     }
 
     fun normalizedConversationId(routeProfileId: String?, fallbackConversationId: String?): String {

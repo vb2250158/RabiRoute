@@ -79,11 +79,11 @@ pwsh -NoProfile -File scripts/Test-ProjectSkillSync.ps1 -ProjectPath <项目根>
 | [RabiLink 跨电脑访问](rabilink-peer-rpc.md) | 按授权读取目标电脑数据，不同步副本 | 同一可信 RabiLink 应用内 |
 | LAN Agent 资源目录 | RabiRoute 包内 `skills/*/SKILL.md` 与显式公开文档 | 已授权 Agent 按需只读拉取，见 [远端 Agent 接入](lan-rabi-agent-bootstrap.md) |
 
-RabiRoute 不向项目或 Agent 端推送技能：本机 Codex / DSH / WorkBuddy 会话各自从自己的工作区技能目录加载，跨电脑通过 RabiLink 访问目标电脑的人格，不再同步人格数据副本。
+RabiRoute 不向项目或 Agent 端推送技能：本机 Codex / DSH / WorkBuddy 会话各自从自己的工作区技能目录加载，跨电脑通过 RabiLink 访问目标电脑的角色，不再同步角色数据副本。
 
 ## 用户级技能与宿主分工
 
-同一清单的 `agentSkills` 管理通用、仓库开发、子应用及宿主专项技能：`source` 是权威目录，`audience` 是用途，`hosts` 是可用宿主，`install=false` 的子应用技能只留在应用目录。运行任务按需加载通用技能，源码开发技能按开发任务加载；人格运行数据不在此清单中。
+同一清单的 `agentSkills` 管理通用、仓库开发、子应用及宿主专项技能：`source` 是权威目录，`audience` 是用途，`hosts` 是可用宿主，`install=false` 的子应用技能只留在应用目录。运行任务按需加载通用技能，源码开发技能按开发任务加载；角色运行数据不在此清单中。
 
 DSH 工具映射由其增强插件的 `skills/dsh-rabi-tools` 与 `skill-catalog.json` 维护，生命周期事件由 `plugins/rabi-dsh-context` 处理。Codex 绑定由 `plugins/rabi-codex-context/skills` 维护。通用检索、计划与发送流程只在 Rabi 维护一次。
 
@@ -98,7 +98,7 @@ node scripts/sync-agent-skills.mjs --target-root <真实技能源目录> --backu
 node scripts/sync-agent-skills.mjs --source-root <DSH插件源码> --catalog skill-catalog.json --target-root <真实技能源目录> --backup-root <备份目录> --host dsh --apply
 ```
 
-这是显式 opt-in 的本地安装工具，默认 dry-run；不会后台推送或自动更新人格技能、已配置人格或 Agent 资产。只在用户明确授权的真实目标根运行 `--apply`。已有目录无基线或被人工修改时，脚本拒绝覆盖；先完成逐项语义比较和必要合并，再决定是否接受源投影。
+这是显式 opt-in 的本地安装工具，默认 dry-run；不会后台推送或自动更新角色技能、已配置角色或 Agent 资产。只在用户明确授权的真实目标根运行 `--apply`。已有目录无基线或被人工修改时，脚本拒绝覆盖；先完成逐项语义比较和必要合并，再决定是否接受源投影。
 
 **`--adopt --apply` 授权用源投影覆盖目标，并删除该技能中源投影不再包含的文件；它不是“只记录当前目标基线”，也不会把本地修改自动合回源。** 必须先保留需要的本地内容并明确接受该覆盖结果，不能按修改时间选新版本。脚本在独立外部目录保存完整备份，写失败恢复当前技能；已经成功的前序技能保留其回读记录，因此不是整批原子事务。每项 `.rabi-skill-lock.json` 记录源哈希与安装哈希。未发布源码的哈希是本机内容快照，不能当作已发布版本。
 

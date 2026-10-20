@@ -32,9 +32,11 @@ object RabiRouteMetadataCache {
     internal fun encode(routes: List<RabiRouteInfo>): String = JSONArray().apply {
         routes.forEach { route -> put(JSONObject().apply {
             put("id", route.id); put("name", route.name); put("configName", route.configName); put("routeName", route.routeName)
+            put("isPersonaOnly", route.rawJson.optBoolean("isPersonaOnly"))
             put("enabled", route.enabled); put("running", route.running); put("agentRoleId", route.agentRoleId)
             put("personaDisplayName", route.personaDisplayName); put("messageAdapters", JSONArray(route.messageAdapters))
             put("ownerWorkerId", route.rawJson.optString("ownerWorkerId")); put("ownerComputerName", route.rawJson.optString("ownerComputerName"))
+            put("personaSourceComputerName", route.rawJson.optString("personaSourceComputerName"))
             put("voiceCallProtocol", route.rawJson.optInt("voiceCallProtocol")); put("personaSourceWorkerId", route.rawJson.optString("personaSourceWorkerId"))
             put("agentAdapters", JSONArray(route.agentAdapters)); put("avatarConfigured", route.avatarConfigured); put("avatarVersion", route.avatarVersion)
             put("messageAdaptersDisabled", safeStringArray(route.rawJson.optJSONArray("messageAdaptersDisabled")))

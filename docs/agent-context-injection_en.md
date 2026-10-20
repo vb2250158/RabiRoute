@@ -115,6 +115,8 @@ RabiRoute places this text in the `[User template supplement]` section. Event fi
 
 ## Current wrapper
 
+Delivery headers display `grokBot` as `GrokBot` for Agent and message endpoints, including the originating Agent of a plan. Structured identifiers, complete session IDs, and message content retain their original values.
+
 Every RabiRoute delivery starts with the exact wire section `[消息源]`, immediately followed by `[消息内容]`. Event details, recent messages, reference parsing and role paths follow under `[相关上下文]`. Generic collaboration rules are not injected. Empty or disabled sections are omitted.
 
 Each source type has its own required identity. `message_adapter` requires `messageAdapter`, `conversationType`, `conversationId`, `messageId`, and either `senderName` or `senderId`. `agent` requires the actual `agentAdapter`, session name, and complete session ID. `plan` requires the plan name and ID. `system` requires event type, name, and ID, with optional actor type, name, and ID.

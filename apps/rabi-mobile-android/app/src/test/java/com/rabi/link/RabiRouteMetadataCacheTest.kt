@@ -10,7 +10,7 @@ class RabiRouteMetadataCacheTest {
     @Test fun cachedRouteMetadataKeepsPersonaPresentationWithoutMessagesOrTokens() {
         val raw = JSONObject()
             .put("ownerWorkerId", "pc-a").put("ownerComputerName", "Computer A").put("voiceCallProtocol", 1)
-            .put("chatAvailable", false)
+            .put("chatAvailable", false).put("isPersonaOnly", true)
             .put("messageAdaptersDisabled", JSONArray().put("rabilink"))
             .put("adapterStates", JSONArray().put(JSONObject()
                 .put("type", "weixin")
@@ -32,7 +32,16 @@ class RabiRouteMetadataCacheTest {
         assertEquals(true, encoded.contains("\"chatAvailable\":false"))
         assertEquals(true, encoded.contains("\"summary\":\"未登录\""))
         assertEquals("伊莉娅", RabiRouteMetadataCache.decode(encoded).single().personaDisplayName)
-        val restored = RabiRouteMetadataCache.decode(encoded).single().rawJson
+        val cached = RabiRouteMetadataCache.decode(encoded).single()
+        assertEquals("Computer A",RabiConversationRules.personaComputerName(cached))
+        cached.rawJson.put("personaSourceWorkerId","pc-b")
+        assertEquals("来源待确认",RabiConversationRules.personaComputerName(cached))
+        cached.rawJson.put("personaSourceComputerName","Source PC")
+        val sourceCached = RabiRouteMetadataCache.decode(RabiRouteMetadataCache.encode(listOf(cached))).single()
+        assertEquals("Source PC",RabiConversationRules.personaComputerName(sourceCached))
+        val restored = cached.rawJson
+        assertEquals(true, restored.getBoolean("isPersonaOnly"))
+        assertEquals(false, restored.getBoolean("chatAvailable"))
         assertEquals("pc-a", restored.getString("ownerWorkerId"))
         assertEquals("Computer A", restored.getString("ownerComputerName"))
         assertEquals(1, restored.getInt("voiceCallProtocol"))

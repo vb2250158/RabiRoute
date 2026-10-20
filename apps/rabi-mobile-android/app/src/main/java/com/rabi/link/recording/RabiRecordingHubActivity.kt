@@ -29,7 +29,9 @@ class RabiRecordingHubActivity : Activity() {
     }
     private lateinit var body: LinearLayout
     private var status: TextView? = null
-    private var recordingToggle: Switch? = null
+    private var recordingToggle: CompoundButton? = null
+    private var recordingTitle: TextView? = null
+    private var recordingSource: TextView? = null
     private var updatingToggle = false
     private var reviewPanel: RecordingReviewPanel? = null
     private var live: RabiLiveRecordingController? = null
@@ -78,15 +80,30 @@ class RabiRecordingHubActivity : Activity() {
         addView(label(title, 20f).apply { typeface = Typeface.DEFAULT_BOLD })
     }.also { body.addView(it) }
     private fun render() {
-        reviewPanel?.close(); reviewPanel = null; status = null; recordingToggle = null
+        reviewPanel?.close(); reviewPanel = null; status = null; recordingToggle = null; recordingTitle = null; recordingSource = null
         val frame = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(RabiMobileUi.background) }
-        val header = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL; setPadding(dp(16),dp(2),dp(8),dp(2)) }
+        val header = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL; setPadding(dp(20),dp(2),dp(12),dp(2)) }
         if(page == "devices") header.addView(label("记录设备",20f),LinearLayout.LayoutParams(0,-2,1f))
-        else header.addView(android.view.View(this),LinearLayout.LayoutParams(0,0,1f))
+        else header.addView(RabiMobileUi.title(this,"记录",22f).apply { setTextColor(RabiMobileUi.text) },LinearLayout.LayoutParams(0,-2,1f))
+        header.setBackgroundColor(RabiMobileUi.background)
+        header.minimumHeight = dp(56)
+        val captureHeader = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL; setPadding(dp(18),dp(8),dp(18),dp(4)); minimumHeight = dp(72) }
         if(page == "records") {
-            recordingToggle = Switch(this).apply {
-                text = if(settings().running) "记录中" else "开始记录"; textSize = 14f
-                minHeight = dp(48); setPadding(dp(8),0,dp(12),0); setTextColor(RabiMobileUi.primary)
+            captureHeader.addView(FrameLayout(this).apply {
+                background = RabiMobileUi.panel(this@RabiRecordingHubActivity,RabiMobileUi.accentSurface,android.graphics.Color.TRANSPARENT,24)
+                addView(RabiMobileUi.icon(this@RabiRecordingHubActivity,R.drawable.ic_ui_pulse,RabiMobileUi.secondary),FrameLayout.LayoutParams(dp(28),dp(28),android.view.Gravity.CENTER))
+            },LinearLayout.LayoutParams(dp(48),dp(48)).apply { marginEnd = dp(14) })
+            captureHeader.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                recordingTitle = TextView(this@RabiRecordingHubActivity).apply {
+                    textSize = 18f; typeface = Typeface.DEFAULT_BOLD; setTextColor(RabiMobileUi.text)
+                    text = if(settings().running) "记录中" else "开始记录"
+                }.also { addView(it) }
+                recordingSource = TextView(this@RabiRecordingHubActivity).apply {
+                    textSize = 15f; setTextColor(RabiMobileUi.muted)
+                }.also { addView(it,LinearLayout.LayoutParams(-1,-2).apply { topMargin = dp(3) }) }
+            },LinearLayout.LayoutParams(0,-2,1f))
+            recordingToggle = RecordingToggleView(this).apply {
                 isChecked = settings().autoResume || settings().running; contentDescription = "开始或暂停记录"
                 setOnCheckedChangeListener { _, checked ->
                     if(!updatingToggle) {
@@ -94,53 +111,51 @@ class RabiRecordingHubActivity : Activity() {
                         refreshRuntime()
                     }
                 }
-            }.also { header.addView(it) }
-            header.addView(RabiMobileUi.compactAction(this,"☰") { page = "devices"; render() }.apply { contentDescription = "记录设备"; setBackgroundColor(android.graphics.Color.TRANSPARENT); stateListAnimator = null },LinearLayout.LayoutParams(dp(48),dp(48)))
+            }.also { captureHeader.addView(it,LinearLayout.LayoutParams(dp(52),dp(48))) }
+            header.addView(RabiMobileUi.iconAction(this,R.drawable.ic_ui_devices,"记录设备") { page = "devices"; render() },LinearLayout.LayoutParams(dp(48),dp(48)))
         }
         val deviceToolbar = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             gravity = android.view.Gravity.CENTER_VERTICAL
             setPadding(dp(16),0,dp(16),dp(12))
         }
         if(page == "devices") {
-            header.addView(android.widget.ImageButton(this).apply {
-                setImageResource(com.rabi.link.R.drawable.ic_recording_close)
-                imageTintList = android.content.res.ColorStateList.valueOf(RabiMobileUi.primary)
-                setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                setPadding(dp(12),dp(12),dp(12),dp(12))
-                contentDescription = "关闭设备页，返回记录"
-                setOnClickListener { page = "records"; render() }
-            },LinearLayout.LayoutParams(dp(48),dp(48)))
-            deviceToolbar.addView(button("⚙  记录设置") { showEventSplitSettings() }.apply { textSize = 14f },LinearLayout.LayoutParams(0,dp(48),1f).apply { marginEnd = dp(8) })
-            deviceToolbar.addView(button("＋  添加设备") {
+            val firstRow = LinearLayout(this)
+            val secondRow = LinearLayout(this)
+            header.addView(RabiMobileUi.iconAction(this,R.drawable.ic_ui_close,"关闭设备页，返回记录") { page = "records"; render() },LinearLayout.LayoutParams(dp(48),dp(48)))
+            firstRow.addView(RabiMobileUi.labeledAction(this,R.drawable.ic_ui_tune,"记录设置") { showEventSplitSettings() },LinearLayout.LayoutParams(0,-2,1f).apply { marginEnd = dp(8) })
+            firstRow.addView(RabiMobileUi.labeledAction(this,R.drawable.ic_ui_add,"添加设备") {
                 AlertDialog.Builder(this).setTitle("添加设备").setItems(arrayOf("眼镜","手表 / 手环")) { _, index ->
                     when(index) {
                         0 -> if(settings().running) toast("请先关闭记录开关，再连接眼镜") else startActivity(Intent(this,RokidProbeActivity::class.java))
                         1 -> startActivity(Intent(this,WearableHealthSettingsActivity::class.java))
                     }
                 }.show()
-            }.apply { textSize = 13f; contentDescription = "添加设备" },LinearLayout.LayoutParams(0,dp(48),1f).apply { marginEnd = dp(8) })
-            deviceToolbar.addView(button("RabiLink") {
+            },LinearLayout.LayoutParams(0,-2,1f))
+            secondRow.addView(RabiMobileUi.labeledAction(this,R.drawable.ic_ui_connection,"RabiLink") {
                 startActivity(Intent(this,MainActivity::class.java).putExtra("open_settings",true).putExtra("relay_settings",true))
-            }.apply { textSize = 13f; contentDescription = "配置 RabiLink" },LinearLayout.LayoutParams(0,dp(48),1f).apply { marginEnd = dp(8) })
-            deviceToolbar.addView(button("ASR 设置") { AsrSettingsDialog.show(this) }.apply { textSize = 13f },LinearLayout.LayoutParams(0,dp(48),1f))
+            }.apply { contentDescription = "配置 RabiLink" },LinearLayout.LayoutParams(0,-2,1f).apply { marginEnd = dp(8) })
+            secondRow.addView(RabiMobileUi.labeledAction(this,R.drawable.ic_ui_volume,"ASR 设置") { AsrSettingsDialog.show(this) },LinearLayout.LayoutParams(0,-2,1f))
+            deviceToolbar.addView(firstRow)
+            deviceToolbar.addView(secondRow,LinearLayout.LayoutParams(-1,-2).apply { topMargin = dp(8) })
         }
-        if(page == "devices") frame.addView(header)
+        frame.addView(header)
         if(page == "devices") {
             frame.addView(deviceToolbar)
-            frame.addView(button("存储管理") { RecordingStorageDialog.show(this) },LinearLayout.LayoutParams(-1,dp(48)).apply {
+            frame.addView(RabiMobileUi.labeledAction(this,R.drawable.ic_ui_storage,"存储管理") { RecordingStorageDialog.show(this) },LinearLayout.LayoutParams(-1,dp(48)).apply {
                 marginStart = dp(16); marginEnd = dp(16); bottomMargin = dp(12)
             })
         }
         body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), 0, dp(16), dp(12)) }
         if(page == "records") {
-            header.setBackgroundColor(android.graphics.Color.TRANSPARENT)
-            reviewPanel = RecordingReviewPanel(this, ::share).also { it.attachHeader(header); frame.addView(it.view, LinearLayout.LayoutParams(-1,0,1f)) }
+            reviewPanel = RecordingReviewPanel(this, ::share).also { it.attachHeader(captureHeader); frame.addView(it.view, LinearLayout.LayoutParams(-1,0,1f)) }
         } else {
             frame.addView(ScrollView(this).apply { addView(body) }, LinearLayout.LayoutParams(-1, 0, 1f))
             renderDevices()
         }
         val nav = RabiMobileUi.bottomNavigation(this, "records") { key ->
             if (key == "messages") startActivity(Intent(this, MainActivity::class.java).putExtra("open_messages", true))
+            else if (key == "settings") startActivity(Intent(this, MainActivity::class.java).putExtra("open_settings", true))
             else if (key != page) { page = key; render() }
         }
         frame.addView(nav); setContentView(frame); refreshRuntime()
@@ -242,7 +257,7 @@ class RabiRecordingHubActivity : Activity() {
         recordingToggle?.isChecked = value.autoResume || value.running
         val recentAudio = System.currentTimeMillis()-data.getLong("captureLastReceivedAt",0) < 5000
         val actualStatus = data.getString("allDayStatus", "").orEmpty()
-        recordingToggle?.text = when {
+        recordingTitle?.text = when {
             actualStatus.contains("storage_low") -> "空间不足"
             actualStatus.contains("失败") || actualStatus.contains("未启动") -> "采集异常"
             value.running && value.mode == "audio" && !recentAudio -> "正在启动"
@@ -250,6 +265,15 @@ class RabiRecordingHubActivity : Activity() {
             value.autoResume -> "正在恢复"
             else -> "开始记录"
         }
+        val source = data.getString("actualAudioSource","").orEmpty().ifBlank { value.source }
+        recordingSource?.text = when {
+            value.mode == "video" -> "眼镜相机"
+            value.mode == "health" -> "健康设备"
+            source == "mobile" || source == "phone" -> "手机麦克风"
+            source == "glasses" -> "眼镜麦克风"
+            else -> "自动选择音源"
+        }
+        recordingToggle?.stateDescription = recordingTitle?.text
         recordingToggle?.isEnabled = !transitionPending()
         updatingToggle = false
         status?.text = if((actualStatus.contains("失败") || actualStatus.contains("中断"))) actualStatus else if(value.running) actualStatus.ifBlank { "正在开始记录…" } else "记录已暂停"

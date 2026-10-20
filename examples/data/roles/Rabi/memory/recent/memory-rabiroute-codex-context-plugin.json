@@ -1,8 +1,8 @@
 {
   "id": "memory-rabiroute-codex-context-plugin",
-  "title": "Codex 人格上下文由 Rabi PC Manager 统一管理",
+  "title": "Codex 角色上下文由 Rabi PC Manager 统一管理",
   "focus": "Codex Hook 的 Manager 单一真源与统一触发生命周期",
-  "content": "Rabi Codex Context 0.4 保持薄 Hook 边界。插件把 SessionStart、UserPromptSubmit、PreToolUse、PostToolUse 和 Stop 原样交给 Rabi PC Manager，不保存角色根、会话绑定、计划/记忆副本或离线召回逻辑。Manager 用完整 session ID 保存 RoleId 绑定，让上下文 Hook 与普通 message_delivery 共用 RabiContextManager；Stop 则按计划 taskBinding 精确匹配执行会话，把官方最终回答经角色面板与 AgentPacket 提醒同人格 Route，并按 sessionId + turnId 去重。完成提醒不自动推进计划，冲突失败关闭，双真实 Desktop 任务验收前保持实验。Codex-only 使用仍必须运行 managerAutostart=false 的知识服务；0.1 插件本地绑定不会自动迁移，升级后要按真实 session ID 重新绑定。",
+  "content": "Rabi Codex Context 0.4 保持薄 Hook 边界。插件把 SessionStart、UserPromptSubmit、PreToolUse、PostToolUse 和 Stop 原样交给 Rabi PC Manager，不保存角色根、会话绑定、计划/记忆副本或离线召回逻辑。Manager 用完整 session ID 保存 RoleId 绑定，让上下文 Hook 与普通 message_delivery 共用 RabiContextManager；Stop 则按计划 taskBinding 精确匹配执行会话，把官方最终回答经角色面板与 AgentPacket 提醒同角色 Route，并按 sessionId + turnId 去重。完成提醒不自动推进计划，冲突失败关闭，双真实 Desktop 任务验收前保持实验。Codex-only 使用仍必须运行 managerAutostart=false 的知识服务；0.1 插件本地绑定不会自动迁移，升级后要按真实 session ID 重新绑定。",
   "source": {
     "kind": "example",
     "summary": "公开示例记忆：Manager 统一 Codex Hook、会话绑定和知识生命周期"

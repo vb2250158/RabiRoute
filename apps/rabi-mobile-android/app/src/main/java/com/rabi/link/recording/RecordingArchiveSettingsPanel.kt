@@ -27,7 +27,7 @@ object RecordingArchiveSettingsPanel {
             setPadding(0, dp(8), 0, dp(8))
         }.also { panel.addView(it) }
         label("录音上传、历史查询与播放依次使用：局域网直连 → P2P → 服务器中转。首次授权可能需要服务器信令。")
-        label("模型、角色和长期保存目录只在电脑配置。此处仅启用新录音归档，不迁移全部历史，也不开放原件清理。")
+        label("电脑保留录音和转录结果。转录完成、电脑原音频回读通过后清理手机原件，回看缓存按缓存设置保留。")
         label("设备 owner：${RabiMobileDeviceIdentity.load(activity)}").setTextIsSelectable(true)
         val current = RecordingArchiveSession.load(activity)
         label(current?.let { "已配置电脑：${it.target.workerId}\n更换电脑需要独立迁移，不能在这里直接改绑。" } ?: "尚未启用电脑长期保存")
@@ -71,7 +71,7 @@ object RecordingArchiveSettingsPanel {
                             return@onSuccess
                         }
                         AlertDialog.Builder(activity).setTitle("启用新录音归档？")
-                            .setMessage("电脑：${worker.name.ifBlank { worker.id }}\n只授权以后开始的新录音。已有历史不会因此上传，手机原件不会自动清理。")
+                            .setMessage("电脑：${worker.name.ifBlank { worker.id }}\n新录音保存在此电脑，转录和回读校验完成后清理手机原件。已有录音可另行加入处理。")
                             .setNegativeButton("取消", null)
                             .setPositiveButton("启用") { _, _ ->
                                 if (dismissed) return@setPositiveButton
@@ -82,7 +82,7 @@ object RecordingArchiveSettingsPanel {
                                             runCatching { com.rabi.link.RabiConversationService.kickArchive() }
                                         }
                                     }
-                                    post { saved.onSuccess { status.text = "已启用新录音归档；从下次开始录音生效。重新打开记录页可查看远程历史。历史迁移和原件清理未启用。" }
+                                    post { saved.onSuccess { status.text = "已启用电脑保存；新录音转录及回读通过后自动清理手机原件。已有录音可在下方加入处理。" }
                                         .onFailure { status.text = failure(it) } }
                                 }
                             }.show()
@@ -111,6 +111,11 @@ object RecordingArchiveSettingsPanel {
             }
         }
         panel.addView(refresh)
+        panel.addView(RabiMobileUi.secondary(activity,"转录并归档已有录音") {
+            runCatching { RecordingArchiveSession.authorizeExisting(activity) }
+                .onSuccess { status.text = "已有完整录音已加入处理；不完整或归属冲突的原件会保留。" }
+                .onFailure { status.text = "请先启用当前电脑长期保存。" }
+        })
         dialog.show()
     }
 }

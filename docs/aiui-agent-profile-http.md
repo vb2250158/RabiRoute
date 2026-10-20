@@ -6,11 +6,11 @@
 
 ## 身份与数据归属
 
-手机入口为“全天记录 → 设备 → 眼镜 → 眼镜设置 → 当前使用的人格”。AIUI 绑定人格后使用该人格身份、指引、Skill 和聊天记录，模型仍由乐奇配置。未绑定人格也能调用公共接口；绑定不限制权限、工作区或其它人格操作。启用 remoteAgent 后，已鉴权 Agent 可调用目标 PC 的全部公共 API，后续新增公共 API 沿同一通用传输使用。
+手机入口为“全天记录 → 设备 → 眼镜 → 眼镜设置 → 当前使用的角色”。AIUI 绑定角色后使用该角色身份、指引、Skill 和聊天记录，模型仍由乐奇配置。未绑定角色也能调用公共接口；绑定不限制权限、工作区或其它角色操作。启用 remoteAgent 后，已鉴权 Agent 可调用目标 PC 的全部公共 API，后续新增公共 API 沿同一通用传输使用。
 
-设备凭据登记时必须明确 `connectionTargetDeviceId`，它是该绑定固定的配置 owner PC。切换 PC B 的人格时，配置仍由 owner PC A 保存，工具与聊天记录默认调用人格来源 B；其它同应用 PC 可显式选为调用目标。配置归属只决定数据保存位置，不授予或限制调用者权限。
+设备凭据登记时必须明确 `connectionTargetDeviceId`，它是该绑定固定的配置 owner PC。切换 PC B 的角色时，配置仍由 owner PC A 保存，工具与聊天记录默认调用角色来源 B；其它同应用 PC 可显式选为调用目标。配置归属只决定数据保存位置，不授予或限制调用者权限。
 
-Relay 的 `GET /api/rabilink/devices/connections` 返回连接目录，不包含人格或 Skill。应用级公共设置首次通过 `PATCH /api/rabilink/mobile/connection` 的 `{connectionOwnerDeviceId}` 明确登记固定 owner，不从默认消息目标推断。已有固定归属不能通过修改默认目标或重置同一绑定凭据改变。
+Relay 的 `GET /api/rabilink/devices/connections` 返回连接目录，不包含角色或 Skill。应用级公共设置首次通过 `PATCH /api/rabilink/mobile/connection` 的 `{connectionOwnerDeviceId}` 明确登记固定 owner，不从默认消息目标推断。已有固定归属不能通过修改默认目标或重置同一绑定凭据改变。
 
 PC 首次确认连接归属后持久缓存元数据，已确认设备可在公网不可用时通过 LAN 继续使用；未知设备须先发现，不能猜 owner。同一应用作用域下发现相同设备的归属冲突时失败关闭。更换连接作用域隔离配置和缓存。
 
@@ -25,11 +25,11 @@ PC 首次确认连接归属后持久缓存元数据，已确认设备可在公�
 | `PUT` 同路径 | 保存 `{expectedRevision,idempotencyKey,profile}` |
 | `GET /api/rabilink/agent-devices/{deviceId}/profile/operations/{key}` | `{code:0,data:{receipt}}`，按原键读取历史回执 |
 | `POST /api/rabilink/agent-devices/self/profile/receipt` | 原设备确认 `{idempotencyKey,appliedRevision,status,errorCode?}` |
-| `POST /api/rabilink/persona-template` | `{roleId,skillIds}`，读取被请求 PC 的人格模板 |
+| `POST /api/rabilink/persona-template` | `{roleId,skillIds}`，读取被请求 PC 的角色模板 |
 
 Android 使用通用加密 Manager Tunnel，顺序为 LAN → P2P → Relay。当前 AIUI 宿主只有 `wx.request` 时使用 `/api/rabilink/device/api` 的 buffered HTTP Relay 降级；这条降级不宣称已支持 LAN/P2P。请求固定 `targetDeviceId`，Relay 不读取 `personaRef` 或 `profileRevision` 来决定路由。见[通用接口传输](../apps/rabilink-aiui/docs/generic-api-transport.md)与[Relay 合同](rabilink-relay-server.md)。
 
-profile 为 `{revision,id,name,systemPrompt,skills,mcp,personaRef?}`。`personaRef` 为 `null` 或 `{roleId,sourceDeviceId}`；保存时核对该来源 PC 确实存在该人格。Skill 为 `{id,title,content,enabled}`；MCP 为 `{id,label,enabled}` 引用，不能包含 Token、URL 或执行命令。引用不是授权，保存也不代表连接或工具执行成功。
+profile 为 `{revision,id,name,systemPrompt,skills,mcp,personaRef?}`。`personaRef` 为 `null` 或 `{roleId,sourceDeviceId}`；保存时核对该来源 PC 确实存在该角色。Skill 为 `{id,title,content,enabled}`；MCP 为 `{id,label,enabled}` 引用，不能包含 Token、URL 或执行命令。引用不是授权，保存也不代表连接或工具执行成功。
 
 限额由 `packages/rabilink-agent-contract/profile.mjs` 唯一定义：ID/名称 128 字符，系统指引 8000 字符，Skill 最多 16 项、单项正文 8000、正文总量 24000，MCP 最多 16 项。模板读取支持 Manager 的原始 JSON envelope 或一次解包回调，前后核对来源 application generation。
 

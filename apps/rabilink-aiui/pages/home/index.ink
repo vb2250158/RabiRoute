@@ -2993,7 +2993,7 @@ export default {
   },
 
   openRoleMessageConfigOnPc() {
-    this.openPcConfigFile("role-message-config", "人格消息配置");
+    this.openPcConfigFile("role-message-config", "角色消息配置");
   },
 
   selectedNapcatToolBody() {
@@ -4561,7 +4561,7 @@ export default {
       return false;
     }
     this.aiuiVoiceInitialInputs = [...queue, { text, scope }];
-    this.setData({ agentStatus: "正在确认人格与设备连接，已保留语音输入", transcriptionText: text });
+    this.setData({ agentStatus: "正在确认角色与设备连接，已保留语音输入", transcriptionText: text });
     void this.initializeAiuiVoiceContext();
     return true;
   },
@@ -4760,7 +4760,7 @@ export default {
         }
       });
       this.chatTurnRuntime = runtime;
-      const modelInput = nativeDeviceContext ? userText + "\n\n[设备 Agent 连接上下文]\n当前设备会话来源见下方。新正式 Agent 请求 POST /api/agent/threads 可显式选择任何经鉴权的目标 PC；已有回传参数的正式回复必须使用以下 targetDeviceId（原投递账本所在 PC），不要用人格来源 PC 或设备所在 PC 替代它。此目标只定位原请求账本，不改变普通接口的默认人格 PC、聊天记录来源或权限。\n" + JSON.stringify(nativeDeviceContext) : userText;
+      const modelInput = nativeDeviceContext ? userText + "\n\n[设备 Agent 连接上下文]\n当前设备会话来源见下方。新正式 Agent 请求 POST /api/agent/threads 可显式选择任何经鉴权的目标 PC；已有回传参数的正式回复必须使用以下 targetDeviceId（原投递账本所在 PC），不要用角色来源 PC 或设备所在 PC 替代它。此目标只定位原请求账本，不改变普通接口的默认角色 PC、聊天记录来源或权限。\n" + JSON.stringify(nativeDeviceContext) : userText;
       const result = await runtime.run(modelInput);
       if (!current() || result.state === "cancelled") return;
       if (pendingSpeech.trim()) this.speakText(pendingSpeech.trim(), "enqueue");

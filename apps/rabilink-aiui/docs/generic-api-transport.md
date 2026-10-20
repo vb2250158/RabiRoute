@@ -6,19 +6,19 @@
 
 ## 职责
 
-服务器维护连接目录、鉴权、目标 PC 选择和中转。人格、Skill、配置事务、聊天记录及业务接口由 PC 提供。新增公共 Manager HTTP 接口复用通用传输，不新增服务器业务分发器。
+服务器维护连接目录、鉴权、目标 PC 选择和中转。角色、Skill、配置事务、聊天记录及业务接口由 PC 提供。新增公共 Manager HTTP 接口复用通用传输，不新增服务器业务分发器。
 
 | 调用 | 数据与执行归属 |
 | --- | --- |
-| `/api/rabilink/mobile/state`、`/mobile/target`、`/devices/connections` | 服务器连接目录与目标元数据；没有人格配置真源 |
-| `/api/rabilink/device/api` | AIUI 有限 HTTP 传输，携带 `{targetDeviceId, request}`；不解释人格或 `profileRevision` |
+| `/api/rabilink/mobile/state`、`/mobile/target`、`/devices/connections` | 服务器连接目录与目标元数据；没有角色配置真源 |
+| `/api/rabilink/device/api` | AIUI 有限 HTTP 传输，携带 `{targetDeviceId, request}`；不解释角色或 `profileRevision` |
 | PC `/api/rabilink/agent-devices/{id|self}/profile`、`/profile/receipt` | 固定设备连接 owner PC 的配置事务与应用回执 |
-| PC `/api/rabilink/persona-template` | 所选来源 PC 的人格与 Skill 指引 |
-| PC `/api/roles/{roleId}/chat-history/aiui` | 本轮固定人格所在 PC 的实际用户文字和回复 |
-| PC `/api/rabilink/mobile/device-status`、`/asr-settings` | 应用连接目录的 `connectionOwnerDeviceId` 保存电量与 ASR 优先级；不跟随聊天或人格目标切换 |
+| PC `/api/rabilink/persona-template` | 所选来源 PC 的角色与 Skill 指引 |
+| PC `/api/roles/{roleId}/chat-history/aiui` | 本轮固定角色所在 PC 的实际用户文字和回复 |
+| PC `/api/rabilink/mobile/device-status`、`/asr-settings` | 应用连接目录的 `connectionOwnerDeviceId` 保存电量与 ASR 优先级；不跟随聊天或角色目标切换 |
 | PC 其他公共路径 | 同一个方法、路径、必要请求头和正文传输；目标接口处理其自身合同 |
 
-`self` 由已鉴权连接身份解析，不能用 SN、自报 `appId` 或请求头冒充。配置只有一个可写 owner PC。选择其他 PC 的人格仅修改 owner 的一份配置，工具和记录使用该人格来源 PC。
+`self` 由已鉴权连接身份解析，不能用 SN、自报 `appId` 或请求头冒充。配置只有一个可写 owner PC。选择其他 PC 的角色仅修改 owner 的一份配置，工具和记录使用该角色来源 PC。
 
 ## 实际连接能力
 
@@ -26,7 +26,7 @@ Android 通过 `RabiLinkManagerHttpTransport` 注入应用持有的连接。`Rab
 
 SDK 没有 socket 或业务状态所有权。未配对手机桥时，AIUI 使用有限 HTTP 中转，明确报告 `lan=false`、`p2p=false`、`streaming=false`、`websocket=false`。配对手机后，通用请求使用眼镜独立身份的加密 Manager 连接；手机应用身份仅负责连接目录与信令，不能冒充眼镜领取消息。
 
-手机眼镜设置中的“手机直连 / 眼镜配对”显示当前连接地址和五分钟配对码。AIUI 顶栏“手机直连”打开独立连接表单，输入地址和配对码后取得十五分钟本机凭据。眼镜设备凭据、独立密钥和本机凭据只存在私有连接配置，不进入人格、Skill、模型上下文或聊天记录。重新配对或连接切换使原连接失效，已派发请求不改用中转重试。
+手机眼镜设置中的“手机直连 / 眼镜配对”显示当前连接地址和五分钟配对码。AIUI 顶栏“手机直连”打开独立连接表单，输入地址和配对码后取得十五分钟本机凭据。眼镜设备凭据、独立密钥和本机凭据只存在私有连接配置，不进入角色、Skill、模型上下文或聊天记录。重新配对或连接切换使原连接失效，已派发请求不改用中转重试。
 
 眼镜凭据经已有 `/device/api` 向目标 PC 的 `/api/rabilink/peer/device-bootstrap` 登记公钥。签名包含原绝对期限；授权最多 45 秒，续租必须再次经过真实设备鉴权。同一有效公钥续租保留 epoch；过期、换钥、重启或连接撤销关闭原通道，不能退回手机身份。普通应用握手拒绝 `glasses-*` 身份。
 
@@ -38,7 +38,7 @@ SDK 没有 socket 或业务状态所有权。未配对手机桥时，AIUI 使用
 
 ## 目标、幂等与结果
 
-`rabi_api_help` 和 `rabi_api_call` 可传 `targetDeviceId`。省略时使用创建本轮模型时固定的人格来源 PC；未绑定人格时固定当前连接选择。其他 PC 必须属于该应用的已鉴权连接范围。人格不会增加或缩减权限。
+`rabi_api_help` 和 `rabi_api_call` 可传 `targetDeviceId`。省略时使用创建本轮模型时固定的角色来源 PC；未绑定角色时固定当前连接选择。其他 PC 必须属于该应用的已鉴权连接范围。角色不会增加或缩减权限。
 
 写入带原 `operationId`、`Idempotency-Key` 和接口要求的版本条件。操作指纹包含实际目标 PC、方法、路径、请求头与正文摘要。同一编号不同目标或内容被拒绝；超时、断连和身份复核失败保留未确认状态，只查询原回执或资源，不自动重放。客户端记录摘要，不额外复制敏感正文。
 

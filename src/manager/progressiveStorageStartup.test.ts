@@ -53,14 +53,17 @@ test("bounded batches cap concurrency, time out hanging items, and publish healt
   assert.deepEqual(new Set(events), new Set(["fast", "next", "last", "failed:hung"]));
 });
 
-test("batch deadline also bounds queued items and cancellation drains every active child", async () => {
+test("batch deadline also bounds queued items and cancellation drains every active child", async t => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"] });
   const scope = new BoundedStorageStartup({ ...limits, concurrency: 1, itemTimeoutMs: 60, batchTimeoutMs: 20 });
   let created = 0;
   const failures: number[] = [];
-  await scope.run([1, 2, 3], () => {
+  const expired = scope.run([1, 2, 3], () => {
     created += 1;
     return { result: new Promise<void>(() => {}), async cancel() {} };
   }, () => assert.fail("hung item published"), item => { failures.push(item); });
+  t.mock.timers.tick(20);
+  await expired;
   assert.equal(created, 1);
   assert.deepEqual(failures, [1, 2, 3]);
   const cancellable = new BoundedStorageStartup(limits);

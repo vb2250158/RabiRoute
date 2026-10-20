@@ -14,6 +14,7 @@ import {
   planStatusKeyForRole,
   personaPlanWorkflowRevision,
   readPersonaPlanWorkflow,
+  readPersonaPlanWorkflowAsync,
   requireEnabledPersonaPlanStatus,
   resolvePersonaPlanStatus,
   resolvePersonaPlanWorkflowRole,
@@ -27,6 +28,28 @@ function roleFixture(t: test.TestContext): string {
   t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
   return roleDir;
 }
+
+test("async workflow reads never initialize or rewrite configuration", async t => {
+  const roleDir = roleFixture(t);
+  const file = path.join(roleDir, "personaConfig.json");
+  assert.equal(await readPersonaPlanWorkflowAsync(roleDir), null);
+  assert.equal(fs.existsSync(file), false);
+  const original = JSON.stringify({ unrelated: "preserved", planWorkflow: loadDefaultPersonaPlanWorkflow() });
+  fs.writeFileSync(file, original);
+  const expected = readPersonaPlanWorkflow(roleDir);
+  const originalRead = fs.readFileSync;
+  const originalWrite = fs.writeFileSync;
+  fs.readFileSync = (() => { throw new Error("Unexpected synchronous read"); }) as typeof fs.readFileSync;
+  fs.writeFileSync = (() => { throw new Error("Unexpected configuration write"); }) as typeof fs.writeFileSync;
+  try { assert.deepEqual(await readPersonaPlanWorkflowAsync(roleDir), expected); }
+  finally { fs.readFileSync = originalRead; fs.writeFileSync = originalWrite; }
+  assert.equal(fs.readFileSync(file, "utf8"), original);
+  fs.writeFileSync(file, "{broken");
+  await assert.rejects(readPersonaPlanWorkflowAsync(roleDir), SyntaxError);
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(readPersonaPlanWorkflowAsync(roleDir, controller.signal), { name: "AbortError" });
+});
 
 function cloneDefault(): PersonaPlanWorkflow {
   return structuredClone(loadDefaultPersonaPlanWorkflow());

@@ -335,7 +335,7 @@
         ],
         "targetGroupId": "",
         "allowedSpeakerNames": [],
-        "regex": "Rabi|RabiRoute|看板娘|兔娘|陪陪|聊聊|在吗|记一下|提醒|怎么配|路由|人格|Agent|连接|状态"
+        "regex": "Rabi|RabiRoute|看板娘|兔娘|陪陪|聊聊|在吗|记一下|提醒|怎么配|路由|角色|Agent|连接|状态"
       },
       "action": {
         "type": "deliver_agent",

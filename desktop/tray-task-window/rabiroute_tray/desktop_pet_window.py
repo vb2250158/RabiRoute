@@ -49,7 +49,7 @@ class DesktopPetWindow(QWidget):
     travel_finished = Signal()
     travel_result = Signal(bool)
 
-    def __init__(self, persona_name: str = "人格", default_slot: int = 0) -> None:
+    def __init__(self, persona_name: str = "角色", default_slot: int = 0) -> None:
         flags = (
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
@@ -59,7 +59,7 @@ class DesktopPetWindow(QWidget):
         super().__init__(None, flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        self._persona_name = str(persona_name or "人格")
+        self._persona_name = str(persona_name or "角色")
         self._default_slot = max(0, int(default_slot))
         self.setWindowTitle(f"{self._persona_name}桌宠")
         self._label = QLabel(self)
@@ -152,7 +152,7 @@ class DesktopPetWindow(QWidget):
         self.show_placeholder(f"{self._persona_name}\n素材准备中")
 
     def set_persona_name(self, persona_name: str) -> None:
-        self._persona_name = str(persona_name or "人格")
+        self._persona_name = str(persona_name or "角色")
         self.setWindowTitle(f"{self._persona_name}桌宠")
 
     @property

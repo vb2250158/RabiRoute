@@ -16,7 +16,7 @@ class DisplayHelpersTest(unittest.TestCase):
             "agentRoleId": "builder",
             "rolesDir": "Z:/path-that-must-not-be-read",
             "roleRouteNames": {"builder": "Builder"},
-            "roleInfo": {"selectedRoleContent": "\ufeff# 星海\n\n由 Manager 返回的人格内容。"},
+            "roleInfo": {"selectedRoleContent": "\ufeff# 星海\n\n由 Manager 返回的角色内容。"},
         }
 
         self.assertEqual(role_label(gateway), "星海")

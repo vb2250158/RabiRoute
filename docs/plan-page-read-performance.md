@@ -34,7 +34,7 @@
 
 ## 可复制的隔离验证
 
-在项目根目录使用与部署相同的 Node 可执行文件。命令中的 `node` 应解析为该版本；测试只创建系统临时目录，不读取配置中的真实人格。
+在项目根目录使用与部署相同的 Node 可执行文件。命令中的 `node` 应解析为该版本；测试只创建系统临时目录，不读取配置中的真实角色。
 
 ```powershell
 node --import ./scripts/test-manager-runtime-env.mjs --import tsx --test src/planReadInvalidation.test.ts src/manager/managerReadWorkerPool.test.ts
@@ -50,7 +50,7 @@ Remove-Item Env:RABI_PLAN_BENCHMARK, Env:RABI_PLAN_FAST
 
 ## 十万真实 HTTP 失败基线（2026-09-22）
 
-`tests/performance/planApiHundredThousand.test.ts` 接受显式 `RABI_PLAN_API_PACKAGE_ROOT` 构建根，设置 `RABI_PLAN_API_BENCHMARK=1` 和 `RABI_PLAN_API_COUNT=100000` 后运行。先以 1000 条烟测；夹具包含规范状态和历史文件，避免启动迁移修改排序字段。仅启用 core/persona/diagnostics 真实插件，使用临时状态目录、动态 READY 地址和身份复核，不连接业务人格。
+`tests/performance/planApiHundredThousand.test.ts` 接受显式 `RABI_PLAN_API_PACKAGE_ROOT` 构建根，设置 `RABI_PLAN_API_BENCHMARK=1` 和 `RABI_PLAN_API_COUNT=100000` 后运行。先以 1000 条烟测；夹具包含规范状态和历史文件，避免启动迁移修改排序字段。仅启用 core/persona/diagnostics 真实插件，使用临时状态目录、动态 READY 地址和身份复核，不连接业务角色。
 
 0.3.13 候选、Node 24.15.0 的一次十万条测试共约 842 秒（包含约 163 秒数据生成），结果未通过：
 
@@ -83,7 +83,7 @@ Remove-Item Env:RABI_PLAN_BENCHMARK, Env:RABI_PLAN_FAST
 
 分页 GET 与查询 POST 在共享准备未完成时返回 HTTP 503、`reason: "PLAN_CATALOG_INITIALIZING"` 和 `Retry-After: 2`，不返回伪造的空数据。准备任务独立于单个请求继续运行；就绪后才返回真实分页结果，包括真实空列表。参数错误仍按原合同返回 400。
 
-Web 只对分页读取中的这一精确错误有界串行重试，遵守 `Retry-After`，最多五分钟或 150 次尝试；其它错误不自动重试。页面显示准备中提示，切换人格或隐藏页面会取消当前等待，不终止服务端共享准备。同一查询刷新失败时保留此前数据和游标；切换人格清空旧列表。十二项重试及生命周期单元测试与隔离完整构建已通过；十万 HTTP 二十并发和实际安装版验证尚未完成。
+Web 只对分页读取中的这一精确错误有界串行重试，遵守 `Retry-After`，最多五分钟或 150 次尝试；其它错误不自动重试。页面显示准备中提示，切换角色或隐藏页面会取消当前等待，不终止服务端共享准备。同一查询刷新失败时保留此前数据和游标；切换角色清空旧列表。十二项重试及生命周期单元测试与隔离完整构建已通过；十万 HTTP 二十并发和实际安装版验证尚未完成。
 
 ## 十万 SQLite 实验不是生产能力
 

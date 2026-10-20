@@ -111,7 +111,7 @@ export const agentProfilePageMethods = {
           }
           this.applyPendingDeviceAgentProfile();
         }
-        this.setData({ deviceAgentProfileStatus: "未绑定人格；已鉴权连接仍可调用接口" });
+        this.setData({ deviceAgentProfileStatus: "未绑定角色；已鉴权连接仍可调用接口" });
         return { ok: true, scope, applied: !this.pendingDeviceAgentProfile, unbound: true };
       }
       const profile = validateAgentProfile(result.profile);
@@ -146,7 +146,7 @@ export const agentProfilePageMethods = {
     if (pending.profile === null) {
       this.deviceAgentProfileScope = "";
       this.setData({ lingzhuAgentId: "", lingzhuAgentName: "灵珠智能体", lingzhuSystemPrompt: "",
-        deviceAgentProfileStatus: "未绑定人格；已鉴权连接仍可调用接口" });
+        deviceAgentProfileStatus: "未绑定角色；已鉴权连接仍可调用接口" });
       return;
     }
     this.showDeviceAgentProfile(pending.profile, "配置已保存，等待下一轮模型应用");

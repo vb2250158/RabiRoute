@@ -21,9 +21,10 @@ export function classifyCompanionScene(input: CompanionObservation, rules: Scene
   if (input.source === "player") return "watch";
   const window = input.window;
   if (!window) return "uncertain";
+  const title = window.title.trim();
   const media = input.media;
   if (media?.kind === "video" && media.status === "playing" && media.title
-      && window.title.toLowerCase().includes(media.title.toLowerCase())) return "watch";
+      && title.toLowerCase().includes(media.title.toLowerCase())) return "watch";
   return rules.find(rule => (!rule.process || rule.process.test(window.processName))
-    && (!rule.title || rule.title.test(window.title)))?.kind || "uncertain";
+    && (!rule.title || rule.title.test(title)))?.kind || "uncertain";
 }

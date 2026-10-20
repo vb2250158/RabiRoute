@@ -24,7 +24,7 @@ The repository fixes these exact texts for reproducible same-text listening and 
 | `short-dialogue` | short sentence | 你好，这是本地语音服务的速度测试。 | first request, fixed Chinese pronunciation, baseline latency |
 | `technical-mixed` | mixed Chinese/English | 请提醒我检查 RabiLink 服务器，并确认 ASR 与 TTS 接口正常。 | product names, abbreviations, and mixed pronunciation |
 | `long-instruction` | long instruction | 如果网络暂时断开，请保留本地任务，等待连接恢复以后再重试，并把失败原因写进诊断报告。 | pauses, completeness, and sustained generation |
-| `asr-smoke-reference` | shared ASR sentence | 热启动测试完成。声音已经由 Rabi 人格目录管理。 | same-audio CER and character accuracy across the five main ASR models |
+| `asr-smoke-reference` | shared ASR sentence | 热启动测试完成。声音已经由 Rabi 角色目录管理。 | same-audio CER and character accuracy across the five main ASR models |
 
 The current six-model cold/warm figures came from integration smoke tests whose TTS text lengths were not fully identical. The TTS latency chart therefore describes observed deployment wait, not a strict generated-throughput ranking.
 

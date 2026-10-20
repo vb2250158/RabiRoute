@@ -4,20 +4,20 @@
 </div>
 <!-- /docs-language-switch -->
 
-# 路由与人格
+# 路由与角色
 
 > 状态：现行指南。说明 route、role/persona 和处理端的真实边界。
 
-路由入口参数见 [路由配置](routing-configuration.md)。这里专门讲人格包，以及跟随人格的自动化规则。
+路由入口参数见 [路由配置](routing-configuration.md)。这里专门讲角色包，以及跟随角色的自动化规则。
 
-本机 Route 也可[引用远端 PC 人格](remote-persona-reference.md)（实验实现）：选择同一 RabiLink 应用中的来源 PC 和人格，自动公钥握手后只读远端正文与消息配置，保留本机消息端和处理 Agent；不复制人格目录，不回退到本机同名人格，也不新增完整管理权限。
+本机 Route 也可[引用远端 PC 角色](remote-persona-reference.md)（实验实现）：选择同一 RabiLink 应用中的来源 PC 和角色，自动公钥握手后只读远端正文与消息配置，保留本机消息端和处理 Agent；不复制角色目录，不回退到本机同名角色，也不新增完整管理权限。
 
-## 路由人格
+## 路由角色
 
-RabiRoute 现在把路由配置和路由人格分开：
+RabiRoute 现在把路由配置和路由角色分开：
 
-- `data/route/<配置名>/`：路由配置包。放 `adapterConfig.json`，决定消息端、端口、Agent 端、指向哪个人格，以及本机是否允许人格自动化运行脚本。
-- `data/roles/<RoleId>/`：人格配置包。放 `persona.md`、`personaConfig.json`、成长记录、提示词和角色知识。
+- `data/route/<配置名>/`：路由配置包。放 `adapterConfig.json`，决定消息端、端口、Agent 端、指向哪个角色，以及本机是否允许角色自动化运行脚本。
+- `data/roles/<RoleId>/`：角色配置包。放 `persona.md`、`personaConfig.json`、成长记录、提示词和角色知识。
 
 一个角色目录通常包含：
 
@@ -47,9 +47,9 @@ RabiRoute 现在把路由配置和路由人格分开：
 - `examples/data/roles/RabiActive/`
 - `examples/data/route/RabiLink/adapterConfig.json`
 
-Rabi 示例是 RabiRoute 默认的兔娘看板娘与陪伴型成长人格样例，主要演示 `persona.md`、`personaConfig.json`、`growth.md`、`skills.md`、`skills/`、`prompts/` 和独立路由配置如何配合。其中 `skills/one-plan-one-task-tracking.md` 是不绑定消息平台或具体项目的通用范例：一旦建立任何计划，无论是旅游、调研、设计、实施还是排障，都为它绑定一个正式会话任务并持续追踪到终态。RabiActive 是 RabiLink AIUI 的主动智能样例，配套演示 record-first 会话账本、空闲/周期审阅和任务外主动下行。
+Rabi 示例是 RabiRoute 默认的兔娘看板娘与陪伴型成长角色样例，主要演示 `persona.md`、`personaConfig.json`、`growth.md`、`skills.md`、`skills/`、`prompts/` 和独立路由配置如何配合。其中 `skills/one-plan-one-task-tracking.md` 是不绑定消息平台或具体项目的通用范例：一旦建立任何计划，无论是旅游、调研、设计、实施还是排障，都为它绑定一个正式会话任务并持续追踪到终态。RabiActive 是 RabiLink AIUI 的主动智能样例，配套演示 record-first 会话账本、空闲/周期审阅和任务外主动下行。
 
-一个项目可以同时拥有多个路由配置。每个 `data/route/<配置名>/adapterConfig.json` 会被 manager 组装成一个运行入口；多个路由配置可以通过 `agentRoleId` 使用同一个 `data/roles/<RoleId>/` 人格配置。
+一个项目可以同时拥有多个路由配置。每个 `data/route/<配置名>/adapterConfig.json` 会被 manager 组装成一个运行入口；多个路由配置可以通过 `agentRoleId` 使用同一个 `data/roles/<RoleId>/` 角色配置。
 
 ```text
 data/route/main/adapterConfig.json
@@ -57,45 +57,45 @@ data/route/voice/adapterConfig.json
 data/route/dev-review/adapterConfig.json
 ```
 
-上面三套路由可以分别配置消息端、端口、热投递模式、Agent 投递方式，也可以指向同一个人格。不要为了多个 Route 复制人格；同一个人格复用根级 `personaConfig.json` 中的自动化规则、语音唤醒关键词和分消息端上下文额度。
+上面三套路由可以分别配置消息端、端口、热投递模式、Agent 投递方式，也可以指向同一个角色。不要为了多个 Route 复制角色；同一个角色复用根级 `personaConfig.json` 中的自动化规则、语音唤醒关键词和分消息端上下文额度。
 
-## 人格之间怎样联系
+## 角色之间怎样联系
 
-对外统一使用“人格（persona）”：它表示可以复用的身份、行为和记忆主体。“角色”只保留在旧字段、目录名和界面自然称呼中，例如 `roleId`、`/api/roles/*` 与 `data/roles/`；本次不迁移这些兼容名称。
+对外统一使用“角色（persona）”：它表示可以复用的身份、行为和记忆主体。“角色”只保留在旧字段、目录名和界面自然称呼中，例如 `roleId`、`/api/roles/*` 与 `data/roles/`；本次不迁移这些兼容名称。
 
-Agent 可以先查询 `/api/personas?addressable=true`，再向另一个人格的已启用 Route 显式投递消息。发送身份不是请求正文里的自由字段：Manager 校验当前 AgentPacket 提供、同时绑定 Route 与人格的凭据。人格目录只返回显示名称和 Route 可达状态，不返回人格正文、本机路径或凭据。
+Agent 可以先查询 `/api/personas?addressable=true`，再向另一个角色的已启用 Route 显式投递消息。发送身份不是请求正文里的自由字段：Manager 校验当前 AgentPacket 提供、同时绑定 Route 与角色的凭据。角色目录只返回显示名称和 Route 可达状态，不返回角色正文、本机路径或凭据。
 
-这种联系是单向投递，不会自动创建双向聊天。目标人格的普通回复留在自己的角色面板；需要答复来源人格时，必须显式反向投递，沿用会话 ID、引用收到的消息并增加跳数。请求使用稳定 `deliveryId` 防止超时重试造成重复任务；超过 8 跳、给自己发送或目标 Route 不明确时会拒绝。
+这种联系是单向投递，不会自动创建双向聊天。目标角色的普通回复留在自己的角色面板；需要答复来源角色时，必须显式反向投递，沿用会话 ID、引用收到的消息并增加跳数。请求使用稳定 `deliveryId` 防止超时重试造成重复任务；超过 8 跳、给自己发送或目标 Route 不明确时会拒绝。
 
 ## 语音、声线与消息上下文归属
 
 | 业务事实 | 唯一真源 | 原因 |
 | --- | --- | --- |
-| 人格头像 | 人格 `personaConfig.json.avatar` 指向的角色目录内图片 | 头像跟随人格复用，不应在每条 Route 重复配置。 |
+| 角色头像 | 角色 `personaConfig.json.avatar` 指向的角色目录内图片 | 头像跟随角色复用，不应在每条 Route 重复配置。 |
 | 语音热投递或关键词模式 | Route `adapterConfig.json.speechPushMode` | 决定这条语音入口是否每段立即投递。 |
-| 人格名/称呼/唤醒词 | 人格 `personaConfig.json.speechTriggerKeywords` | 同一人格被多条 Route 复用时应共用同一组称呼。 |
-| 普通消息端的自动上下文条数 | 人格 `personaConfig.json.recentMessageLimits` | 同一人格的不同消息端需要不同上下文长度；`0` 只关闭自动注入，不停止记录。Heartbeat 固定无历史输入。 |
-| TTS 模型、声线、语言、语速和发声说明 | 人格 `voice/voice-profile.json` | 声音是人格的长期属性，不应在 Route 复制。 |
-| 当前双向消息证据 | 人格 `conversation/current.jsonl` | 入站/出站、ASR/TTS、QQ 自身回复和其他端统一记录。 |
-| 说话人资料 | RabiSpeech 主机共用 `output/speaker-profiles.json` | 人物资料设置一次后可为后续人格/Route/会议复用；标签仍按 `sessionId + speakerLabel` 手工绑定。 |
+| 角色名/称呼/唤醒词 | 角色 `personaConfig.json.speechTriggerKeywords` | 同一角色被多条 Route 复用时应共用同一组称呼。 |
+| 普通消息端的自动上下文条数 | 角色 `personaConfig.json.recentMessageLimits` | 同一角色的不同消息端需要不同上下文长度；`0` 只关闭自动注入，不停止记录。Heartbeat 固定无历史输入。 |
+| TTS 模型、声线、语言、语速和发声说明 | 角色 `voice/voice-profile.json` | 声音是角色的长期属性，不应在 Route 复制。 |
+| 当前双向消息证据 | 角色 `conversation/current.jsonl` | 入站/出站、ASR/TTS、QQ 自身回复和其他端统一记录。 |
+| 说话人资料 | RabiSpeech 主机共用 `output/speaker-profiles.json` | 人物资料设置一次后可为后续角色/Route/会议复用；标签仍按 `sessionId + speakerLabel` 手工绑定。 |
 
-热投递开启时，每段 ASR 完成即投递；关闭时所有 ASR 仍记录，仅命中当前人格关键词才唤醒。关键词为空时不回退热投递。普通消息端一旦命中规则则直接 `steer/start`；Heartbeat 的忙碌跳过由独立开关控制。
+热投递开启时，每段 ASR 完成即投递；关闭时所有 ASR 仍记录，仅命中当前角色关键词才唤醒。关键词为空时不回退热投递。普通消息端一旦命中规则则直接 `steer/start`；Heartbeat 的忙碌跳过由独立开关控制。
 
-## 人格头像
+## 角色头像
 
-在 RibiWebGUI 的“人格配置”页选择人格后，可以上传 PNG、JPEG、WebP 或 GIF，单文件上限 5 MB。Manager 会把图片保存为人格目录内的内容寻址文件，例如 `avatar-a1b2c3d4e5f6.webp`，再原子更新 `personaConfig.json.avatar`。新文件与配置均写入成功后才清理旧的托管头像，因此更换失败时旧头像仍然有效。删除头像不影响 `persona.md`、消息规则、计划、记忆或声线。
+在 RibiWebGUI 的“角色配置”页选择角色后，可以上传 PNG、JPEG、WebP 或 GIF，单文件上限 5 MB。Manager 会把图片保存为角色目录内的内容寻址文件，例如 `avatar-a1b2c3d4e5f6.webp`，再原子更新 `personaConfig.json.avatar`。新文件与配置均写入成功后才清理旧的托管头像，因此更换失败时旧头像仍然有效。删除头像不影响 `persona.md`、消息规则、计划、记忆或声线。
 
-头像会显示在 WebGUI 的人格选择、Route 总览、语音人格选择和本地角色面板中。未配置、文件缺失或图片加载失败时，各界面统一回退到人格 ID 首字。Manager 只接受角色目录内的简单文件名，不允许通过 `avatar` 读取目录外路径；`personaConfig.json` 损坏时上传和删除都会失败关闭，不会用空配置覆盖原文件。
+头像会显示在 WebGUI 的角色选择、Route 总览、语音角色选择和本地角色面板中。未配置、文件缺失或图片加载失败时，各界面统一回退到角色 ID 首字。Manager 只接受角色目录内的简单文件名，不允许通过 `avatar` 读取目录外路径；`personaConfig.json` 损坏时上传和删除都会失败关闭，不会用空配置覆盖原文件。
 
-## 人格路由模板设计
+## 角色路由模板设计
 
-`personaConfig.json` 里的模板不是单纯通知文案，它是把消息交给人格时的“判断框架”。同一个 `routeKind` 对不同角色、不同场景的意义可能完全不同：同一个 Rabi，在私聊里可以更像陪伴角色；在群里则更像看板娘和路由助手。明确私聊、直接 @ 和直接回复默认需要回应，让对方知道 Agent 理解了什么、接下来谁做什么；“嗯嗯”“收到”“谢谢”、表情、重复消息等纯结束语可以只记录。
+`personaConfig.json` 里的模板不是单纯通知文案，它是把消息交给角色时的“判断框架”。同一个 `routeKind` 对不同角色、不同场景的意义可能完全不同：同一个 Rabi，在私聊里可以更像陪伴角色；在群里则更像看板娘和路由助手。明确私聊、直接 @ 和直接回复默认需要回应，让对方知道 Agent 理解了什么、接下来谁做什么；“嗯嗯”“收到”“谢谢”、表情、重复消息等纯结束语可以只记录。
 
-网关根据私聊、直接 @、直接回复、回复链和普通群消息等结构提供默认回应要求，但不替 Agent 编写具体回答。Agent 仍要结合上下文判断回应内容和少数静默例外；对应人格的模板和 `persona.md` 可以进一步收窄语气、长度和场景规则。
+网关根据私聊、直接 @、直接回复、回复链和普通群消息等结构提供默认回应要求，但不替 Agent 编写具体回答。Agent 仍要结合上下文判断回应内容和少数静默例外；对应角色的模板和 `persona.md` 可以进一步收窄语气、长度和场景规则。
 
 ### 陪伴型模板
 
-陪伴型能力要分场景写。私聊里可以鼓励自然延续关系、回应情绪、轻轻找话题；群聊里即使是偏人格化角色，也通常要先看群聊节奏，不要主动把公共频道变成陪聊场。
+陪伴型能力要分场景写。私聊里可以鼓励自然延续关系、回应情绪、轻轻找话题；群聊里即使是偏角色化角色，也通常要先看群聊节奏，不要主动把公共频道变成陪聊场。
 
 群聊回复链模板可以写成：
 
@@ -160,21 +160,21 @@ xcopy examples\data data /E /I
 cp -R examples/data/. data/
 ```
 
-也可以只复制单个人格到 gateway 的角色目录：
+也可以只复制单个角色到 gateway 的角色目录：
 
 ```powershell
 xcopy examples\data data /E /I
 ```
 
-然后在 WebUI 的路由配置中把 `指向人格` 选择为 `Rabi`。选择人格后，转发给处理端的提示末尾会追加角色文件路径，自动化规则从该角色的 `personaConfig.json` 读取。
+然后在 WebUI 的路由配置中把 `指向角色` 选择为 `Rabi`。选择角色后，转发给处理端的提示末尾会追加角色文件路径，自动化规则从该角色的 `personaConfig.json` 读取。
 
-项目内还提供了一个开源 skill，用来指导创建新人格：
+项目内还提供了一个开源 skill，用来指导创建新角色：
 
 - `skills/create-rabiroute-persona/SKILL.md`
 
 它说明了如何一起设计 `persona.md` 和 `personaConfig.json`，让角色既有稳定气质，也有对应的自动化规则。
 
-RabiPC 语音输入、人格回复与 RabiSpeech TTS 工作站可参考：
+RabiPC 语音输入、角色回复与 RabiSpeech TTS 工作站可参考：
 
 - `skills/rabiroute-voice-workstation/SKILL.md`
 - `skills/character-tts-dialogue/SKILL.md`

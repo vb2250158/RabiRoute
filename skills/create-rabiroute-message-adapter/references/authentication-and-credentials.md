@@ -8,7 +8,7 @@
 | --- | --- | --- | --- |
 | 平台账号或连接实例 | 消息端账户库 | 系统生成的 `endpointAccountId`、类型、非敏感显示身份、`credentialId`、授权摘要 | 用 Route ID、昵称或数组位置充当账号身份 |
 | token、secret、cookie、refresh token、密码 | 本机受保护凭据库 | 密文或操作系统托管秘密；业务层只取得按用途限权的读取结果 | 写入 Route JSON、公开配置、日志、URL、前端 snapshot 或错误文本 |
-| 当前 Route 如何使用账号 | Route 配置 | `endpointAccountId`、启用状态、事件过滤、目标人格、外发策略 | 在每个 Route 复制账号秘密或独立刷新 token |
+| 当前 Route 如何使用账号 | Route 配置 | `endpointAccountId`、启用状态、事件过滤、目标角色、外发策略 | 在每个 Route 复制账号秘密或独立刷新 token |
 | 当前连接与授权挑战 | 当前 Manager generation 的授权控制器 | 内存中的连接、轮询、`authAttemptId`、挑战状态和超时 | generation 更换后继续接受旧挑战，或让 WebGUI 自己轮询平台秘密 API |
 | 卡片显示状态 | Manager 返回的只读 snapshot | 非敏感账号身份、状态、下一动作、错误码、更新时间 | 根据是否填过字段推断已登录，或只显示空输入框 |
 
@@ -156,6 +156,6 @@ Route 页面
 - 秘密提交后不出现在 API response、Route/config、日志、诊断、错误、浏览器存储和构建产物中。
 - 重启 Manager/Host 后账号身份与 Route 绑定仍在，连接重新验证；旧代挑战失效。
 - token 过期进入 `expired`，重新授权复用同一个 `endpointAccountId`。
-- 多 Route 显式选择同一账号时共享连接，不共享事件过滤、人格或外发策略。
+- 多 Route 显式选择同一账号时共享连接，不共享事件过滤、角色或外发策略。
 - 退出登录后连接停止、秘密不可再用、Route 清楚显示授权缺失。
 - 无真实账号或平台环境时保持 `experimental`，使用 fake provider 验证状态机与脱敏；不能把 mock 通过写成真实平台已验证。

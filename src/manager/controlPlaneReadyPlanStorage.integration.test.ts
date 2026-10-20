@@ -117,7 +117,7 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
     fs.copyFileSync(path.join(packageRoot, "plugin-adapters/rabi-speech/model-catalog.json"), path.join(speechFixtureRoot, "model-catalog.json"));
     const companionFixtureRoot = path.join(fixturePackageRoot, "packages/rabi-companion");
     fs.mkdirSync(companionFixtureRoot, { recursive: true });
-    for (const file of ["presets.json", "scene-rules.json"]) {
+    for (const file of ["presets.json", "scene-rules.json", "observation.json"]) {
       fs.copyFileSync(path.join(packageRoot, "packages/rabi-companion", file), path.join(companionFixtureRoot, file));
     }
     const stateRoot = path.join(fixtureRoot, "state");

@@ -342,9 +342,9 @@ class TaskWindowLayoutTest(unittest.TestCase):
         card.close()
 
     def test_overflow_menu_contains_actions_not_duplicate_views(self) -> None:
-        self.window.set_actions([("人格目录", lambda: None, True)])
+        self.window.set_actions([("角色目录", lambda: None, True)])
         menu_texts = [action.text() for action in self.window.more_menu.actions() if action.text()]
-        self.assertIn("人格目录", menu_texts)
+        self.assertIn("角色目录", menu_texts)
         self.assertIn("刷新", menu_texts)
         self.assertNotIn("近期记忆", menu_texts)
         self.assertNotIn("已归档", menu_texts)

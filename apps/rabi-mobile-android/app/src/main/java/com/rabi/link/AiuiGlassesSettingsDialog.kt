@@ -22,13 +22,13 @@ object AiuiGlassesSettingsDialog {
         val panel = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setPadding(32,16,32,16) }
         val state = TextView(activity).apply { text = "正在读取眼镜设置…"; textSize = 15f }
         val deviceButton = Button(activity).apply { text = "选择眼镜" }
-        val computerButton = Button(activity).apply { text = "选择人格所在电脑" }
-        val personaButton = Button(activity).apply { text = "当前使用的人格：未绑定" }
-        val skillButton = Button(activity).apply { text = "采用人格 Skill" }
+        val computerButton = Button(activity).apply { text = "选择角色所在电脑" }
+        val personaButton = Button(activity).apply { text = "当前使用的角色：未绑定" }
+        val skillButton = Button(activity).apply { text = "采用角色 Skill" }
         val saveButton = Button(activity).apply { text = "保存" }
         val refreshButton = Button(activity).apply { text = "刷新 / 核对原请求" }
         val resumeButton = Button(activity).apply { text = "继续原保存请求"; isEnabled = false }
-        val unbindButton = Button(activity).apply { text = "不使用人格" }
+        val unbindButton = Button(activity).apply { text = "不使用角色" }
         val bridgeButton = Button(activity).apply { text = "手机直连 / 眼镜配对" }
         bridgeButton.setOnClickListener {
             runCatching { RabiConversationService.openPhoneEyeBridge() }.fold(onSuccess={info->
@@ -36,7 +36,7 @@ object AiuiGlassesSettingsDialog {
                     .setPositiveButton("关闭",null).show()
             },onFailure={AlertDialog.Builder(activity).setTitle("手机直连").setMessage("请先启动手机连接服务。").setPositiveButton("完成",null).show()})
         }
-        panel.addView(TextView(activity).apply { text = "人格提供身份、指引和聊天记录归属，模型由乐奇提供。接口权限沿用连接鉴权。"; textSize = 14f })
+        panel.addView(TextView(activity).apply { text = "角色提供身份、指引和聊天记录归属，模型由乐奇提供。接口权限沿用连接鉴权。"; textSize = 14f })
         listOf(deviceButton,computerButton,personaButton,skillButton,saveButton,unbindButton,refreshButton,resumeButton,bridgeButton,state).forEach(panel::addView)
         val dialog = AlertDialog.Builder(activity).setTitle("眼镜设置 · AIUI").setView(panel).setNegativeButton("关闭", null).create()
         var busy = false; var open = true; var deviceId = ""; var ownerId = ""; var sourceId = ""; var revision = 0
@@ -64,9 +64,9 @@ object AiuiGlassesSettingsDialog {
             draft = value.optJSONObject("profile")?.let { JSONObject(it.toString()) }
             sourceId = draft?.optJSONObject("personaRef")?.optString("sourceDeviceId").orEmpty().ifBlank { ownerId }
             deviceButton.text = "眼镜：$deviceId"
-            computerButton.text = "人格所在电脑：${sourceId.ifBlank { "未选择" }}"
-            personaButton.text = "当前使用的人格：${draft?.optJSONObject("personaRef")?.let { draft?.optString("name") } ?: "未绑定"}"
-            skillButton.text = "采用人格 Skill（${draft?.optJSONArray("skills")?.length() ?: 0}）"
+            computerButton.text = "角色所在电脑：${sourceId.ifBlank { "未选择" }}"
+            personaButton.text = "当前使用的角色：${draft?.optJSONObject("personaRef")?.let { draft?.optString("name") } ?: "未绑定"}"
+            skillButton.text = "采用角色 Skill（${draft?.optJSONArray("skills")?.length() ?: 0}）"
             state.text = "已保存版本 $revision；眼镜应用状态：${value.optJSONObject("applied")?.optString("status") ?: "尚未确认"}。保存后当前轮结束再切换。"
         }
         fun refresh() {
@@ -112,21 +112,21 @@ object AiuiGlassesSettingsDialog {
             }.show()
         }
         computerButton.setOnClickListener { run({ JSONArray().also { rows -> client.computers().forEach { rows.put(JSONObject().put("id",it.id).put("name",it.name).put("online",it.online)) } } }, { computers ->
-            AlertDialog.Builder(activity).setTitle("选择人格所在电脑").setItems(Array(computers.length()) { i -> computers.getJSONObject(i).optString("name") + if(computers.getJSONObject(i).optBoolean("online")) "" else "（离线）" }) { _, index ->
-                sourceId = computers.getJSONObject(index).getString("id"); draft = null; personaButton.text = "当前使用的人格：请选择"; skillButton.text = "采用人格 Skill（0）"; state.text = "请在此电脑选择人格。"; computerButton.text = "人格所在电脑：" + computers.getJSONObject(index).optString("name")
+            AlertDialog.Builder(activity).setTitle("选择角色所在电脑").setItems(Array(computers.length()) { i -> computers.getJSONObject(i).optString("name") + if(computers.getJSONObject(i).optBoolean("online")) "" else "（离线）" }) { _, index ->
+                sourceId = computers.getJSONObject(index).getString("id"); draft = null; personaButton.text = "当前使用的角色：请选择"; skillButton.text = "采用角色 Skill（0）"; state.text = "请在此电脑选择角色。"; computerButton.text = "角色所在电脑：" + computers.getJSONObject(index).optString("name")
             }.show()
         }) }
         personaButton.setOnClickListener { run({ client.personas(sourceId).optJSONArray("personas") ?: JSONArray() }, { personas ->
-            AlertDialog.Builder(activity).setTitle("当前使用的人格").setItems(Array(personas.length()) { i -> personas.getJSONObject(i).optString("name",personas.getJSONObject(i).optString("personaId")) }) { _, index ->
+            AlertDialog.Builder(activity).setTitle("当前使用的角色").setItems(Array(personas.length()) { i -> personas.getJSONObject(i).optString("name",personas.getJSONObject(i).optString("personaId")) }) { _, index ->
                 val roleId = personas.getJSONObject(index).getString("personaId")
                 run({ client.template(sourceId,roleId) }, { profile ->
-                    draft = profile; sourceId = profile.getJSONObject("personaRef").getString("sourceDeviceId"); personaButton.text = "当前使用的人格：" + profile.getString("name"); skillButton.text = "采用人格 Skill（0）"; state.text = "已选择，尚未保存。"
+                    draft = profile; sourceId = profile.getJSONObject("personaRef").getString("sourceDeviceId"); personaButton.text = "当前使用的角色：" + profile.getString("name"); skillButton.text = "采用角色 Skill（0）"; state.text = "已选择，尚未保存。"
                 })
             }.show()
         }) }
         skillButton.setOnClickListener {
             val roleId = draft?.optJSONObject("personaRef")?.optString("roleId").orEmpty()
-            if(roleId.isBlank()) { state.text = "请先选择人格。"; return@setOnClickListener }
+            if(roleId.isBlank()) { state.text = "请先选择角色。"; return@setOnClickListener }
             run({ client.skills(sourceId,roleId) }, { result ->
                 val skills = result.optJSONArray("skills") ?: result.optJSONArray("items") ?: JSONArray()
                 val selected = BooleanArray(skills.length())
@@ -134,13 +134,13 @@ object AiuiGlassesSettingsDialog {
                     .setPositiveButton("采用") { _, _ ->
                         val ids = (0 until skills.length()).filter { selected[it] }.map { skills.getJSONObject(it).getString("id") }
                         if(ids.size > 16) { state.text = "一次可预载最多 16 项；其余 Skill 可通过接口按需读取。"; return@setPositiveButton }
-                        run({ client.template(sourceId,roleId,ids) }, { profile -> draft = profile; skillButton.text = "采用人格 Skill（${ids.size}）";state.text = "已选择 Skill，尚未保存。" })
+                        run({ client.template(sourceId,roleId,ids) }, { profile -> draft = profile; skillButton.text = "采用角色 Skill（${ids.size}）";state.text = "已选择 Skill，尚未保存。" })
                     }.setNegativeButton("取消",null).show()
             })
         }
         unbindButton.setOnClickListener {
             draft = JSONObject().put("revision",revision+1).put("id","assistant").put("name","眼镜助手").put("systemPrompt","").put("skills",JSONArray()).put("mcp",JSONArray()).put("personaRef",JSONObject.NULL)
-            sourceId = ownerId; computerButton.text = "人格所在电脑：未绑定"; skillButton.text = "采用人格 Skill（0）"; personaButton.text = "当前使用的人格：未绑定";state.text = "未绑定仍可调用接口；尚未保存。"
+            sourceId = ownerId; computerButton.text = "角色所在电脑：未绑定"; skillButton.text = "采用角色 Skill（0）"; personaButton.text = "当前使用的角色：未绑定";state.text = "未绑定仍可调用接口；尚未保存。"
         }
         saveButton.setOnClickListener {
             val chosen = draft?.let { JSONObject(it.toString()) } ?: return@setOnClickListener

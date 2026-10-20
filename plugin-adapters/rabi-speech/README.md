@@ -6,12 +6,12 @@
 
 # RabiSpeech 插件
 
-RabiSpeech 是由 RabiRoute Manager 语音插件管理的本机重型子进程，也是只绑定回环地址的本地 TTS / ASR provider 网关。它不能脱离当前 RabiRoute application generation 独立自启动。普通手动语音 API 不接入 Agent、不经过消息路由；常驻麦克风每完成一段 ASR，Manager 会把同一份文本广播给所有已开启语音消息端的 Route，各 Route 独立执行热投递或人格关键词策略：
+RabiSpeech 是由 RabiRoute Manager 语音插件管理的本机重型子进程，也是只绑定回环地址的本地 TTS / ASR provider 网关。它不能脱离当前 RabiRoute application generation 独立自启动。普通手动语音 API 不接入 Agent、不经过消息路由；常驻麦克风每完成一段 ASR，Manager 会把同一份文本广播给所有已开启语音消息端的 Route，各 Route 独立执行热投递或角色关键词策略：
 
 - TTS 由 RabiSpeech 直接管理本地 ONNX-VITS、GPT-SoVITS、IndexTTS2、Qwen3-TTS 和 CosyVoice3 worker。
 - ASR 支持本地 faster-whisper、Qwen3-ASR、SenseVoiceSmall 和 FireRedASR2。
-- Rabi 人格拥有 `data/roles/<RoleId>/voice/` 参考音频、voice index 和缓存；直接把人格目录名作为 `voice` 即可，无需 Route 或 Agent。
-- 所有模型、人格、Route、会话和 Agent 的播放统一进入一个主机级 FIFO。
+- Rabi 角色拥有 `data/roles/<RoleId>/voice/` 参考音频、voice index 和缓存；直接把角色目录名作为 `voice` 即可，无需 Route 或 Agent。
+- 所有模型、角色、Route、会话和 Agent 的播放统一进入一个主机级 FIFO。
 - RabiLink Relay 只代理原始 HTTP 请求和响应，不解析角色、声线或转写正文。
 
 ## 安装与启动
@@ -79,7 +79,7 @@ RabiSpeech 本身目前没有声学回声参考或 AEC。桌面远程语音客�
 
 Provider 注册、预热或 TTS/ASR 执行使公开能力发生变化时，Registry 发布 `capabilities_changed`。事件只携带刷新提示，不包含提供端配置、路径、错误或凭据；订阅方重新读取 `/v1/capabilities` 获取当前能力。RabiLink 使用该事件更新语音可用状态，服务断线时撤销能力，不做空闲定时探测。
 
-`PUT /v1/playback/settings` 同样只允许回环调用，接受 `{"volume": 0..100}`。它是主机级唯一播放音量，持久化在忽略 Git 的 `output/playback-settings.json`，不属于 Route 或人格；每条 FIFO 音频开始播放时冻结当时的数值。Windows 播放统一使用 SoundFile / PortAudio，能正确读取流式 WAV 的实际数据长度。Windows 11 音量合成器按进程映像显示应用，因此 `scripts/install.ps1` 会生成并由 `scripts/start.ps1` 优先启动带 RabiSpeech 产品资源的 `runtime/RabiSpeech.exe`。服务启动时建立一个持续无声的共享输出会话，把历史 `1%` 只归一一次到 `100%`，之后只保活、不回写，保证 Windows 合成器滑条一直可调。该无声会话不进入 FIFO，也不触发麦克风防回流。
+`PUT /v1/playback/settings` 同样只允许回环调用，接受 `{"volume": 0..100}`。它是主机级唯一播放音量，持久化在忽略 Git 的 `output/playback-settings.json`，不属于 Route 或角色；每条 FIFO 音频开始播放时冻结当时的数值。Windows 播放统一使用 SoundFile / PortAudio，能正确读取流式 WAV 的实际数据长度。Windows 11 音量合成器按进程映像显示应用，因此 `scripts/install.ps1` 会生成并由 `scripts/start.ps1` 优先启动带 RabiSpeech 产品资源的 `runtime/RabiSpeech.exe`。服务启动时建立一个持续无声的共享输出会话，把历史 `1%` 只归一一次到 `100%`，之后只保活、不回写，保证 Windows 合成器滑条一直可调。该无声会话不进入 FIFO，也不触发麦克风防回流。
 
 DashScope 风格兼容面：
 
@@ -117,15 +117,15 @@ DashScope 风格 ASR 为了保持本地隐私，只接受 `data:audio/...;base64
 
 ## 语音记录与 TTS 缓存
 
-常驻麦克风完成一段语音后计算整段 RMS 与峰值，并把它们随采集时间、音频格式、来源设备和 ASR/声纹分段提交给 Manager。主机通用记录、人格语音历史和会话上下文都会保留这两个音频事实，但主机不据此判断说话人身份或谁是用户。关闭前置缓冲时，触发 VAD 的第一块 PCM 仍属于语段，不能吞掉句首。
+常驻麦克风完成一段语音后计算整段 RMS 与峰值，并把它们随采集时间、音频格式、来源设备和 ASR/声纹分段提交给 Manager。主机通用记录、角色语音历史和会话上下文都会保留这两个音频事实，但主机不据此判断说话人身份或谁是用户。关闭前置缓冲时，触发 VAD 的第一块 PCM 仍属于语段，不能吞掉句首。
 
 `GET /v1/records` 查询按日期持久化的 ASR/TTS 文本元数据，可按 `kind`、`session_id`、`route_id` 和时间窗口筛选。文本记录与成品音频缓存彼此独立；音频超过保留窗口不会删除文本记录。
 
-解析到人格的 TTS 成品固定保存在对应的 `data/roles/<RoleId>/voice/cache/tts-audio/`。`server.tts_audio_dir`（或 `RABISPEECH_TTS_AUDIO_DIR`）只控制未解析到人格时的 fallback，默认物理位置是 `plugin-adapters/rabi-speech/output/tts-audio/`，不能把人格缓存重定向出角色目录。
+解析到角色的 TTS 成品固定保存在对应的 `data/roles/<RoleId>/voice/cache/tts-audio/`。`server.tts_audio_dir`（或 `RABISPEECH_TTS_AUDIO_DIR`）只控制未解析到角色时的 fallback，默认物理位置是 `plugin-adapters/rabi-speech/output/tts-audio/`，不能把角色缓存重定向出角色目录。
 
-每个成品文件按自己的 mtime 默认保留 `1440` 分钟（24 小时），不按自然日整批删除。服务启动时清理已过期文件并计算最早到期时间；每次写入新 TTS 成品只在它更早到期时重排一个一次性 cleanup deadline，不再每 60 秒扫描全部人格与 fallback 缓存。进程停机和操作系统调度仍可能让实际删除晚于预计时间，因此记录中的预计过期时间不是硬实时承诺。
+每个成品文件按自己的 mtime 默认保留 `1440` 分钟（24 小时），不按自然日整批删除。服务启动时清理已过期文件并计算最早到期时间；每次写入新 TTS 成品只在它更早到期时重排一个一次性 cleanup deadline，不再每 60 秒扫描全部角色与 fallback 缓存。进程停机和操作系统调度仍可能让实际删除晚于预计时间，因此记录中的预计过期时间不是硬实时承诺。
 
-记录 API 只返回安全的 POSIX 风格逻辑相对路径：人格缓存为 `<RoleId>/voice/cache/tts-audio/<file>`，fallback 为 `output/tts-audio/<file>`；旧记录可保留单个文件名。绝对路径、父级穿越、反斜杠、URI/编码伪路径和控制字符不会进入 Manager/WebGUI read model。
+记录 API 只返回安全的 POSIX 风格逻辑相对路径：角色缓存为 `<RoleId>/voice/cache/tts-audio/<file>`，fallback 为 `output/tts-audio/<file>`；旧记录可保留单个文件名。绝对路径、父级穿越、反斜杠、URI/编码伪路径和控制字符不会进入 Manager/WebGUI read model。
 
 ## 说话人标注
 
@@ -143,7 +143,7 @@ Agent 可调用 `PUT /api/speech/speaker-identities`，本机调用方也可使�
 
 `scripts/benchmark_speaker_models.py` 使用同一批私有 WAV 评估选定的本地声纹模型，并可选加入旧 68 维频谱基线作历史比较，输出 EER、FAR、FRR、已知人物识别率、未知保留率与 p50/p95 延迟。语料清单格式见 `benchmarks/speaker-cases.example.json`；真实录音必须留在 Git 忽略目录，不进入公开报告。脚本和模型探针一样会从自身位置加载 RabiSpeech 与 `.deps`，因此可直接从仓库根目录或任意工作目录运行，不需要人工设置 `PYTHONPATH`。
 
-正式校准前可用采集工具建立私有数据集。默认目录是已被 Git 忽略的 `benchmarks/private/speaker-validation/`；工具只写 WAV、原子更新 `speaker-cases.json` 并把旧 manifest 归档到同目录 `archive/`，不会修改人物资料、人格关系或 `validated`。新建、旧版或未声明的数据集默认是 `dataset_kind=unspecified`、`formal_validation_eligible=false`；只有确认目录内全部样本都是真人录音后，显式执行 `init --confirm-real-person-recordings`，才会标记为 `real_person_private`。录音统一为 16 kHz 单声道，低 RMS、短于 1 秒或严重削波默认拒绝：
+正式校准前可用采集工具建立私有数据集。默认目录是已被 Git 忽略的 `benchmarks/private/speaker-validation/`；工具只写 WAV、原子更新 `speaker-cases.json` 并把旧 manifest 归档到同目录 `archive/`，不会修改人物资料、角色关系或 `validated`。新建、旧版或未声明的数据集默认是 `dataset_kind=unspecified`、`formal_validation_eligible=false`；只有确认目录内全部样本都是真人录音后，显式执行 `init --confirm-real-person-recordings`，才会标记为 `real_person_private`。录音统一为 16 kHz 单声道，低 RMS、短于 1 秒或严重削波默认拒绝：
 
 ```powershell
 py -3.10 plugin-adapters\rabi-speech\scripts\collect_speaker_validation.py init `
@@ -159,7 +159,7 @@ py -3.10 plugin-adapters\rabi-speech\scripts\collect_speaker_validation.py statu
   --policy plugin-adapters\rabi-speech\benchmarks\speaker-validation-policy.example.json
 ```
 
-公开示例 policy 的最低规模是 32 段、4 个已登记人物、至少 2 个未知测试人物；建议每个已登记人物分别采 3 段 enroll 和 3 段 test，再为两个未知人物各采 4 段 test，并覆盖实际使用的电脑、手机/眼镜麦克风、距离和房间噪声。`speaker` 是私有数据集标签，不会自动成为人格所理解的用户身份。
+公开示例 policy 的最低规模是 32 段、4 个已登记人物、至少 2 个未知测试人物；建议每个已登记人物分别采 3 段 enroll 和 3 段 test，再为两个未知人物各采 4 段 test，并覆盖实际使用的电脑、手机/眼镜麦克风、距离和房间噪声。`speaker` 是私有数据集标签，不会自动成为角色所理解的用户身份。
 
 ```powershell
 py -3.10 plugin-adapters\rabi-speech\scripts\benchmark_speaker_models.py `
@@ -190,7 +190,7 @@ py -3.10 plugin-adapters\rabi-speech\scripts\test_multivoice_voiceprint.py `
 
 自动生成模式只调用回环 RabiSpeech 标准 API，不自行复制 Provider 协议；因此外部模型仍必须先在本机私有配置中显式启用。脚本会先查询 `/v1/models`，完整模型 ID 可直接使用，唯一的短模型名会解析到当前完整 ID；短名在多个 Provider 中重名或当前不可用时明确失败，不会把猜测的旧 ID 直接提交。TTS 与 ASR 请求都等待当前请求的终态，不运行状态轮询；DashScope 异步会议任务仅在 Provider 的请求 deadline 内保留受控查询。
 
-仓库根目录的 `scripts/test-rabispeech-tts-loop.mjs` 把一次真实闭环收敛成可复现验收。它要求 RabiSpeech 与 Manager 已经运行，先订阅 SSE `records_changed`，再按 `/v1/models` 的真实能力生成 16 kHz mono WAV、把同一 WAV 送入 ASR、检查不透明声纹证据，最后各查询一次 RabiSpeech 与 Manager 的同会话 TTS/ASR 记录。脚本不启动或停止服务/麦克风、不播放音频、不调用 `/api/speech/messages`，因此不会投递 Route 或修改人格关系；查询发生在两个终态事件到达之后，不做状态或记录轮询。
+仓库根目录的 `scripts/test-rabispeech-tts-loop.mjs` 把一次真实闭环收敛成可复现验收。它要求 RabiSpeech 与 Manager 已经运行，先订阅 SSE `records_changed`，再按 `/v1/models` 的真实能力生成 16 kHz mono WAV、把同一 WAV 送入 ASR、检查不透明声纹证据，最后各查询一次 RabiSpeech 与 Manager 的同会话 TTS/ASR 记录。脚本不启动或停止服务/麦克风、不播放音频、不调用 `/api/speech/messages`，因此不会投递 Route 或修改角色关系；查询发生在两个终态事件到达之后，不做状态或记录轮询。
 
 自动选模优先选择已安装可用的本地 Provider。只有显式加 `--allow-api-provider` 才允许使用配置中已经启用的 HTTPS API Provider，不会在本地失败后暗中回退云端：
 
@@ -203,9 +203,9 @@ npm run check:rabispeech:tts-loop -- `
   --allow-api-provider
 ```
 
-脱敏报告和 WAV 默认写入 Git 忽略的 `plugin-adapters/rabi-speech/output/acceptance/`。报告不保存测试正文、声线/人格值或原始声纹 ID，只保存哈希、模型、音频指标、事件与查询检查；固定标记 `datasetKind=synthetic_tts_smoke`、`formalValidationEligible=false`。它只证明运行机制，不能写入 `validation_report_path`，也不能替代真人校准。
+脱敏报告和 WAV 默认写入 Git 忽略的 `plugin-adapters/rabi-speech/output/acceptance/`。报告不保存测试正文、声线/角色值或原始声纹 ID，只保存哈希、模型、音频指标、事件与查询检查；固定标记 `datasetKind=synthetic_tts_smoke`、`formalValidationEligible=false`。它只证明运行机制，不能写入 `validation_report_path`，也不能替代真人校准。
 
-构建后还可运行 `npm run check:speech-ingress-separation`。它不调用模型，而是在临时数据根中用真实 `dist/index.js --speech-message` 分别处理 PC `speech` 与手机 `rabilink` 主机记录，验收一个通用主机库、两个不同人格的独立历史、主机身份字段清洗，以及手机回复只使用稳定设备 ID。它不访问真实 Manager、Desktop、QQ、Relay、麦克风或人格目录，和上面的模型闭环烟测分别证明“语音模型链”和“消息/人格路由链”。
+构建后还可运行 `npm run check:speech-ingress-separation`。它不调用模型，而是在临时数据根中用真实 `dist/index.js --speech-message` 分别处理 PC `speech` 与手机 `rabilink` 主机记录，验收一个通用主机库、两个不同角色的独立历史、主机身份字段清洗，以及手机回复只使用稳定设备 ID。它不访问真实 Manager、Desktop、QQ、Relay、麦克风或角色目录，和上面的模型闭环烟测分别证明“语音模型链”和“消息/角色路由链”。
 
 ## 扩展 provider
 

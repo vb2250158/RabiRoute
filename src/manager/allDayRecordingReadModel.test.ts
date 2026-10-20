@@ -52,3 +52,15 @@ test("an invalidated late response cannot replace the new persona snapshot",asyn
  assert.deepEqual((await model.catalog("one","2026-10-11")).events.map(row=>row.id),["new"]);
  assert.equal(ready.length,1);model.dispose();
 });
+test("timestamp ASR query uses committed audio during cold history, with role and interval isolation",async()=>{
+ const model=new AllDayRecordingReadModel({directory:()=>"/private/role",mobileRoot:"/private/mobile",settings:async()=>DEFAULT_ALL_DAY_SETTINGS,
+  run:async()=>new Promise(()=>{}),ready:()=>{}});
+ const now=Date.now();
+ const audio:AllDayEvent={id:"mic-one",startedAt:now-2000,endedAt:now-1500,source:"microphone",kind:"audio",deviceId:"pc",text:"hello",state:"saved",transcriptionState:"ready"};
+ model.committed("one",audio,undefined,true); model.committed("two",{...audio,id:"private-other"},undefined,true);
+ model.committed("one",{...audio,id:"pending",text:"",transcriptionState:"processing"},undefined,true);
+ model.committed("one",{...audio,id:"future",startedAt:now+1,endedAt:now+500},undefined,true);
+ const result=await model.transcripts("one",now-3000,now);
+ assert.equal(result.loading,true);assert.deepEqual(result.events.map(row=>row.id),["mic-one"]);
+ model.dispose();
+});

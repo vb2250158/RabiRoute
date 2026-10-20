@@ -160,7 +160,7 @@ def main() -> int:
         f"- 来源角色：{profile.get('display_name_zh') or profile.get('display_name') or character_id}\n"
         f"- 声线风格：{profile.get('style_summary_zh') or profile.get('style_summary') or '未记录'}\n"
         f"- 来源页面：{profile.get('source_profile_url') or '未记录'}\n"
-        "- 运行原则：事实、价值观和人格边界以 Rabi persona 为准；本文件仅影响语气、情绪与参考台词选择。\n",
+        "- 运行原则：事实、价值观和角色边界以 Rabi persona 为准；本文件仅影响语气、情绪与参考台词选择。\n",
         encoding="utf-8",
     )
     report = {"executed_at": timestamp, "backup": str(backup) if backup else None, **plan}

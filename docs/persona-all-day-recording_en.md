@@ -22,6 +22,10 @@ Recording settings include a **Home Assistant** switch that can be enabled alone
 
 Device records retain activity entities, display names, state text and source timestamps. IDs derive from activity time, entity, state or message, and context, so retries do not duplicate an activity. Older settings without `homeAssistant` load with it off and are upgraded through the normal save path; remove that compatibility conversion only after existing settings have migrated. Events use the same computer storage, indexes and SSE updates. This source does not download clips, execute device actions or automatically notify an Agent.
 
+Completed ASR is persisted before broadcast enters its independent bounded FIFO (32 queued messages). Slow Agent or Manager delivery cannot hold the next transcription. A full or failed delivery queue retains completed ASR; stopping cancels pending broadcasts without automatically replaying them.
+
+Microphone ASR commits through RabiSpeech `records_changed` events without waiting for screen or camera samples. Connection and recovery backfill the current session; subsequent updates fetch stable record IDs. Processing and completed transcription update one event without recording twice. New microphone defaults accept 300 ms of voiced speech and segment continuous speech every 8 seconds; ASR compute time adds latency. Existing personal settings are preserved and remain adjustable in speech settings.
+
 An existing local microphone session is shared, collecting only computer recordings since enrollment. Disabling or lease expiry leaves that listener running. If no listener exists, a temporary session is started and restored on release. Remote input is rejected; source or session changes are explicit errors. Existing ASR thresholds and message routing still apply. Sound that never meets recording/transcription thresholds is not a saved event.
 
 After transcription, the updated phone app exports event timestamps, text and playable WAV through the authenticated resources channel to the computer that processed that event. A durable queue is separate from ASR acknowledgement, so network failures or an older PC cannot block transcription. Account and target are frozen at enrollment. Each persona explicitly selects which discovered phones to include; request bodies cannot impersonate another authenticated source. This covers new transcription events after the update, not automatic historical backfill inferred from old receipts, unuploaded phone videos, or health data.
@@ -42,6 +46,8 @@ Screen previews fit the complete virtual desktop without cropping, preserving th
 - Users, safe local Agents, and authenticated remote Agents may query the timeline. It does not automatically notify an Agent or inject raw recordings into prompts.
 
 ## Public Manager API
+
+Companion delivery reads microphone and system-playback ASR via `GET /api/roles/{roleId}/all-day-recording/transcripts?since=<milliseconds>&until=<milliseconds>`. Committed live records are immediately available; cold history reports `loading`, not no speech. Sources `microphone` and `systemAudio` retain original capture timestamps. When all-day recording is enabled, companion playback transcripts and WAV enter the same timeline; when recording is off, no persistent record is created.
 
 Discover the current Manager URL through Host and verify `/meta`. These public endpoints grant safe local requests and authenticated remote Agents equal access, preserve Manager read-only restrictions, and accept no arbitrary paths or commands. Remote requests retain their original admission lease, revalidate after body reads, control-queue waits, storage and speech calls, and check again before writes, subsequent network calls, data disclosure, or raw media output. Revoked, replaced, or disabled-and-reenabled authorization never falls back to local access. Public permission does not change the authenticated phone resource owner, persona-visible device selection, or the Host’s single capture owner; a device tunnel is not an Agent credential.
 
@@ -98,3 +104,6 @@ Previous/next navigation selects immediately within a complete, untrimmed loaded
 
 
 The active recording session holds one isolated, persistent camera process and continuously drains frames to maintain automatic exposure. First open waits at least two seconds and fifteen frames before saving; later samples use fresh frames without reopening the device. Disabling the camera source, changing its index, pausing or orderly shutdown releases it. Manager renews the lease every thirty seconds; the worker exits after 120 seconds without renewal or when its parent disconnects, including when a driver read blocks. A snapshot waits at most fifteen seconds, then terminates that worker and reports failure; the next sample reopens and warms up. Frames stay in memory and JPEGs are saved only at the configured interval; no continuous video is persisted and driver exposure settings are not forced.
+
+
+The microphone lease renews independently every 30 seconds, without waiting for frame capture, ASR computation or NAS writes. Renewal cannot acquire hardware. Stop drains an in-flight renewal before releasing the lease; release restores only the temporary session ID and retains updated model and capture settings.

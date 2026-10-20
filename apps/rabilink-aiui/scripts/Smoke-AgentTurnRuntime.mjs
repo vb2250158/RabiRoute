@@ -35,12 +35,12 @@ test('same Rokid session reads live help, calls a future API and reasons from th
 });
 
 test('model options retain the persona, use host default model and declare application tools only', () => {
-  const base = { initialPrompts: [{ role: 'system', content: '人格指引' }], tools: [{ type: 'function', function: { name: 'close_app', parameters: {} } }] };
+  const base = { initialPrompts: [{ role: 'system', content: '角色指引' }], tools: [{ type: 'function', function: { name: 'close_app', parameters: {} } }] };
   const result = agentLoopModelOptions(base, [{ type: 'function', function: { name: 'rabi_api_call', parameters: {} } }]);
   assert.equal(result.options.model, undefined); assert.deepEqual(result.options.tools, []);
-  assert.ok(result.options.initialPrompts[0].content.startsWith('人格指引'));
+  assert.ok(result.options.initialPrompts[0].content.startsWith('角色指引'));
   assert.ok(result.options.initialPrompts[0].content.includes('rabi_api_call'));
-  assert.equal(result.tools.length, 2); assert.equal(base.tools.length, 1); assert.equal(base.initialPrompts[0].content, '人格指引');
+  assert.equal(result.tools.length, 2); assert.equal(base.tools.length, 1); assert.equal(base.initialPrompts[0].content, '角色指引');
 });
 
 test('HTTP settlement precedes the next model request; equivalent writes keep one original outcome', async () => {

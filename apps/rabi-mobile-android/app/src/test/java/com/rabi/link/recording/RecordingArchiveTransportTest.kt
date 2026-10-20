@@ -121,26 +121,37 @@ class RecordingArchiveTransportTest {
             for (i in 0 until rows.length()) rows.getJSONObject(i).put("sha256", hash)
         }
         val manifestHash = RecordingArchiveContract.recordingManifestHash(manifest)
-        for (failure in 0..3) {
+        for (failure in 0..9) {
+            val cacheRoot = java.nio.file.Files.createTempDirectory("archive-proof-cache").toFile()
+            val cache = RecordingPlaybackObjectCache(cacheRoot,3600000L)
+            cache.retain(hash,pcm)
+            val state = when(failure) { 5 -> "queued"; 6 -> "processing"; 7 -> "failed"; 8 -> "not_requested"; 9 -> ""; else -> "completed" }
             var reads = 0
-            val t = transport { _, path, _ ->
+            val channel: (String,String,ByteArray) -> RecordingArchiveTransport.Reply = { _, path, _ ->
                 when {
                     path == "/archive-capabilities" -> reply(200, cap())
                     path.endsWith("/manifest") -> reply(200, if (failure == 3) JSONObject(manifest.toString()).put("timeBasis", "media") else manifest)
                     path.startsWith("/recordings?") -> reply(200, JSONObject()
                         .put("storageNamespaceId", ns).put("offline", false).put("nextCursor", JSONObject.NULL)
                         .put("items", org.json.JSONArray().apply {
-                            if (failure != 1) put(JSONObject().put("recordId", "record-1").put("manifestHash", manifestHash))
+                            if (failure != 1) put(JSONObject().put("recordId", "record-1").put("manifestHash", manifestHash).put("asrState",state))
                         }))
                     path.startsWith("/objects/") -> {
                         reads++
-                        RecordingArchiveTransport.Reply(200, if (failure == 2) pcm.copyOf().apply { this[0] = 1 } else pcm)
+                        RecordingArchiveTransport.Reply(200, if (failure == 2 || failure == 4) pcm.copyOf().apply { this[0] = 1 } else pcm)
                     }
                     else -> error("Unexpected path $path")
                 }
             }
+            val t = RecordingArchiveTransport("pc","phone", { object : RecordingArchiveTransport.Channel {
+                override fun request(method: String,path: String,contentType: String,body: ByteArray) = channel(method,path,body)
+                override fun close() {}
+            } }, { cache })
+            if(failure == 4) assertArrayEquals(pcm,t.readPlaybackObject(target(),hash,pcm.size))
             if (failure == 0) { assertTrue(t.verifyArchivedPlayback(target(), manifest)); assertEquals(2, reads) }
+            else if(failure >= 5) { assertFalse(t.verifyArchivedPlayback(target(),manifest)); assertEquals(0,reads) }
             else fails<IllegalArgumentException> { t.verifyArchivedPlayback(target(), manifest) }
+            cacheRoot.deleteRecursively()
         }
     }
 }

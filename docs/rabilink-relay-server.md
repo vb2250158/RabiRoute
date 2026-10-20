@@ -2,17 +2,17 @@
 
 [English](rabilink-relay-server_en.md) | 简体中文
 
-Relay 负责连接、鉴权和通用中转。RabiPC 负责人格、Skill、聊天记录、设备状态、ASR 设置和消息处理。启用 remoteAgent 后，已鉴权 Agent 可调用目标 PC 的全部公共 API；新增公共 API 不需要修改 Relay，也不因人格或工作区绑定缩小接口范围。
+Relay 负责连接、鉴权和通用中转。RabiPC 负责角色、Skill、聊天记录、设备状态、ASR 设置和消息处理。启用 remoteAgent 后，已鉴权 Agent 可调用目标 PC 的全部公共 API；新增公共 API 不需要修改 Relay，也不因角色或工作区绑定缩小接口范围。
 
 当前为实验实现。本地 fixture、构建、安装运行、生产部署和真机验收分别记录，不能相互代替。当前完整验收要求见[AIUI 验收清单](aiui-agent-acceptance.md)。
 
 ## 架构与连接顺序
 
-Android 与 PC 的通用加密 Peer Tunnel 按 LAN → P2P → Relay 连接同一目标。Relay 提供同应用设备发现、连接信令及中继，PC 服务拥有实际接口和业务状态。人格默认来源 PC、设备配置 owner PC 与默认消息目标可以不同；调用者显式冻结本次目标。
+Android 与 PC 的通用加密 Peer Tunnel 按 LAN → P2P → Relay 连接同一目标。Relay 提供同应用设备发现、连接信令及中继，PC 服务拥有实际接口和业务状态。角色默认来源 PC、设备配置 owner PC 与默认消息目标可以不同；调用者显式冻结本次目标。
 
 AIUI 宿主只提供 `wx.request` 时，使用既有 buffered HTTP Relay 通道。其实际能力是 HTTP Relay 降级，不能把 Android 的 LAN/P2P 能力当成 AIUI 已验收能力。两种通道最终调用同一公共 Manager API。
 
-Relay 保存账号与凭据、设备连接登记、同应用目标目录、opaque 请求/响应队列、传输 lease、cursor、blob 和操作状态。server 自身诊断日志可保留。人格模板、权限业务、聊天记录拼装、ASR 排序、健康数据解释和 record-first 判断均由 PC 或客户端实现。队列中的原始业务正文不由 Relay 改写或按业务白名单分发。
+Relay 保存账号与凭据、设备连接登记、同应用目标目录、opaque 请求/响应队列、传输 lease、cursor、blob 和操作状态。server 自身诊断日志可保留。角色模板、权限业务、聊天记录拼装、ASR 排序、健康数据解释和 record-first 判断均由 PC 或客户端实现。队列中的原始业务正文不由 Relay 改写或按业务白名单分发。
 
 通用 HTTP 传输的连接身份包含首次鉴权时间 `authenticatedAt`。原队列与同操作重试沿用该时间，不能因晚到或重新认领延长连接授权；PC 使用内部 MAC 核验它。手机代眼镜建立独立身份的短租约由 PC 管理，见[设备连接授权](device-peer-connection.md)。Relay 不增加对应业务 API 分发表或公钥授权库。
 
@@ -38,14 +38,14 @@ Windows 部署使用 `scripts/deploy-rabilink-relay-windows.ps1`。`scripts/rabi
 
 | 接口 | 用途 |
 | --- | --- |
-| `GET /api/rabilink/mobile/state` | 连接目录、目标和服务广告；无设备电量、人格或 ASR 排序 |
+| `GET /api/rabilink/mobile/state` | 连接目录、目标和服务广告；无设备电量、角色或 ASR 排序 |
 | `PATCH /api/rabilink/mobile/target` | `{targetDeviceId}`，选择默认消息目标 |
 | `PATCH /api/rabilink/mobile/connection` | `{connectionOwnerDeviceId}`，首次明确登记固定应用设置 owner |
 | `GET /api/rabilink/devices/connections` | 固定设备连接目录，返回应用 `connectionOwnerDeviceId` 与设备 `connectionTargetDeviceId` |
 | `POST /api/rabilink/devices/token` | 登记设备独立凭据；新绑定必须明确 `connectionTargetDeviceId` |
 | `GET /api/rabilink/peers` | 同应用连接与能力发现 |
 
-应用 owner 必须是同应用、具 Manager 服务广告的 PC，登记后不可通过默认目标改变。设备同一 binding 的固定 owner 在凭据重置后保留，换 owner 需新 binding。没有明确登记时失败关闭，不从旧 tasks-only 默认目标猜业务归属。目录只表示连接和数据归属，不解析人格，更不按绑定限制公共 API 权限。
+应用 owner 必须是同应用、具 Manager 服务广告的 PC，登记后不可通过默认目标改变。设备同一 binding 的固定 owner 在凭据重置后保留，换 owner 需新 binding。没有明确登记时失败关闭，不从旧 tasks-only 默认目标猜业务归属。目录只表示连接和数据归属，不解析角色，更不按绑定限制公共 API 权限。
 
 ## 通用 HTTP 合同
 
@@ -64,7 +64,7 @@ Windows 部署使用 `scripts/deploy-rabilink-relay-windows.ps1`。`scripts/rabi
 }
 ```
 
-路径为安全相对公共路径，保留 query 和通用合同头；拒绝外部 URL、路径逃逸、凭据和伪造 transport 身份。`targetDeviceId` 指向同应用目标；客户端必须在原请求与回读间保持目标。Relay 不接受 profileRevision 路由字段，不读取人格来选择 PC。
+路径为安全相对公共路径，保留 query 和通用合同头；拒绝外部 URL、路径逃逸、凭据和伪造 transport 身份。`targetDeviceId` 指向同应用目标；客户端必须在原请求与回读间保持目标。Relay 不接受 profileRevision 路由字段，不读取角色来选择 PC。
 
 省略 `targetDeviceId` 时，仅采用设备已登记的 `connectionTargetDeviceId`，或应用明确登记的 `connectionOwnerDeviceId`。缺少连接目标返回 `API_CONNECTION_TARGET_REQUIRED`；旧消息或任务的 `targetDeviceId` 不参与默认接口路由，原任务目标数据仍保留。
 
@@ -84,7 +84,7 @@ Rokid/Lingzhu 外部 wire 入口仍作为传输 codec 保留：`/rokid/rabilink/
 
 ## 新版 PC 业务与旧入口退役
 
-人格配置和模板只使用[公共 profile API](aiui-agent-profile-http.md)。公共 PC 设置使用 `/api/rabilink/mobile/asr-settings`、`device-status`、`proof`、`proofs`；健康能力为 PC `/api/rabilink/devices/health-capabilities`。它们通过通用 Manager 传输调用，Relay 不拥有业务副本。
+角色配置和模板只使用[公共 profile API](aiui-agent-profile-http.md)。公共 PC 设置使用 `/api/rabilink/mobile/asr-settings`、`device-status`、`proof`、`proofs`；健康能力为 PC `/api/rabilink/devices/health-capabilities`。它们通过通用 Manager 传输调用，Relay 不拥有业务副本。
 
 旧 `/manage/.../agent-profile`、`/api/rabilink/device/agent-profile*`、`/device/knowledge*`、`/mobile/aiui-*`、`/mobile/webgui`、`/mobile/routes`、`/mobile/asr-settings`、`/mobile/device-status` 和 proof 业务入口已退役，返回 404 或 410。旧配置管理页面及知识授权开关删除。更新全部客户端后按新规范明确登记并配置；不维护旧客户端代理，不迁移旧业务值，不清空原账号、任务或未知扩展字段。旧完整原数据须私有留底。
 
@@ -92,6 +92,6 @@ Rokid/Lingzhu 外部 wire 入口仍作为传输 codec 保留：`/rokid/rabilink/
 
 默认数据目录为 `data/rabilink-relay`，可由 `RABILINK_RELAY_DATA_DIR` 覆盖，应用文件可由 `RABILINK_RELAY_APP_STORE_FILE` 指定。常用传输参数包括 `RABILINK_RELAY_WEBGUI_REQUEST_WAIT_MS`、`RABILINK_RELAY_WEBGUI_BODY_MAX_BYTES`、`RABILINK_RELAY_SPEECH_REQUEST_WAIT_MS`、`RABILINK_RELAY_SPEECH_BODY_MAX_BYTES`、`RABILINK_RELAY_TASK_TTL_MS`、`RABILINK_RELAY_OUTBOX_TTL_MS` 和 `RABILINK_RELAY_LEASE_MS`；实际边界由源码 clamp 定义。旧 server 电量过期与 ASR 业务环境变量不再生效。
 
-先检查 `/health` 和同应用目录，再检查目标 PC 能力与实际运行版本、PC Manager generation、原请求 ID/operationId 和回执。日志只记录必要传输诊断并过滤凭据。存储替换失败须恢复快照；损坏存储失败关闭。不能通过换目标、换键或切人格重发结果不确定的写请求。
+先检查 `/health` 和同应用目录，再检查目标 PC 能力与实际运行版本、PC Manager generation、原请求 ID/operationId 和回执。日志只记录必要传输诊断并过滤凭据。存储替换失败须恢复快照；损坏存储失败关闭。不能通过换目标、换键或切角色重发结果不确定的写请求。
 
 隔离测试覆盖真实 Relay runtime staging 启动、同应用隔离、未来 API 透传、固定目标、原请求头/回执、opaque 正文保留、PC 业务 owner 重启与旧入口退役。生产部署、账号登录、硬件唤醒、双工语音和平台上传须另行验证。

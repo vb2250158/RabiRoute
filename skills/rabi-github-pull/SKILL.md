@@ -13,7 +13,7 @@ description: 安全拉取 RabiRoute 更新，并根据项目更新日志和公�
 
 - `版本更新日志.md`：迁移说明和行为变化的主要来源。
 - `examples/data/`：公开的当前配置模板。
-- `data/`：本地运行期配置和人格数据，默认是私有数据。
+- `data/`：本地运行期配置和角色数据，默认是私有数据。
 - `.env`：本机密钥和机器相关设置，绝不能用示例文件覆盖。
 - `src/adapters/`、`src/forwarding.ts`、`src/manager.ts`：路由、adapter 和配置模型变更的常见位置。
 - `docs/`：更新日志链接到的更详细迁移说明。
@@ -65,7 +65,7 @@ git diff HEAD..@{u} -- "\347\211\210\346\234\254\346\233\264\346\226\260\346\227
 
 ## 迁移检查清单
 
-更新日志提到配置、route kind、adapter、人格式、RibiWebGUI 或 manager 变化时，检查这些区域：
+更新日志提到配置、route kind、adapter、角色式、RibiWebGUI 或 manager 变化时，检查这些区域：
 
 - Gateway 条目：adapter 类型、显示名、启用状态、进程命令、环境变量。
 - Route 配置：route kind、匹配规则、模板变量、目标处理端、输出策略。

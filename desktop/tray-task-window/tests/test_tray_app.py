@@ -431,14 +431,14 @@ class TrayAppAsyncSendTest(unittest.TestCase):
 
     def test_persona_configuration_entries_are_direct_and_overflow_into_more_menu(self) -> None:
         menu = QMenu()
-        more_menu = QMenu("更多人格")
+        more_menu = QMenu("更多角色")
         insert_before = menu.addSeparator()
         opened: list[str] = []
         gateways = [
             {
                 "id": f"route-{index}",
                 "agentRoleId": f"Role{index}",
-                "roleRouteNames": {f"route-{index}": f"人格 {index}"},
+                "roleRouteNames": {f"route-{index}": f"角色 {index}"},
                 "enabled": True,
                 "running": index % 2 == 0,
             }
@@ -457,7 +457,7 @@ class TrayAppAsyncSendTest(unittest.TestCase):
 
         direct_actions = [action for action in menu.actions() if not action.isSeparator() and action.menu() is None]
         self.assertEqual(len(direct_actions), MAX_DIRECT_PERSONAS)
-        self.assertTrue(direct_actions[0].text().startswith("人格配置 · 人格 3"))
+        self.assertTrue(direct_actions[0].text().startswith("角色配置 · 角色 3"))
         self.assertEqual(len(more_menu.actions()), 1)
         more_menu.aboutToShow.emit()
         self.assertEqual(len(more_menu.actions()), 2)
@@ -572,7 +572,7 @@ class TrayAppAsyncSendTest(unittest.TestCase):
 
     def test_persona_menu_explains_manager_offline_state(self) -> None:
         menu = QMenu()
-        more_menu = QMenu("更多人格")
+        more_menu = QMenu("更多角色")
         insert_before = menu.addSeparator()
         snapshot = ManagerSnapshot(False, "http://127.0.0.1:8790", {}, [], "offline")
 
@@ -706,7 +706,7 @@ class TrayAppAsyncSendTest(unittest.TestCase):
     def test_menu_layout_is_precomputed_under_100ms(self) -> None:
         menu = QMenu()
         for index in range(10):
-            menu.addAction(f"人格 {index}")
+            menu.addAction(f"角色 {index}")
         started_at = time.perf_counter()
 
         size = _warm_menu_layout(menu)

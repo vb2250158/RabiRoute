@@ -178,6 +178,7 @@ final class RabiDurableAudioSpool {
     private long accountedQuarantineManifestGapBytes;
     private long quarantineBytes;
     private long quarantineItems;
+    private boolean recoveringSpool;
     private String lastFailure = "";
     private long totalStoredBytes;
     private long lastCleanupAt;
@@ -202,6 +203,12 @@ final class RabiDurableAudioSpool {
                 RabiDurableAudioSpool::moveReplacing, stage -> { });
     }
 
+    RabiDurableAudioSpool(File root, Policy policy, boolean allDayOnly) throws Exception {
+        this(root, policy, System::currentTimeMillis, File::getUsableSpace,
+                RabiDurableAudioSpool::moveReplacing, stage -> { },
+                ACK_JOURNAL_MAX_RECORDS, ACK_JOURNAL_MAX_BYTES, allDayOnly);
+    }
+
     RabiDurableAudioSpool(File root, Policy policy, Clock clock, SpaceProbe spaceProbe) throws Exception {
         this(root, policy, clock, spaceProbe, RabiDurableAudioSpool::moveReplacing, stage -> { });
     }
@@ -220,10 +227,17 @@ final class RabiDurableAudioSpool {
     RabiDurableAudioSpool(File root, Policy policy, Clock clock, SpaceProbe spaceProbe,
                           FileMover fileMover, Cutpoint cutpoint,
                           int ackJournalMaxRecords, long ackJournalMaxBytes) throws Exception {
+        this(root, policy, clock, spaceProbe, fileMover, cutpoint, ackJournalMaxRecords, ackJournalMaxBytes, false);
+    }
+
+    private RabiDurableAudioSpool(File root, Policy policy, Clock clock, SpaceProbe spaceProbe,
+                          FileMover fileMover, Cutpoint cutpoint,
+                          int ackJournalMaxRecords, long ackJournalMaxBytes, boolean allDayOnly) throws Exception {
         if (ackJournalMaxRecords < 1 || ackJournalMaxBytes < 1L) {
             throw new IllegalArgumentException("invalid durable acknowledgement journal capacity");
         }
         this.root = root;
+        this.allDayOnly = allDayOnly;
         this.policy = policy;
         this.clock = clock;
         this.spaceProbe = spaceProbe;
@@ -240,7 +254,9 @@ final class RabiDurableAudioSpool {
         ensureDirectory(segmentsDirectory);
         ensureDirectory(ackJournalDirectory);
         ensureDirectory(cleanupTombstoneDirectory);
-        recover();
+        recoveringSpool = true;
+        try { recover(); }
+        finally { recoveringSpool = false; }
     }
 
     synchronized AppendResult append(byte[] pcm, String source, String routeProfileId) {
@@ -398,7 +414,12 @@ final class RabiDurableAudioSpool {
         if (eventId == null || eventId.isEmpty()) return;
         if (!eventId.matches("[A-Za-z0-9_-]{1,120}")) throw new IllegalArgumentException("invalid event id");
         if (!eventCommitted(eventId)) return;
-        writeJson(new File(root, "event-" + eventId + ".json"), new JSONObject().put("complete", true));
+        File marker = new File(root, "event-" + eventId + ".json");
+        if (marker.isFile()) {
+            try { if (readJson(marker).optBoolean("complete", false)) return; }
+            catch (Exception invalid) { /* Rebuild the marker from the committed event. */ }
+        }
+        writeJson(marker, new JSONObject().put("complete", true));
     }
 
     private boolean eventCommitted(String eventId) {
@@ -936,6 +957,28 @@ final class RabiDurableAudioSpool {
         JSONObject value = archiveTarget(target);
         if (file.exists()) { requireArchiveTarget(captureId,target); return; }
         writeJson(file,value);
+    }
+    synchronized JSONObject authorizeArchiveHistory(com.rabi.link.recording.RecordingArchiveCoordinator.Target target, String after, int limit) throws Exception {
+        java.util.TreeSet<String> captures = new java.util.TreeSet<>(archiveCandidates.values());
+        int visited=0, conflicts=0; String cursor=after;
+        for(String id:captures.tailSet(after,false)) {
+            if(visited >= Math.max(1,Math.min(32,limit))) break;
+            visited++; cursor=id;
+            if(id.startsWith("call_")) continue;
+            boolean complete = true;
+            for(java.util.Map.Entry<String,String> item:archiveCandidates.entrySet()) {
+                if(!id.equals(item.getValue())) continue;
+                JSONObject summary = archiveSummaries.get(item.getKey());
+                java.util.List<File> files = archiveSummaryFiles.get(item.getKey());
+                if(summary == null || files == null || files.isEmpty()
+                    || summary.getLong("totalBytes") != readJson(new File(root,"event-intent-"+item.getKey()+".json")).getLong("expectedBytes")) { complete=false; break; }
+                for(File file:files) if(!file.isFile()) { complete=false; break; }
+                if(!complete) break;
+            }
+            if(!complete) { conflicts++; continue; }
+            try { authorizeArchive(id,target); } catch(IllegalArgumentException mismatch) { conflicts++; }
+        }
+        return new JSONObject().put("cursor",cursor).put("more",captures.higher(cursor)!=null).put("conflicts",conflicts);
     }
     private void requireArchiveTarget(String captureId, com.rabi.link.recording.RecordingArchiveCoordinator.Target target) throws Exception {
         JSONObject saved = readJson(new File(root,"archive-target-" + archiveId(captureId) + ".json"));
@@ -2088,9 +2131,13 @@ final class RabiDurableAudioSpool {
             manifest.put("gapRecorded", true).put("completedAt", clock.now());
             writeJson(manifestFile, manifest);
         }
-        measureQuarantine();
-        reconcileQuarantineAccounting();
-        recomputeStoredBytes();
+        // Startup owns the whole batch and reconciles once after all recovered manifests.
+        // Rescanning every retained file for each manifest makes recovery quadratic.
+        if (!recoveringSpool) {
+            measureQuarantine();
+            reconcileQuarantineAccounting();
+            recomputeStoredBytes();
+        }
     }
 
     private void addPending(long sequence, long bytes, JSONObject metadata) {
@@ -2165,6 +2212,7 @@ final class RabiDurableAudioSpool {
     }
 
     private void measureQuarantine() {
+        cleanupCutpoint("quarantine_scan");
         File quarantineRoot = new File(root, "quarantine");
         long[] totals = measureFiles(quarantineRoot);
         quarantineBytes = totals[0];

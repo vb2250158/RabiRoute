@@ -87,8 +87,11 @@ test("forwarding resolves remote rules before matching and keeps all local audit
     assert.equal(fs.existsSync(path.join(route.rolesDir, "Shared")), false);
     assert.equal(fs.existsSync(path.join(route.dataDir!, "private-messages.jsonl")), true);
     const packetLog = fs.readFileSync(path.join(route.dataDir!, "agent-packets.jsonl"), "utf8");
-    assert.match(packetLog, /Remote authoritative persona/);
-    assert.match(packetLog, /Remote template remote hello/);
+    assert.match(packetLog, /所属电脑：pc-b/);
+    assert.match(packetLog, /api\/roles\/Shared/);
+    assert.doesNotMatch(packetLog, /Remote authoritative persona/);
+    assert.match(packetLog, /Remote template/);
+    assert.match(packetLog, /remote hello/);
     assert.doesNotMatch(packetLog, /Wrong local template|请遵循角色文件/);
     assert.equal(route.notificationRules[0].id, "stale-group-only");
     const automationLog = path.join(route.dataDir!, "automation-executions.jsonl");

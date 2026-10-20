@@ -1,11 +1,11 @@
 ---
 name: rabiroute-nas-windows-package
-description: 将 NAS 工作区中的 RabiRoute 构建并安装为 Windows 本机可搜索、可双击、带托盘的完整运行包，同时让每台电脑保留独立路由和运行日志，并共享 NAS 上的人格、记忆与计划。用于共享源码与人格目录环境的首次安装、换机安装、第二台电脑部署、本机目录迁移、升级重打包或排查本机包与 NAS 数据边界。
+description: 将 NAS 工作区中的 RabiRoute 构建并安装为 Windows 本机可搜索、可双击、带托盘的完整运行包，同时让每台电脑保留独立路由和运行日志，并共享 NAS 上的角色、记忆与计划。用于共享源码与角色目录环境的首次安装、换机安装、第二台电脑部署、本机目录迁移、升级重打包或排查本机包与 NAS 数据边界。
 ---
 
 # RabiRoute NAS Windows 本机包
 
-把版本化程序和机器运行态放在本机，把所有人格的事实源留在 NAS：
+把版本化程序和机器运行态放在本机，把所有角色的事实源留在 NAS：
 
 ```text
 <InstallRoot>
@@ -27,12 +27,12 @@ NAS RabiRoute/data/roles
 - 本机安装参数：`<InstallRoot>`。
 - 共享根参数（完整 UNC 路径）：`<SharedRoot>`。
 - 用 UNC 路径保存共享位置，不依赖各电脑的盘符映射。
-- 所有人格始终通过 NAS `data/roles` 整体共享；安装时不得询问“选择哪些人格”。
-- route 是本机入口配置，不决定共享哪些人格。已有本机 route 时直接保留并继续安装，不得把 route 选择设为阻塞问题。
+- 所有角色始终通过 NAS `data/roles` 整体共享；安装时不得询问“选择哪些角色”。
+- route 是本机入口配置，不决定共享哪些角色。已有本机 route 时直接保留并继续安装，不得把 route 选择设为阻塞问题。
 - 只有需要从 NAS 源码首次导入 route 配置时才使用 `-RouteNames`；没有 route 也允许先完成程序安装，再由用户通过 WebGUI 配置。
 - 不要把同一 NapCat、FenneNote 或 heartbeat 消费入口在两台电脑重复启用。
 - 整个 `data/roles` 都由 NAS 共享，不只共享 `<RoleId>`。
-- 多条 route 可以使用相同 `agentRoleId`；这是人格共享，不是 route 共享。
+- 多条 route 可以使用相同 `agentRoleId`；这是角色共享，不是 route 共享。
 - heartbeat 主动智能通常只放在一台电脑，防止重复主动消息。
 - 不复制 NAS 的 `data/roles`、消息日志、token、录音或历史运行数据到安装包。
 - 允许把本机已绑定桌宠的不可变动作包同步到 `data/cache/desktop-pet-roles/`；它只是可重建运行缓存，不包含 persona、计划、记忆或消息，不能反向写回 NAS，也不能成为动作包真源。
@@ -100,6 +100,6 @@ release 与 Setup 必须：
 6. FenneNote/NapCat/heartbeat 只在预期电脑启用；NapCat 是外部依赖，不进入 Host Job，也不因安装、回滚或 fenced quit 被停止。
 7. 登录自启动若启用，唯一入口的目标必须精确等于 `<InstallRoot>\RabiRouteHost.exe`。
 8. `current.json` 指向的 releaseId、版本 manifest 与运行中 Host/core 一致；旧版本仍可回滚，版本目录未被就地改写。
-9. NAS 暂时不可用时应明确报共享人格不可达，不得静默生成新的本地人格副本。
+9. NAS 暂时不可用时应明确报共享角色不可达，不得静默生成新的本地角色副本。
 
 汇报时只说明 route、adapter、进程和路径边界，不打印 token、QQ 号、私聊内容或完整配置。

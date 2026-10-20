@@ -71,7 +71,7 @@ function optionalLine(label: string, value: unknown): string | undefined {
 
 function agentSourceLines(source: Omit<RabiAgentMessageSource, "type">, standalone = false): Array<string | undefined> {
   return [
-    `${standalone ? "类型：Agent｜" : ""}处理端：${source.agentAdapter}`,
+    `${standalone ? "类型：Agent｜" : ""}处理端：${source.agentAdapter === "grokBot" ? "GrokBot" : source.agentAdapter}`,
     source.agentType?.trim().toLowerCase() === "agent" ? undefined : optionalLine("角色", source.agentType),
     `会话：${source.sessionName}`,
     `会话 ID：${source.sessionId}`,
@@ -98,7 +98,7 @@ export function rabiMessageSourceLines(source: RabiMessageSource, sentAt?: strin
   } else if (source.type === "message_adapter") {
     lines.push(
       "消息源类型：消息端",
-      `消息端：${source.messageAdapter}`,
+      `消息端：${source.messageAdapter === "grokBot" ? "GrokBot" : source.messageAdapter}`,
       optionalLine("会话类型", source.conversationType),
       optionalLine("会话名称", source.conversationName),
       optionalLine("会话 ID", source.conversationId),

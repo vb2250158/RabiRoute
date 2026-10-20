@@ -16,9 +16,11 @@ object AsrSettingsDialog {
         val relay = RabiLinkRelaySettings.load(activity)
         fun toast(text: String) = Toast.makeText(activity, text, Toast.LENGTH_SHORT).show()
         if(!relay.configured) { toast("请先配置 RabiLink"); return }
-        val sdk = RabiRouteSdk()
+        fun request(priority: List<String>? = null) = com.rabi.link.transport.RabiManagerHttpTransport(activity).use { transport ->
+            RabiRouteSdk(managerTransport = transport).mobileAsrSettings(relay.baseUrl, relay.token, priority)
+        }
         Thread {
-            val loaded = runCatching { sdk.mobileAsrSettings(relay.baseUrl, relay.token) }
+            val loaded = runCatching { request() }
             activity.runOnUiThread {
                 if(activity.isFinishing || activity.isDestroyed) return@runOnUiThread
                 val settings = loaded.getOrElse { toast("ASR 列表读取失败，请确认服务器已更新并联网"); return@runOnUiThread }
@@ -69,7 +71,7 @@ object AsrSettingsDialog {
                             val saved = runCatching {
                                 val current = RabiLinkRelaySettings.load(activity)
                                 check(current.baseUrl == relay.baseUrl && current.token == relay.token) { "RabiLink 已切换" }
-                                sdk.mobileAsrSettings(relay.baseUrl,relay.token,priority).also { com.rabi.link.transport.AsrDirectory.update(relay,it) }
+                                request(priority).also { com.rabi.link.transport.AsrDirectory.update(relay,it) }
                             }
                             activity.runOnUiThread {
                                 if(activity.isFinishing || activity.isDestroyed) return@runOnUiThread

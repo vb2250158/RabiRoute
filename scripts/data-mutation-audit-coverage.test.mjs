@@ -11,6 +11,7 @@ const mutationPattern = /\bfs(?:\.promises)?\.(?:writeFile|appendFile|rename|unl
 const auditPattern = /\bauditRecordingArchiveMutation\s*\(|\brecordDataMutationAudit\s*\(|\batomicWriteFileSync\s*\(|\bappendAdapterLog\s*\(/;
 
 const infrastructureExclusions = new Map([
+  ["src/roleLifecycle.ts", "role coordination locks/work leases and atomic JSON publication primitive; role configuration and lifecycle business commits/failures are audited by roleConfigurationRoutes"],
   ["src/manager/companionFrameDelivery.ts", "generation-owned temporary reduced-frame attachment leases; exclusive creation, bounded size and lifetime; no persistent persona or message state"],
   ["src/linuxProcessLease.ts", "kernel ownership lease descriptor and atomic temporary file; no persona, message or business state"],
   ["src/markdownImage.ts", "isolated temporary browser profile cleanup after bounded image rendering; send receipts remain owned and audited by the send pipeline"],

@@ -7,13 +7,13 @@
   "priority": "medium",
   "kind": "configuration",
   "currentStepId": "validate-legacy-configs",
-  "currentStep": "人格消息规则与 heartbeat 计划已统一为 automationRules；触发方式可选收到消息或定时任务，动作可选通知 Agent 或运行人格 scripts 目录内的受限脚本。旧 notificationRules 和内嵌计划在读取时转换，保存后使用新结构；共享配置模型继续保留消息端默认规则和显式禁用语义。",
+  "currentStep": "角色消息规则与 heartbeat 计划已统一为 automationRules；触发方式可选收到消息或定时任务，动作可选通知 Agent 或运行角色 scripts 目录内的受限脚本。旧 notificationRules 和内嵌计划在读取时转换，保存后使用新结构；共享配置模型继续保留消息端默认规则和显式禁用语义。",
   "nextAction": "用旧版脱敏配置验证 notificationRules、heartbeat 计划和多消息端组合的读取迁移与 WebGUI 保存往返，确认不会重复规则、扩大投递范围或意外启用本机脚本。",
   "steps": [
     { "id": "split-config-sources", "title": "拆分 adapterConfig 与 personaConfig 事实源", "status": "已完成" },
     { "id": "centralize-normalization", "title": "把 normalize、校验、端口和消息端策略收敛到共享模型", "status": "已完成" },
     { "id": "backfill-default-routes", "title": "为已启用消息端补齐未覆盖的默认白板 Route", "status": "已完成" },
-    { "id": "unify-persona-automations", "title": "把消息规则和定时计划统一为人格自动化模型", "status": "已完成", "completedAt": "2026-08-12T00:00:00+08:00" },
+    { "id": "unify-persona-automations", "title": "把消息规则和定时计划统一为角色自动化模型", "status": "已完成", "completedAt": "2026-08-12T00:00:00+08:00" },
     { "id": "validate-legacy-configs", "title": "验证旧配置迁移与多消息端保存往返", "status": "进行中" }
   ],
   "waitingFor": "",

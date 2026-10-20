@@ -10,33 +10,33 @@
 
 该插件只注册并执行自身 `PLUGIN_ROOT` 下的 Hook。安装、升级和运行均不改写其他插件的 `hooks.json`、市场条目或启用状态，可与独立的语言风格 Hook 同时加载。
 
-Manager 将人格资料与知识召回的物理读取交给受限存储进程，保留原有召回与查看时间规则。同一会话的上下文请求按顺序处理；每次异步读取后复核会话归属与绑定，解绑或变更会拒绝迟到结果。读取失败不记录成功指纹，可恢复后重试，慢存储期间健康请求仍可响应。
+Manager 将角色资料与知识召回的物理读取交给受限存储进程，保留原有召回与查看时间规则。同一会话的上下文请求按顺序处理；每次异步读取后复核会话归属与绑定，解绑或变更会拒绝迟到结果。读取失败不记录成功指纹，可恢复后重试，慢存储期间健康请求仍可响应。
 
-## 人格可配置的 Stop 追问
+## 角色可配置的 Stop 追问
 
-已绑定人格的 Stop 只检查该人格的恢复状态，并在同一人格范围内查找计划追问、文件变更提醒和完成通知。其它人格恢复失败不会阻断它；当前人格未恢复时仍在写入前返回 `PLAN_STORAGE_STARTUP_UNAVAILABLE`。未绑定人格的会话仍需等待全部计划恢复后，才能跨人格查找任务绑定。
+已绑定角色的 Stop 只检查该角色的恢复状态，并在同一角色范围内查找计划追问、文件变更提醒和完成通知。其它角色恢复失败不会阻断它；当前角色未恢复时仍在写入前返回 `PLAN_STORAGE_STARTUP_UNAVAILABLE`。未绑定角色的会话仍需等待全部计划恢复后，才能跨角色查找任务绑定。
 
-`personaConfig.json.codexHooks.planFollowup` 拥有 `enabled`（默认 false）、`cooldownSeconds`（默认 300）和有序 `rules`。每条规则包含稳定 `id`、`enabled`、`statusKeys` 和 `prompt`。状态 key 引用该人格状态目录，没有内置业务状态触发列表。Manager 在唯一业务任务绑定下匹配第一条规则，返回 `followup: { decision: "block", reason }`，插件只转换为 Codex Stop 输出。配置保存复用人格 Repository，UI 位于「自动化 → Agent Hook」。
+`personaConfig.json.codexHooks.planFollowup` 拥有 `enabled`（默认 false）、`cooldownSeconds`（默认 300）和有序 `rules`。每条规则包含稳定 `id`、`enabled`、`statusKeys` 和 `prompt`。状态 key 引用该角色状态目录，没有内置业务状态触发列表。Manager 在唯一业务任务绑定下匹配第一条规则，返回 `followup: { decision: "block", reason }`，插件只转换为 Codex Stop 输出。配置保存复用角色 Repository，UI 位于「自动化 → Agent Hook」。
 
 既有 Hook 运行记录保存规则与计划步骤指纹、轮次和时间。同轮、相同指纹、冷却期及 `stop_hook_active` 阻止重复追问；终态、归档、绑定歧义或 Manager 不可用时不触发。追问期间不提前发送完成通知。该决策不会变更业务计划、替代授权或安排未来唤醒。独立本机守卫的固定 Stop 拦截应另行退役为提示；插件不会改写其他 Hook。
 
-## 人格聊天记录
+## 角色聊天记录
 
 计划反馈实际投递给绑定任务或计划秘书后，以 `user_delivery` 写入同一文件。记录保留实际 `deliveryId`、`feedbackId`、计划名称和目标任务；以计划、反馈及目标任务组合去重。用户来源不解析为 Codex 任务，目标名称和定位链接按页解析。只保存、Agent 反馈和失败投递不新增用户消息；未确认投递保留记录时状态。追加后使用相同事件增量更新。
 
-Manager 在 `Stop` 收到非空 `last_assistant_message`（或 `lastAssistantMessage`）和 `turn_id`（或 `turnId`）时，将完整正文追加到唯一归属人格的 `chat-history/final-replies.jsonl`。归属复用显式 Hook 绑定、Route 任务及计划/秘书/消息处理任务绑定；归属冲突或缺失时不写入。Codex 和通过同一 Hook API 上报的 DSH 回复共用此入口，不读取桌面聊天数据库或补录旧消息。
+Manager 在 `Stop` 收到非空 `last_assistant_message`（或 `lastAssistantMessage`）和 `turn_id`（或 `turnId`）时，将完整正文追加到唯一归属角色的 `chat-history/final-replies.jsonl`。归属复用显式 Hook 绑定、Route 任务及计划/秘书/消息处理任务绑定；归属冲突或缺失时不写入。Codex 和通过同一 Hook API 上报的 DSH 回复共用此入口，不读取桌面聊天数据库或补录旧消息。
 
-`GET /api/roles/:roleId/chat-history?limit=50&cursor=<byte-offset>` 返回 `entries` 和 `nextCursor`，按追加顺序倒序读取；cursor 省略时从最新位置开始，`nextCursor=null` 表示已到最早记录。正文不截断，分页最多 100 条且达到约 1 MiB 后提前返回游标。`sessionId + turnId + 正文` 的摘要用于重复回调去重。追加成功后发布 `persona_chat_history_changed`，WebGUI 仅在聊天记录标签激活时读取，收到事件或重连后按消息 ID 增量补入顶部，不清空已有记录；跨页补齐断线期间的新回复，保留更早记录游标、展开状态和阅读位置，请求期间到达的事件合并为随后一次补读。支持手动翻页与补读，只有切换人格时重置列表。该记录动作独立于计划完成通知开关，并保留现有启动恢复门禁。
+`GET /api/roles/:roleId/chat-history?limit=50&cursor=<byte-offset>` 返回 `entries` 和 `nextCursor`，按追加顺序倒序读取；cursor 省略时从最新位置开始，`nextCursor=null` 表示已到最早记录。正文不截断，分页最多 100 条且达到约 1 MiB 后提前返回游标。`sessionId + turnId + 正文` 的摘要用于重复回调去重。追加成功后发布 `persona_chat_history_changed`，WebGUI 仅在聊天记录标签激活时读取，收到事件或重连后按消息 ID 增量补入顶部，不清空已有记录；跨页补齐断线期间的新回复，保留更早记录游标、展开状态和阅读位置，请求期间到达的事件合并为随后一次补读。支持手动翻页与补读，只有切换角色时重置列表。该记录动作独立于计划完成通知开关，并保留现有启动恢复门禁。
 
 聊天记录读取时按本页任务 ID 批量解析 Codex 侧栏名称，不重写历史正文；点击任务名称使用与计划面板相同的 Codex 任务深链接。完整任务 ID 和回合 ID 保留在折叠详情中。桌面元数据不可用或任务不存在时保留 ID 和正文，不提供定位链接。
 
-线程 `send` 的 Agent 互投从此版本起写入同一聊天记录文件，按实际投递 ID 去重，保留纯消息正文及来源/目标任务 ID。卡片同一行左侧为来源任务、右侧为目标任务；两端 Codex 名称和定位链接按页解析。唯一归属的人格分别可见，同人格只记录一次；未绑定或归属冲突的端不猜人格。失败投递不入记录，送达未确认的记录明确展示“记录时尚未确认送达”（这是记录时的状态，不是后续回执状态）。不补录历史投递，不把 Hook 最终回复推断成互投消息。原 `chat-history/final-replies.jsonl` 路径保留，以保持已有记录和字节分页游标兼容；没有第二份历史存储。
+线程 `send` 的 Agent 互投从此版本起写入同一聊天记录文件，按实际投递 ID 去重，保留纯消息正文及来源/目标任务 ID。卡片同一行左侧为来源任务、右侧为目标任务；两端 Codex 名称和定位链接按页解析。唯一归属的角色分别可见，同角色只记录一次；未绑定或归属冲突的端不猜角色。失败投递不入记录，送达未确认的记录明确展示“记录时尚未确认送达”（这是记录时的状态，不是后续回执状态）。不补录历史投递，不把 Hook 最终回复推断成互投消息。原 `chat-history/final-replies.jsonl` 路径保留，以保持已有记录和字节分页游标兼容；没有第二份历史存储。
 
 ## 唯一边界
 
 Rabi PC / RabiRoute Manager 是以下事实的唯一管理者：
 
-- 人格目录与配置；
+- 角色目录与配置；
 - Codex `session_id → RoleId` 绑定；
 - 计划、近期记忆、沉淀记忆和角色技能；
 - 关键词召回、`viewedAt`、计划归档、记忆编辑窗口与整理流程。
@@ -62,14 +62,14 @@ Codex Stop
   -> Manager 按计划 taskBinding 精确匹配执行会话
   -> 角色面板 timeline
   -> Forwarding / AgentPacket
-  -> 提醒人格 Route 绑定的精确处理会话
+  -> 提醒角色 Route 绑定的精确处理会话
 ```
 
 ## 统一触发策略
 
 | 标准触发 | 来源 | 上下文形式 | 生命周期 |
 |---|---|---|---|
-| `session_start` | Codex `SessionStart` | 完整入口上下文 | 正常归档；按需重发人格 |
+| `session_start` | Codex `SessionStart` | 完整入口上下文 | 正常归档；按需重发角色 |
 | `user_prompt` | Codex `UserPromptSubmit` | 完整入口上下文 | 正常召回并刷新命中记忆 |
 | `reasoning_pre_tool` | Codex `PreToolUse` | 本轮新命中的增量 | 不重复归档；新命中才刷新 `viewedAt` |
 | `reasoning_post_tool` | Codex `PostToolUse` | 本轮新命中的增量 | 同上，可发现工具结果产生的新计划或记忆 |
@@ -80,24 +80,24 @@ Codex Stop
 
 ## WebGUI Hook 管理
 
-人格「自动化 → Agent Hook」集中管理 Hook 开关，并说明触发时机；Agent 端只负责安装或更新 Hook：
+角色「自动化 → Agent Hook」集中管理 Hook 开关，并说明触发时机；Agent 端只负责安装或更新 Hook：
 
 | 开关 | Codex Hook | 何时触发 | 默认值 |
 |---|---|---|---|
 | 会话入口上下文 | `SessionStart` / `UserPromptSubmit` | 打开、恢复、清空或压缩任务，以及用户提交新消息时 | 开启 |
 | 推理期上下文刷新 | `PreToolUse` / `PostToolUse` | Codex 调用工具前后；只注入本轮新命中的计划、记忆或技能上下文 | 开启 |
-| 计划任务会话完成通知 | `Stop` | 绑定计划的执行任务输出本轮最终回答后，经 Rabi 投递到该人格 Route 绑定的会话 | 开启 |
+| 计划任务会话完成通知 | `Stop` | 绑定计划的执行任务输出本轮最终回答后，经 Rabi 投递到该角色 Route 绑定的会话 | 开启 |
 
 配置分别写入 `codexHooks.sessionContextEnabled`、`codexHooks.reasoningContextEnabled` 和 `codexHooks.planTaskCompletionEnabled`。开关只控制 Manager 是否响应对应 Hook；插件中的 Hook 注册保持不变，因此重新开启不需要重装插件。没有 Route 精确绑定到计划执行任务时，Manager 对该执行任务继续使用默认开启值，让独立计划任务仍可上报 `Stop`；提醒目标 Route 自己关闭完成通知时则失败关闭。
 
 ## 计划任务完成 Hook
 
-计划可用 `taskBinding` 精确绑定一个 Codex 执行会话。存在 `taskBinding` 且省略 `completionHook` 时，完成通知默认开启；可用 `completionHook.enabled=false` 对单个计划关闭。当该会话完成一轮并产生最终回答后，`Stop` Hook 把官方 `last_assistant_message` 交给 Manager。Manager 以计划文件为“计划 ↔ 执行会话”真源，以 Route/gateway 为提醒人格目标会话真源；提醒继续走现有角色面板、Forwarding、AgentPacket 和 Agent adapter 链路。
+计划可用 `taskBinding` 精确绑定一个 Codex 执行会话。存在 `taskBinding` 且省略 `completionHook` 时，完成通知默认开启；可用 `completionHook.enabled=false` 对单个计划关闭。当该会话完成一轮并产生最终回答后，`Stop` Hook 把官方 `last_assistant_message` 交给 Manager。Manager 以计划文件为“计划 ↔ 执行会话”真源，以 Route/gateway 为提醒角色目标会话真源；提醒继续走现有角色面板、Forwarding、AgentPacket 和 Agent adapter 链路。
 
 - 同一 `sessionId + turnId` 持久化去重。
 - Hook 不读取 transcript 猜测结果，也不自动修改计划状态、步骤或记忆。
-- 目标 Codex 会话必须已精确绑定，且不得与执行会话相同；workspace、人格或 gateway 冲突时失败关闭。
-- 未命中人格追问时，完成通知成功不会输出 Hook JSON；投递失败只返回非阻塞 `systemMessage`。命中已启用追问规则时，按上文返回一次 Stop block。
+- 目标 Codex 会话必须已精确绑定，且不得与执行会话相同；workspace、角色或 gateway 冲突时失败关闭。
+- 未命中角色追问时，完成通知成功不会输出 Hook JSON；投递失败只返回非阻塞 `systemMessage`。命中已启用追问规则时，按上文返回一次 Stop block。
 - 完成记录写入私有运行文件 `data/codex-hook/sessions.json`，不得提交。
 
 ## Codex-only 模式
@@ -109,15 +109,15 @@ $env:RABIROUTE_MANAGER_AUTOSTART = "0"
 npm run manager
 ```
 
-该模式不启动 Route 配置轮询；人格、计划、记忆和技能仍在每次 Hook 请求时从 Manager 当前 `rolesDir` 读取，显式修改 Manager 配置后也会立即使用新的目录。这样知识服务可以在 NAS 工作区长期运行，而不会为了未启动的 Gateway 反复扫描和迁移 Route 配置。
+该模式不启动 Route 配置轮询；角色、计划、记忆和技能仍在每次 Hook 请求时从 Manager 当前 `rolesDir` 读取，显式修改 Manager 配置后也会立即使用新的目录。这样知识服务可以在 NAS 工作区长期运行，而不会为了未启动的 Gateway 反复扫描和迁移 Route 配置。
 
-人格目录通过 Rabi PC / Manager 的 `rolesDir` 配置管理。插件不再提供 `source add`，也不再使用用户目录下的插件私有 `roles/`。
+角色目录通过 Rabi PC / Manager 的 `rolesDir` 配置管理。插件不再提供 `source add`，也不再使用用户目录下的插件私有 `roles/`。
 
 ### 从 0.1 插件迁移
 
-0.1 版插件保存在插件用户目录里的角色根注册和 session 绑定不会自动迁移到 Manager。升级到 0.4 后，先启动 Rabi PC Manager，再按准确的完整 `session_id` 重新绑定人格；不要根据任务标题、工作区或最近时间猜测 ID。旧实现只保留在 `archive/plugins/rabi-codex-context-v0.1.0-local-context/` 作为只读迁移参考，不能重新接回活动调用链。
+0.1 版插件保存在插件用户目录里的角色根注册和 session 绑定不会自动迁移到 Manager。升级到 0.4 后，先启动 Rabi PC Manager，再按准确的完整 `session_id` 重新绑定角色；不要根据任务标题、工作区或最近时间猜测 ID。旧实现只保留在 `archive/plugins/rabi-codex-context-v0.1.0-local-context/` 作为只读迁移参考，不能重新接回活动调用链。
 
-新的绑定写入 Manager 私有运行数据 `data/codex-hook/sessions.json`。该文件、旧插件用户目录和任何真实人格数据都不得提交。
+新的绑定写入 Manager 私有运行数据 `data/codex-hook/sessions.json`。该文件、旧插件用户目录和任何真实角色数据都不得提交。
 
 ## 会话控制
 
@@ -145,7 +145,7 @@ DELETE /api/codex-hook/sessions/{sessionId}
 | 方法 | 路径 | 用途 |
 |---|---|---|
 | POST | `/api/codex-hook/context` | 接收原始 Hook 事件并生成统一上下文 |
-| GET | `/api/codex-hook/roles` | 列出 Manager 当前人格 |
+| GET | `/api/codex-hook/roles` | 列出 Manager 当前角色 |
 | GET | `/api/codex-hook/sessions` | 列出 Manager 持有的 Codex 绑定 |
 | GET/PUT/DELETE | `/api/codex-hook/sessions/{sessionId}` | 查询、主动绑定或解除 |
 | GET | `/api/codex-hook/doctor` | 检查 rolesRoot、角色和绑定状态 |
@@ -177,13 +177,13 @@ codex plugin add rabi-codex-context@rabiroute-local
 2. 未绑定会话收到空上下文。
 3. `[rabi:use <RoleId>]` 同一轮由 Manager 完成绑定和注入。
 4. 关键词命中走 `roleKnowledgeSnapshot()` 并刷新对应记忆 `viewedAt`。
-5. 两个 session 可绑定不同人格，互不串线。
+5. 两个 session 可绑定不同角色，互不串线。
 6. Rabi PC 可以按完整 session ID 主动绑定和解除。
 7. `SessionStart` 在启动、恢复、清空和压缩时向 Manager 请求重新注入。
 8. `PreToolUse` / `PostToolUse` 只在命中相关知识或明确 Rabi 知识路径时注入推理期增量。
 9. 同一 turn 的重复命中不会重复注入或重复刷新 `viewedAt`；条目更新后允许重新注入。
 10. 正常 RabiRoute 消息投递与 Codex Hook 共用 `RabiContextManager`，代码中没有第二个 snapshot 调用入口。
-11. 绑定计划的 `Stop` 只向指定人格 Route 投递一次最终回答提醒；计划顶层为 `暂停` 时忽略提醒，未绑定、重复 turn、workspace/人格/gateway 冲突和源目标同会话均失败关闭或忽略。
+11. 绑定计划的 `Stop` 只向指定角色 Route 投递一次最终回答提醒；计划顶层为 `暂停` 时忽略提醒，未绑定、重复 turn、workspace/角色/gateway 冲突和源目标同会话均失败关闭或忽略。
 12. 完成提醒成功时 Hook stdout 为空；失败只产生非阻塞系统警告。更新插件后必须在 `/hooks` 重新审阅并信任新增的 `Stop` Hook。
 
 代码和本地 mock 测试不等于 Desktop 实机验收。未在两个真实 Codex Desktop 任务之间观察到提醒前，本能力保持实验状态。
@@ -191,8 +191,8 @@ codex plugin add rabi-codex-context@rabiroute-local
 
 ## 完成通知的内容与配置
 
-完成通知只读取人格 `codexHooks.completionDeliveries` 与绑定计划 `messageChannels` 的显式目标，不根据私有项目路径或问题记录推断发送对象。两者命中同一目标时，每个任务轮次只发送一次。来源任务名称按完整任务 ID 从 Desktop 当前名称读取，无法读取时显示“未命名任务”，不使用旧计划绑定名称。正文保留完整最终回复，不追加计划中的旧“下一步”；QQ 长消息按最多 3000 个 UTF-16 单元分段，保留换行与完整 Unicode 字符，每段复用独立 Outbox 回执，失败时不继续发送后续段。
+完成通知只读取角色 `codexHooks.completionDeliveries` 与绑定计划 `messageChannels` 的显式目标，不根据私有项目路径或问题记录推断发送对象。两者命中同一目标时，每个任务轮次只发送一次。来源任务名称按完整任务 ID 从 Desktop 当前名称读取，无法读取时显示“未命名任务”，不使用旧计划绑定名称。正文保留完整最终回复，不追加计划中的旧“下一步”；QQ 长消息按最多 3000 个 UTF-16 单元分段，保留换行与完整 Unicode 字符，每段复用独立 Outbox 回执，失败时不继续发送后续段。
 
-旧的按业务项目自动发送摘要的入口已移除；升级前在相应人格或计划中确认通知目标。私有项目路径、群号与业务规则仅保存在 Git 忽略的人格数据中。升级不会重发历史回复。
+旧的按业务项目自动发送摘要的入口已移除；升级前在相应角色或计划中确认通知目标。私有项目路径、群号与业务规则仅保存在 Git 忽略的角色数据中。升级不会重发历史回复。
 
 

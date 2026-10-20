@@ -6,7 +6,7 @@
 
 # 从远端调用 TTS 与 ASR
 
-这篇指南用于让另一台电脑、手机后端或自动化客户端通过 RabiLink Relay 调用目标 Rabi PC 上的 RabiSpeech。普通 TTS 与文件 ASR 请求直接返回音频或转写，不进入 Agent、人格、Route 或会话账本；Android/眼镜连续 PCM 流是明确例外，目标 PC 完成 ASR 后会自动进入主机语音库和 `rabilink` Route。
+这篇指南用于让另一台电脑、手机后端或自动化客户端通过 RabiLink Relay 调用目标 Rabi PC 上的 RabiSpeech。普通 TTS 与文件 ASR 请求直接返回音频或转写，不进入 Agent、角色、Route 或会话账本；Android/眼镜连续 PCM 流是明确例外，目标 PC 完成 ASR 后会自动进入主机语音库和 `rabilink` Route。
 
 > 成熟度：实验。先在受控环境验证模型、超时和公网反代，再接入正式客户端。
 
@@ -100,7 +100,7 @@ $Token = $null
 | `502` | PC 或本机 RabiSpeech 在处理时失败 | 到目标 PC 查看语音服务状态和日志 |
 | `504` | 模型冷启动或处理超过 Relay 等待时间 | 先跑健康检查/预热，或调整受控部署的超时 |
 
-公网 allowlist 不包含麦克风启停、人格目录、模型下载或 Python 扩展加载。远端客户端只能调用已允许端点并选择目标 PC 已安装的模型。
+公网 allowlist 不包含麦克风启停、角色目录、模型下载或 Python 扩展加载。远端客户端只能调用已允许端点并选择目标 PC 已安装的模型。
 
 ## 本机调用怎么改
 

@@ -328,7 +328,7 @@ class DesktopPluginCatalogTest(unittest.TestCase):
                     slot="directories",
                     order=10,
                     requiredCapabilities=["desktop.panel-action"],
-                    label={"fallback": "人格目录"},
+                    label={"fallback": "角色目录"},
                     **PERSONA_OWNER,
                 ),
                 _command(
@@ -356,7 +356,7 @@ class DesktopPluginCatalogTest(unittest.TestCase):
             ),
         )
 
-        self.assertEqual([action.label for action in actions], ["人格目录", "触发：巡检"])
+        self.assertEqual([action.label for action in actions], ["角色目录", "触发：巡检"])
         actions[0].callback()
         self.assertEqual(invoked, ["desktop.open-role-directory"])
 

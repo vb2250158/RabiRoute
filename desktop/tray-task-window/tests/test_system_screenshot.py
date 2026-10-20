@@ -1546,8 +1546,8 @@ class SystemScreenshotTest(unittest.TestCase):
         composer = ScreenshotComposer(
             Path("C:/tmp/rabiroute-screenshot.png"),
             [
-                SelectionDeliveryTarget("route-a", "人格 A"),
-                SelectionDeliveryTarget("route-b", "人格 B"),
+                SelectionDeliveryTarget("route-a", "角色 A"),
+                SelectionDeliveryTarget("route-b", "角色 B"),
             ],
         )
         emitted: list[tuple[str, str]] = []

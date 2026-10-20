@@ -22,7 +22,7 @@ description: 运行或更新 RabiSpeech 本机语音模型闭环基准。用于�
 
 确认要测的 TTS worker 已经在本机回环地址运行。冷启动比较需要显式重启对应 worker；如果测试前已经 ready，必须把首条标为 `already-warm`，不能冒充冷启动。
 
-先通过 `GET /api/speech/models` 或 `GET /v1/models` 读取真实模型与请求 Schema，不要靠旧报告或 Skill 中的模型名单猜当前安装状态。人格声线、参考音和 Provider 声线 ID 都不是公开基准参数；若测试需要人格素材，只能在本机传入，报告中必须脱敏。
+先通过 `GET /api/speech/models` 或 `GET /v1/models` 读取真实模型与请求 Schema，不要靠旧报告或 Skill 中的模型名单猜当前安装状态。角色声线、参考音和 Provider 声线 ID 都不是公开基准参数；若测试需要角色素材，只能在本机传入，报告中必须脱敏。
 
 ## 2. 先测试每个 TTS
 
@@ -120,4 +120,4 @@ https://<relay>/manage/<account>/<RabiGUID>/reports/rabispeech-model-benchmark.h
 
 远端报告必须返回 `200` 和 `text/html`。没有公网环境时，只能记录“本地报告与 Relay 静态契约已验证”，不能写成真实公网已通过。
 
-最后再确认运行时语音接口仍保持自己的合同：直接 TTS/ASR 会写语音记录，TTS 音频缓存按单条时间戳保留 24 小时；Route 的 `hot/keyword` 投递、人格关键词、双向会话账本和说话人绑定不属于模型性能评分，不能用基准脚本改写这些配置。
+最后再确认运行时语音接口仍保持自己的合同：直接 TTS/ASR 会写语音记录，TTS 音频缓存按单条时间戳保留 24 小时；Route 的 `hot/keyword` 投递、角色关键词、双向会话账本和说话人绑定不属于模型性能评分，不能用基准脚本改写这些配置。

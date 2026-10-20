@@ -10,7 +10,7 @@
 
 Rabi Agent 是远端电脑客户端。Windows 提供托盘和状态窗口，macOS/Linux 保持后台运行。它主动连接主控 Rabi Manager，提供电脑接口；可选关联远端 Agent 执行任务，Codex Desktop 使用 IPC，DSH 使用本机 `session.prompt`。
 
-主机电脑的 Rabi 服务承担常驻管理职责，无需另设主控 Agent。普通已鉴权 Agent 也可查询计划、近期与沉淀记忆、Skill；Route 或是否为主人格不构成额外许可。电脑能力按实际平台提供，关联 Codex/DSH 无需启动。使用步骤见[主机与远端电脑客户端](../../docs/remote-computer-client.md)。
+主机电脑的 Rabi 服务承担常驻管理职责，无需另设主控 Agent。普通已鉴权 Agent 也可查询计划、近期与沉淀记忆、Skill；Route 或是否为主角色不构成额外许可。电脑能力按实际平台提供，关联 Codex/DSH 无需启动。使用步骤见[主机与远端电脑客户端](../../docs/remote-computer-client.md)。
 
 ## Mac 接入与终端
 
@@ -62,7 +62,7 @@ Mac 原生终端与 Desktop IPC 仍需在线真机验收。`401 LAN_AGENT_CREDEN
 在 MCP 宿主的环境设置中配置：
 
 - `RABIROUTE_HOST_EXE`：可选，本机 Host 可执行文件；未设置时使用当前用户默认安装位置。
-- `RABI_MCP_ALLOWED_ROLES`：必填，JSON 字符串数组，例如 `["example"]`。只允许这些人格，工具参数不能扩权。
+- `RABI_MCP_ALLOWED_ROLES`：必填，JSON 字符串数组，例如 `["example"]`。只允许这些角色，工具参数不能扩权。
 - `RABI_MCP_ALLOW_WRITES`：默认 `false`；明确设置为 `true` 才开放创建、更新及会更新阅读时间的近期记忆详情。
 
 工具覆盖知识搜索、计划列表/详情/状态目录、记忆列表与沉淀详情；开启写入后增加计划及近期记忆创建/更新。更新必须传原样强 ETag，写操作必须提供已保存的稳定幂等键。近期详情也按当前 Manager 的 touch 写入回执合同核对；只读 Manager 缺少该回执时不确认成功。工具不提供删除、沉淀执行、归档写入、附件、任务绑定或任意 HTTP 请求。

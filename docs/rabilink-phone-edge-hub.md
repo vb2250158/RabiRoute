@@ -12,7 +12,7 @@
 
 RabiLink 的手机定位是 **边缘通讯枢纽（edge communication hub）**，不是第二个 Agent，也不是 RabiRoute 的配置真源。
 
-- PC RabiRoute / Codex：拥有推理、人格、统一会话账本、配置真源和动作安全门。
+- PC RabiRoute / Codex：拥有推理、角色、统一会话账本、配置真源和动作安全门。
 - Relay：拥有按应用隔离、可重试的双向邮箱；广播/按类型消息使用有限 TTL，明确目标消息在目标 `delivered` 前不按 TTL 删除，并持久化逐设备回执。
 - 手机：保存应用 token，承担眼镜后端、公网通讯、目标 PC、cursor、音频/媒体队列、通知和本地便携设备扇出。
 - 眼镜原生 App：只承担轻量 HUD、触摸板、PCM 采集/播放和设备媒体输入，不保存 Relay 凭据。
@@ -53,8 +53,8 @@ RabiLink 手机伴侣不拥有 Agent；RabiRoute 不拥有 Agent，但拥有上�
 | --- | --- | --- |
 | Relay | token 鉴权、应用隔离、入站 observation、下行持久队列、幂等、设备过滤 | Agent 推理、全局消费确认、设备 UI |
 | PC RabiRoute | 统一账本、空闲审阅、主动投递、配置、审计、安全门 | 蓝牙配对、手表本地 API、眼镜 UI |
-| 手机伴侣 | token、目标 PC、本地设备身份、联网、状态、cursor、眼镜音频/媒体队列与便携端转发 | 长期记忆、人格真源、Route/Agent 配置副本、替代 Codex |
-| 眼镜原生 App | PCM 采集/播放、HUD、触摸板、设备媒体输入 | Relay 凭据、本地 ASR/TTS、人格真源、可靠保存全部上下文 |
+| 手机伴侣 | token、目标 PC、本地设备身份、联网、状态、cursor、眼镜音频/媒体队列与便携端转发 | 长期记忆、角色真源、Route/Agent 配置副本、替代 Codex |
+| 眼镜原生 App | PCM 采集/播放、HUD、触摸板、设备媒体输入 | Relay 凭据、本地 ASR/TTS、角色真源、可靠保存全部上下文 |
 | 手表客户端 | 快速输入、通知、震动、简短回复、自己的 cursor | 读取其他设备私有队列、直接持有 PC 配置 |
 
 ## 双向数据流

@@ -431,12 +431,12 @@ class SystemSelectionTest(unittest.TestCase):
         )
 
     def test_action_bar_has_accessible_labels_and_distinct_interaction_states(self) -> None:
-        bar = SelectionActionBar(lambda: [SelectionDeliveryTarget("default-main", "默认人格")])
+        bar = SelectionActionBar(lambda: [SelectionDeliveryTarget("default-main", "默认角色")])
         bar.ensurePolished()
         bar.adjustSize()
 
         self.assertEqual(bar.read_button.accessibleName(), "朗读选中的文字")
-        self.assertEqual(bar.deliver_button.accessibleName(), "投递选中文字至人格")
+        self.assertEqual(bar.deliver_button.accessibleName(), "投递选中文字至角色")
         self.assertEqual(bar.deliver_button.text(), "投递至 ▾")
         self.assertGreaterEqual(bar.read_button.sizeHint().height(), 32)
         self.assertLess(bar.read_button.sizeHint().height(), 38)
@@ -456,7 +456,7 @@ class SystemSelectionTest(unittest.TestCase):
         bar.show_for(QPoint(100, 100), can_deliver=False, can_read=True)
 
         self.assertFalse(bar.deliver_button.isEnabled())
-        self.assertEqual(bar.deliver_button.toolTip(), "暂无激活人格")
+        self.assertEqual(bar.deliver_button.toolTip(), "暂无激活角色")
         bar.hide()
 
     def test_controller_start_and_stop_are_idempotent(self) -> None:
@@ -484,7 +484,7 @@ class SystemSelectionTest(unittest.TestCase):
         self.assertFalse(controller._toolbar.isVisible())
 
     def test_controller_passes_selection_geometry_and_direction_to_toolbar(self) -> None:
-        targets = [SelectionDeliveryTarget("default-main", "默认人格")]
+        targets = [SelectionDeliveryTarget("default-main", "默认角色")]
         clipboard_reader = _ClipboardReader()
         controller = SystemSelectionController(
             manager=object(),
@@ -521,7 +521,7 @@ class SystemSelectionTest(unittest.TestCase):
         )
 
     def test_controller_uses_trigger_rect_when_unity_has_no_selection_rect(self) -> None:
-        targets = [SelectionDeliveryTarget("default-main", "默认人格")]
+        targets = [SelectionDeliveryTarget("default-main", "默认角色")]
         controller = SystemSelectionController(
             manager=object(),
             delivery_targets_provider=lambda: targets,

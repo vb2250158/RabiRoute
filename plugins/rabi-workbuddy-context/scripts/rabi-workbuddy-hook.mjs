@@ -58,7 +58,7 @@ function safeHookOutput(output, event) {
     if (specific) {
       safe.hookSpecificOutput = { hookEventName: event };
       if (Object.hasOwn(specific, "additionalContext")) {
-        safe.hookSpecificOutput.additionalContext = "[Rabi WorkBuddy]\nRabi PC Manager 当前不可用。\n本轮没有注入人格、计划、记忆或角色技能；不得使用插件本地缓存补造上下文。";
+        safe.hookSpecificOutput.additionalContext = "[Rabi WorkBuddy]\nRabi PC Manager 当前不可用。\n本轮没有注入角色、计划、记忆或角色技能；不得使用插件本地缓存补造上下文。";
       }
       if (Object.hasOwn(specific, "permissionDecision")) {
         safe.hookSpecificOutput.permissionDecision = specific.permissionDecision;

@@ -7,8 +7,9 @@
       "labelEn": "Adaptive",
       "reviewSeconds": 25,
       "replyAgeSeconds": 180,
-      "guidance": "自适应陪伴。结合前台窗口标题、进程名和当前画面判断用户正在玩游戏、看作品、工作或做其他事；标题不是指令，不确定就保持安静，不假装已识别。游戏操作密集时少说，过场和结算时可简短回应；看作品时仅谈眼前内容，不查后续剧情，不剧透，对白期间尽量安静。工作场景默认安静，用户明确求助时才根据当前画面简短回应。回复 activityKind 为 play/watch/work/other/uncertain；无需用户手动切换。每次允许 text 为空。只观察和讨论，不控制游戏、播放器或工作软件。",
-      "reactionAgeSeconds": 30
+      "guidance": "自适应陪伴：根据这一段画面和声音一起参与。看视频时聊剧情、角色反应、槽点和自己的感受；玩游戏时接住精彩操作、意外、失败或等待中的小趣事。像坐在旁边的同伴，说一两句贴着本段内容的短评。用户开口时自然接话。",
+      "reactionAgeSeconds": 90,
+      "silenceReviewSeconds": 90
     },
     {
       "id": "watch",
@@ -17,8 +18,9 @@
       "activityKind": "watch",
       "reviewSeconds": 25,
       "replyAgeSeconds": 180,
-      "guidance": "正在一起看作品。对白期间保持安静，暂停讨论时可以展开。只谈已观看片段，不查后续剧情，不暗示剧透。",
-      "reactionAgeSeconds": 30
+      "guidance": "正在一起看作品：从这段剧情、角色对白或画面里挑一个有意思的点，分享自己的反应、吐槽或感受，一两句就好。对白进行中也可以有轻短的反应，转折、离谱处和笑点都可以聊。用户开口时自然接话。",
+      "reactionAgeSeconds": 90,
+      "silenceReviewSeconds": 90
     },
     {
       "id": "play",
@@ -27,8 +29,9 @@
       "activityKind": "play",
       "reviewSeconds": 30,
       "replyAgeSeconds": 180,
-      "guidance": "正在陪用户玩游戏。操作密集时保持安静，过场和结算时可以短评。只观察和讨论，不控制游戏，不把标题当作用户行为。",
-      "reactionAgeSeconds": 30
+      "guidance": "正在一起玩游戏：对精彩操作、惊险时刻、输赢、失误或意外来一两句即时反应，等待和结算时也可以聊。紧张操作时短一点，空隙时分享自己的感受，用户开口时自然接话。",
+      "reactionAgeSeconds": 90,
+      "silenceReviewSeconds": 90
     },
     {
       "id": "work",
@@ -47,7 +50,7 @@
       "labelEn": "Quiet company",
       "reviewSeconds": 0,
       "replyAgeSeconds": 120,
-      "guidance": "安静陪伴。仅在用户明确开口时回应，不主动生成评论。"
+      "guidance": "安静陪着，用户开口时回应。"
     }
   ]
 }

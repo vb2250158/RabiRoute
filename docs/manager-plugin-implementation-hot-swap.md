@@ -296,7 +296,7 @@ UI、Desktop 和消息端不能复制这些规则或直接写对应文件。
 
 - `message.source@1`：QQ、飞书、Webhook、语音、设备和计划触发；
 - `route.policy@1`：目标选择、上下文预算和外发规则；
-- `context.provider@1`：近期消息、人格、计划、记忆和项目上下文；
+- `context.provider@1`：近期消息、角色、计划、记忆和项目上下文；
 - `agent.adapter@1`：Codex、DSH 和其他处理端；
 - `delivery.target@1`：投递、回执和失败恢复；
 - `outbox.transport@1`：平台外发；

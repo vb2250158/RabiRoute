@@ -18,6 +18,7 @@ import { recordingManifestHash } from "./recordingArchiveContract.js";
 import { createAllDayRecording, allDayRecordingHandler } from "./allDayRecordingRoutes.js";
 import { CompanionActivity, companionSpeechScope, readCompanionPresets, recordCompanionInteraction, saveCompanionSummary, lastCompanionSummary } from "./companionActivity.js";
 import { buildCompanionContext } from "./companionContext.js";
+import { CompanionWindowTypes } from "./companionWindowTypes.js";
 import { readCompanionSceneRules } from "./companionScene.js";
 import { companionActivityHandler } from "./companionActivityRoutes.js";
 import { CompanionContinuationStore } from "./companionContinuation.js";
@@ -78,6 +79,7 @@ import { listCodexDesktopWorkspaces, readCodexDesktopThread } from "../codexDesk
 import { isDshSessionId, readDshPrimaryBindingAsync } from "../dshSessionBridge.js";
 import { DshOwnerRecovery } from "../dshOwnerRecovery.js";
 import { CompanionFrameDelivery } from "./companionFrameDelivery.js";
+import { readCompanionObservationPolicy } from "./companionObservationInterval.js";
 import { bindDshSessionForSave } from "../shared/codexSessionBinding.js";
 import { sameCodexWorkspace } from "../codexTaskIdentity.js";
 import { selectAgentThreadRouteId } from "./agentThreadRouteSelection.js";
@@ -1171,7 +1173,27 @@ const handleAllDayRecordingApi = allDayRecordingHandler(allDayRecording, {
 });
 const companionDshOwnerRecovery = new DshOwnerRecovery();
 const companionFrameDelivery = new CompanionFrameDelivery(rootDir);
+const companionObservationPolicy = readCompanionObservationPolicy(JSON.parse(fs.readFileSync(path.join(packageRoot, "packages", "rabi-companion", "observation.json"), "utf8")));
 const companionActivity = new CompanionActivity({
+  observationPolicy: companionObservationPolicy,
+  transcripts: (roleId, startedAt, endedAt) => allDayRecording.reads.transcripts(roleId, startedAt, endedAt),
+  transcribe: async (reviewId, wav, signal, interval) => {
+    const form = new FormData();
+    form.set("job_key", `companion_${reviewId.replaceAll("-", "")}`);
+    form.set("response_format", "verbose_json");
+    form.set("file", new Blob([new Uint8Array(wav)], { type: "audio/wav" }), "system-playback.wav");
+    const response = await requestLocalSpeech(speechServiceUrl(), "/v1/archive/transcriptions", { method: "POST", body: form }, {
+      timeoutMs: companionObservationPolicy.transcriptionTimeoutSeconds * 1000,
+      fetchImpl: ((input, init) => fetch(input, { ...init, signal: AbortSignal.any([signal, init!.signal!]) })) as typeof fetch
+    });
+    if (response.status !== 200) throw new Error(`System playback ASR HTTP ${response.status}`);
+    const body = JSON.parse(response.body.toString("utf8"));
+    if (typeof body.text !== "string") throw new Error("System playback ASR returned no text");
+    if (signal.aborted) throw new Error("Companion observation changed");
+    await allDayRecording.service.savePlayback(interval.roleId, reviewId, interval.startedAt, interval.endedAt, body.text, wav);
+    return body.text;
+  },
+  windowTypes: new CompanionWindowTypes(roleDirForApi),
   presets: readCompanionPresets(JSON.parse(fs.readFileSync(path.join(packageRoot, "packages", "rabi-companion", "presets.json"), "utf8"))),
   sceneRules: readCompanionSceneRules(JSON.parse(fs.readFileSync(path.join(packageRoot, "packages", "rabi-companion", "scene-rules.json"), "utf8"))),
   changed: (roleId, session) => {
@@ -1211,7 +1233,7 @@ const companionActivity = new CompanionActivity({
       throw new Error("陪伴场景已改变，已取消旧画面投递");
     }
     await triggerGatewayRolePanelMessage(runtime, `companion-${review.id}`, review.text,
-      imagePath ? [{ kind: "image", name: "current-activity.jpg", path: imagePath,
+      imagePath ? [{ kind: "image", name: "activity-sequence.jpg", path: imagePath,
         url: `${managerBaseUrl}/api/roles/${encodeURIComponent(session.roleId)}/companion/frame?reviewId=${review.id}` }] : [],
       { companion: { sessionId: session.id, revision: review.revision, reviewId: review.id }, suppressTaskAnnouncement: true },
       recoveredOwnerUrl ? { RABI_DSH_LOCAL_OWNER_URL: recoveredOwnerUrl } : undefined);

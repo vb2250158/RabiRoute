@@ -12,7 +12,7 @@ English: [device-peer-connection_en.md](device-peer-connection_en.md) | 简体�
 
 ## 授予与续租
 
-使用眼镜设备凭据，通过 Relay 的通用 `POST /api/rabilink/device/api` 请求目标 PC 的 `POST /api/rabilink/peer/device-bootstrap`。Relay 只验证连接凭据和中转原始 HTTP；它不解析这个 PC 接口，也不保存人格或额外公钥授权库。
+使用眼镜设备凭据，通过 Relay 的通用 `POST /api/rabilink/device/api` 请求目标 PC 的 `POST /api/rabilink/peer/device-bootstrap`。Relay 只验证连接凭据和中转原始 HTTP；它不解析这个 PC 接口，也不保存角色或额外公钥授权库。
 
 PC 接受的正文为 `{source,publicKey,target,expiresAt,nonce,signature}`。`source` 必须等于真实 Relay 设备身份，`target` 必须是接收请求的 PC。签名域为 `rabi-device-delegation-v1`，字段按 `source,publicKey,target,expiresAt,nonce` 顺序编码；签名与实际密钥持有证明由 PC 隧道运行时验证。
 
@@ -30,4 +30,4 @@ Relay 在首次鉴权接纳时记录 `authenticatedAt`，原队列、认领和�
 
 设备凭据撤销后，后续授予或续租失败；已授予的离线租约受原绝对期限限制。不能声称断网时能即时获知服务器刚发生的撤销。正式消息认领仍要求眼镜原会话和 owner epoch；连接授权不代替业务回执。
 
-人格和工作区绑定不限定公共 API 范围。绑定只选择上下文和自动投递目标，详见 [连接与接口使用](connection-access.md) 和 [精确投递](agent-endpoint-delivery.md)。
+角色和工作区绑定不限定公共 API 范围。绑定只选择上下文和自动投递目标，详见 [连接与接口使用](connection-access.md) 和 [精确投递](agent-endpoint-delivery.md)。

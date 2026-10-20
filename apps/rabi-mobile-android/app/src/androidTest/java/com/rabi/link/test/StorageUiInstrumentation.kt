@@ -24,8 +24,13 @@ class StorageUiInstrumentation : Instrumentation() {
                 for(i in 0 until n.childCount) n.getChild(i)?.let { if(reveal(it)) return true }
                 return false
             }
-            if(preview.findAccessibilityNodeInfosByText("☰").isEmpty()) { check(reveal(preview)); waitForIdleSync() }
-            uiAutomation.rootInActiveWindow.findAccessibilityNodeInfosByText("☰").first().performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)
+            fun devices(n: android.view.accessibility.AccessibilityNodeInfo): android.view.accessibility.AccessibilityNodeInfo? {
+                if(n.contentDescription?.toString()=="记录设备") return n
+                for(i in 0 until n.childCount) n.getChild(i)?.let { child -> devices(child)?.let { return it } }
+                return null
+            }
+            if(devices(preview)==null) { check(reveal(preview)); waitForIdleSync() }
+            checkNotNull(devices(uiAutomation.rootInActiveWindow)).performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)
             waitForIdleSync()
             val button = uiAutomation.rootInActiveWindow.findAccessibilityNodeInfosByText("存储管理").first { it.text?.toString() == "存储管理" }
             val bounds = android.graphics.Rect(); button.getBoundsInScreen(bounds)

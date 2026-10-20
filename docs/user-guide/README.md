@@ -17,11 +17,11 @@ RabiRoute 是消息分诊和调度层。它接收消息、记录事件、判断�
 在界面里，一条 **Route（航线）** 就是一套可独立启停的消息流配置：
 
 ```text
-消息端 -> 匹配规则 -> 人格与上下文 -> Agent 处理端 -> 回复或草稿
+消息端 -> 匹配规则 -> 角色与上下文 -> Agent 处理端 -> 回复或草稿
 ```
 
 - **消息端**决定消息从哪里来，例如 NapCat / QQ、Heartbeat、Webhook 或 RabiLink。
-- **人格与规则**决定哪些消息命中，以及交给 Agent 时附带什么说明。
+- **角色与规则**决定哪些消息命中，以及交给 Agent 时附带什么说明。
 - **Agent 端**决定消息交给哪个处理端、项目目录和任务。
 - **日志诊断**帮助你判断消息停在了哪一段。
 
@@ -32,7 +32,7 @@ RabiRoute 是消息分诊和调度层。它接收消息、记录事件、判断�
 1. 打开左下角“快速配置”。
 2. 消息入口选择“定时触发”。
 3. Agent 选择 Codex，并绑定项目目录与 Desktop 任务。
-4. 人格可以先留空，保存配置。
+4. 角色可以先留空，保存配置。
 5. 到“日志诊断”手动触发一次并确认任务收到消息。
 
 完整步骤见[跑通第一条 Route](first-route.md)。需要接 QQ 时，再阅读[Route 与消息端](routes-and-adapters.md)。
@@ -49,8 +49,8 @@ RabiRoute 是消息分诊和调度层。它接收消息、记录事件、判断�
 | 接 QQ、定时器、Webhook 或 RabiLink | [Route 与消息端](routes-and-adapters.md) |
 | 从其他设备调用目标 PC 的 TTS / ASR | [从远端调用 TTS 与 ASR](speech-api.md) |
 | 绑定 Codex 或其他处理端 | [Agent、项目与任务](agents-and-sessions.md) |
-| 查看人格保存的技能目录与正文 | [查看角色技能](persona-skills.md) |
-| 配置人格、命中规则和定时计划 | [人格与消息规则](personas-and-rules.md) |
+| 查看角色保存的技能目录与正文 | [查看角色技能](persona-skills.md) |
+| 配置角色、命中规则和定时计划 | [角色与消息规则](personas-and-rules.md) |
 | 消息没到、状态异常或需要复盘 | [运行、日志与排障](operations-and-troubleshooting.md) |
 | 理解回复权限、草稿和本地数据 | [安全、回传与数据](safety-and-data.md) |
 | 查常见问题或准备反馈材料 | [常见问题与获得帮助](faq-and-support.md) |

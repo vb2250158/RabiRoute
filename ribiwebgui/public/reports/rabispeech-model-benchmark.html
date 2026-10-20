@@ -71,7 +71,7 @@
       <tr><td><code>short-dialogue</code></td><td>短句</td><td>你好，这是本地语音服务的速度测试。</td><td>首请求、固定中文发音和基础延迟</td></tr>
       <tr><td><code>technical-mixed</code></td><td>中英混合</td><td>请提醒我检查 RabiLink 服务器，并确认 ASR 与 TTS 接口正常。</td><td>产品名、英文缩写和中文混读</td></tr>
       <tr><td><code>long-instruction</code></td><td>长指令</td><td>如果网络暂时断开，请保留本地任务，等待连接恢复以后再重试，并把失败原因写进诊断报告。</td><td>长句停顿、完整性和持续生成</td></tr>
-      <tr><td><code>asr-smoke-reference</code></td><td>ASR 同源短句</td><td>热启动测试完成。声音已经由 Rabi 人格目录管理。</td><td>五个主要 ASR 的同音频 CER/字符准确率</td></tr>
+      <tr><td><code>asr-smoke-reference</code></td><td>ASR 同源短句</td><td>热启动测试完成。声音已经由 Rabi 角色目录管理。</td><td>五个主要 ASR 的同音频 CER/字符准确率</td></tr>
     </tbody>
   </table></div>
   <p>前三条是仓库固定的后续同文本盲听语料。下方六模型冷/热数据来自接入阶段的可用性冒烟，文本长度未完全统一，因此只能比较部署等待，不是严格的每秒生成吞吐排名。</p>
@@ -124,7 +124,7 @@
     <div class="bar-row"><span>IndexTTS2</span><div class="bar-track"><div class="bar" style="width:49%"></div></div><b>18.13 s</b></div>
     <div class="bar-row"><span>CosyVoice3</span><div class="bar-track"><div class="bar" style="width:41%"></div></div><b>14.95 s</b></div>
   </div>
-  <p class="warn">TTS 冒烟文本未全部统一，不能把这张表当成严格吞吐排名。六个模型都已用获授权的本地测试人格参考音生成有效 WAV；自然度、音色相似度和情绪需要同文本盲听。</p>
+  <p class="warn">TTS 冒烟文本未全部统一，不能把这张表当成严格吞吐排名。六个模型都已用获授权的本地测试角色参考音生成有效 WAV；自然度、音色相似度和情绪需要同文本盲听。</p>
 
   <h2>ASR：同一条 5.04 秒中文音频</h2>
   <div class="table-wrap"><table>
@@ -155,7 +155,7 @@
     <div class="bar-row"><span>SenseVoiceSmall</span><div class="bar-track"><div class="bar" style="width:81.82%"></div></div><b>81.82%</b></div>
     <div class="bar-row"><span>large-v3-turbo</span><div class="bar-track"><div class="bar" style="width:77.27%"></div></div><b>77.27%</b></div>
   </div>
-  <p>逐字标准答案：“热启动测试完成。声音已经由 Rabi 人格目录管理。”准确率按 <code>100% − CER</code> 展示；它仅来自一条干净合成短句，是安装冒烟指标，不是生产准确率结论。</p>
+  <p>逐字标准答案：“热启动测试完成。声音已经由 Rabi 角色目录管理。”准确率按 <code>100% − CER</code> 展示；它仅来自一条干净合成短句，是安装冒烟指标，不是生产准确率结论。</p>
 
   <h2>建议配置</h2>
   <div class="table-wrap"><table>
@@ -173,7 +173,7 @@
   <ul>
     <li><code>GET /v1/models</code> 返回模型列表、安装状态、请求 schema、必填/可选参数与示例。</li>
     <li>普通 TTS/ASR 是直接 API，不接入 Agent；只有显式“提交 Route”才进入消息路由。</li>
-    <li>角色声线由 <code>data/roles/&lt;RoleId&gt;/voice/</code> 管理；播放跨会话、人格、模型使用全局 FIFO。</li>
+    <li>角色声线由 <code>data/roles/&lt;RoleId&gt;/voice/</code> 管理；播放跨会话、角色、模型使用全局 FIFO。</li>
     <li>RTX 4080 SUPER 16 GiB 使用单 GPU worker 按需加载更稳妥。</li>
     <li>真实声卡流和服务重启恢复已通过；连续说话、噪声、回声、盲听和另一台电脑经 RabiLink 的公网往返延迟仍需用户验收。</li>
   </ul>

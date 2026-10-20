@@ -11,6 +11,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -36,6 +38,58 @@ public final class RabiChatStore {
 
     private final AtomicFile chatFile;
     private final AtomicFile stateFile;
+
+    /** Rebuilt from the ledger and local conversation state for one list render. */
+    public static final class Summary {
+        public Message latest;
+        public int unread;
+        public boolean pinned;
+    }
+
+    public Map<String, Summary> summaries() {
+        synchronized (LOCK) {
+            try {
+                JSONObject state = readState();
+                Map<String, Summary> result = new LinkedHashMap<>();
+                for (Message message : list()) {
+                    String id = normalizedId(message.routeProfileId);
+                    Summary summary = result.computeIfAbsent(id, key -> new Summary());
+                    if (summary.latest == null || message.createdAt >= summary.latest.createdAt) summary.latest = message;
+                    if ("assistant".equals(message.role) && message.createdAt > state.getJSONObject("readAt").optLong(id)) summary.unread++;
+                }
+                for (String key : new String[] { "pinned", "markedUnread" }) {
+                    java.util.Iterator<String> ids = state.getJSONObject(key).keys();
+                    while (ids.hasNext()) result.computeIfAbsent(ids.next(), id -> new Summary());
+                }
+                for (Map.Entry<String, Summary> entry : result.entrySet()) {
+                    entry.getValue().pinned = state.getJSONObject("pinned").optBoolean(entry.getKey());
+                    if (state.getJSONObject("markedUnread").optBoolean(entry.getKey())) entry.getValue().unread = Math.max(1, entry.getValue().unread);
+                }
+                return result;
+            } catch (Exception error) { throw new IllegalStateException("Cannot read conversation state", error); }
+        }
+    }
+
+    public void setPinned(String conversationId, boolean pinned) {
+        saveFlag("pinned", conversationId, pinned);
+    }
+
+    public void markUnread(String conversationId) {
+        saveFlag("markedUnread", conversationId, true);
+    }
+
+    private void saveFlag(String field, String conversationId, boolean enabled) {
+        String id = clean(conversationId);
+        if (id.isEmpty()) throw new IllegalArgumentException("Conversation ID is required");
+        synchronized (LOCK) {
+            try {
+                JSONObject state = readState();
+                if (enabled) state.getJSONObject(field).put(id, true);
+                else state.getJSONObject(field).remove(id);
+                write(stateFile, state.toString());
+            } catch (Exception error) { throw new IllegalStateException("Cannot save conversation state", error); }
+        }
+    }
 
     public RabiChatStore(Context context) {
         this(context.getFilesDir());
@@ -167,6 +221,11 @@ public final class RabiChatStore {
         for (Message message : listForConversation(conversationId)) {
             if ("assistant".equals(message.role) && message.createdAt > readAt) result++;
         }
+        synchronized (LOCK) {
+            try {
+                if (readState().getJSONObject("markedUnread").optBoolean(clean(conversationId))) return Math.max(1, result);
+            } catch (Exception error) { throw new IllegalStateException(error); }
+        }
         return result;
     }
 
@@ -176,11 +235,11 @@ public final class RabiChatStore {
         for (Message message : listForConversation(target)) {
             if ("assistant".equals(message.role)) latestIncomingAt = Math.max(latestIncomingAt, message.createdAt);
         }
-        if (latestIncomingAt <= 0) return;
         synchronized (LOCK) {
             try {
                 JSONObject state = readState();
                 state.optJSONObject("readAt").put(target, latestIncomingAt);
+                state.getJSONObject("markedUnread").remove(target);
                 write(stateFile, state.toString());
             } catch (Exception error) { throw new IllegalStateException(error); }
         }
@@ -217,6 +276,8 @@ public final class RabiChatStore {
         JSONObject state = readObject(stateFile);
         if (state.optJSONObject("readAt") == null) state.put("readAt", new JSONObject());
         if (state.optJSONObject("drafts") == null) state.put("drafts", new JSONObject());
+        if (state.optJSONObject("pinned") == null) state.put("pinned", new JSONObject());
+        if (state.optJSONObject("markedUnread") == null) state.put("markedUnread", new JSONObject());
         return state;
     }
 

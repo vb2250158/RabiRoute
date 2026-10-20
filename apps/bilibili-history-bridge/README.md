@@ -39,7 +39,7 @@ Token 保存在 Chrome `storage.local` 和 RabiRoute 私有 `data/` 运行目录
 
 ## 私有逐条记录与生命周期
 
-- 创建任务必须指定 `roleId`。Manager 把窗口内每条记录写入该人格的
+- 创建任务必须指定 `roleId`。Manager 把窗口内每条记录写入该角色的
   `runtime/bilibili-history/daily/YYYY-MM-DD.jsonl`，不会写入全局运行状态。
 - 日期文件是物理分卷，不表示归档、记忆沉淀或到期删除。逐条记录是私有事实真源，
   默认长期保留；删除需要单独、明确授权。
@@ -47,7 +47,7 @@ Token 保存在 Chrome `storage.local` 和 RabiRoute 私有 `data/` 运行目录
   不会重复追加。
 - `index.json` 是可重建索引；日期文件先原子提交，随后重建索引。只读查询在内存中
   扫描日期文件，不会为了 GET 写盘；Manager 重启后，已提交日期文件仍可恢复。
-- Manager 不自动把观看标题转成人格记忆。兴趣偏好只能从跨日稳定信号或用户确认后，
+- Manager 不自动把观看标题转成角色记忆。兴趣偏好只能从跨日稳定信号或用户确认后，
   通过正常记忆接口另行沉淀。
 
 生命周期合同：
@@ -69,6 +69,6 @@ Token 保存在 Chrome `storage.local` 和 RabiRoute 私有 `data/` 运行目录
 
 - 扩展不读取 Cookie API、Local Storage、密码或浏览器 Profile。
 - Manager 的全局状态不持久化逐条标题、BVID、URL 或 Cookie；逐条数据只进入任务指定
-  人格的私有日分卷，且永不保存 Cookie、Token 或未列入记录契约的响应字段。
+  角色的私有日分卷，且永不保存 Cookie、Token 或未列入记录契约的响应字段。
 - API `-101`（登录失效）或 `-412`（风控）会暂停任务，不自动紧密重试。
 - 每页默认间隔 650ms；任务逐页保存游标，Manager 重启后可从断点继续。

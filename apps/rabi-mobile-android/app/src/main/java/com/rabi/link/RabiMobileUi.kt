@@ -11,6 +11,8 @@ import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
+import android.widget.ImageButton
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.Spinner
 import android.widget.Switch
@@ -157,8 +159,8 @@ object RabiMobileUi {
     fun card(context: Context): LinearLayout = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(context, 16), dp(context, 15), dp(context, 16), dp(context, 15))
-        background = panel(context, surface, border, 12)
-        elevation = dp(context, 2).toFloat()
+        background = panel(context, surface, border, 16)
+        elevation = 0f
     }
 
     @JvmStatic
@@ -195,6 +197,7 @@ object RabiMobileUi {
         setHintTextColor(muted)
         setSingleLine(true)
         minHeight = dp(context, 52)
+        minimumHeight = dp(context, 52)
         gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(context, 14), 0, dp(context, 14), 0)
         background = panel(context, inputSurface, borderStrong, 10)
@@ -215,7 +218,8 @@ object RabiMobileUi {
         typeface = Typeface.DEFAULT_BOLD
         minHeight = dp(context, 52)
         setTextColor(onAccent)
-        background = panel(context, secondary, secondary, 10)
+        stateListAnimator = null
+        background = RippleDrawable(ColorStateList.valueOf(accentBorder), panel(context, secondary, secondary, 14), null)
         setOnClickListener { action() }
     }
 
@@ -226,7 +230,8 @@ object RabiMobileUi {
         textSize = 15f
         minHeight = dp(context, 52)
         setTextColor(primary)
-        background = panel(context, accentSurface, accentBorder, 10)
+        stateListAnimator = null
+        background = RippleDrawable(ColorStateList.valueOf(accentBorder), panel(context, surface, border, 14), null)
         setOnClickListener { action() }
     }
 
@@ -240,11 +245,81 @@ object RabiMobileUi {
         minimumHeight = dp(context, 48)
         setPadding(dp(context, 12), 0, dp(context, 12), 0)
         setTextColor(primary)
-        background = panel(context, accentSurface, accentBorder, 10)
+        stateListAnimator = null
+        background = RippleDrawable(ColorStateList.valueOf(accentBorder), panel(context, Color.TRANSPARENT, Color.TRANSPARENT, 12), null)
         setOnClickListener { action() }
     }
 
-    /** Shared bottom navigation; only the current destination uses a filled background. */
+    fun icon(context: Context, resource: Int, color: Int = primary): ImageView = ImageView(context).apply {
+        setImageResource(resource)
+        imageTintList = ColorStateList.valueOf(color)
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
+
+    /** Icon remains 24dp inside a labeled native 48dp control. */
+    fun iconAction(context: Context, resource: Int, description: String, filled: Boolean = false, action: () -> Unit): ImageButton = ImageButton(context).apply {
+        setImageResource(resource)
+        imageTintList = ColorStateList.valueOf(if (filled) onAccent else primary)
+        contentDescription = description; tooltipText = description
+        minimumWidth = dp(context, 48); minimumHeight = dp(context, 48)
+        setPadding(dp(context, 12), dp(context, 12), dp(context, 12), dp(context, 12))
+        background = RippleDrawable(ColorStateList.valueOf(accentBorder), panel(context, if (filled) secondary else Color.TRANSPARENT, Color.TRANSPARENT, 24), null)
+        setOnClickListener { action() }
+    }
+
+    fun labeledAction(context: Context, resource: Int, title: String, action: () -> Unit): Button = secondary(context, title, action).apply {
+        val leading = icon(context, resource, secondary).drawable
+        leading.setBounds(0, 0, dp(context, 20), dp(context, 20))
+        setCompoundDrawables(leading, null, null, null)
+        compoundDrawablePadding = dp(context, 8)
+        setPadding(dp(context, 12), dp(context, 4), dp(context, 12), dp(context, 4))
+        textSize = 14f
+    }
+
+    fun actionRow(context: Context, resource: Int, title: String, chevron: Boolean = true, grouped: Boolean = false, action: () -> Unit): LinearLayout = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+        minimumHeight = dp(context, 64); isFocusable = true
+        setPadding(dp(context, 16), dp(context, 8), dp(context, 16), dp(context, 8))
+        background = RippleDrawable(ColorStateList.valueOf(accentBorder), panel(context, if (grouped) Color.TRANSPARENT else surface, Color.TRANSPARENT, if (grouped) 0 else 16), null)
+        contentDescription = title
+        accessibilityDelegate = object : View.AccessibilityDelegate() {
+            override fun onInitializeAccessibilityNodeInfo(host: View, info: android.view.accessibility.AccessibilityNodeInfo) {
+                super.onInitializeAccessibilityNodeInfo(host, info)
+                info.className = Button::class.java.name
+            }
+        }
+        addView(icon(context, resource, secondary), LinearLayout.LayoutParams(dp(context, 24), dp(context, 24)).apply { marginEnd = dp(context, 16) })
+        addView(TextView(context).apply {
+            text = title; textSize = 16f; setTextColor(RabiMobileUi.text)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        if (chevron) addView(icon(context, R.drawable.ic_ui_chevron, muted), LinearLayout.LayoutParams(dp(context, 20), dp(context, 20)))
+        setOnClickListener { action() }
+    }
+
+    fun settingsGroup(context: Context, resource: Int, title: String, content: View, expanded: Boolean = false, grouped: Boolean = false): View = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        content.visibility = if (expanded) View.VISIBLE else View.GONE
+        val header = actionRow(context, resource, title, grouped = grouped) {
+            content.visibility = if (content.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+            val open = content.visibility == View.VISIBLE
+            getChildAt(0).stateDescription = if (open) "已展开" else "已收起"
+            (getChildAt(0) as LinearLayout).getChildAt(2).rotation = if (open) 90f else 0f
+        }
+        header.stateDescription = if (expanded) "已展开" else "已收起"
+        header.getChildAt(2).rotation = if (expanded) 90f else 0f
+        addView(header)
+        addView(content, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(context, 8) })
+    }
+
+    fun insetDivider(context: Context, start: Int, end: Int = 16): View = FrameLayout(context).apply {
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        addView(View(context).apply { setBackgroundColor(border) }, FrameLayout.LayoutParams(-1, 1).apply {
+            marginStart = dp(context, start); marginEnd = dp(context, end)
+        })
+    }
+
+    /** A small icon pill marks the current destination; the whole tab is a touch target. */
     fun bottomNavigation(context: Context, selected: String, onSelect: (String) -> Unit): View =
         LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -252,29 +327,44 @@ object RabiMobileUi {
             addView(View(context).apply { setBackgroundColor(border) }, LinearLayout.LayoutParams(-1, dp(context, 1)))
             addView(LinearLayout(context).apply {
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(context, 12), dp(context, 8), dp(context, 12), dp(context, 8))
+                setPadding(dp(context, 12), dp(context, 4), dp(context, 12), dp(context, 4))
                 val ids = resources.getStringArray(R.array.mobile_navigation_ids)
                 val names = resources.getStringArray(R.array.mobile_navigation_names)
+                val icons = resources.obtainTypedArray(R.array.mobile_navigation_icons)
                 ids.forEachIndexed { index, id ->
-                    addView(Button(context).apply {
-                        text = names[index]
-                        textSize = 13f
-                        isAllCaps = false
+                    addView(LinearLayout(context).apply {
+                        orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
                         isSelected = id == selected
-                        typeface = if (isSelected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
-                        minWidth = 0; minimumWidth = 0
-                        minHeight = dp(context, 48); minimumHeight = dp(context, 48)
-                        setPadding(dp(context, 4), 0, dp(context, 4), 0)
-                        setTextColor(if (isSelected) secondary else muted)
-                        stateListAnimator = null
+                        isFocusable = true; minimumHeight = dp(context, 76)
+                        setPadding(dp(context, 4), dp(context, 6), dp(context, 4), dp(context, 6))
                         background = RippleDrawable(ColorStateList.valueOf(accentBorder),
-                            panel(context, if (isSelected) accentSurface else surface, Color.TRANSPARENT, 10), null)
+                            panel(context, Color.TRANSPARENT, Color.TRANSPARENT, 16), null)
                         contentDescription = "${names[index]}${if (isSelected) "，已选择" else ""}"
+                        accessibilityDelegate = object : View.AccessibilityDelegate() {
+                            override fun onInitializeAccessibilityNodeInfo(host: View, info: android.view.accessibility.AccessibilityNodeInfo) {
+                                super.onInitializeAccessibilityNodeInfo(host, info)
+                                info.className = Button::class.java.name
+                            }
+                        }
+                        val active = isSelected
+                        addView(FrameLayout(context).apply {
+                            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                            background = panel(context, if (active) accentSurface else Color.TRANSPARENT, Color.TRANSPARENT, 18)
+                            addView(icon(context, icons.getResourceId(index, 0), if (active) secondary else muted),
+                                FrameLayout.LayoutParams(dp(context, 24), dp(context, 24), Gravity.CENTER))
+                        }, LinearLayout.LayoutParams(dp(context, 64), dp(context, 28)))
+                        addView(TextView(context).apply {
+                            text = names[index]; textSize = 15f
+                            setTextColor(if (id == selected) secondary else muted)
+                            typeface = if (id == selected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+                            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                        }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(context, 4) })
                         setOnClickListener { onSelect(id) }
                     }, LinearLayout.LayoutParams(0, -2, 1f).apply {
                         if (index > 0) marginStart = dp(context, 6)
                     })
                 }
+                icons.recycle()
             }, LinearLayout.LayoutParams(-1, -2))
         }
 
@@ -296,8 +386,7 @@ object RabiMobileUi {
         minWidth = dp(context, 24)
         setPadding(dp(context, 6), 0, dp(context, 6), 0)
         setTextColor(onAccent)
-        setTextColor(if (RabiMobileTheme.isDark()) Color.BLACK else Color.WHITE)
-        background = panel(context, accent, accent, 12)
+        background = panel(context, secondary, secondary, 12)
         contentDescription = "$count 条未读消息"
     }
 
@@ -371,6 +460,7 @@ object RabiMobileUi {
         setHintTextColor(muted)
         minHeight = dp(context, 52)
         gravity = if (multiline) Gravity.TOP else Gravity.CENTER_VERTICAL
+        minimumHeight = dp(context, 52)
         setPadding(dp(context, 14), if (multiline) dp(context, 12) else 0, dp(context, 14), if (multiline) dp(context, 12) else 0)
         background = panel(context, inputSurface, borderStrong, 10)
     }

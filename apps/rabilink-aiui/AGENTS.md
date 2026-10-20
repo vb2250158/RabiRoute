@@ -29,7 +29,7 @@ RabiLink AIUI 在同一页面承载对话、状态和配置，不硬编码特定
 ## Capabilities
 
 - **AIUI `SpeechRecognition`**：前台连续自然语言采集，状态机受控续轮，具备快速重复文本与标点抑制。
-- **AIUI `LanguageModel`**：宿主模型会话，通过 `create(options)` 传入人格与应用动作协议，工具声明放在应用协议中；原生 `tools` 为空。使用 `promptStreaming()` / `prompt()` 串行推理，实际结果经普通应用观察消息续轮，同一会话只允许一个活跃请求。原生 `tool` role 与结果提交 API 仍未证实。
+- **AIUI `LanguageModel`**：宿主模型会话，通过 `create(options)` 传入角色与应用动作协议，工具声明放在应用协议中；原生 `tools` 为空。使用 `promptStreaming()` / `prompt()` 串行推理，实际结果经普通应用观察消息续轮，同一会话只允许一个活跃请求。原生 `tool` role 与结果提交 API 仍未证实。
 - **AIUI `speechSynthesis`**：宿主原生语音合成，流式分句播报，生命周期与文本时长双重超时监控；实际声音取决于宿主能力。
 - **智能打断与回声抑制（Barge-in）**：过滤自身 TTS 回声与快速重复输入；检测到新的用户语音时只中断播报，完整输入在当前请求结束后引导后续推理，实际效果须真机验证。
 - **极简 AR HUD 渲染**：绿色高对比度字幕及名称、状态、时钟、电量显示；保持边缘安全和中央视野，小尺寸布局须单独验收。
@@ -55,6 +55,6 @@ RabiLink AIUI 在同一页面承载对话、状态和配置，不硬编码特定
 - **手势交互**：
   - 单击触摸板（Tap）：在播报时打断当前 TTS；空闲时检查设备 Agent 连接。
   - 双击触摸板（Double Tap）：返回上一级或退出当前应用。
-- **并行语音输入**：日常 AIUI 对话在 TTS 和推理时继续原生 ASR。非回声文字只停播，原推理继续；完整输入排入引导队列，当前宿主请求结束后、下一次决策前采用；已分发工具须先等实际结果，不并发启动第二个模型请求。人格切换等引导队列结束后应用；真机并行与回声效果按实测报告。
+- **并行语音输入**：日常 AIUI 对话在 TTS 和推理时继续原生 ASR。非回声文字只停播，原推理继续；完整输入排入引导队列，当前宿主请求结束后、下一次决策前采用；已分发工具须先等实际结果，不并发启动第二个模型请求。角色切换等引导队列结束后应用；真机并行与回声效果按实测报告。
 
-实现边界见 [README](README.md)、[模型执行归属](docs/agent-runtime-mode.md)、[设备配置应用](docs/agent-profile-runtime.md)、[人格与语音引导](docs/persona-agent.md)及[工具合同核对](docs/agent-tool-contract.md)。本文件是运行与维护指令，不机械翻译为另一个加载副本。
+实现边界见 [README](README.md)、[模型执行归属](docs/agent-runtime-mode.md)、[设备配置应用](docs/agent-profile-runtime.md)、[角色与语音引导](docs/persona-agent.md)及[工具合同核对](docs/agent-tool-contract.md)。本文件是运行与维护指令，不机械翻译为另一个加载副本。

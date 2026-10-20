@@ -6,6 +6,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.64 - 2026-10-20
+
+- Integrate pending main-checkout mobile recording and messaging UI, continuous desktop companion frames and playback-audio observations, and brief message delivery. Preserve upstream independent role configuration, unified message-rule navigation and remote enrollment fixes.
+- Resolve Grok Bot long source sessions, current-role Hook completion notices and memory reads individually, retaining role-reference method validation, atomic-write audit evidence and clean-checkout test fixtures.
+- Align public Chinese role terminology while preserving persona configuration filenames, machine identifiers, existing connection authentication and interface availability.
+- This change synchronizes, validates and submits source only; installed-runtime, browser and phone/glasses acceptance remain separate.
+- Fix Qt companion-mode submenu ownership, make observation-buffer tests importable from a clean checkout, align long Grok Bot source tests with the current display label, and use a controlled clock for startup deadline and cancellation assertions.
+
 ## 0.3.63 - 2026-10-20
 
 - Collect the Elysia role-centric source: independent role catalog and configuration saves, selectable unbound roles, and navigation ordered Role configuration, Plans and memory, Route configuration.
@@ -182,6 +190,19 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - QQ favorite stickers are read from the current account and revalidated before sending. Read tests seed their data directly, and the scan responsiveness test uses production build output.
 
 ## 0.3.32 - 2026-10-12
+
+- Companion guidance invites short video/game reactions with silence and recent-discussion context. Static footage is reconsidered after 90 seconds of silence; comments receive a 90-second post-preparation budget. Fresh intervals replace stalled reviews, with distinct quiet and late-comment outcomes.
+
+- All-day microphone leases renew independently from slow frame capture and storage; lease release preserves updated ASR settings instead of restoring stale values.
+
+- Microphone ASR persists independently of the ordered message-broadcast queue. Slow or full delivery queues cannot block the next transcription; stopping cancels pending broadcasts while retaining completed ASR.
+
+- All-day recording commits ASR from completion events without waiting for frame samples. New defaults accept 300 ms voiced phrases and segment continuous speech every 8 seconds; accepted voice no longer advances silence. Companion delivery reads microphone transcripts by frame interval; playback ASR joins the same timeline while recording is enabled.
+
+- Companion mode now continuously buffers frames in memory and selects N visually different frames into a timestamped storyboard. Existing batch ASR transcribes system playback from the same interval. Window changes, pause and restart clear buffers; pet playback excludes audio, while capture and delivery remain independent.
+
+- Companion Agents learn unknown window types, switch poses on reply, and persist process/title classifications across restarts; game titles ignore surrounding whitespace.
+- Ordinary delivery defaults to brief current events and situations with on-demand queries. Companion delivery omits duplicate templates, previous observations and general prohibitions.
 
 - Read Codex Hook role sources and knowledge through the bounded storage process. Serialize requests per session; reject late results after unbinding or ownership changes, and do not stamp successful context after read failures.
 - Await original evidence before committing critical-fact outcomes, then recheck request identity and requirement revision. Slow storage does not block health requests.

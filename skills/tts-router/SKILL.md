@@ -48,6 +48,6 @@ Generated audio remains in RabiSpeech output/cache. Persona reference audio is r
 
 ## 会话、旧数据和 Manager 代理
 
-每次请求显式发送 model、input 和 voice；人格属于请求，不属于 worker 全局状态。先查询模型列表和详情，以 installed、语言和 request 字段判断能力。用户明确选用的模型优先。旧 voice-references 注册表不作为当前真源；迁移须先备份并使用当前人格 voice 合同。
+每次请求显式发送 model、input 和 voice；角色属于请求，不属于 worker 全局状态。先查询模型列表和详情，以 installed、语言和 request 字段判断能力。用户明确选用的模型优先。旧 voice-references 注册表不作为当前真源；迁移须先备份并使用当前角色 voice 合同。
 
 经动态发现及 `/meta` 身份核验后的 Manager 可使用 `/api/speech/status`、`/api/speech/models`、`/api/speech/personas`、`/api/speech/tts`、`/api/speech/asr` 和 `/api/speech/playback/status`。直接 RabiSpeech 使用 speechBaseUrl 下的 `/v1/models`、`/v1/audio/speech` 与 `/v1/playback/status`。停止播放是用户授权范围内的独立操作，不作为只读探针。只有 `/api/speech/messages` 会将识别文本提交给 Route/Agent；普通 TTS/ASR 不隐式投递任务。

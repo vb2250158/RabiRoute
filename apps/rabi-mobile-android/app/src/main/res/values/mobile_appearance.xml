@@ -1,10 +1,13 @@
 <resources>
     <string-array name="mobile_navigation_ids">
-        <item>records</item><item>messages</item>
+        <item>records</item><item>messages</item><item>settings</item>
     </string-array>
     <string-array name="mobile_navigation_names">
-        <item>记录</item><item>消息</item>
+        <item>记录</item><item>消息</item><item>设置</item>
     </string-array>
+    <array name="mobile_navigation_icons">
+        <item>@drawable/ic_ui_record_list</item><item>@drawable/ic_ui_messages</item><item>@drawable/ic_ui_settings</item>
+    </array>
     <string-array name="mobile_theme_ids">
         <item>system</item><item>light</item><item>dark</item>
     </string-array>

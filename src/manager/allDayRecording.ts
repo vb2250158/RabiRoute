@@ -356,7 +356,7 @@ export class AllDayRecordingStore {
   }
   async page(roleId: string, direction: "older" | "newer", cursor: { time: number; id: string }, source = "all", limit = 100, eventType = "all", authorize?: RecordingAuthorization) {
     if (!["all", "asr", "image", "window", "status", "device"].includes(eventType)) throw new Error("Invalid event type");
-    if (!Number.isFinite(cursor.time) || cursor.time < 0 || cursor.id.length > 512 || !["all", ...ALL_DAY_SOURCES, "mobile", "session"].includes(source)) throw new Error("Invalid event cursor");
+    if (!Number.isFinite(cursor.time) || cursor.time < 0 || cursor.id.length > 512 || !["all", ...ALL_DAY_SOURCES, "mobile", "session", "systemAudio"].includes(source)) throw new Error("Invalid event cursor");
     const settings = await this.settings(roleId, authorize);
     const directories = [path.join(this.directory(roleId), "events"), ...(settings.mobileDeviceIds.length ? [path.join(this.mobileRoot, "events")] : [])];
     const dates = new Set<string>();
@@ -428,12 +428,15 @@ export type AllDayCaptureDependencies = {
   startMicrophone(sessionId: string, authorize?: RecordingAuthorization): Promise<string | void>;
   stopMicrophone(sessionId: string, authorize?: RecordingAuthorization): Promise<void>;
   audio(since: number, until: number, sessionId: string, authorize?: RecordingAuthorization): Promise<AllDayEvent[]>;
+  audioRecord?(id: string, sessionId: string): Promise<AllDayEvent | null>;
+  watchAudio?(changed: (id?: string) => void, failed: (error: string) => void): () => void;
   audioFile(recordId: string, authorize?: RecordingAuthorization): Promise<Buffer>;
   stopCapture?(sessionId: string, authorize?: RecordingAuthorization): Promise<void>;
   renewCapture?(sessionId: string): Promise<void>;
+  renewMicrophone?(sessionId: string): Promise<void>;
   changed(roleId: string): void;
 };
-type RecordingSession = { cameraActive?: boolean; cameraLeaseTimer?: NodeJS.Timeout; preparing?: boolean; prepared?: boolean; homeAssistantSince?: number; audioSessionId?: string; roleId: string; id: string; settings: AllDaySettings; startedAt: number; lastSampleAt: number | null; audioSince: number; error: string; timer?: NodeJS.Timeout; pending?: Promise<void>; stopping: boolean; windowTitle: string | null };
+type RecordingSession = { audioLeaseTimer?: NodeJS.Timeout; audioLeasePending?: Promise<void>; releaseAudio?: () => void; audioPending?: Promise<void>; audioWake?: NodeJS.Timeout; audioChanges?: Set<string>; audioCatchup?: boolean; audioRecords?: Map<string, AllDayEvent>; cameraActive?: boolean; cameraLeaseTimer?: NodeJS.Timeout; preparing?: boolean; prepared?: boolean; homeAssistantSince?: number; audioSessionId?: string; roleId: string; id: string; settings: AllDaySettings; startedAt: number; lastSampleAt: number | null; audioSince: number; error: string; timer?: NodeJS.Timeout; pending?: Promise<void>; stopping: boolean; windowTitle: string | null };
 
 /** One host capture owner; explicit enable intent survives orderly shutdown. */
 export class AllDayRecordingService {
@@ -474,9 +477,9 @@ export class AllDayRecordingService {
       const settings = normalizeAllDaySettings(input);
       const session = this.session?.roleId === roleId ? this.session : null;
       if (session) {
-        clearTimeout(session.timer); clearTimeout(session.cameraLeaseTimer); session.stopping = true;
+        clearTimeout(session.timer); clearTimeout(session.cameraLeaseTimer); clearTimeout(session.audioLeaseTimer); clearTimeout(session.audioWake); session.releaseAudio?.(); session.releaseAudio = undefined; session.stopping = true;
         try {
-          await recordingOperation(authorize, async () => { await session.pending; });
+          await recordingOperation(authorize, async () => { await Promise.all([session.pending, session.audioPending, session.audioLeasePending]); });
           if (session.cameraActive && (!settings.sources.camera || settings.cameraIndex !== session.settings.cameraIndex)) {
             await recordingOperation(authorize, async () => { await this.dependencies.stopCapture?.(session.id,authorize); });
             session.cameraActive = false;
@@ -533,10 +536,10 @@ export class AllDayRecordingService {
       if (!session || session.roleId !== roleId) return this.snapshot(roleId, authorize);
       session.stopping = true;
       this.notifyActivity();
-      clearTimeout(session.timer); clearTimeout(session.cameraLeaseTimer);
+      clearTimeout(session.timer); clearTimeout(session.cameraLeaseTimer); clearTimeout(session.audioLeaseTimer); clearTimeout(session.audioWake); session.releaseAudio?.(); session.releaseAudio = undefined;
       let stopped = false;
       try {
-        await recordingOperation(authorize, async () => { await session.pending; });
+        await recordingOperation(authorize, async () => { await Promise.all([session.pending, session.audioPending, session.audioLeasePending]); });
         authorize?.();
         // Once stop is dispatched, never resurrect capture on a failed/revoked reply.
         stopped = true;
@@ -618,17 +621,93 @@ export class AllDayRecordingService {
     }, 30_000);
     session.cameraLeaseTimer.unref();
   }
+  private scheduleAudioLease(session: RecordingSession) {
+    clearTimeout(session.audioLeaseTimer);
+    if (!this.dependencies.renewMicrophone || !session.audioSessionId || !session.settings.sources.microphone || session.stopping) return;
+    session.audioLeaseTimer = setTimeout(() => {
+      if (this.session !== session || session.stopping) return;
+      session.audioLeasePending = this.dependencies.renewMicrophone!(session.id).catch(error => {
+        if (this.session === session && !session.stopping) {
+          this.sourceErrors.microphone = error instanceof Error ? error.message : String(error);
+          this.dependencies.changed(session.roleId);
+        }
+      }).finally(() => {
+        session.audioLeasePending = undefined;
+        if (this.session === session && !session.stopping) this.scheduleAudioLease(session);
+      });
+    }, 30_000);
+    session.audioLeaseTimer.unref();
+  }
   private async collectAudio(session: RecordingSession, authorize?: RecordingAuthorization) {
     if (!session.settings.sources.microphone || !session.audioSessionId) return;
     const until = Date.now();
-    // Re-read this session: delayed ASR completion must not disappear behind a timestamp cursor.
+    // Catch up only on subscription/reconnection or stop. Completion updates use stable record IDs.
     for (const event of await recordingOperation(authorize, () => this.dependencies.audio(session.audioSince, until, session.audioSessionId!, authorize))) {
+      await this.saveAudio(session, event, authorize);
+    }
+  }
+  private async saveAudio(session: RecordingSession, event: AllDayEvent, authorize?: RecordingAuthorization) {
+      if (event.startedAt < session.audioSince || event.startedAt > Date.now() + 60_000) return;
+      const cached = session.audioRecords?.get(event.id);
+      if (cached?.text === event.text && cached?.transcriptionState === event.transcriptionState) return;
       const filename = path.join(this.store.directory(session.roleId), "events", recordingDay(event.startedAt), `${hash(event.id)}.json`);
       const existing = await jsonOr<AllDayEvent | null>(filename, null, authorize);
-      if (existing && existing.text === event.text && existing.transcriptionState === event.transcriptionState) continue;
-      if (existing?.media) { await this.store.append(session.roleId, { ...event, media: existing.media }, undefined, authorize); continue; }
-      await this.store.append(session.roleId, event, await recordingOperation(authorize, () => this.dependencies.audioFile(event.speechRecordId!, authorize)), authorize);
-    }
+      if (!existing || existing.text !== event.text || existing.transcriptionState !== event.transcriptionState) {
+        if (existing?.media) await this.store.append(session.roleId, { ...event, media: existing.media }, undefined, authorize);
+        else await this.store.append(session.roleId, event, await recordingOperation(authorize, () => this.dependencies.audioFile(event.speechRecordId!, authorize)), authorize);
+      }
+      session.audioRecords ??= new Map(); session.audioRecords.set(event.id, event);
+      while (session.audioRecords.size > 512) session.audioRecords.delete(session.audioRecords.keys().next().value!);
+  }
+  private watchAudio(session: RecordingSession) {
+    if (session.releaseAudio || !this.dependencies.watchAudio) return;
+    session.releaseAudio = this.dependencies.watchAudio(id => {
+      if (this.session !== session || session.stopping) return;
+      session.audioChanges ??= new Set();
+      if (id && session.audioChanges.size < 256) session.audioChanges.add(id); else session.audioCatchup = true;
+      this.wakeAudio(session);
+    }, error => {
+      if (this.session !== session || session.stopping) return;
+      this.sourceErrors.microphone = error; this.dependencies.changed(session.roleId);
+    });
+  }
+  private wakeAudio(session: RecordingSession) {
+    if (session.audioPending || session.audioWake || session.stopping) return;
+    session.audioWake = setTimeout(() => {
+      session.audioWake = undefined;
+      if (this.session !== session || session.stopping) return;
+      const authorize = () => { if (this.session !== session || session.stopping) throw new Error("Recording session has ended"); };
+      session.audioPending = (async () => {
+        if (session.audioCatchup) { session.audioCatchup = false; await this.collectAudio(session, authorize); }
+        for (const id of session.audioChanges ?? []) {
+          session.audioChanges!.delete(id);
+          if (this.dependencies.audioRecord && session.audioSessionId) {
+            const event = await this.dependencies.audioRecord(id, session.audioSessionId);
+            authorize(); if (event) await this.saveAudio(session, event, authorize);
+          }
+        }
+        delete this.sourceErrors.microphone;
+      })().catch(error => {
+        if (session.stopping) return;
+        this.sourceErrors.microphone = error instanceof Error ? error.message : String(error);
+        session.audioCatchup = true;
+      }).finally(() => {
+        session.audioPending = undefined;
+        session.error = Object.entries(this.sourceErrors).map(([source, message]) => `${source}: ${message}`).join("; ");
+        this.dependencies.changed(session.roleId);
+        if (this.session === session && !session.stopping && (session.audioCatchup || session.audioChanges?.size)) this.wakeAudio(session);
+      });
+    }, session.audioCatchup && this.sourceErrors.microphone ? 3000 : 40);
+    session.audioWake.unref();
+  }
+  /** Playback transcription belongs to the same timeline owner as microphone ASR. */
+  async savePlayback(roleId: string, id: string, startedAt: number, endedAt: number, text: string, wav: Buffer) {
+    const session = this.session;
+    if (!session || session.roleId !== roleId || session.stopping) return;
+    const authorize = () => { if (this.session !== session || session.stopping) throw new Error("Recording session has ended"); };
+    await this.store.append(roleId, { id: `systemPlayback:${id}`, source: "systemAudio", deviceId: this.store.hostId, kind: "audio", state: "saved",
+      transcriptionState: text ? "ready" : "empty", startedAt, endedAt, text }, wav, authorize);
+    this.dependencies.changed(roleId);
   }
   private async sample(session: RecordingSession) {
     if (!session.prepared && this.dependencies.prepare) {
@@ -644,7 +723,7 @@ export class AllDayRecordingService {
     if (this.sourceErrors.homeAssistant) errors.push(`homeAssistant: ${this.sourceErrors.homeAssistant}`);
     let microphoneReady = false;
     if (session.settings.sources.microphone) {
-      try { session.audioSessionId = await this.dependencies.startMicrophone(session.id) || session.id; microphoneReady = true; }
+      try { session.audioSessionId = await this.dependencies.startMicrophone(session.id) || session.id; microphoneReady = true; this.watchAudio(session); this.scheduleAudioLease(session); }
       catch (error) { this.sourceErrors.microphone = error instanceof Error ? error.message : String(error); errors.push(`microphone: ${this.sourceErrors.microphone}`); }
     }
     if (session.settings.sources.camera) {
@@ -663,8 +742,11 @@ export class AllDayRecordingService {
       if (sample.source === "window" && !sample.error) session.windowTitle = sample.text ?? "";
       await this.store.append(session.roleId, { id: randomUUID(), startedAt: now, endedAt: now, source: sample.source, deviceId: this.store.hostId, kind: sample.jpeg ? "image" : sample.source === "window" ? "window" : "status", text: sample.error ?? sample.text ?? "", state: sample.error ? "error" : "saved" }, sample.jpeg ? Buffer.from(sample.jpeg, "base64") : undefined);
     }
-    try { await this.collectAudio(session); }
-    catch (error) { this.sourceErrors.microphone = error instanceof Error ? error.message : String(error); errors.push(`microphone: ${this.sourceErrors.microphone}`); }
+    if (!this.dependencies.watchAudio) {
+      try { await this.collectAudio(session); }
+      catch (error) { this.sourceErrors.microphone = error instanceof Error ? error.message : String(error); errors.push(`microphone: ${this.sourceErrors.microphone}`); }
+    }
+    if (this.sourceErrors.microphone && !errors.some(error => error.startsWith("microphone:"))) errors.push(`microphone: ${this.sourceErrors.microphone}`);
     if (successful) session.lastSampleAt = now;
     session.error = errors.join("; ");
   }

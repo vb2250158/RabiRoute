@@ -25,6 +25,7 @@ capture_sources = capture_module.capture_sources
 @dataclass
 class Config:
     session_id: str = "resident"
+    min_utterance_ms: int = 1000
 
 
 class Microphone:
@@ -147,6 +148,19 @@ class AllDayCaptureTests(unittest.TestCase):
             self.assertFalse(self.microphone.running)
             self.assertEqual(self.microphone.config.session_id, "resident")
             self.assertEqual(self.microphone.persisted, [False, False])
+
+    def test_renew_cannot_acquire_hardware_and_release_preserves_changed_settings(self):
+        with self.client as client:
+            self.assertEqual(client.post("/v1/all-day/microphone/renew", json={"sessionId":self.session}).status_code,409)
+            self.assertFalse(self.microphone.running)
+            client.post("/v1/all-day/microphone/start", json={"sessionId":self.session})
+            self.microphone.config = replace(self.microphone.config, min_utterance_ms=300)
+            self.assertEqual(client.post("/v1/all-day/microphone/renew", json={"sessionId":"other"}).status_code,409)
+            self.assertEqual(client.post("/v1/all-day/microphone/renew", json={"sessionId":self.session}).status_code,200)
+            client.post("/v1/all-day/microphone/stop", json={"sessionId":self.session})
+            self.assertEqual(self.microphone.config.min_utterance_ms,300)
+            self.assertEqual(self.microphone.config.session_id,"resident")
+            self.assertEqual(client.post("/v1/all-day/microphone/renew", json={"sessionId":self.session}).status_code,409)
 
     def test_running_microphone_is_shared_and_survives_stop(self):
         with self.client as client, patch("capture_tests.all_day_capture.bounded_capture", return_value=[]):

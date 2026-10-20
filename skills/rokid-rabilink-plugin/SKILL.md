@@ -11,7 +11,7 @@ Use this skill for Rokid/Rizon/Lingzhu platform integration with RabiLink.
 
 下文的导入格式与两工具轮询流程适用于 Rizon / 灵珠的任务通道。新版 `apps/rabilink-aiui` 是使用乐奇配置模型的独立设备 Agent，采用[通用接口传输](../../apps/rabilink-aiui/docs/generic-api-transport.md)与[设备 Agent 合同](../../docs/device-agent-adapter.md)，不沿用两工具模式或旧 Relay 业务配置。
 
-AIUI 绑定人格用于指引、Skill、聊天记录和默认来源 PC；未绑定也可以调用接口。已启用并鉴权的 Agent 使用全部当前及未来公共 Manager API，工作区、人格与 Route 绑定不提供接口授权。Relay 只负责连接、鉴权和通用中转，状态由明确选择的 PC 保存；新增接口不修改 Relay。
+AIUI 绑定角色用于指引、Skill、聊天记录和默认来源 PC；未绑定也可以调用接口。已启用并鉴权的 Agent 使用全部当前及未来公共 Manager API，工作区、角色与 Route 绑定不提供接口授权。Relay 只负责连接、鉴权和通用中转，状态由明确选择的 PC 保存；新增接口不修改 Relay。
 
 Android 通用通道按 LAN → P2P → Relay 连接同一目标。AIUI 只有 `wx.request` 时使用有界 HTTP Relay 降级，手机桥接、原生按键唤醒与 ASR/TTS 并行需要[真机验收](../../docs/aiui-agent-acceptance.md)。原投递、owner 接收和响应回执须核对相同 ID；触摸命令提交不能代替消息接收。旧业务配置不自动迁移，原始数据保留私有备份。
 

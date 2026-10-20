@@ -61,3 +61,20 @@ test("peer discovery derives each remote PC version from its own advertisement",
   assert.deepEqual(peers.map(peer => peer.rabiPcVersion), ["0.3.17", null, null, null]);
   assert.deepEqual(peerDiscoveryPage(peers, new URLSearchParams("deviceKind=pc")).peers.map(peer => peer.rabiPcVersion), ["0.3.17", null, null]);
 });
+
+
+test("capability directory keeps the connected local ASR computer", async t => {
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url!, "http://fixture");
+    const local = { id: "local-pc", guid: "local-guid", name: "Local", deviceKind: "pc", online: true, capabilities: ["asr"], peerUrls: [] };
+    const remote = { ...local, id: "remote-pc", guid: "remote-guid", name: "Remote" };
+    const peers = [local, remote].filter(peer => peer.id !== url.searchParams.get("deviceId") && peer.guid !== url.searchParams.get("deviceGuid"));
+    assert.equal(req.headers["x-rabilink-token"], "fixture");
+    res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ peers }));
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const { port } = server.address() as { port: number };
+  const peers = await discoverRabiPeers({ url: `http://127.0.0.1:${port}`, token: "fixture", deviceId: "local-pc", deviceGuid: "local-guid" });
+  assert.deepEqual(peers.filter(peer => peer.capabilities.includes("asr")).map(peer => peer.id), ["local-pc", "remote-pc"]);
+});

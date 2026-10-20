@@ -31,7 +31,7 @@
 | 已有证据 | 说明 | 下一步 |
 | --- | --- | --- |
 | 没有消息记录 | 事件没有进入 RabiRoute | 查平台登录、连接、端口和输入 policy |
-| 有消息记录，没有 `agent-packets.jsonl` | 消息进入但规则没命中 | 查人格绑定、`configName`、route kind 和 regex |
+| 有消息记录，没有 `agent-packets.jsonl` | 消息进入但规则没命中 | 查角色绑定、`configName`、route kind 和 regex |
 | 有 AgentPacket，Desktop 没消息 | 处理端投递失败 | 查任务 ID、工作目录、Desktop IPC 和最后错误 |
 | Desktop 有结果，平台没回复 | 回传没有完成 | 查 replyContext、pipeline、输出 policy 和 Outbox 日志 |
 | Outbox 为 `blocked` | policy 或目标不允许外发 | 修正明确目标或授权，不要绕过安全门 |
@@ -83,7 +83,7 @@ Manager 和 Gateway 会把配置、计划、记忆、消息记录、发送回执
 先确认 `group-messages.jsonl` 或 `private-messages.jsonl` 是否出现新记录。
 
 - 没有记录：查 QQ 登录、WebSocket Client、端口和接收 policy。
-- 有记录：查人格规则的 `configName`、route kind、目标群和 regex。
+- 有记录：查角色规则的 `configName`、route kind、目标群和 regex。
 - 合并转发只有 ID：查 OneBot HTTP 和 `get_forward_msg`。
 
 ## NapCat 能收不能发
@@ -138,13 +138,13 @@ RabiRoute 不依赖固定 Manager 端口。Manager 每一代都向操作系统�
 
 如果计划页提交审批意见时正好遇到 Manager 重启或短暂断网，页面会明确提示无法连接，并保留本次文字、附件和同一条幂等 `feedbackId`。先确认页面右上角恢复为“Manager 已连接”或 `/meta` 已响应，再直接重试；不要因为看到旧版浏览器错误 `Failed to fetch` 而重新输入或重复创建另一条审批意见。
 
-## 人格正文不可用
+## 角色正文不可用
 
-人格配置显示 `Persona file is unavailable.` 时，先确认所选人格文件仍能读取。若语音页能列出人格，而路由的人格下拉框为空，可能是旧版本未把人格目录快照传给页面诊断子进程；更新到修复版本后，从托盘重新打开 WebGUI 核对正文与头像，无需重建人格文件。诊断子进程使用同一份已提交人格快照，不在页面请求中重新扫描共享目录。
+角色配置显示 `Persona file is unavailable.` 时，先确认所选角色文件仍能读取。若语音页能列出角色，而路由的角色下拉框为空，可能是旧版本未把角色目录快照传给页面诊断子进程；更新到修复版本后，从托盘重新打开 WebGUI 核对正文与头像，无需重建角色文件。诊断子进程使用同一份已提交角色快照，不在页面请求中重新扫描共享目录。
 
 ## 计划状态加载失败
 
-`PLAN_STATUS_CONFIG_INVALID` 也可能是启动迁移受阻，并不一定缺少人格状态配置。先核对人格的 `legacyAliases` 和 `/meta` 的 `planStorageStartup`；若已有别名但迁移失败，查看本机 Manager 日志中的具体失败原因。旧版本在 NAS 上覆盖旧计划锁可能返回 `EPERM`，使缺失历史补齐和后续状态转换停住。修复版本在回收隔离期间保留旧锁，通过空闲名称和排他发布接管；续租或并发竞争会中止接管并保留恢复证据。
+`PLAN_STATUS_CONFIG_INVALID` 也可能是启动迁移受阻，并不一定缺少角色状态配置。先核对角色的 `legacyAliases` 和 `/meta` 的 `planStorageStartup`；若已有别名但迁移失败，查看本机 Manager 日志中的具体失败原因。旧版本在 NAS 上覆盖旧计划锁可能返回 `EPERM`，使缺失历史补齐和后续状态转换停住。修复版本在回收隔离期间保留旧锁，通过空闲名称和排他发布接管；续租或并发竞争会中止接管并保留恢复证据。
 
 升级前备份相关计划资料，由完整 Host 启动的 Manager 执行恢复。等待 `planStorageStartup.state=ready`，再验证当前与已归档计划列表；不要通过清空计划、删除锁目录或直接改写状态来掩盖迁移失败。
 
@@ -157,7 +157,7 @@ RabiRoute 不依赖固定 Manager 端口。Manager 每一代都向操作系统�
 - Route 子进程退出。
 - 日志证明运行的是旧产物。
 
-规则、人格或普通表单改动应先保存。不要把重启当成保存，也不要在没有证据时反复重启外部平台。
+规则、角色或普通表单改动应先保存。不要把重启当成保存，也不要在没有证据时反复重启外部平台。
 
 ## 反馈问题前准备
 

@@ -4,6 +4,8 @@ English | [简体中文](message-delivery-templates.md)
 
 RabiRoute owns source verification, context assembly, routing and receipts. Handlers execute tasks. Templates carry the current task and API parameters without repeating a general Agent operating policy.
 
+Ordinary messages default to a brief situation card: source and body once, the current event/persona, necessary device identifiers and at most three short recent-context previews. Empty-state filler is omitted. Plans, memories, skills, log paths, full interface contracts and general behavior restrictions are queried on demand through `GET /api/agent/help`. Replies retain only destination locators instead of full request templates. Integrations explicitly requiring the full projection can set `BuildAgentPacketOptions.contextDetail = "full"`; normal delivery does not fall back to it. Custom task content remains, while the standard `[RabiRoute 数据解构]` wrapper is not duplicated.
+
 ## Ownership
 
 | Data | Owner | Boundary |

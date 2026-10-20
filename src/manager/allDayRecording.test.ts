@@ -13,6 +13,32 @@ async function fixture(t: import("node:test").TestContext) {
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   return new AllDayRecordingStore(role => path.join(root, role), "computer-a", path.join(root, "mobile"));
 }
+
+test("ASR completion commits while camera capture is blocked, updates once, and releases its subscription", async t => {
+  const store = await fixture(t);
+  let wake!: (id?: string) => void, releaseCapture!: () => void, released = 0, queries = 0;
+  const captured = new Promise<void>(resolve => { releaseCapture = resolve; });
+  let event: AllDayEvent;
+  const service = new AllDayRecordingService(store, { changed: () => {},
+    capture: async () => { await captured; return []; }, startMicrophone: async () => "shared", stopMicrophone: async () => {},
+    watchAudio: callback => { wake = callback; return () => { released++; }; },
+    audioRecord: async (id, sessionId) => { assert.equal(sessionId, "shared"); queries++; return id === "speech-one" ? event : null; },
+    audio: async () => [], audioFile: async () => Buffer.from("RIFFfixture") });
+  t.after(async () => { releaseCapture(); await service.dispose(); });
+  await service.configure("one", { ...DEFAULT_ALL_DAY_SETTINGS, sources: { ...DEFAULT_ALL_DAY_SETTINGS.sources, microphone: true, camera: true } });
+  const started = await service.start("one");
+  for (let i=0;!wake && i<100;i++) await new Promise(resolve => setTimeout(resolve,10));
+  assert.ok(wake);
+  event = { id:"speech:one",speechRecordId:"speech-one",startedAt:started.startedAt!+1,endedAt:Date.now()+1,source:"microphone",deviceId:"pc",kind:"audio",text:"",state:"saved",transcriptionState:"processing" };
+  wake("speech-one"); await new Promise(resolve => setTimeout(resolve,120));
+  event={...event,text:"short phrase",transcriptionState:"ready"};
+  wake("speech-one"); wake("speech-one");
+  for(let i=0;i<100;i++) { if((await store.recent("one")).some(row=>row.text==="short phrase")) break; await new Promise(resolve=>setTimeout(resolve,10)); }
+  assert.equal((await store.recent("one")).filter(row=>row.kind==="audio").length,1);
+  assert.equal(queries,2);
+  releaseCapture(); await service.stop("one"); assert.equal(released,1);
+  wake("after-stop"); await new Promise(resolve=>setTimeout(resolve,60)); assert.equal(queries,2);
+});
 const event = (id: string, time: number): AllDayEvent => ({ id, startedAt: time, endedAt: time + 1000, source: "window", deviceId: "computer-a", kind: "window", state: "saved", text: "Editor" });
 
 test("blocked reconstruction permits capture commits and fences newer versions of the same event", async t => {
@@ -456,4 +482,21 @@ test("review hides raw audio before pagination; ASR keeps capture identity, time
   const next = await store.page("one","newer",{time,id:"recognized"},"all",1,"asr");
   assert.equal(next.events[0].id,"hidden-0"); assert.equal(next.events[0].startedAt,time+1);
   assert.equal(next.events[0].media,audio.media);
+});
+
+test("microphone lease survives blocked sampling and stops renewing after owner release", async t => {
+  const store = await fixture(t);
+  await store.configure("one", {...DEFAULT_ALL_DAY_SETTINGS,sources:{...DEFAULT_ALL_DAY_SETTINGS.sources,microphone:true,screen:true}});
+  let entered!:()=>void, finish!:()=>void;
+  const started=new Promise<void>(resolve=>{entered=resolve;}), blocked=new Promise<void>(resolve=>{finish=resolve;});
+  const renewals:string[]=[],releases:string[]=[];
+  const service=new AllDayRecordingService(store,{changed:()=>{},capture:async()=>{entered();await blocked;return [];},
+    startMicrophone:async()=>"audio",stopMicrophone:async id=>{releases.push(id);},renewMicrophone:async id=>{renewals.push(id);},audio:async()=>[],audioFile:async()=>Buffer.alloc(0)});
+  t.mock.timers.enable({apis:["setTimeout"]});
+  await service.start("one");t.mock.timers.tick(0);await started;
+  for(let i=0;i<4;i++){t.mock.timers.tick(30_000);await new Promise<void>(resolve=>setImmediate(resolve));}
+  assert.equal(renewals.length,4);
+  const stopped=service.stop("one");finish();await stopped;
+  assert.deepEqual(releases,[renewals[0]]);
+  t.mock.timers.tick(90_000);await new Promise<void>(resolve=>setImmediate(resolve));assert.equal(renewals.length,4);
 });

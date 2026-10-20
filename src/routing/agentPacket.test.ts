@@ -38,7 +38,7 @@ test("focused packets render one required item and gate optional remote instruct
     const build = (rawMessage: string) => buildPublishedAgentPacket({
       route, routeKind: "manual_trigger", record: { time: 1, source: "manual", rawMessage },
       extraValues: {}, matchedRules: [rule], routeVariables: {}, routeText: rawMessage
-    }, rule, { roleId: "TestRole", roleDir, rolePath: path.join(roleDir, "persona.md"), dataDir: roleDir }, { roleKnowledge: knowledge });
+    }, rule, { roleId: "TestRole", roleDir, rolePath: path.join(roleDir, "persona.md"), dataDir: roleDir }, { roleKnowledge: knowledge, contextDetail: "full" });
     const ordinary = build("你好").content;
     const directRule: NotificationRule = { ...rule, template: "{message}", agentTarget: {
       kind: "session", agentAdapter: "grokBot", agentTargetId: "local:grokBot", sessionId: "example-group",
@@ -114,7 +114,7 @@ test(`${mode} memory consolidation packet excludes non-candidates while ordinary
       route, routeKind: "manual_trigger",
       record: { time: 1, source: "manual", triggerId, rawMessage: "执行本次任务" },
       extraValues: {}, matchedRules: [rule], routeVariables: {}, routeText: "执行本次任务"
-    }, rule, { roleId: "ExampleRole", roleDir, rolePath: path.join(roleDir, "persona.md"), dataDir: roleDir }, { roleKnowledge: knowledge });
+    }, rule, { roleId: "ExampleRole", roleDir, rolePath: path.join(roleDir, "persona.md"), dataDir: roleDir }, { roleKnowledge: knowledge, contextDetail: "full" });
 
     const consolidation = packetFor("memory-consolidation").content;
     assert.match(consolidation, /\[待整理记忆\][\s\S]*本轮候选正文/);
@@ -149,7 +149,7 @@ function buildAgentPacket(
     migrateRolePlanLayoutAtStartup(roleContext.roleDir);
     publishRoleKnowledgeCatalogSnapshot(roleContext.roleDir, readRoleKnowledgeCatalogSnapshot(roleContext.roleDir));
   }
-  return buildPublishedAgentPacket(decision, rule, roleContext);
+  return buildPublishedAgentPacket(decision, rule, roleContext, { contextDetail: "full" });
 }
 
 function appendGroupMessage(dataDir: string, record: GroupMessageRecord): void {

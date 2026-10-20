@@ -18,7 +18,7 @@ function buildAgentPacket(
   if (roleContext.roleDir) {
     publishRoleKnowledgeCatalogSnapshot(roleContext.roleDir, readRoleKnowledgeCatalogSnapshot(roleContext.roleDir));
   }
-  return buildPublishedAgentPacket(decision, rule, roleContext);
+  return buildPublishedAgentPacket(decision, rule, roleContext, { contextDetail: "full" });
 }
 
 function routeProfile(patch: Partial<RouteProfile> = {}): RouteProfile {

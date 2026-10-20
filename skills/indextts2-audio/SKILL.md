@@ -1,18 +1,18 @@
 ---
 name: indextts2-audio
-description: 通过 RabiSpeech 的本地 IndexTTS2 模型生成中文或音色复刻语音。用户指定 IndexTTS2、中文参考音频、情绪/风格指令、人格声线或本地 WAV 验证时使用。不得直接运行技能内 worker、启动 OumuQ 或调用云端 API。
+description: 通过 RabiSpeech 的本地 IndexTTS2 模型生成中文或音色复刻语音。用户指定 IndexTTS2、中文参考音频、情绪/风格指令、角色声线或本地 WAV 验证时使用。不得直接运行技能内 worker、启动 OumuQ 或调用云端 API。
 ---
 
 # RabiSpeech IndexTTS2
 
-IndexTTS2 由 RabiSpeech 管理，模型 id 为 `local-tts/indextts2`。人格参考音频位于 `RabiRoute/data/roles/<RoleId>/voice/`，生成结果不得写回参考库。
+IndexTTS2 由 RabiSpeech 管理，模型 id 为 `local-tts/indextts2`。角色参考音频位于 `RabiRoute/data/roles/<RoleId>/voice/`，生成结果不得写回参考库。
 
 ## 流程
 
 先读 [TTS 路由](../tts-router/SKILL.md)。`speechBaseUrl` 必须从当前服务配置取得；下例中的 `$speechBaseUrl` 由该发现步骤赋值。
 
 1. 检查 `GET <speechBaseUrl>/v1/models/local-tts/indextts2`。
-2. 传入 `voice=<RoleId>`；RabiSpeech 从人格 voice index 选择并缓存参考音频。
+2. 传入 `voice=<RoleId>`；RabiSpeech 从角色 voice index 选择并缓存参考音频。
 3. 需要情绪或语气时用 `instructions` 描述，保持简短、可执行。
 4. 验证用 `play=false` 并保存返回 WAV；对话用 `play=true`、`session_id`，进入全局 FIFO。
 

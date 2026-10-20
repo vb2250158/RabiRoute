@@ -60,7 +60,7 @@ PC 全局“连接服务器”只负责登记电脑和代理远程 WebGUI。要�
 
 1. 新工作区会看到默认禁用的 `RabiLink` 模板。已有 data 的升级环境如果没有它，把 `examples/data/route/RabiLink` 和 `examples/data/roles/RabiActive` 复制到对应运行目录。
 2. 在路由配置中确认消息端包含 `rabilink`，且输入、输出和 `text` 能力都开启。
-3. Agent 选择 `codex`，人格选择 `RabiActive`，填写明确的固定线程名和 Agent 工作目录。
+3. Agent 选择 `codex`，角色选择 `RabiActive`，填写明确的固定线程名和 Agent 工作目录。
 4. 检查本地端口无冲突后启用并保存 Route。
 5. 在全局“Rabi 实例”中配置 Relay 地址、应用 token 和 PC 标识并打开“连接服务器”，再到 Relay `/manage` 为应用选择这台通讯 PC。
 
@@ -398,7 +398,7 @@ npm run device-status:e2e
 - `npm run check`、`npm run acceptance:local` 的 21 项矩阵和 `npm run delivery:verify` 已通过；其中主动智能核心项会单独验证 record-first 分类、无任务主动下行、统一账本分卷恢复、空闲/周期审阅和触摸板引导，原生语音项会验证 capability、统一 DTO、无 API key 和无隐藏网络 fallback，常驻转写项会验证 FenneNote/命名 Webhook 写入同一账本、带稳定 ID/生产端时间的重试去重且不逐段触发 Agent；视觉回归会检查模式标题完整度和左右安全区像素。
 - Craft 顶部“运行智能体”曾成功初始化历史 AIX；现有 `dist/craft-render-acceptance.json` 也只对应历史 AIX，不能作为 1.0.23 证据。当前 1.0.23 等待真机体验；`/debug` 的 Rokid 上游 DNS/fetch 故障与 AIX 初始化已分开记录。
 - 本地 1.0.23 最终 AIX 的 VERSION 和 SHA256 以本次重新打包文件为准；主包嵌入已部署 Relay 入口。
-- 历史真实公网 Relay + 本机 Rabi + 绑定 `RabiActive` 人格的 Codex record-first 双向队列曾通过：无输入主动投递 184ms，observation 落盘并释放上行 435ms，触摸板审阅后真实 Codex 约 68 秒以无 `taskId` 主动消息独立回复；用户 observation 与 Agent 下行同处一个 JSONL，重复数为 0；远程配置写入、读回与精确回滚通过。当前实现增加常驻 record-first 入口和可直接执行的审阅回复合同后，旧报告已因发布版本、AIX、实现摘要或时效不匹配被 `goal-evidence` 判为 `stale-live-e2e`；重新授权运行前不能把历史报告当作当前证明。
+- 历史真实公网 Relay + 本机 Rabi + 绑定 `RabiActive` 角色的 Codex record-first 双向队列曾通过：无输入主动投递 184ms，observation 落盘并释放上行 435ms，触摸板审阅后真实 Codex 约 68 秒以无 `taskId` 主动消息独立回复；用户 observation 与 Agent 下行同处一个 JSONL，重复数为 0；远程配置写入、读回与精确回滚通过。当前实现增加常驻 record-first 入口和可直接执行的审阅回复合同后，旧报告已因发布版本、AIX、实现摘要或时效不匹配被 `goal-evidence` 判为 `stale-live-e2e`；重新授权运行前不能把历史报告当作当前证明。
 - 历史版本的上传记录不代表本次 1.0.23 已上传；云端版本和审核状态需要在 Craft 中重新读取。
 - 命令行、普通浏览器和内嵌浏览器三个上传入口已统一补齐 `RECORD_AUDIO`、自动/受审计的 `index` tool，并拒绝“HTTP 200 但没有 done”或流内 `error`；Windows PowerShell 5.1 的 JSON 数组序列化也已实际 dry-run 验证。
 - 已确认必须从本地工程切到云端 RabiLink，提审才会启用。

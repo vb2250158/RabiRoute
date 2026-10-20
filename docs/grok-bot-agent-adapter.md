@@ -30,7 +30,7 @@ Grok 的 routine webhook 会启动 routine run，不能指定原会话继续一�
 
 服务地址由原生接入合同自动取得（`https://api2.cursor.sh/`），不再提供编辑入口。资料目录自动使用当前 Windows 用户的 Grok Bot 目录，并以只读信息显示。旧 Route、查询参数和环境变量中的连接覆盖值不再用于发现或投递；保存规范化会移除旧地址和目录字段。这是产品 backend 地址，与 Rabi Manager 地址不同。Manager 地址仍从当前 Host/READY 发现并核对 `/meta`，不固定端口。
 
-在 Route 的 Agent 设置中选择“主人格 Bot”，RabiRoute 会绑定该 Bot 已发现的默认主会话，并将 Grok Bot 设为主控 Agent；无需填写会话 ID 或目录。桌面应用必须保持运行，只有残留登录文件不能完成鉴权。进入设置时自动发现一次；稍后才启动或登录时，点击“刷新 Grok Bot”。发现只读登录资料，不替 Grok Bot 写入或刷新凭据。
+在 Route 的 Agent 设置中选择“主角色 Bot”，RabiRoute 会绑定该 Bot 已发现的默认主会话，并将 Grok Bot 设为主控 Agent；无需填写会话 ID 或目录。桌面应用必须保持运行，只有残留登录文件不能完成鉴权。进入设置时自动发现一次；稍后才启动或登录时，点击“刷新 Grok Bot”。发现只读登录资料，不替 Grok Bot 写入或刷新凭据。
 
 显式扫描已有 Bot 和会话：
 
@@ -145,7 +145,7 @@ DSH 目标使用 `"agentAdapter": "dsh"`，来源字段相同。完整合同见 
 
 `action.target` 保持 `kind=session`、`agentTargetId`、`agentAdapter=grokBot`、完整 `sessionId`、`sessionName` 和空 `workspace`，增加 `deliveryType=private|group`、`sendMode=direct|identity`。指定身份额外保存 `senderAgentId`、`senderAgentName`；直接发送不保留身份字段。切换类型或目标后重新核对身份。
 
-此显式模式把规则模板渲染结果作为正文，不附加人格提示词或控制块。例如 `{sender}({userId}) : {message}` 生成 `Example(123) : hello`。指定身份通过 `SendGrokBotAgentMessage` 直接寻址目标群，不先通知 Bot 默认私聊。缺少目标、身份失效或结果未知时不回退默认会话。
+此显式模式把规则模板渲染结果作为正文，不附加角色提示词或控制块。例如 `{sender}({userId}) : {message}` 生成 `Example(123) : hello`。指定身份通过 `SendGrokBotAgentMessage` 直接寻址目标群，不先通知 Bot 默认私聊。缺少目标、身份失效或结果未知时不回退默认会话。
 
 `POST /api/agent/threads` 的 `send` / `reconcile_delivery` 请求携带 `grokBotDelivery: {deliveryType, sendMode, senderAgentId?}`、原 `threadId` 和稳定 `deliveryId`。结果未知时核对原回执，不换键重发。保存、服务受理及目标群显示分别验收；真实双向链路未验收前保持实验状态。
 

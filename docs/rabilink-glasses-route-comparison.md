@@ -43,12 +43,12 @@ flowchart TB
     P2 --> Relay
 
     Relay --> Router["PC RabiRoute 拥有<br/>路由 · 统一账本 · 配置真源 · Outbox 安全门"]
-    Router --> Agent["PC Agent 拥有<br/>推理 · 人格 · 计划 · 记忆 · 工具执行"]
+    Router --> Agent["PC Agent 拥有<br/>推理 · 角色 · 计划 · 记忆 · 工具执行"]
     Agent --> Router
     Router --> Relay
 ```
 
-自由度越高，客户端能自行决定的 UI、语音接线、设备能力和生命周期越多；同时平台替项目承担的能力越少，权限、安全、兼容、发布和真机维护责任越多。Agent 推理、人格、长期记忆、配置真源和动作安全门不随眼镜路线下沉，仍统一留在 PC 端。
+自由度越高，客户端能自行决定的 UI、语音接线、设备能力和生命周期越多；同时平台替项目承担的能力越少，权限、安全、兼容、发布和真机维护责任越多。Agent 推理、角色、长期记忆、配置真源和动作安全门不随眼镜路线下沉，仍统一留在 PC 端。
 
 ## 核心差异
 
@@ -57,7 +57,7 @@ flowchart TB
 | 眼镜端宿主 | 灵珠/Rizon 原生智能体会话，平台负责对话壳和工具编排 | 挂在同一灵珠智能体下的 AIUI/AIX 页面，由 QuickJS/Ink 页面承载 HUD 和状态机 | 独立 Android 应用，直接使用眼镜 SDK、Android 组件和自有页面 |
 | 典型入口 | 从官方助手、智能体列表或语音入口唤起智能体后对话 | 由智能体调起页面，进入沉浸式连接对话或配置助手 | 从设备应用入口启动 APK，也可由手机伴侣或设备命令协同 |
 | 语音与推理归属 | 平台智能体负责一轮对话理解和工具调用；RabiRoute 通过 OpenAPI/Relay 接收请求 | 历史实现使用 AIUI 原生 ASR/TTS；暂停继续产品化 | App 只采集和播放音频；ASR、Agent 推理与 TTS 都由 Rabi PC 的眼镜消息端完成 |
-| 能力归属边界 | 灵珠平台拥有唤醒、ASR/TTS、对话 UI 和工具调度；项目主要拥有 OpenAPI 工具与后端处理 | 灵珠平台拥有智能体身份、入口和页面调起；AIUI 页面拥有 HUD、ASR/TTS 与前台状态机；PC 拥有主要 Agent 能力 | 眼镜拥有音频/媒体 I/O 与 HUD；手机拥有设备连接、Relay 凭据、cursor 和眼镜设置；PC 拥有 ASR/TTS、Agent、人格、记忆、配置与动作门 |
+| 能力归属边界 | 灵珠平台拥有唤醒、ASR/TTS、对话 UI 和工具调度；项目主要拥有 OpenAPI 工具与后端处理 | 灵珠平台拥有智能体身份、入口和页面调起；AIUI 页面拥有 HUD、ASR/TTS 与前台状态机；PC 拥有主要 Agent 能力 | 眼镜拥有音频/媒体 I/O 与 HUD；手机拥有设备连接、Relay 凭据、cursor 和眼镜设置；PC 拥有 ASR/TTS、Agent、角色、记忆、配置与动作门 |
 | UI 自由度 | 最低，主要使用平台原生对话展示 | 中高，可做定制 HUD、模式切换、触摸板交互和状态可视化 | 最高，可自定义完整页面、导航、通知和设备交互 |
 | 连续交互与生命周期 | 更适合按需唤起的一轮或多轮会话，不作为持续前台 HUD 或后台采集保证 | 页面前台可自动续接 ASR、持续消费下行；隐藏、退出或被宿主回收后不能继续承诺录音 | 可使用 Activity、Service 和 Android 生命周期深化常驻能力；仍受权限、系统和厂商限制，必须显式显示采集状态 |
 | 设备能力 | 只使用灵珠平台向智能体和工具开放的能力 | 使用 AIUI 的 ASR、TTS、LanguageModel、触摸和页面网络能力，不能任意取得 Android 系统权限 | 最广，可接设备状态、相机、传感器、CustomCmd 和厂商 SDK，但兼容与授权成本最高 |
@@ -97,13 +97,13 @@ flowchart TB
 
 ## 路线三：原生 App
 
-这条路线在眼镜上安装独立 Android APK，并由手机 App 充当眼镜后端。眼镜只采集/发送 PCM、接收/播放 PCM 和发送设备媒体；手机保存 Relay 凭据、目标 PC、cursor 与眼镜设置。眼镜不安装第二套 ASR、TTS、人格、Agent 或长期记忆，也不直接访问 Relay。
+这条路线在眼镜上安装独立 Android APK，并由手机 App 充当眼镜后端。眼镜只采集/发送 PCM、接收/播放 PCM 和发送设备媒体；手机保存 Relay 凭据、目标 PC、cursor 与眼镜设置。眼镜不安装第二套 ASR、TTS、角色、Agent 或长期记忆，也不直接访问 Relay。
 
 首版链路：
 
 ```text
 眼镜麦克风 -> PCM -> 手机后端 -> Relay 受限语音代理 -> Rabi PC ASR
-  -> 主机通用语音库 -> 已启用 rabilink Route 的 hot/keyword -> 人格上下文 -> PC Agent
+  -> 主机通用语音库 -> 已启用 rabilink Route 的 hot/keyword -> 角色上下文 -> PC Agent
 PC Agent -> Outbox 下行文本 -> 手机请求 Rabi PC TTS -> PCM -> 眼镜扬声器
 ```
 
@@ -129,7 +129,7 @@ PC Agent -> Outbox 下行文本 -> 手机请求 Rabi PC TTS -> PCM -> 眼镜扬�
 | 保留低成本兼容入口 | 原生灵珠智能体；AIUI 仅保留历史兼容 |
 | 研究真正长期常驻采集 | App 前台服务，复用现有“主机先存一次、Route 再决定投递”的语音契约 |
 
-当前推荐把 **原生 App 作为定制眼镜主体验**，保留 **原生灵珠智能体作为轻量入口**，并将 **AIUI 暂停在历史兼容状态**。App 不复制后端：音频模型、人格、Agent、账本、配置和动作门仍留在 Rabi PC。
+当前推荐把 **原生 App 作为定制眼镜主体验**，保留 **原生灵珠智能体作为轻量入口**，并将 **AIUI 暂停在历史兼容状态**。App 不复制后端：音频模型、角色、Agent、账本、配置和动作门仍留在 Rabi PC。
 
 ## 共同边界
 
@@ -138,7 +138,7 @@ PC Agent -> Outbox 下行文本 -> 手机请求 Rabi PC TTS -> PCM -> 眼镜扬�
 - RabiRoute 是消息网关、Policy Router 和 Action Gate，不是眼镜端 Agent OS。
 - PC RabiRoute 拥有配置真源、统一会话账本、路由策略和外发安全门。
 - Relay 提供按应用隔离、可重试的双向邮箱，不承担 Agent 推理。
-- 手机后端保存必要的设备状态、Relay 凭据、cursor 和待处理队列；眼镜只保存前端 UI 状态，两端都不复制人格、长期记忆或完整 PC 配置。
+- 手机后端保存必要的设备状态、Relay 凭据、cursor 和待处理队列；眼镜只保存前端 UI 状态，两端都不复制角色、长期记忆或完整 PC 配置。
 - 主动外发继续经过 `/api/agent/send` 和 Outbox 策略。
 - 任何常驻采集都必须显式开启、持续可见，并分别控制转写、原始数据保存、外发和删除权限。
 

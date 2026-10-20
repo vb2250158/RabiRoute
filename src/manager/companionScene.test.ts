@@ -31,3 +31,10 @@ test("rules must carry bounded evidence", () => {
   assert.throws(() => readCompanionSceneRules({ rules: [{ kind: "watch", titlePattern: "[" }] }));
   assert.throws(() => readCompanionSceneRules({ rules: Array(65).fill({ kind: "watch", titlePattern: "a" }) }));
 });
+
+test("padded native game titles classify without mistaking launchers or remote viewers for games", () => {
+  assert.equal(classifyCompanionScene(observe("HTGame.exe", "异环  "), rules), "play");
+  assert.equal(classifyCompanionScene(observe("unknown.exe", "  原神  "), rules), "play");
+  assert.equal(classifyCompanionScene(observe("GameViewer.exe", "Remote desktop"), rules), "uncertain");
+  assert.equal(classifyCompanionScene(observe("HTGameLauncher.exe", "Launcher"), rules), "uncertain");
+});

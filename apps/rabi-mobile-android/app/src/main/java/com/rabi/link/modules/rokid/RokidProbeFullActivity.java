@@ -316,7 +316,7 @@ public class RokidProbeFullActivity extends Activity implements RokidProbeUi.Act
 
             @Override
             public void onPersonaAvatarChanged(String roleId, String avatarVersion, String avatarUrl) {
-                appendOnUi("人格头像已更新：" + roleId);
+                appendOnUi("角色头像已更新：" + roleId);
             }
 
             @Override

@@ -1,0 +1,12 @@
+{
+  "captureSeconds": 0.5,
+  "uploadSeconds": 2,
+  "historySeconds": 300,
+  "maxFrameBytes": 33554432,
+  "storyboardFrames": 6,
+  "tileWidth": 640,
+  "changeThreshold": 7,
+  "audioUploadSeconds": 30,
+  "transcriptionTimeoutSeconds": 20,
+  "initialReviewSeconds": 5
+}

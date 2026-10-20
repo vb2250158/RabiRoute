@@ -80,15 +80,15 @@ RabiRoute manager listening at <managerBaseUrl>
 
 ## 配置第一条路由
 
-普通可写模式首次启动时，如果没有 `data/route` 和 `data/roles`，manager 会优先复制整包 `examples/data`，这样默认 QQ 路由、Rabi 示例人格与脱敏的 RabiLink 主动智能模板会一起落地。只有 `main` 默认启用；其他接入先保持禁用，配置完成后再逐条开启。RabiLink 模板不会自动获得 Relay 地址或 token；即使发布包里没有 examples，manager 也能自己建立最小 QQ / NapCat 到 Codex 配置。
+普通可写模式首次启动时，如果没有 `data/route` 和 `data/roles`，manager 会优先复制整包 `examples/data`，这样默认 QQ 路由、Rabi 示例角色与脱敏的 RabiLink 主动智能模板会一起落地。只有 `main` 默认启用；其他接入先保持禁用，配置完成后再逐条开启。RabiLink 模板不会自动获得 Relay 地址或 token；即使发布包里没有 examples，manager 也能自己建立最小 QQ / NapCat 到 Codex 配置。
 
 在 RibiWebGUI 里重点检查：
 
 - `消息适配端`：默认启用 `NapCat / OneBot` 和 `定时触发`。
 - `Agent 端`：选择处理端配置，填写 Codex 监听线程名，并在 `Agent 工作目录` 下拉里选择对应项目目录；没有候选时在右侧手动填写一次。
-- `路由配置`：确认 NapCat WS 端口、NapCat HTTP 地址、Webhook 端口、Agent 工作目录和指向人格。
-- `人格配置`：选择或创建角色。普通陪伴示例使用 `Rabi`；眼镜 record-first 与主动下行示例使用配套的 `RabiLink` Route 和 `RabiActive` 人格。
-- `人格自动化`：在“收到消息时 / 定时任务”中确认触发条件，并选择通知 Agent 或运行人格脚本。
+- `路由配置`：确认 NapCat WS 端口、NapCat HTTP 地址、Webhook 端口、Agent 工作目录和指向角色。
+- `角色配置`：选择或创建角色。普通陪伴示例使用 `Rabi`；眼镜 record-first 与主动下行示例使用配套的 `RabiLink` Route 和 `RabiActive` 角色。
+- `角色自动化`：在“收到消息时 / 定时任务”中确认触发条件，并选择通知 Agent 或运行角色脚本。
 
 需要手动写 `personaConfig.json`、关键词规则或自动化规则时，看 [路由配置](routing-configuration.md)。
 
@@ -102,7 +102,7 @@ xcopy examples\data data /E /I
 cp -R examples/data/. data/
 ```
 
-如果只想本地试跑定时任务，可以启用“定时任务”入口，不用接 NapCat。配置脚本动作后即可运行所属人格 scripts 目录内的脚本。
+如果只想本地试跑定时任务，可以启用“定时任务”入口，不用接 NapCat。配置脚本动作后即可运行所属角色 scripts 目录内的脚本。
 
 ## 适配 Codex
 

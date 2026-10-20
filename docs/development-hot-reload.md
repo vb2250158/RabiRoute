@@ -10,7 +10,7 @@
 
 - WebGUI 使用 Vite HMR，入口为 `http://127.0.0.1:8793/`。
 - RabiSpeech 可以显式使用 Uvicorn reload；启动前必须先停止占用 `8781` 的正式实例。
-- Manager 不进入安全热重载循环。Manager 拥有 Route 子进程，重启会连带抖动 NapCat、RabiLink、个人微信和人格会话，可能使来源会话 token 失效。
+- Manager 不进入安全热重载循环。Manager 拥有 Route 子进程，重启会连带抖动 NapCat、RabiLink、个人微信和角色会话，可能使来源会话 token 失效。
 - Android 原生代码不支持这套热重载，改动后仍要重新构建 APK。
 - 功能定稿后仍必须完整构建、打包并更新已安装运行时，再做正式验收。
 

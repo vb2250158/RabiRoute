@@ -462,6 +462,7 @@ class DesktopPetController(QObject):
         job = payload if isinstance(payload, dict) else {}
         was_playing = self._speech_job.get("status") == "playing"
         self._speech_job = job
+        self._companion.set_playback_active(job.get("status") == "playing")
         if not self.visible or time.monotonic() < self._muted_until:
             if not job or job.get("status") != "playing":
                 self.window.finish_speech_bubble()
@@ -870,7 +871,8 @@ class DesktopPetController(QObject):
         companion.setCheckable(True)
         companion.setChecked(bool(self._companion_session))
         companion.setEnabled(not self._companion.control_busy)
-        modes = menu.addMenu("陪伴方式")
+        modes = QMenu("陪伴方式", menu)
+        menu.addMenu(modes)
         if not self._companion.presets:
             modes.addAction("正在加载陪伴方式…").setEnabled(False)
         for preset in self._companion.presets:
@@ -892,7 +894,7 @@ class DesktopPetController(QObject):
                 label = {"watch": "正在陪你看视频", "play": "正在陪你玩游戏", "work": "正在陪你工作",
                          "other": "安静陪着"}.get(session.get("activityKind"), "正在识别当前画面")
             menu.addAction(label).setEnabled(False)
-        menu.addAction(f"打开 {self.persona_name} 人格面板", self._open_current_persona)
+        menu.addAction(f"打开 {self.persona_name} 角色面板", self._open_current_persona)
         menu.addAction("安静一小时", self._mute_for_one_hour)
         menu.addSeparator()
         click_through = menu.addAction("鼠标点透")
