@@ -50,7 +50,7 @@ export async function desktopConfigFilePayload(
   const route = gatewayId ? context.findRoute(gatewayId) : undefined;
   if (type === "role" || type === "persona") {
     const safeRoleId = sanitizeRoleId(roleId ?? route?.agentRoleId);
-    if (!safeRoleId) throw new Error("请先选择一个路由人格，再打开 persona.md。");
+    if (!safeRoleId) throw new Error("请先选择一个路由角色，再打开 persona.md。");
     const rolePath = await context.ensureRoleFile(
       safeRoleId,
       route?.agentRoleFile ?? "persona.md"
@@ -61,7 +61,7 @@ export async function desktopConfigFilePayload(
 
   if (type === "role-folder") {
     const safeRoleId = sanitizeRoleId(roleId ?? route?.agentRoleId);
-    if (!safeRoleId) throw new Error("请先选择一个路由人格，再打开人格文件夹。");
+    if (!safeRoleId) throw new Error("请先选择一个路由角色，再打开角色文件夹。");
     const roleDirectory = await context.ensureRoleFolder(safeRoleId);
     openPath(roleDirectory);
     return { code: 0, data: { path: roleDirectory } };
@@ -69,7 +69,7 @@ export async function desktopConfigFilePayload(
 
   if (type === "role-message-config") {
     const safeRoleId = sanitizeRoleId(roleId ?? route?.agentRoleId);
-    if (!safeRoleId) throw new Error("请先选择一个路由人格，再打开 personaConfig.json。");
+    if (!safeRoleId) throw new Error("请先选择一个路由角色，再打开 personaConfig.json。");
     const configPath = await context.ensurePersonaConfigFile(safeRoleId);
     openPath(configPath);
     return { code: 0, data: { path: configPath } };
@@ -77,7 +77,7 @@ export async function desktopConfigFilePayload(
 
   if (type === "xiaomi-recordings" || type === "xiaomi-media" || type === "camera-clips") {
     const safeRoleId = sanitizeRoleId(roleId ?? route?.agentRoleId);
-    if (!safeRoleId) throw new Error("请先选择一个路由人格，再打开录像文件夹。");
+    if (!safeRoleId) throw new Error("请先选择一个路由角色，再打开录像文件夹。");
     const mediaDir = await context.ensureRoleFolder(safeRoleId, "xiaomi-media");
     openPath(mediaDir);
     return { code: 0, data: { path: mediaDir } };

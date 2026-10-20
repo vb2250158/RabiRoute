@@ -1,3 +1,4 @@
+import { roleLifecyclePresentation } from "../roleLifecycle.js";
 import fs from "node:fs";
 import path from "node:path";
 import type { GatewayConfigFile, GatewayDefinition } from "../shared/gatewayConfigModel.js";
@@ -52,6 +53,8 @@ export type RouteCatalogSnapshot = Readonly<{
 }>;
 
 export type RouteCatalogPersonaPresentation = Readonly<{
+  archivedAt?: string | null;
+  lifecycleError?: string;
   rolesRoot: string;
   roleId: string;
   isPersona: boolean;
@@ -142,7 +145,7 @@ export function readRouteCatalogDefinition(
 
 function safePersonaDisplayName(value: string, fallback: string): string {
   const compact = value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
-  return compact.replace(/(?:\s*[-—–:：]\s*)?(?:人格提示词|人格)$/u, "").trim().slice(0, 80) || fallback;
+  return compact.replace(/(?:\s*[-—–:：]\s*)?(?:角色提示词|角色)$/u, "").trim().slice(0, 80) || fallback;
 }
 
 function resolveRolesRoot(rootDir: string, value: unknown, fallback: string): string {
@@ -251,6 +254,7 @@ function personaPresentation(
     rolesRoot: path.resolve(rolesRoot),
     roleId,
     isPersona,
+    ...roleLifecyclePresentation(roleDir),
     displayName,
     avatarConfigured: avatar.configured,
     ...(avatar.version ? { avatarVersion: avatar.version } : {}),

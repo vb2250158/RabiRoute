@@ -12,6 +12,7 @@ const label = (zh: string, en: string) => isEnglish.value ? en : zh;
 const failureMessage = (failure: unknown) => failure instanceof Error && failure.name === "TimeoutError"
   ? label("读取超时，请重试", "Request timed out. Please retry.") : failure instanceof Error ? failure.message : String(failure);
 const sources = computed(() => [
+  { id: "systemAudio", name: label("电脑播放", "System playback"), icon: "mdi-volume-high", color: "#a4cf80" },
   { id: "microphone", name: label("麦克风", "Microphone"), icon: "mdi-microphone", color: "#62d4a0" },
   { id: "screen", name: label("屏幕", "Screen"), icon: "mdi-monitor", color: "#65cde4" },
   { id: "window", name: label("前台窗口", "Foreground window"), icon: "mdi-application-outline", color: "#dfba70" },
@@ -91,7 +92,7 @@ const captureHealth = computed(() => {
 const captureStatus = computed(() => {
   if (stateError.value) return { text: label("状态读取失败", "Status unavailable"), color: "error" };
   if (!state.value) return { text: label("正在加载", "Loading"), color: undefined };
-  if (state.value.activeRoleId && state.value.activeRoleId !== props.roleId) return { text: label("其他人格记录中", "Another persona is recording"), color: undefined };
+  if (state.value.activeRoleId && state.value.activeRoleId !== props.roleId) return { text: label("其他角色记录中", "Another persona is recording"), color: undefined };
   const statuses = {
     off: ["已关闭", "Off", undefined], waiting: ["等待记录", "Waiting for events", undefined],
     preparing: ["正在准备采集环境", "Preparing capture environment", "info"], starting: ["等待首次采集", "Waiting for first capture", "info"],
@@ -673,7 +674,7 @@ onBeforeUnmount(() => { disposed = true; indexController?.abort(); catalogContro
       </div>
     </div>
     <v-alert v-if="error || stateError || historyError || state?.error" type="error" variant="tonal">{{ error || stateError || historyError || state?.error }}</v-alert>
-    <v-alert v-if="state?.activeRoleId && state.activeRoleId !== roleId" type="info" variant="tonal">{{ label('这台电脑正在为另一个人格记录：', 'This computer is recording for another persona: ') }}{{ state.activeRoleId }}</v-alert>
+    <v-alert v-if="state?.activeRoleId && state.activeRoleId !== roleId" type="info" variant="tonal">{{ label('这台电脑正在为另一个角色记录：', 'This computer is recording for another persona: ') }}{{ state.activeRoleId }}</v-alert>
     <div class="recording-status-line"><span v-if="historyMessage" class="muted" role="status">{{ historyMessage }}</span><span v-else-if="cachedPreview" class="muted" role="status">{{ fetching ? label('已显示上次记录，正在更新…', 'Showing cached records. Updating…') : label('已显示上次记录', 'Showing cached records') }}</span></div>
     <div class="recording-workspace">
     <div class="review-column">
@@ -731,7 +732,7 @@ onBeforeUnmount(() => { disposed = true; indexController?.abort(); catalogContro
       <v-card class="section-card"><v-card-title>{{ label('记录设置', 'Recording settings') }}</v-card-title><v-card-text>
         <p>{{ label('屏幕和摄像头按间隔保存画面；麦克风复用语音服务的监听，暂停记录不会停止原有监听。', 'Screen and camera save periodic frames. Microphone uses the Speech service recording and transcription settings.') }}</p>
         <v-switch v-for="source in ALL_DAY_SOURCES" :key="source" v-model="settings.sources[source]" :label="sourceInfo(source).name" color="secondary" :disabled="busy" hide-details />
-        <p v-if="settings.sources.homeAssistant" class="muted">{{ label('将 Home Assistant 活动页的事件汇入当前人格，包括普通状态和进度变化。请先在米家设置中连接 Home Assistant；开启记录先同步当天已有活动，再实时接收；暂停时停止接收。', 'Add Home Assistant Activity events to this persona, including ordinary states and progress changes. Connect Home Assistant in Xiaomi Home settings. Recording imports today’s existing activity, then receives live events; pausing stops reception.') }}</p>
+        <p v-if="settings.sources.homeAssistant" class="muted">{{ label('将 Home Assistant 活动页的事件汇入当前角色，包括普通状态和进度变化。请先在米家设置中连接 Home Assistant；开启记录先同步当天已有活动，再实时接收；暂停时停止接收。', 'Add Home Assistant Activity events to this persona, including ordinary states and progress changes. Connect Home Assistant in Xiaomi Home settings. Recording imports today’s existing activity, then receives live events; pausing stops reception.') }}</p>
         <p v-for="(message, source) in state?.sourceErrors" :key="source" class="muted">{{ sourceInfo(source).name }}：{{ message }}</p>
         <v-text-field v-model.number="settings.intervalSeconds" type="number" :min="10" :max="3600" :label="label('画面采样间隔（秒）', 'Frame interval (seconds)')" :disabled="busy" class="mt-4" />
         <v-text-field v-if="settings.sources.camera" v-model.number="settings.cameraIndex" type="number" :min="0" :max="16" :label="label('摄像头编号（默认 0）', 'Camera index (default 0)')" :disabled="busy" />

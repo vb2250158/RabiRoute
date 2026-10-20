@@ -29,16 +29,16 @@ export class RemotePersonaReadError extends Error {
 
 export function remotePersonaServicePath(deviceId: string, path: string): string {
   if (!deviceId || (path !== "/meta" && !path.startsWith("/api/")) || path.startsWith("/api/rabilink/peer/")) {
-    throw new Error("远端人格读取地址无效。");
+    throw new Error("远端角色读取地址无效。");
   }
   return `/api/rabilink/peer/http/${encodeURIComponent(deviceId)}/persona${path}`;
 }
 
 async function readJson(path: string, signal = AbortSignal.timeout(25_000), init: RequestInit = {}): Promise<Record<string, unknown>> {
   const response = await fetch(path, { ...init, signal, redirect: "error" });
-  const text = await responseTextByByteLimit(response, 4 * 1024 * 1024, false, "远端人格响应过大。");
+  const text = await responseTextByByteLimit(response, 4 * 1024 * 1024, false, "远端角色响应过大。");
   if ([401, 403].includes(response.status)) {
-    throw new RemotePersonaReadError("unauthorized", "RabiLink 鉴权失败，无法读取远端人格。请检查 RabiLink 的连接和登录状态。");
+    throw new RemotePersonaReadError("unauthorized", "RabiLink 鉴权失败，无法读取远端角色。请检查 RabiLink 的连接和登录状态。");
   }
   let body: Record<string, unknown>;
   try {
@@ -47,7 +47,7 @@ async function readJson(path: string, signal = AbortSignal.timeout(25_000), init
   }
   catch {
     const unsupported = response.status === 404 || response.headers.get("content-type")?.includes("text/html") || /^\s*(?:<!doctype\s+html|<html)/i.test(text);
-    throw new RemotePersonaReadError(unsupported ? "unsupported" : "failed", `远端人格返回了无效响应（HTTP ${response.status}）。`);
+    throw new RemotePersonaReadError(unsupported ? "unsupported" : "failed", `远端角色返回了无效响应（HTTP ${response.status}）。`);
   }
   if (!response.ok || ("code" in body && body.code !== 0)) {
     const message = String(body.message || body.error || `HTTP ${response.status}`);
@@ -81,7 +81,7 @@ export function sameRemotePersonaManager(left: RemoteManagerIdentity, right: Rem
 }
 
 export async function bootstrapRemotePersonaService(deviceId: string, signal = AbortSignal.timeout(25_000)): Promise<void> {
-  if (!deviceId) throw new Error("远端人格来源 PC 无效。");
+  if (!deviceId) throw new Error("远端角色来源 PC 无效。");
   const before = await readPersonaManagerIdentity("/meta", true, signal);
   const body = await readJson("/api/rabilink/peer/persona/bootstrap", signal, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ deviceId })
@@ -119,15 +119,15 @@ export const remotePersonaClient = {
     await bootstrapRemotePersonaService(deviceId, signal);
     const before = await readRemotePersonaMeta(deviceId, true, signal);
     const body = await readJson(remotePersonaServicePath(deviceId, "/api/personas"), signal);
-    if (!Array.isArray(body.personas)) throw new Error("远端人格目录格式无效。");
+    if (!Array.isArray(body.personas)) throw new Error("远端角色目录格式无效。");
     const personas = body.personas.map((value: unknown) => {
-      if (!value || typeof value !== "object") throw new Error("远端人格目录格式无效。");
+      if (!value || typeof value !== "object") throw new Error("远端角色目录格式无效。");
       const persona = value as RemotePersonaOption;
-      if (typeof persona.personaId !== "string" || !persona.personaId) throw new Error("远端人格 ID 无效。");
+      if (typeof persona.personaId !== "string" || !persona.personaId) throw new Error("远端角色 ID 无效。");
       return { personaId: persona.personaId, name: persona.name || persona.personaId, title: persona.title };
     });
     const after = await readRemotePersonaMeta(deviceId, false, signal);
-    if (!sameRemotePersonaManager(before, after)) throw new Error("远端 Manager 身份已变化，请重新读取人格目录。");
+    if (!sameRemotePersonaManager(before, after)) throw new Error("远端 Manager 身份已变化，请重新读取角色目录。");
     return personas;
   },
   async reference(deviceId: string, roleId: string, file: string): Promise<RemotePersonaReference> {
@@ -139,11 +139,11 @@ export const remotePersonaClient = {
     const data = body.data as RemotePersonaReference | undefined;
     if (!data || data.schemaVersion !== 1 || data.roleId !== roleId || data.file !== file
       || typeof data.document !== "string" || !data.personaConfig || typeof data.personaConfig !== "object" || Array.isArray(data.personaConfig)
-      || !data.applicationGenerationId || !data.managerInstanceId || !/^[a-f0-9]{64}$/.test(data.revision || "")) throw new Error("远端人格身份或配置响应无效。");
-    if (new TextEncoder().encode(data.document).byteLength > 2 * 1024 * 1024) throw new Error("远端人格正文超过 2 MiB。");
+      || !data.applicationGenerationId || !data.managerInstanceId || !/^[a-f0-9]{64}$/.test(data.revision || "")) throw new Error("远端角色身份或配置响应无效。");
+    if (new TextEncoder().encode(data.document).byteLength > 2 * 1024 * 1024) throw new Error("远端角色正文超过 2 MiB。");
     const after = await readRemotePersonaMeta(deviceId, false, signal);
     if (!sameRemotePersonaManager(before, data) || !sameRemotePersonaManager(before, after)) {
-      throw new Error("远端 Manager 身份已变化，请重新读取人格。");
+      throw new Error("远端 Manager 身份已变化，请重新读取角色。");
     }
     return data;
   }

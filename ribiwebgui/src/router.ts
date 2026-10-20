@@ -54,7 +54,7 @@ function registeredPageRoutes(registration: TrustedWebPageRegistration): RouteRe
 export const router = createRouter({
   history: createWebHashHistory(),
   routes: [
-    { path: "/", redirect: "/overview" },
+    { path: "/", redirect: "/roles" },
     {
       path: "/plugin-recovery",
       name: PLUGIN_RECOVERY_ROUTE_NAME,

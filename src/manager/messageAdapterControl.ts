@@ -337,7 +337,7 @@ export function scanXiaomiHomeEndpoint(healthInput: Record<string, unknown>): Me
       { id: "camera-capture", label: "摄像头事件录像", required: false, ok: cameraReady, detail: cameraReady ? `已就绪；当前 ${Number(camera.inFlight || 0)} 个抓取任务。` : camera.enabled === true ? "已开启，但尚未配置允许的媒体主机。" : "未开启；普通米家状态事件不受影响。" }
     ],
     warnings: [
-      "米家只把 Home Assistant 状态与摄像头事件投递到当前人格；它不是 Gateway 常驻 adapter，也不同于小米音箱 / 小爱。",
+      "米家只把 Home Assistant 状态与摄像头事件投递到当前角色；它不是 Gateway 常驻 adapter，也不同于小米音箱 / 小爱。",
       ...(ready ? [] : ["未取得 Home Assistant 的真实成功响应前，状态保持为待授权或未连接。"])
     ]
   };

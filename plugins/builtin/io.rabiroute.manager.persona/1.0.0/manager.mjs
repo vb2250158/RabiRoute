@@ -10,7 +10,7 @@ export const activate = definePlugin({
                 "value": {
                     "surface": "web.pages",
                     "label": {
-                        "fallback": "人格配置"
+                        "fallback": "角色配置"
                     },
                     "routeId": "route.persona",
                     "rendererId": "builtin.web-page.persona.v1",
@@ -18,7 +18,7 @@ export const activate = definePlugin({
                     "hosts": [
                         "web"
                     ],
-                    "order": 30
+                    "order": 20
                 }
             },
             {
@@ -27,7 +27,7 @@ export const activate = definePlugin({
                 "value": {
                     "surface": "web.navigation",
                     "label": {
-                        "fallback": "人格配置"
+                        "fallback": "角色配置"
                     },
                     "routeId": "route.persona",
                     "icon": "mdi-account-heart-outline",
@@ -35,7 +35,7 @@ export const activate = definePlugin({
                     "hosts": [
                         "web"
                     ],
-                    "order": 30
+                    "order": 20
                 }
             },
             {
@@ -52,7 +52,7 @@ export const activate = definePlugin({
                     "hosts": [
                         "web"
                     ],
-                    "order": 40
+                    "order": 30
                 }
             },
             {
@@ -69,7 +69,7 @@ export const activate = definePlugin({
                     "hosts": [
                         "web"
                     ],
-                    "order": 40
+                    "order": 30
                 }
             },
             {
@@ -78,7 +78,7 @@ export const activate = definePlugin({
                 "value": {
                     "surface": "web.pages",
                     "label": {
-                        "fallback": "人格正文"
+                        "fallback": "角色正文"
                     },
                     "routeId": "route.persona-document",
                     "rendererId": "builtin.web-page.persona-document.v1",
@@ -95,7 +95,7 @@ export const activate = definePlugin({
                 "value": {
                     "surface": "desktop.panel",
                     "label": {
-                        "fallback": "人格目录"
+                        "fallback": "角色目录"
                     },
                     "handlerId": "desktop.open-role-directory",
                     "slot": "persona",
@@ -143,7 +143,7 @@ export const activate = definePlugin({
                     "requiredCapabilities": [
                         "desktop.panel-action"
                     ],
-                    "order": 30
+                    "order": 20
                 }
             }
         ])
@@ -177,6 +177,7 @@ export const activate = definePlugin({
                     || runtime.handleLanguageStyleApi(request, requestUrl, response, runtime.languageStyleValidator)))
             ], [
                 { routeId: "personas", kind: "exact", path: "/api/personas", methods: ["GET"] },
+                { routeId: "roles", kind: "exact", path: "/api/roles", methods: ["GET", "POST"] },
                 { routeId: "personas-resource", kind: "prefix", pathPrefix: "/api/personas/" },
                 { routeId: "roles-api", kind: "prefix", pathPrefix: "/api/roles/" },
                 { routeId: "roles-static", kind: "prefix", pathPrefix: "/roles/" },

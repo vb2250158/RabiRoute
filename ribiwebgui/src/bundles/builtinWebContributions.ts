@@ -1,4 +1,5 @@
 import type { Component } from "vue";
+import { roleConfigPath, roleKnowledgePath } from "../roleScopedNavigation";
 import type { TrustedWebPageRegistration } from "../pluginPages";
 import type {
   TrustedWebSettingsRendererRegistration,
@@ -73,7 +74,7 @@ export function activateCore(api: BaseWebBundleApi): readonly Dispose[] {
       {
         routeId: "global.settings", rendererId: "builtin.web-page.settings.v1",
         loader: () => import("../pages/SettingsPage.vue"),
-        paths: [{ path: "/settings", title: "设置" }],
+        paths: [{ path: "/settings", title: "设置" }, { path: "/settings/archived-roles", title: "已归档角色" }],
         navigation: { resolvePath: () => "/settings", allowedSlots: ["utility"], allowedIcons: ["mdi-cog-outline"] }
       },
       {
@@ -93,7 +94,7 @@ export function activateMessageAdapterControl(api: BaseWebBundleApi): readonly D
   return pages(api, [{
     routeId: "route.adapters", rendererId: "builtin.web-page.adapters.v1",
     loader: () => import("../pages/RouteConfigPage.vue"),
-    paths: [{ path: "/routes/:id/adapters", title: "消息适配器" }, { path: "/routes/:id?", title: "消息适配器" }],
+    paths: [{ path: "/routes/:id/adapters", title: "路由配置" }, { path: "/routes/:id?", title: "路由配置" }],
     requirements: ["gateway.diagnostics"],
     navigation: { resolvePath: routeScopedAdaptersPath, allowedSlots: ["route-primary"], allowedIcons: ["mdi-puzzle-outline"] }
   }]);
@@ -104,10 +105,10 @@ export function activatePersona(api: BaseWebBundleApi): readonly Dispose[] {
     {
       routeId: "route.persona", rendererId: "builtin.web-page.persona.v1",
       loader: () => import("../pages/PersonaTemplatePage.vue"),
-      paths: [{ path: "/routes/:id/persona", title: "人格配置" }, { path: "/persona/:id?", title: "人格配置" }],
-      navigation: { resolvePath: routeScopedPersonaPath, allowedSlots: ["route-primary"], allowedIcons: ["mdi-account-heart-outline"] }
+      paths: [{ path: "/roles", title: "角色配置" }, { path: "/roles/:roleId/config", title: "角色配置" }, { path: "/routes/:id/persona", title: "角色配置" }, { path: "/persona/:id?", title: "角色配置" }],
+      navigation: { scope: "role", resolvePath: roleConfigPath, allowedSlots: ["route-primary"], allowedIcons: ["mdi-account-heart-outline"] }
     },
-    { routeId: "route.persona-document", rendererId: "builtin.web-page.persona-document.v1", loader: () => import("../pages/PersonaDocumentPage.vue"), paths: [{ path: "/routes/:id/persona/document", title: "人格正文" }] },
+    { routeId: "route.persona-document", rendererId: "builtin.web-page.persona-document.v1", loader: () => import("../pages/PersonaDocumentPage.vue"), paths: [{ path: "/roles/:roleId/document", title: "角色正文" }, { path: "/routes/:id/persona/document", title: "角色正文" }] },
     {
       routeId: "route.knowledge", rendererId: "builtin.web-page.knowledge.v1",
       loader: () => import("../pages/RoleKnowledgePage.vue"),
@@ -115,11 +116,14 @@ export function activatePersona(api: BaseWebBundleApi): readonly Dispose[] {
       // plan panel) needs a stable way to open exactly the plan it is bound to, and the
       // plan owns its own presentation, so the focus address belongs to this page.
       paths: [
+        { path: "/roles/knowledge", title: "计划与记忆" },
+        { path: "/roles/:roleId/knowledge", title: "计划与记忆" },
+        { path: "/roles/:roleId/plan/:planId", title: "计划" },
         { path: "/routes/:id/knowledge", title: "计划与记忆" },
         { path: "/knowledge", title: "计划与记忆" },
         { path: "/routes/:id/plan/:planId", title: "计划" }
       ],
-      navigation: { resolvePath: routeScopedKnowledgePath, allowedSlots: ["route-primary"], allowedIcons: ["mdi-notebook-check-outline"] }
+      navigation: { scope: "role", resolvePath: roleKnowledgePath, allowedSlots: ["route-primary"], allowedIcons: ["mdi-notebook-check-outline"] }
     }
   ]);
 }

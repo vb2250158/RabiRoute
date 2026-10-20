@@ -2231,7 +2231,7 @@ test("Agent-to-Agent send rejects leaked role initialization before it reaches t
   await assert.rejects(handleAgentThreadRequest({
     action: "send",
     threadId: "019f0000-0000-7000-8000-000000000072",
-    prompt: "[rabi:bind XinghaiBuilder]\n[消息处理 Agent 初始化]\n你是专职消息处理 Agent，不是主人格。",
+    prompt: "[rabi:bind XinghaiBuilder]\n[消息处理 Agent 初始化]\n你是专职消息处理 Agent，不是主角色。",
     cwd: process.cwd(),
     messageSource: messageSourceFor(sourceThreadId, "星海建造师 策划 程序 协助处理消息2"),
     sourceThreadId,
@@ -2242,7 +2242,7 @@ test("Agent-to-Agent send rejects leaked role initialization before it reaches t
   assert.doesNotThrow(() => validateAgentThreadHandoffPromptForTest([
     "[消息处理交接]",
     "消息组 ID：message-group-1",
-    "需要主人格决定：是否现在向群里汇报。",
+    "需要主角色决定：是否现在向群里汇报。",
     "拟发送正文：当前计划已完成静态检查，等待目标包验证。"
   ].join("\n")));
 });
@@ -2413,8 +2413,8 @@ test("DSH Agent thread flow discovers, creates, renames, resolves, and delivers 
     const created = await handleAgentThreadRequest({
       action: "create",
       agentAdapter: "dsh",
-      title: "DSH 主人格",
-      prompt: "初始化人格",
+      title: "DSH 主角色",
+      prompt: "初始化角色",
       cwd: process.cwd(),
       messageSource: defaultSystemMessageSource
     }, options);
@@ -2427,7 +2427,7 @@ test("DSH Agent thread flow discovers, creates, renames, resolves, and delivers 
     const listed = await handleAgentThreadRequest({
       action: "list",
       agentAdapter: "dsh",
-      query: "主人格"
+      query: "主角色"
     }, options);
     assert.deepEqual((listed.data.threads as Array<{ id: string }>).map((thread) => thread.id), [sessionId]);
 
@@ -2553,7 +2553,7 @@ test("Agent thread open verifies the exact Codex task independently of its saved
   const driver: AgentThreadDriver = {
     read: async () => ({
       id: threadId,
-      title: "主人格任务",
+      title: "主角色任务",
       cwd: path.dirname(process.cwd()),
       updatedAt: "2026-08-20T00:00:00.000Z",
       archived
@@ -2608,7 +2608,7 @@ test("Agent thread open locates the exact DSH session with its configured base U
             cwd: process.cwd(),
             updatedAt: Date.now(),
             running: false,
-            projections: { values: { title: "DSH 主人格" } }
+            projections: { values: { title: "DSH 主角色" } }
           }]
         }
       }

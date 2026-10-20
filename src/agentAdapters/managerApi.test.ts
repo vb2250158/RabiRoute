@@ -200,7 +200,7 @@ test("DSH settings scan exposes endpoint, projects, sessions, and local paginati
         agentAdapters: ["dsh"],
         dshBaseUrl: "http://127.0.0.1:3080/",
         dshCwd: process.cwd(),
-        dshSessionName: "主人格"
+        dshSessionName: "主角色"
       }
     }],
     projects: [],
@@ -299,7 +299,7 @@ test("dedicated DSH scan does not wait for the Codex catalog or other adapters",
       },
       listDshSessions: async () => [{
         id: "session-00000000-0000-4000-8000-000000000001",
-        name: "DSH 主人格",
+        name: "DSH 主角色",
         projectPath: process.cwd(),
         updatedAt: "2026-08-20T00:00:00.000Z"
       }]

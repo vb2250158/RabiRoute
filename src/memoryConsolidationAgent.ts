@@ -84,8 +84,8 @@ function initializationPrompt(options: MemoryConsolidationAgentOptions, binding:
   return [
     `[rabi:bind ${options.roleId}]`,
     "[记忆整理 Agent 初始化]",
-    `主人格任务：${options.sourceThreadName}`,
-    `主人格任务 ID：${options.sourceThreadId}`,
+    `主角色任务：${options.sourceThreadName}`,
+    `主角色任务 ID：${options.sourceThreadId}`,
     `记忆整理任务：${binding.threadName}`,
     `记忆整理任务 ID：${binding.threadId}`,
     `工作目录：${binding.workspace}`,

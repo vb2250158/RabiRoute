@@ -579,6 +579,8 @@ import type {
 import type { LocalSpeechResponse } from "../speech/localSpeechClient.js";
 import { standaloneGatewayPayload as buildStandaloneGatewayPayload } from "./statusPayload.js";
 import { handlePersonaDocumentApi } from "./personaDocumentRoutes.js";
+import { handleRoleConfigurationApi } from "./roleConfigurationRoutes.js";
+import { RoleLifecycleError, assertRoleAcceptsWork, checkedRoleDirectory, withRoleLock } from "../roleLifecycle.js";
 import { handlePersonaBootstrapApi, handlePersonaReferenceApi, handlePersonaReferenceLanguageStyleApi, handleRemotePersonaResolutionApi, resolveRemotePersonaSnapshot, validateRemotePersonaLanguageStyle, type RemotePersonaReadContext } from "./remotePersonaRoutes.js";
 import { assertLocalPersonaOwner, localPersonaMessageDirectories, localPersonaRoleForAgentTask, localPersonaRoleForHooks, localPersonaRuntimeForDelivery, routeOwnsLocalPersona } from "./localPersonaOwner.js";
 import {
@@ -921,7 +923,7 @@ function primaryAgentMessageSource(definition: GatewayDefinition): AgentMessageS
     fields.sessionId,
     fields.sessionName,
     agentAdapter,
-    "主人格 Agent",
+    "主角色 Agent",
     fields.workspace
   );
 }
@@ -1194,7 +1196,7 @@ const companionActivity = new CompanionActivity({
     let recoveredOwnerUrl: string | undefined;
     if (runtime.definition.primaryAgentAdapter === "dsh") {
       const binding = await readDshPrimaryBindingAsync(adapterConfigPath(runtime.definition.configName || runtime.definition.id));
-      if (!binding) throw new Error("当前人格没有绑定 DSH 会话");
+      if (!binding) throw new Error("当前角色没有绑定 DSH 会话");
       recoveredOwnerUrl = await companionDshOwnerRecovery.ensure(binding);
       appendLog(runtime, `companion Agent owner ready: ${review.id}`);
     }
@@ -2076,12 +2078,29 @@ async function writeConfig(
   sharedAutoAssignGatewayPorts(normalized.gateways, managerPort);
   sharedValidateGatewayPortConflicts(normalized.gateways);
   try {
-    await requireRouteCatalogLifecycle().replace(normalized, expectedContentHash, operationId);
+    await withRoleBindings(normalized.gateways, () => requireRouteCatalogLifecycle().replace(normalized, expectedContentHash, operationId));
     pendingManagedConfigWatchEchoes += 1;
     return readConfig();
   } catch (error) {
     throw routeCatalogMutationFailure(error);
   }
+}
+
+async function withRoleBindings<T>(definitions: readonly GatewayDefinition[], action: () => Promise<T>): Promise<T> {
+  const previous = readConfig().gateways;
+  const bindings = [...new Set(definitions.filter(item => item.agentRoleId && !item.agentRoleDeviceId).map(item => item.agentRoleId!))].sort();
+  async function lockAt(index: number): Promise<T> {
+    if (index === bindings.length) return action();
+    const roleId = bindings[index];
+    const directory = roleFolderPath(rolesRoot, roleId);
+    return withRoleLock(directory, async () => {
+      const createsReference = definitions.some(item => item.agentRoleId === roleId && !item.agentRoleDeviceId
+        && !previous.some(old => old.id === item.id && old.agentRoleId === roleId && !old.agentRoleDeviceId));
+      if (createsReference) { await checkedRoleDirectory(rolesRoot, roleId); await assertRoleAcceptsWork(directory); }
+      return lockAt(index + 1);
+    });
+  }
+  return lockAt(0);
 }
 
 async function writeGatewayConfig(id: string, definition: GatewayDefinition, hash: string, operationId: string): Promise<void> {
@@ -2092,7 +2111,7 @@ async function writeGatewayConfig(id: string, definition: GatewayDefinition, has
   }
   // The worker merges only this Route with its authoritative catalog inside the CAS transaction.
   try {
-    await requireRouteCatalogLifecycle().upsert(normalized, hash, operationId, id);
+    await withRoleBindings([normalized], () => requireRouteCatalogLifecycle().upsert(normalized, hash, operationId, id));
     pendingManagedConfigWatchEchoes += 1;
   } catch (error) {
     throw routeCatalogMutationFailure(error);
@@ -3390,12 +3409,12 @@ function defaultAgentState(definition: GatewayDefinition, adapterType: AgentAdap
     return {
       agentAdapterType: adapterType,
       bound: Boolean(definition.dshSessionId?.trim() && definition.dshCwd?.trim()),
-      monitorThreadName: definition.dshSessionName?.trim() || "DSH 主人格",
+      monitorThreadName: definition.dshSessionName?.trim() || "DSH 主角色",
       monitorThreadSource: dshBaseUrl,
       monitorThreadId: definition.dshSessionId?.trim() || "",
       monitorThreadCwd: definition.dshCwd?.trim() || "",
       deliveryTransport: "http",
-      message: "DSH 会话主人格：投递通过 DSH apiproxy session.prompt 完成。"
+      message: "DSH 会话主角色：投递通过 DSH apiproxy session.prompt 完成。"
     };
   }
 
@@ -5748,7 +5767,7 @@ async function dispatchPlanNotificationRequirement(requirement: MessageProcessin
   const target = currentMessageProcessingTarget(requirement);
   const worker = target?.worker;
   if (!target || !worker?.threadId || !worker.workspace) {
-    messageProcessingBoard.recordDispatchFailure(requirement.id, "当前 Route 没有可用的主人格或消息处理 Agent 任务；等待配置恢复或人工重新分配。");
+    messageProcessingBoard.recordDispatchFailure(requirement.id, "当前 Route 没有可用的主角色或消息处理 Agent 任务；等待配置恢复或人工重新分配。");
     publishManagerEvent("message_processing_board_changed", { requirementId: requirement.id, status: "send_failed" });
     return;
   }
@@ -8465,7 +8484,7 @@ function handleRoleKnowledgeApi(
                       participantId,
                       status: participantStatus,
                       confidence: 1,
-                      evidenceRefs: [{ note: "人格通过声纹确认界面显式关联到身份。" }]
+                      evidenceRefs: [{ note: "角色通过声纹确认界面显式关联到身份。" }]
                     }
                   ]
                 : existingAccount?.participantLinks.map(link => ({ ...link, status: "retired" as const })) ?? [];
@@ -9554,6 +9573,22 @@ export function handlePersonaPluginApi(
 ): boolean {
   const activeRolesRoot = context.rolesRoot ?? rolesRoot;
   const resolveRoleDir = context.roleDir ?? roleDirForApi;
+  if (handleRoleConfigurationApi(request, requestUrl, response, {
+    rolesRoot: activeRolesRoot,
+    routes: () => readConfig().gateways,
+    isReadOnly: () => managerReadOnly,
+    presentation: roleId => routeCatalogPersonas().find(role => role.roleId === roleId && path.resolve(role.rolesRoot) === path.resolve(activeRolesRoot)),
+    assertCatalogReady: () => {
+      if (requireRouteCatalogLifecycle().snapshot().state !== "ready") {
+        throw new RoleLifecycleError("ROLE_REFERENCES_UNAVAILABLE", "路由目录尚未完整加载，请稍后重试。", 503);
+      }
+    },
+    readJson: readJsonBody,
+    changed: async roleId => {
+      await ensureDataDirs();
+      publishManagerEvent("role_catalog_changed", { roleId });
+    }
+  })) return true;
   if (handlePersonaMessagingApi(request, requestUrl, response, {
     rootDir,
     rolesRoot: activeRolesRoot,

@@ -31,10 +31,10 @@ test("the dedicated persona page renders the complete body with the safe markdow
 });
 
 test("markdown summaries are plain, bounded text", () => {
-  const source = "# 人格标题\n\n" + "正文".repeat(300);
+  const source = "# 角色标题\n\n" + "正文".repeat(300);
   const excerpt = markdownPreviewExcerpt(source, 120);
   assert.equal(excerpt.length, 120);
-  assert.match(excerpt, /^人格标题 正文/);
+  assert.match(excerpt, /^角色标题 正文/);
   assert.match(excerpt, /…$/);
   assert.doesNotMatch(excerpt, /#/);
 });

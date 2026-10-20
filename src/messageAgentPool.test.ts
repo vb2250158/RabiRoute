@@ -89,9 +89,9 @@ test("Message Agent initialization references the remote persona owner without a
   const configuration = options("fixture-state.json");
   assert.match(messageAgentInitializationPrompt(configuration), /\[rabi:bind XinghaiBuilder\]/);
   const remotePrompt = messageAgentInitializationPrompt({ ...configuration, roleDeviceId: "remote-pc" });
-  assert.match(remotePrompt, /人格所属电脑：remote-pc/);
-  assert.match(remotePrompt, /人格 ID：XinghaiBuilder/);
-  assert.match(remotePrompt, /每次消息 AgentPacket 的人格正文和远端知识入口/);
+  assert.match(remotePrompt, /角色所属电脑：remote-pc/);
+  assert.match(remotePrompt, /角色 ID：XinghaiBuilder/);
+  assert.match(remotePrompt, /每次消息 AgentPacket 的角色正文和远端知识入口/);
   assert.doesNotMatch(remotePrompt, /\[rabi:bind/);
 });
 
@@ -112,12 +112,12 @@ test("remote Message Agent worker naming ignores a same-name local persona docum
   await deliver(pool, group("remote-group"), "Authoritative remote persona packet");
   assert.match(String(calls.find(call => call.action === "resolve")?.title), /星海主任务/);
   assert.doesNotMatch(JSON.stringify(calls), /Wrong local same-name persona|\[rabi:bind/);
-  assert.match(deliveryPayloadText(calls.find(call => call.action === "send")), /人格所属电脑：remote-pc/);
+  assert.match(deliveryPayloadText(calls.find(call => call.action === "send")), /角色所属电脑：remote-pc/);
   calls.length = 0;
   await deliver(pool, group("remote-next"), "Next remote persona packet");
   const reusedPrompt = deliveryPayloadText(calls.find(call => call.action === "send"));
   assert.doesNotMatch(reusedPrompt, /\[消息处理 Agent 初始化\]|\[rabi:bind/);
-  assert.match(reusedPrompt, /人格所属电脑：remote-pc/);
+  assert.match(reusedPrompt, /角色所属电脑：remote-pc/);
 });
 
 test("a local-to-remote persona change reuses the same Message Agent task with a per-turn remote owner hint", async (t) => {
@@ -142,8 +142,8 @@ test("a local-to-remote persona change reuses the same Message Agent task with a
   assert.equal(remoteWorker.initializedAt, initializedAt);
   assert.equal(calls.some(call => call.action === "resolve"), false);
   const remotePrompt = deliveryPayloadText(calls.find(call => call.action === "send"));
-  assert.match(remotePrompt, /人格所属电脑：remote-pc/);
-  assert.match(remotePrompt, /按每次消息 AgentPacket 的人格正文和远端知识入口/);
+  assert.match(remotePrompt, /角色所属电脑：remote-pc/);
+  assert.match(remotePrompt, /按每次消息 AgentPacket 的角色正文和远端知识入口/);
   assert.doesNotMatch(remotePrompt, /\[消息处理 Agent 初始化\]|\[rabi:bind/);
 });
 
@@ -253,7 +253,7 @@ test("Message Agent pool discards persisted workers from a previous Primary Pers
     updatedAt: "2026-08-20T00:00:00.000Z",
     workers: [{
       threadId: oldThreadId,
-      threadName: "旧主人格 协助处理消息1",
+      threadName: "旧主角色 协助处理消息1",
       workspace: oldWorkspace,
       index: 1,
       createdAt: "2026-08-20T00:00:00.000Z",
@@ -323,7 +323,7 @@ test("Message Agent pool creates a Desktop task and sends the first group with L
   assert.match(deliveryText, new RegExp(`sourceThreadId=${worker.threadId}`));
   assert.match(deliveryText, /sourceAgentType=message_processing/);
   assert.match(deliveryText, /当前任务输出只供内部查看/);
-  assert.match(deliveryText, /待决定事项必须实际交给主人格/);
+  assert.match(deliveryText, /待决定事项必须实际交给主角色/);
   assert.match(deliveryText, new RegExp(`threadId=${options(path.join(root, "unused.json")).sourceThreadId}`));
   assert.match(deliveryText, /要求回传发送回执或决定/);
   assert.match(deliveryText, /处理结果：无需对外回复/);
@@ -494,8 +494,8 @@ test("Message Agent initialization resolves the current Primary Persona displaye
   await deliver(pool, group("current-primary-title"), "检查名称");
 
   const prompt = deliveryPayloadText(calls.find((call) => call.action === "send"));
-  assert.match(prompt, /主人格任务：星海建造师 策划 程序/);
-  assert.match(prompt, /当前主人格任务：星海建造师 策划 程序/);
+  assert.match(prompt, /主角色任务：星海建造师 策划 程序/);
+  assert.match(prompt, /当前主角色任务：星海建造师 策划 程序/);
   assert.doesNotMatch(prompt, /这个会话宕机了/);
 });
 
@@ -512,7 +512,7 @@ test("Message Agent pool refuses to initialize inside the Primary Persona task",
     }
   });
 
-  await assert.rejects(deliver(pool, group("role-crossover"), "不得进入主人格"), /refusing role crossover/);
+  await assert.rejects(deliver(pool, group("role-crossover"), "不得进入主角色"), /refusing role crossover/);
   assert.equal(sendCount, 0);
   assert.equal(pool.snapshot().workers.length, 0);
 });
@@ -553,7 +553,7 @@ test("heartbeat Message Agent performs the omission scan itself and does not for
   assert.match(prompt, /按游标增量比对群消息、计划、问题映射和回执/);
   assert.match(prompt, /项目事实缺失/);
   assert.match(prompt, /criticalFactDisposition/);
-  assert.match(prompt, /需要决定、跨计划冲突或已有可发送正文时才交给主人格/);
+  assert.match(prompt, /需要决定、跨计划冲突或已有可发送正文时才交给主角色/);
   assert.match(prompt, /没有遗漏或新进展时写/);
 });
 
@@ -1092,7 +1092,7 @@ test("Message Agent pool renames existing workers to stable persona-owned titles
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-agent-rename-"));
   const statePath = path.join(root, "agents.json");
   const rolePath = path.join(root, "persona.md");
-  fs.writeFileSync(rolePath, "# 星海建造师 策划 程序\n\n人格正文。\n", "utf8");
+  fs.writeFileSync(rolePath, "# 星海建造师 策划 程序\n\n角色正文。\n", "utf8");
   const workspace = process.cwd();
   fs.writeFileSync(statePath, JSON.stringify({
     schemaVersion: 1,

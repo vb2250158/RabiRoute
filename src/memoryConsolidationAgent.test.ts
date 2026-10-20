@@ -48,7 +48,7 @@ test("uncertain memory delivery survives reload and verifies its receipt without
 
 function primaryMessageSource(
   sessionId = "019f0000-0000-7000-8000-000000000001",
-  sessionName = "主人格",
+  sessionName = "主角色",
   agentAdapter: "codex" | "dsh" = "codex",
   workspace = "C:/Project"
 ) {
@@ -68,7 +68,7 @@ test("memory consolidation delivery rejects an omitted messageSource", async () 
     statePath: memoryConsolidationAgentStatePath(root),
     managerBaseUrl: "http://127.0.0.1:8790",
     sourceThreadId: "019f0000-0000-7000-8000-000000000001",
-    sourceThreadName: "主人格",
+    sourceThreadName: "主角色",
     workspace: "C:/Project",
     roleId: "Rabi"
   }, { request: async () => { throw new Error("request must not run"); } });
@@ -85,7 +85,7 @@ test("dedicated memory consolidation reuses one Desktop task and defaults to GPT
   const calls: Array<Record<string, unknown>> = [];
   const worker = {
     id: "019f0000-0000-7000-8000-000000000020",
-    title: "主人格 记忆整理",
+    title: "主角色 记忆整理",
     cwd: "C:/Project"
   };
   let created = false;
@@ -111,7 +111,7 @@ test("dedicated memory consolidation reuses one Desktop task and defaults to GPT
     statePath,
     managerBaseUrl: "http://127.0.0.1:8790",
     sourceThreadId: "019f0000-0000-7000-8000-000000000001",
-    sourceThreadName: "主人格",
+    sourceThreadName: "主角色",
     workspace: "C:/Project",
     roleId: "Rabi",
     model: ""
@@ -127,7 +127,7 @@ test("dedicated memory consolidation reuses one Desktop task and defaults to GPT
     agentAdapter: "codex",
     agentType: "primary_persona",
     sessionId: "019f0000-0000-7000-8000-000000000001",
-    sessionName: "主人格",
+    sessionName: "主角色",
     workspace: "C:/Project"
   });
   assert.match(deliveryPayloadText(firstSend), /记忆整理 Agent 初始化/);
@@ -151,7 +151,7 @@ test("memory consolidation replaces a binding from another Primary Persona works
     updatedAt: "2026-08-20T00:00:00.000Z",
     binding: {
       threadId: "019f0000-0000-7000-8000-000000000021",
-      threadName: "旧主人格 记忆整理",
+      threadName: "旧主角色 记忆整理",
       workspace: "C:/OldProject",
       initializedAt: "2026-08-20T00:00:00.000Z"
     }
@@ -161,7 +161,7 @@ test("memory consolidation replaces a binding from another Primary Persona works
     statePath,
     managerBaseUrl: "http://127.0.0.1:8790",
     sourceThreadId: "019f0000-0000-7000-8000-000000000001",
-    sourceThreadName: "主人格",
+    sourceThreadName: "主角色",
     workspace: "C:/CurrentProject",
     roleId: "Rabi"
   }, {
@@ -172,7 +172,7 @@ test("memory consolidation replaces a binding from another Primary Persona works
           resolution: "created",
           thread: {
             id: "019f0000-0000-7000-8000-000000000022",
-            title: "主人格 记忆整理",
+            title: "主角色 记忆整理",
             cwd: "C:/CurrentProject"
           }
         };
@@ -182,7 +182,7 @@ test("memory consolidation replaces a binding from another Primary Persona works
     }
   });
 
-  const binding = await agent.deliver("consolidate", primaryMessageSource("019f0000-0000-7000-8000-000000000001", "主人格", "codex", "C:/CurrentProject"));
+  const binding = await agent.deliver("consolidate", primaryMessageSource("019f0000-0000-7000-8000-000000000001", "主角色", "codex", "C:/CurrentProject"));
 
   const resolve = calls.find((call) => call.action === "resolve");
   assert.equal(resolve?.threadId, undefined);
@@ -199,7 +199,7 @@ test("dedicated memory consolidation accepts a state-database task match without
     statePath: memoryConsolidationAgentStatePath(root),
     managerBaseUrl: "http://127.0.0.1:8790",
     sourceThreadId: "019f0000-0000-7000-8000-000000000001",
-    sourceThreadName: "主人格",
+    sourceThreadName: "主角色",
     workspace: "C:/Project",
     roleId: "Rabi"
   }, {
@@ -210,7 +210,7 @@ test("dedicated memory consolidation accepts a state-database task match without
           resolution: "name",
           thread: {
             id: "019f0000-0000-7000-8000-000000000020",
-            title: "主人格 记忆整理"
+            title: "主角色 记忆整理"
           }
         };
       }
@@ -232,7 +232,7 @@ test("DSH memory consolidation keeps an independent DSH binding and never falls 
     statePath: memoryConsolidationAgentStatePath(root),
     managerBaseUrl: "http://127.0.0.1:8790",
     sourceThreadId: "session-00000000-0000-4000-8000-000000000011",
-    sourceThreadName: "DSH 主人格",
+    sourceThreadName: "DSH 主角色",
     agentAdapter: "dsh",
     workspace: "C:/Project",
     roleId: "Rabi"
@@ -253,8 +253,8 @@ test("DSH memory consolidation keeps an independent DSH binding and never falls 
     }
   });
 
-  const first = await agent.deliver("first", primaryMessageSource("session-00000000-0000-4000-8000-000000000011", "DSH 主人格", "dsh"));
-  const second = await agent.deliver("second", primaryMessageSource("session-00000000-0000-4000-8000-000000000011", "DSH 主人格", "dsh"));
+  const first = await agent.deliver("first", primaryMessageSource("session-00000000-0000-4000-8000-000000000011", "DSH 主角色", "dsh"));
+  const second = await agent.deliver("second", primaryMessageSource("session-00000000-0000-4000-8000-000000000011", "DSH 主角色", "dsh"));
 
   assert.equal(first.agentAdapter, "dsh");
   assert.equal(second.threadId, first.threadId);

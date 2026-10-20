@@ -1,3 +1,4 @@
+import { roleLifecyclePresentation, RoleLifecycleError, beginRoleWork } from "../roleLifecycle.js";
 import fs from "node:fs";
 import path from "node:path";
 import { rabiContextManager, type RabiContextResolution, type RabiContextTrigger } from "../context/rabiContextManager.js";
@@ -34,6 +35,8 @@ function readText(filePath: string): string {
  * recall, viewedAt and completed-plan policies as the synchronous hook API. */
 export function readCodexHookContextInput(input: CodexHookContextReadRequest): CodexHookContextReadReply {
   if (input.kind === "knowledge") {
+    const lifecycle = roleLifecyclePresentation(input.trigger.roleDir);
+    if (lifecycle.archivedAt || lifecycle.lifecycleError) throw new RoleLifecycleError("ROLE_ARCHIVED_OR_UNAVAILABLE", "角色已归档或状态无法读取，不再附带新上下文。");
     return { kind: "knowledge", resolution: rabiContextManager.resolve(input.trigger) };
   }
   const roleId = sanitizeRoleId(input.roleId);
@@ -42,6 +45,8 @@ export function readCodexHookContextInput(input: CodexHookContextReadRequest): C
   if (!fs.existsSync(path.join(roleDir, "persona.md"))) {
     throw new Error(`Rabi role not found: ${roleId}`);
   }
+  const lifecycle = roleLifecyclePresentation(roleDir);
+  if (lifecycle.archivedAt || lifecycle.lifecycleError) throw new RoleLifecycleError("ROLE_ARCHIVED_OR_UNAVAILABLE", "角色已归档或状态无法读取，不再附带新上下文。");
   return {
     kind: "role_source",
     source: {
@@ -55,6 +60,10 @@ export function readCodexHookContextInput(input: CodexHookContextReadRequest): C
 
 /** Physical worker face; keeps synchronous direct-hook consumers on their existing API. */
 export async function readCodexHookContextInputAsync(input: CodexHookContextReadRequest): Promise<CodexHookContextReadReply> {
-  if (input.kind === "knowledge") return { kind: "knowledge", resolution: await rabiContextManager.resolveAsync(input.trigger, input.memories) };
-  return readCodexHookContextInput(input);
+  const directory = input.kind === "knowledge" ? input.trigger.roleDir : roleFolderPath(input.rolesRoot, sanitizeRoleId(input.roleId));
+  const release = await beginRoleWork(directory);
+  try {
+    if (input.kind === "knowledge") return { kind: "knowledge", resolution: await rabiContextManager.resolveAsync(input.trigger, input.memories) };
+    return readCodexHookContextInput(input);
+  } finally { await release(); }
 }

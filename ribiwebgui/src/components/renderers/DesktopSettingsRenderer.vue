@@ -539,7 +539,7 @@ onBeforeUnmount(() => {
     <div class="section-title-row compact-row mb-2">
       <div>
         <div class="section-title small-title">系统级截图</div>
-        <div class="section-note">框选截图后可复制到剪贴板、贴到屏幕或发送给已激活人格；在截图窗口按 F2 发送，按 &lt; / &gt; 切换上一张和下一张。</div>
+        <div class="section-note">框选截图后可复制到剪贴板、贴到屏幕或发送给已激活角色；在截图窗口按 F2 发送，按 &lt; / &gt; 切换上一张和下一张。</div>
       </div>
       <v-switch v-model="desktopScreenshotEnabled" label="启用截图" color="success" density="compact" inset hide-details :disabled="!loaded" />
     </div>

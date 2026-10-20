@@ -457,8 +457,8 @@ test("Manager publishes fenced READY before route catalog recovery and gates HTT
   assert.match(source, /input:\s*\(\) => \(\{[\s\S]*?routeRoot,[\s\S]*?rolesRoot,[\s\S]*?readOnly: managerReadOnly/);
   assert.match(source, /apply: applyRouteCatalogSnapshot/);
   assert.match(source, /await routeCatalogLifecycle\.recapture\(\)/);
-  assert.match(source, /await requireRouteCatalogLifecycle\(\)\.replace\(normalized, expectedContentHash, operationId\)/);
-  assert.match(source, /await requireRouteCatalogLifecycle\(\)\.upsert\(desired\)/);
+  assert.match(source, /withRoleBindings\(normalized\.gateways, \(\) => requireRouteCatalogLifecycle\(\)\.replace\(normalized, expectedContentHash, operationId\)\)/);
+  assert.match(source, /withRoleBindings\(\[normalized\], \(\) => requireRouteCatalogLifecycle\(\)\.upsert\(normalized, hash, operationId, id\)\)/);
   assert.match(source, /await requireRouteCatalogLifecycle\(\)\.remove\(configName, expectedContentHash, operationId\)/);
   assert.match(source, /await requireRouteCatalogLifecycle\(\)\.ensurePersona\(roleId\)/);
   assert.match(source, /await requireRouteCatalogLifecycle\(\)\.ensureRoleFile\(roleId, roleFile\)/);

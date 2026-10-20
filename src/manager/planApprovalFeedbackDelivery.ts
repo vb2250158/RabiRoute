@@ -196,7 +196,7 @@ function controlFeedbackText(
   directFailure?: string
 ): string {
   const guidance = isGuidance(options.feedback);
-  const recipient = options.secretary ? "计划秘书" : "人格 Agent";
+  const recipient = options.secretary ? "计划秘书" : "角色 Agent";
   return [
     guidance ? "[计划执行引导]" : "[计划审批建议]",
     ...feedbackLines(options.feedback),
@@ -220,8 +220,8 @@ function controlNoticeText(options: DeliverPlanApprovalFeedbackOptions): string 
     `会话 ID：${binding.sessionId}`,
     `工作区：${binding.workspace}`,
     options.secretary
-      ? "秘书跟进计划和结果；仅在需要决定、授权、输入或最终复核时通知主人格。"
-      : "人格 Agent 只需复核后续结果。"
+      ? "秘书跟进计划和结果；仅在需要决定、授权、输入或最终复核时通知主角色。"
+      : "角色 Agent 只需复核后续结果。"
   ].join("\n");
 }
 
@@ -235,7 +235,7 @@ function controlPendingNoticeText(options: DeliverPlanApprovalFeedbackOptions, f
     `会话 ID：${binding.sessionId}`,
     `工作区：${binding.workspace}`,
     `Desktop owner 尚未接管，系统重试同一会话：${failure}`,
-    `${label}保持 pending。${options.secretary ? "秘书" : "人格 Agent"}等待重试结果。`
+    `${label}保持 pending。${options.secretary ? "秘书" : "角色 Agent"}等待重试结果。`
   ].join("\n");
 }
 

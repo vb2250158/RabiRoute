@@ -1,4 +1,5 @@
 import path from "node:path";
+import { beginRoleWork, RoleLifecycleError } from "./roleLifecycle.js";
 import { appendDesktopPetTranscript } from "./desktopPetTranscript.js";
 import { executeAgentDelivery } from "./automation/agentDelivery.js";
 import { deliverSessionOnce } from "./automation/sessionDelivery.js";
@@ -101,7 +102,7 @@ export type {
 } from "./routing/types.js";
 
 export type ForwardDeliveryStatus = "delivered" | "routed" | "missed" | "failed" | "skipped";
-export type ForwardDeliveryReason = "no_active_route_profile" | "no_matching_rule" | "low_signal_voice_transcript" | "no_agent_adapter" | "agent_busy" | "remote_persona_unavailable" | "remote_persona_automation_remote_only";
+export type ForwardDeliveryReason = "role_archived" | "role_unavailable" | "no_active_route_profile" | "no_matching_rule" | "low_signal_voice_transcript" | "no_agent_adapter" | "agent_busy" | "remote_persona_unavailable" | "remote_persona_automation_remote_only";
 
 export type ForwardAdapterOutcome = {
   routeId: string;
@@ -188,7 +189,7 @@ function primaryManagedAgentBinding(): {
     return {
       agentAdapter: "workbuddy",
       sessionId: config.workbuddySessionId,
-      sessionName: config.workbuddySessionName || "WorkBuddy 主人格",
+      sessionName: config.workbuddySessionName || "WorkBuddy 主角色",
       workspace: config.workbuddyCwd
     };
   }
@@ -993,7 +994,7 @@ function isLowSignalVoiceTranscript(record: ForwardRecord): boolean {
   return likelyUnstableSpeaker || text.length <= 2;
 }
 
-async function forwardMessageToRoute(
+async function forwardMessageToRouteInternal(
   route: RouteProfile,
   routeKind: ForwardRouteKind,
   record: ForwardRecord,
@@ -1228,6 +1229,25 @@ async function forwardMessageToRoute(
     adapterOutcomes,
     reason: adapterOutcomes.length === 0 ? "no_agent_adapter" : undefined
   });
+}
+
+async function forwardMessageToRoute(
+  route: RouteProfile,
+  routeKind: ForwardRouteKind,
+  record: ForwardRecord,
+  extraValues: ForwardTemplateValues = {},
+  options: ForwardMessageOptions = {},
+  packets: DeliveryReplayPacket[] = []
+): Promise<ForwardRouteDeliveryResult> {
+  const directory = route.agentRoleDeviceId ? "" : rolePathsForRoute(route).roleDir;
+  let release: (() => Promise<void>) | undefined;
+  try {
+    if (directory) release = await beginRoleWork(directory);
+  } catch (error) {
+    return routeResult(route, "skipped", { reason: error instanceof RoleLifecycleError && error.code === "ROLE_ARCHIVED" ? "role_archived" : "role_unavailable" });
+  }
+  try { return await forwardMessageToRouteInternal(route, routeKind, record, extraValues, options, packets); }
+  finally { await release?.(); }
 }
 
 async function forwardMessageAndWaitInternal(

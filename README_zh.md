@@ -17,7 +17,7 @@
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="许可证：MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 20 或更高版本" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="当前版本：0.3.62" src="https://img.shields.io/badge/version-0.3.62-3178c6">
+  <img alt="当前版本：0.3.63" src="https://img.shields.io/badge/version-0.3.63-3178c6">
   <img alt="状态：积极开发中" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
@@ -30,12 +30,12 @@ Agent 负责回答、写代码、调用工具和执行任务。RabiRoute 负责�
 ## 适合做什么
 
 - **把聊天交给 Agent。** QQ 群聊、私聊、角色面板和其他消息入口可以按 Route 进入固定项目和固定任务。
-- **让 Agent 定时工作。** 人格规则可以按间隔、时间窗口、每天指定时间或单次时间触发 Agent，也可以运行明确授权的本机脚本。
+- **让 Agent 定时工作。** 角色规则可以按间隔、时间窗口、每天指定时间或单次时间触发 Agent，也可以运行明确授权的本机脚本。
 - **操作远端电脑。** 一个主控管理记忆、Skill 和流程，在线客户端提供终端、文件互传、窗口查询和截图，关联 Agent 后端未启动时仍可使用。实验范围见[远端电脑客户端](docs/remote-computer-client.md)。
-- **保留连续上下文。** 每个人格拥有自己的消息记录、计划、记忆和技能引用；每条 Route 可以限制自动附带的最近消息。
-- **按人格配置计划工作流。** 状态 key、名称、说明、颜色、顺序、所在视图、审批行为和延迟归档都来自人格配置；Agent 调整状态目录不需要发布新代码。
+- **保留连续上下文。** 每个角色拥有自己的消息记录、计划、记忆和技能引用；每条 Route 可以限制自动附带的最近消息。
+- **按角色配置计划工作流。** 状态 key、名称、说明、颜色、顺序、所在视图、审批行为和延迟归档都来自角色配置；Agent 调整状态目录不需要发布新代码。
 - **控制外部发送。** Agent 必须通过统一发送接口回复 QQ、RabiLink 等外部渠道；目标、引用消息、发送者身份和回执会被校验并记录。
-- **从 Windows 桌面投递文字和图片。** RabiRoute Desktop 支持滑词操作、系统截图、标注、复制、贴图和投递给已启用人格。
+- **从 Windows 桌面投递文字和图片。** RabiRoute Desktop 支持滑词操作、系统截图、标注、复制、贴图和投递给已启用角色。
 - **连接语音和移动设备。** RabiSpeech、RabiLink 手机/眼镜、穿戴设备与远程 Relay 已有实现，但仍按实验集成验收。
 
 ## 快速上手
@@ -78,20 +78,22 @@ npm run status:linux -- --json
 
 ## 当前能力
 
-仓库当前版本为 `0.3.62`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
+仓库当前版本为 `0.3.63`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
+
+角色配置、计划与记忆独立选择角色，未绑定路由的角色也能使用；路由配置负责消息端、Agent 和显式角色引用。归档角色在设置中恢复，彻底删除前检查引用与运行中任务。见[以角色为主的配置架构](docs/role-centric-architecture.md)。本次只收集源码，不安装或激活运行版本。
 
 | 范围 | 当前状态 | 用户可以完成什么 |
 | --- | --- | --- |
 | 路由主链 | 已验证 | 接收消息、保存事件、匹配规则、生成 Agent 上下文、投递处理端并记录回传。 |
 | NapCat / OneBot | 已验证 | 每个 Route 绑定一个 NapCat；在 Route 卡片内完成快速、密码、扫码登录与安全确认，接收 QQ 群聊和私聊、保存媒体证据，并通过 OneBot HTTP 发送回复。 |
-| 定时任务与人格自动化 | 已验证 | 按消息或时间触发 Agent；在单独授权后运行人格目录中的本机脚本。 |
+| 定时任务与角色自动化 | 已验证 | 按消息或时间触发 Agent；在单独授权后运行角色目录中的本机脚本。 |
 | Codex Desktop | 已验证 | 完整任务 ID 选择既有任务，每次投递单独指定项目目录；只有目标任务写入 `deliveryId` 回执后才报告成功。任务删除或归档后可受控换新。 |
-| RibiWebGUI | 已验证 | 管理 Route、人格、消息端、Agent、计划、记忆、日志、诊断、主题和桌面设置。 |
+| RibiWebGUI | 已验证 | 管理 Route、角色、消息端、Agent、计划、记忆、日志、诊断、主题和桌面设置。 |
 | 计划、记忆与消息处理 | 已验证 | 分页查看计划和记忆，提交计划反馈，分配消息处理任务，并保存处理状态和回执。 |
-| 人格计划工作流 | 已验证 | Manager、WebGUI 与 Desktop 共同使用人格配置中的状态 key 和显示资料；Agent 可通过受保护接口新增、修改、替换或退役状态，并保留计划历史。 |
+| 角色计划工作流 | 已验证 | Manager、WebGUI 与 Desktop 共同使用角色配置中的状态 key 和显示资料；Agent 可通过受保护接口新增、修改、替换或退役状态，并保留计划历史。 |
 | Windows 桌面 | 主链已实现 | Host 管理包含 Manager 和托盘/任务窗口表现层的同一代应用；提供滑词、截图和截图标注。部分系统交互仍需 Windows 实机复测。 |
 | Linux Host | 实验支持 | 源码启动最小 Host：构建后管理 Manager、打印当前回环 WebGUI 地址，支持状态查询、打开页面、重启与退出。不含 Windows/Qt 托盘、截图和全局快捷键；真实 Relay 与长期运行仍待验收。 |
-| DSH | 实验支持 | 作为主人格或辅助处理端使用明确的 API、项目目录和会话绑定。 |
+| DSH | 实验支持 | 作为主角色或辅助处理端使用明确的 API、项目目录和会话绑定。 |
 | Grok Bot | 实验支持 | 通过原生 HTTP 投递到已有云端会话，在 Route 设置中选择真实会话；来源、稳定投递 ID 与 QQ/Codex 回传遵循 [Grok Bot 接入合同](docs/grok-bot-agent-adapter.md)，真实往返单独验收。 |
 | WorkBuddy | 实验支持 | 把消息投进用户已有的 WorkBuddy 任务，由该任务用它自带的模型、工具和审批执行。投递需要一次性录入本地网关凭据，缺失时失败关闭。任务发现、绑定和生命周期 Hook 已实现；桌面配对入口尚未提供，冷启动未验证。 |
 | RabiSpeech / RabiLink / 移动与穿戴设备 | 实验支持 | 接入语音、手机、眼镜、Relay 和健康数据链路；每条链路按设备与网络环境单独验收。 |
@@ -112,15 +114,15 @@ npm run status:linux -- --json
 
 ### 0.3.23：一次连接，默认使用服务
 
-同一 RabiLink 应用已鉴权设备默认可以使用 PC 提供的服务，包括语音、人格、资源、管理和知识读写。配置页移除重复权限开关、MCP 密钥和白名单；设备身份、应用隔离和服务就绪仍分别核对。见[通用连接](docs/rabilink-peer-tunnel.md)及[知识服务](docs/rabilink-knowledge-runtime.md)。
+同一 RabiLink 应用已鉴权设备默认可以使用 PC 提供的服务，包括语音、角色、资源、管理和知识读写。配置页移除重复权限开关、MCP 密钥和白名单；设备身份、应用隔离和服务就绪仍分别核对。见[通用连接](docs/rabilink-peer-tunnel.md)及[知识服务](docs/rabilink-knowledge-runtime.md)。
 
 ### 0.3.21：区分电脑实例身份
 
 RabiLink 配置新增 **重置实例 ID**，用于修复两台电脑复制配置后共用身份。Host 备份并重置实例 ID 和连接密钥，保留已保存数据，再重启应用；本机归属标记阻止后续外机复制身份继续运行。旧配置、恢复方法及连接边界见[实例身份说明](docs/user-guide/instance-identity.md)。
 
-### 0.3.19 实验实现：本机路由引用远端人格
+### 0.3.19 实验实现：本机路由引用远端角色
 
-本机 Route 可以选择另一台 PC 的人格，读取正文、消息规则和上下文额度，同时沿用本机消息端和处理 Agent。0.3.19 新增这项实验实现：两端复用同一 RabiLink 应用认证，自动交换并固定设备公钥，再沿 LAN、P2P 或 Relay 读取受限人格服务，无需逐服务手工授权。0.3.22 起同一应用已鉴权连接默认允许实际提供的服务，固定公钥继续核对；来源 PC 需升级。操作、失败行为和待完成的真实双 PC 验收见[远端人格引用](docs/remote-persona-reference.md)。
+本机 Route 可以选择另一台 PC 的角色，读取正文、消息规则和上下文额度，同时沿用本机消息端和处理 Agent。0.3.19 新增这项实验实现：两端复用同一 RabiLink 应用认证，自动交换并固定设备公钥，再沿 LAN、P2P 或 Relay 读取受限角色服务，无需逐服务手工授权。0.3.22 起同一应用已鉴权连接默认允许实际提供的服务，固定公钥继续核对；来源 PC 需升级。操作、失败行为和待完成的真实双 PC 验收见[远端角色引用](docs/remote-persona-reference.md)。
 
 ### 0.3.5：远端 Agent 授权、审批专注视图与移动记录
 
@@ -149,7 +151,7 @@ flowchart LR
     G --> H[回复 · 回执 · 审计]
 ```
 
-每条 Route 分开保存消息入口、人格、处理端、项目目录和发送规则。消息端不负责拼接 Agent 指令，Agent 也不能绕过 RabiRoute 直接取得渠道凭据或修改路由状态。
+每条 Route 分开保存消息入口、角色、处理端、项目目录和发送规则。消息端不负责拼接 Agent 指令，Agent 也不能绕过 RabiRoute 直接取得渠道凭据或修改路由状态。
 
 Manager 通过一个插件内核装载 默认 Profile 中的 31 个内置插件实例。内置包和树外包统一使用 schema/profile v2、SDK、依赖图、权限检查、generation 切换、执行模式边界和 Web 模块生命周期。当前实现说明见[插件包与热替换](docs/plugin-bundles.md)。
 
@@ -172,10 +174,10 @@ data/roles/<RoleId>/persona.md
 data/roles/<RoleId>/personaConfig.json
 ```
 
-- `adapterConfig.json` 保存消息入口、处理端、项目目录、Route 规则和人格绑定。
-- `persona.md` 保存人格说明和面向处理端的工作要求。
-- `personaConfig.json` 保存人格自动化、头像、语音关键词和最近消息额度。
-- `data/roles/<RoleId>/conversation/` 保存该人格的消息记录。
+- `adapterConfig.json` 保存消息入口、处理端、项目目录、Route 规则和角色绑定。
+- `persona.md` 保存角色说明和面向处理端的工作要求。
+- `personaConfig.json` 保存角色自动化、头像、语音关键词和最近消息额度。
+- `data/roles/<RoleId>/conversation/` 保存该角色的消息记录。
 - [`examples/data/`](examples/data/) 保存可公开复制的脱敏样板。
 
 可独立构建的客户端位于 [`apps/`](apps/)，共享 SDK 位于 [`packages/`](packages/)，可复用 Agent 指南位于 [`skills/`](skills/)。
@@ -187,7 +189,7 @@ data/roles/<RoleId>/personaConfig.json
 ### 第一次使用
 
 - [跑通第一条 Route](docs/user-guide/first-route.md)：完成一次真实 Codex Desktop 投递。
-- [RibiWebGUI 使用手册](docs/user-guide/README.md)：查看界面、人格、Route、Agent 和排障步骤。
+- [RibiWebGUI 使用手册](docs/user-guide/README.md)：查看界面、角色、Route、Agent 和排障步骤。
 - [界面与运行状态](docs/user-guide/interface-and-status.md)：判断 Manager、Route 和消息端是否正常。
 - [运行、日志与排障](docs/user-guide/operations-and-troubleshooting.md)：按现象定位失败位置。
 
@@ -195,7 +197,7 @@ data/roles/<RoleId>/personaConfig.json
 
 - [配置说明](docs/configuration.md)：查看本机配置、目录和主要参数。
 - [局域网 Rabi Agent](docs/lan-rabi-agent-bootstrap.md)：连接其他电脑上的 Codex/DSH 任务，并配置节点权限。
-- [远端人格引用](docs/remote-persona-reference.md)：0.3.19 实验实现，在本机 Route 使用另一台 PC 的人格。
+- [远端角色引用](docs/remote-persona-reference.md)：0.3.19 实验实现，在本机 Route 使用另一台 PC 的角色。
 - [RabiSpeech](docs/rabispeech-plugin.md)：配置本机或远端 TTS / ASR。
 - [客户端应用](apps/README.md)：构建 Android、Rokid AIUI、浏览器桥和 Rabi Agent。
 

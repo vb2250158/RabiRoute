@@ -121,7 +121,7 @@ function voiceprintIdsForRecord(record: RouteDecision["record"]): string[] {
 }
 
 function formatPersonaVoiceIdentity(voiceprintId: string, identity?: PersonaVoiceIdentity): string {
-  if (!identity) return `- ${voiceprintId}：当前人格尚未确认`;
+  if (!identity) return `- ${voiceprintId}：当前角色尚未确认`;
   const conflictCandidates = identity.conflictCandidates?.slice(0, 5).map(candidate => {
     const branch = [
       candidate.deleted ? "已删除" : "保留",
@@ -266,7 +266,7 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
       ]
     : forceMessagePipeline
     ? [
-        "当前路由未绑定人格。自然语言回复通过明确发送 API 投递到指定渠道和目标。"
+        "当前路由未绑定角色。自然语言回复通过明确发送 API 投递到指定渠道和目标。"
       ]
     : routeKind === "rabilink"
       ? [
@@ -274,7 +274,7 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
         ]
       : characterTtsDialogue
       ? [
-          "生成同义的屏幕文本和朗读文本，保持当前人格；通常使用同一句短回复。",
+          "生成同义的屏幕文本和朗读文本，保持当前角色；通常使用同一句短回复。",
           "语音通过明确发送 API 投递，使用 channel=speech 和 sessionId。"
         ]
       : outputAdapter === "fennenote" && routeKind === "voice_transcript"
@@ -305,15 +305,15 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
     isPlanFeedback
       ? "成功后简短说明计划已更新、回复已回写。"
       : characterTtsDialogue
-      ? "成功后显示同一人格回复；保持安静时记录原因。"
+      ? "成功后显示同一角色回复；保持安静时记录原因。"
       : "成功后简短记录投递结果；保持安静时记录原因。"
   ];
 }
 
 function directMessageModeLines(values: ForwardTemplateValues): string[] {
   return [
-    "当前路由没有绑定任何人格，这是无人格直通模式。",
-    "不要扮演角色，不读取或更新角色计划、记忆、技能，也不要提示需要配置人格。",
+    "当前路由没有绑定任何角色，这是无角色直通模式。",
+    "不要扮演角色，不读取或更新角色计划、记忆、技能，也不要提示需要配置角色。",
     optionalLine("输出适配器", values.outputAdapter),
     "只根据本次消息、日志路径和路由变量处理任务。",
     "需要对消息来源说出的每一句话，都通过“回传参数”里的发送 API 投递到 RabiRoute；必须使用给出的 channel 与 params，不能让系统根据来源上下文猜测目标。"
@@ -806,7 +806,7 @@ function remoteAgentApiHint(values: ForwardTemplateValues): string[] {
     }, null, 2).replace("\"__replyContextJson__\"", replyContext),
     "- 可选文件传输：请求体可传 filePaths、files 或 attachments；manager 会把文件内容随任务发给远端 bridge。",
     "- 远端回传文件：远端回调可以传 artifactPath、logPath 或 files，bridge 会把文件内容带回本机并保存到 data/remote-agent-files/<taskId>/。",
-    "远端结果会回传到本机 RabiRoute，并投递回当前本机人格线程；远端 Agent 不应直接回复 QQ。"
+    "远端结果会回传到本机 RabiRoute，并投递回当前本机角色线程；远端 Agent 不应直接回复 QQ。"
   ];
 }
 
@@ -1299,7 +1299,7 @@ function buildAgentMessage(
       optionalLine("本段声纹", values.voiceprintIds),
       optionalLine("语音账号兼容数据文件", values.voiceIdentitiesPath),
       optionalLine("语音推送模式", values.speechPushMode),
-      optionalLine("命中人格关键词", values.speechTriggerKeyword),
+      optionalLine("命中角色关键词", values.speechTriggerKeyword),
       optionalLine("触发 ID", values.triggerId),
       optionalLine("触发名称", values.triggerName)
     ]),
@@ -1318,8 +1318,8 @@ function buildAgentMessage(
     values.voiceprintIds || values.voiceprintId ? section("身份定位：语音消息端账号", [
       "RabiSpeech 和主机只提供不透明声纹 ID、处理主机与判定证据，不判断这个人是谁，也不判断谁是用户。",
       "声纹与 QQ、微信账号一样进入通用身份定位：处理主机组成消息端命名空间，声纹 ID 是稳定账号 ID。多人录音会分别建立多个待认识账号。",
-      "以下内容来自当前人格保存的语音分类兼容数据，不是主机推断：",
-      String(values.personaVoiceIdentitySummary || "- 当前人格尚未记录这些声纹的身份说明。"),
+      "以下内容来自当前角色保存的语音分类兼容数据，不是主机推断：",
+      String(values.personaVoiceIdentitySummary || "- 当前角色尚未记录这些声纹的身份说明。"),
       "PUT /api/roles/:roleId/voice-identities 只用于维护“这是我 / 其他人”等语音分类兼容信息；认识具体是谁、补充称呼和关系线索，统一使用下方通用身份观察接口。"
     ]) : "",
     hasLocalPersona ? section("身份定位", [
@@ -1336,12 +1336,12 @@ function buildAgentMessage(
       "只允许调用 Rabi PC 已公开的远程 WebGUI/路由配置接口；不要索取、复述或猜测 token、密码等凭据。",
       "只有接口返回成功并复核读回结果后才能声称配置完成；不明确时先向用户追问。"
     ]) : "",
-    remotePersona ? section("远端人格", [
-      `人格：${remotePersona.roleId}`,
+    remotePersona ? section("远端角色", [
+      `角色：${remotePersona.roleId}`,
       `所属电脑：${remotePersona.deviceId}`,
-      `人格文档：${remotePersona.file}`,
-      "本次使用远端 PC 的人格正文和消息配置；人格、计划、记忆与技能仍由远端 PC 保存。",
-      "远端人格定时任务和脚本由远端 PC 运行，本机不执行其脚本或自动整理任务。"
+      `角色文档：${remotePersona.file}`,
+      "本次使用远端 PC 的角色正文和消息配置；角色、计划、记忆与技能仍由远端 PC 保存。",
+      "远端角色定时任务和脚本由远端 PC 运行，本机不执行其脚本或自动整理任务。"
     ]) : hasPersona ? section("角色和路径", [
       optionalLine("角色", values.agentRoleId),
       optionalLine("角色文件", values.agentRolePath || rolePath),
@@ -1349,16 +1349,16 @@ function buildAgentMessage(
       optionalLine("运行数据目录", values.dataDir),
       optionalLine("计划目录", knowledgePlansDir ?? values.plansDir),
       optionalLine("记忆目录", knowledgeMemoryDir ?? values.memoryDir)
-    ]) : section("无人格直通模式", directMessageModeLines(values)),
-    remotePersona ? section("远端人格正文", [remotePersona.document]) : "",
+    ]) : section("无角色直通模式", directMessageModeLines(values)),
+    remotePersona ? section("远端角色正文", [remotePersona.document]) : "",
     remotePersona ? section("远端记忆与计划", [
-      "不把本机同名人格当成该远端人格。需要既有事实、计划或历史时，通过以下远端入口按需读取：",
+      "不把本机同名角色当成该远端角色。需要既有事实、计划或历史时，通过以下远端入口按需读取：",
       `知识搜索：GET ${remoteRoleApiBase}/knowledge/search?query=<关键词>&mode=keywords`,
       `计划：GET ${remoteRoleApiBase}/plans；具体计划：GET ${remoteRoleApiBase}/plans/{planId}`,
       `记忆：GET ${remoteRoleApiBase}/memory；具体记忆：GET ${remoteRoleApiBase}/memory/recent/{memoryId} 或 /memory/consolidated/{memoryId}`,
       `技能：GET ${remoteRoleApiBase}/skills；具体技能：GET ${remoteRoleApiBase}/skills/{skillId}`,
       `操作前读取当前接口合同：GET ${remotePersona.knowledgeApiBaseUrl}/api/agent/help。`,
-      "此远端人格入口只读，不提供远端数据修改、消息外发或跨任务投递；这些操作须在来源 PC 使用Rabi 接口及其授权合同。离线、未授权或身份变化时停止，不改用本机数据。"
+      "此远端角色入口只读，不提供远端数据修改、消息外发或跨任务投递；这些操作须在来源 PC 使用Rabi 接口及其授权合同。离线、未授权或身份变化时停止，不改用本机数据。"
     ]) : hasPersona ? section("记忆与计划", [
       optionalLine("更新记忆与计划的说明文档", knowledgeAgentInterfaceDocPath ?? values.agentInterfaceDocPath),
       ...(knowledgeView?.apiHintLines ?? []),

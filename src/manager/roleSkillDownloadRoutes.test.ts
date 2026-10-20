@@ -157,8 +157,8 @@ test("invalid download paths fail before role resolution or temporary creation i
   }
   assert.equal(resolved, 0); assert.equal(archived, 0);
   assert.deepEqual(await fs.readdir(f.temporaryRoot), []);
-  assert.deepEqual(parseRoleSkillDownloadRoute(`/roles/${encodeURIComponent("示例人格")}/skills/${encodeURIComponent("示例技能")}/download`), {
-    roleId: "示例人格", skillId: "示例技能"
+  assert.deepEqual(parseRoleSkillDownloadRoute(`/roles/${encodeURIComponent("示例角色")}/skills/${encodeURIComponent("示例技能")}/download`), {
+    roleId: "示例角色", skillId: "示例技能"
   });
 });
 

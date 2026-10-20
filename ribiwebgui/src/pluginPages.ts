@@ -10,6 +10,7 @@ export type WebPagePathRegistration = Readonly<{
 }>;
 
 export type WebPageNavigationRegistration = Readonly<{
+  scope?: "role" | "route";
   resolvePath: (selectedRouteId: string) => string;
   allowedSlots: readonly string[];
   allowedIcons: readonly string[];
@@ -143,6 +144,7 @@ function normalizeRegistration(input: TrustedWebPageRegistration): TrustedWebPag
 
   const navigation = input.navigation
     ? Object.freeze({
+        scope: input.navigation.scope,
         resolvePath: input.navigation.resolvePath,
         allowedSlots: controlledSymbols(input.navigation.allowedSlots, "navigation.allowedSlots"),
         allowedIcons: controlledSymbols(input.navigation.allowedIcons, "navigation.allowedIcons")
@@ -266,10 +268,10 @@ export function webPageRenderer(routeId: WebPageRouteId): TrustedWebPageRegistra
   return renderer;
 }
 
-export function resolveRegisteredWebPagePath(routeId: WebPageRouteId, selectedRouteId: string): string {
+export function resolveRegisteredWebPagePath(routeId: WebPageRouteId, selectedRouteId: string, selectedRoleId = ""): string {
   const registration = webPageRendererRegistry.get(routeId);
   if (!registration?.navigation) return "";
-  return controlledResolvedPath(registration.navigation.resolvePath(selectedRouteId), routeId);
+  return controlledResolvedPath(registration.navigation.resolvePath(registration.navigation.scope === "role" ? selectedRoleId : selectedRouteId), routeId);
 }
 
 export function webPageAllowsNavigation(

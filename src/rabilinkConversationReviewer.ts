@@ -180,7 +180,7 @@ export function buildRabiLinkConversationReviewPrompt(input: {
   const localEvidenceLines = evidenceToolPath
     ? [
       "[本机现场取证]",
-      "仅在当前人格提供取证工具、且已有明确授权覆盖本轮采集时运行一次；工具存在不代表获得授权。静默不能证明用户不在场。",
+      "仅在当前角色提供取证工具、且已有明确授权覆盖本轮采集时运行一次；工具存在不代表获得授权。静默不能证明用户不在场。",
       `${evidenceToolPath} -CaptureScreen -CaptureCamera -IncludeWindowTitle -OutputPath <本机临时 manifest>。只使用本机临时目录，不把 manifest 或原始材料写回角色目录。`,
       "查看成功采样的一帧，记录来源、时间、事实与未知；前台窗口或探针活动不能证明用户正在操作，摄像头画面不用于身份、健康或情绪诊断。",
       "本机语音只读取已运行的 RabiRoute speech/RabiLink 摘要；不启动第二个常驻录音器。探针失败时回退到低敏元数据并保留未知，不因单个传感器失败结束本轮。",
@@ -218,7 +218,7 @@ export function buildRabiLinkConversationReviewPrompt(input: {
     `新增范围：${first?.entryId || "无新增用户记录"} -> ${last?.entryId || "无新增用户记录"}`,
     `记录时间：${first?.recordedAt || "无新增记录"} -> ${last?.recordedAt || "无新增记录"}`,
     `本次涉及 Route：${input.pendingRouteProfileIds?.join(", ") || input.routeProfileId}`,
-    `当前人格：${input.agentRolePath || "使用当前线程已绑定人格"}`,
+    `当前角色：${input.agentRolePath || "使用当前线程已绑定角色"}`,
     input.identityLines?.length ? `[身份定位]\n${input.identityLines.join("\n")}` : "",
     input.identityObservationUrl
       ? `本次若出现新的、可核对身份线索，只能 POST ${input.identityObservationUrl} 追加候选观察；说话习惯一致性可以辅助共用账号的本条消息归因，但不能单独确认身份。`
@@ -228,7 +228,7 @@ export function buildRabiLinkConversationReviewPrompt(input: {
     "[审阅范围]",
     "1. 用结构化方式读取当前 JSONL。每行是一条 JSON；用户观察、Agent 已投递消息和手动审阅请求都在同一条时间线上。新增范围可能跨分卷；当前文件找不到起始 entryId 时，必须读取历史索引并在归档中找到它。",
     input.reflection
-      ? "2. 本次可能没有新增用户记录。回看当前账本中足够的用户与 Agent 消息，并检查当前人格目录内相关计划、任务、记忆或最近工具结果；需要跨会话恢复语境时，先读历史索引，再按文件名读取日期归档。"
+      ? "2. 本次可能没有新增用户记录。回看当前账本中足够的用户与 Agent 消息，并检查当前角色目录内相关计划、任务、记忆或最近工具结果；需要跨会话恢复语境时，先读历史索引，再按文件名读取日期归档。"
       : "2. 阅读全部本次新增用户记录，并回看当前账本中足够的先前用户与 Agent 消息；需要跨会话恢复语境时，先读历史索引，再按文件名读取日期归档。归档只分割原始数据，没有摘要。",
     "3. 区分明确对你说的话、环境交谈、媒体声音、半句话和 ASR 噪声。不要把持续录音中的每句话都当成命令。",
     "4. 结合记录判断当前意图、阻碍和下一步；区分事实、推断与未知。",

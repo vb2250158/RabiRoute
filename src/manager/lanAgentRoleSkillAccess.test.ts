@@ -5,7 +5,7 @@ import { authorizeLanAgentRoleSkillRead, authorizeLanAgentRoleSkillRequest } fro
 const principal = { kind: "agent", nodeId: "node-a", agentId: "agent-a" } as const;
 
 test("authenticated Agents read public persona Skills without Route grants", () => {
-  for (const persona of ["persona-a", "persona-b", "示例人格"]) {
+  for (const persona of ["persona-a", "persona-b", "示例角色"]) {
     assert.deepEqual(authorizeLanAgentRoleSkillRead(principal, persona, [], () => ""), { allowed: true });
     for (const prefix of ["/api/roles", "/roles"]) {
       for (const suffix of ["/skills", "/skills/example", "/skills/example/download"]) {

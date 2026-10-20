@@ -23,13 +23,13 @@ function plan(id: string, secretaryBinding?: PlanItem["secretaryBinding"]): Plan
 const sessions: CodexPlanAssistantSession[] = [
   {
     threadId: "019fa314-2c07-7523-896f-9bb6b638054a",
-    threadName: "主人格 协助处理计划1",
+    threadName: "主角色 协助处理计划1",
     workspace: "C:\\workspace\\route",
     index: 1
   },
   {
     threadId: "019fa314-2c07-7523-896f-9bb6b638054b",
-    threadName: "主人格 协助处理计划2",
+    threadName: "主角色 协助处理计划2",
     workspace: "C:\\workspace\\route",
     index: 2
   }
@@ -186,7 +186,7 @@ test("DSH plans keep a stable DSH secretary binding", () => {
   const dshSessions = [{
     agentAdapter: "dsh" as const,
     threadId: "session-00000000-0000-4000-8000-000000000021",
-    threadName: "DSH 主人格 协助处理计划",
+    threadName: "DSH 主角色 协助处理计划",
     workspace: "C:\\workspace\\route",
     index: 1
   }];
@@ -203,7 +203,7 @@ test("a legacy Codex-typed binding keeps the same session when that secretary is
   const dshSessions = [{
     agentAdapter: "dsh" as const,
     threadId: "session-00000000-0000-4000-8000-000000000022",
-    threadName: "DSH 主人格 协助处理计划2",
+    threadName: "DSH 主角色 协助处理计划2",
     workspace: "C:\\workspace\\route",
     index: 2
   }];

@@ -3,6 +3,8 @@ import { userFacingError } from "./userFacingError";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useTheme } from "vuetify";
 import { useRoute, useRouter } from "vue-router";
+import { useRoleStore } from "./stores/roleStore";
+import { isRolePage, roleConfigPath } from "./roleScopedNavigation";
 import LocaleSwitcher from "./components/LocaleSwitcher.vue";
 import QuickSetupDialog from "./components/QuickSetupDialog.vue";
 import { useI18n } from "./i18n";
@@ -39,6 +41,9 @@ import {
 const store = useGatewayStore();
 const route = useRoute();
 const router = useRouter();
+const roles = useRoleStore();
+const showRoleSwitcher = computed(() => isRolePage(route.path));
+const roleSourceQuery = computed(() => roles.sourceDeviceId ? { source: roles.sourceDeviceId } : {});
 const embeddedPlanView = computed(() => Boolean(route.params.planId) && window.self !== window.top);
 const { t } = useI18n();
 const vuetifyTheme = useTheme();
@@ -131,20 +136,20 @@ const snackbar = ref("");
 const showRouteSwitcher = computed(() => showsRouteSwitcher(route.path));
 const selectedRouteKey = computed(() => store.requestedRouteKey || (store.selectedGateway ? configNameFor(store.selectedGateway) : ""));
 watch(() => route.fullPath, path => store.syncRouteSelection(`#${path}`), { immediate: true, flush: "sync" });
-const navigationGroups = computed(() => buildWebNavigation(pluginCatalogStore.contributions.value, selectedRouteKey.value));
-const navItems = computed(() => navigationGroups.value.routePrimary.map(item => ({ ...item, title: t(item.title) })));
+const navigationGroups = computed(() => buildWebNavigation(pluginCatalogStore.contributions.value, selectedRouteKey.value, roles.selectedRoleId));
+const navItems = computed(() => navigationGroups.value.routePrimary.map(item => ({ ...item, title: t(item.title), to: item.to.startsWith("/roles/") ? { path: item.to, query: roleSourceQuery.value } : item.to })));
 const utilityNavItems = computed(() => navigationGroups.value.utility.map(item => ({ ...item, title: t(item.title) })));
 const footerNavItems = computed(() => navigationGroups.value.footer.map(item => ({ ...item, title: t(item.title) })));
 const sidebarPrimaryCommands = computed(() => webCommandsInSlot(pluginCatalogStore.commands.value, "sidebar-footer-primary"));
 const sidebarCommands = computed(() => webCommandsInSlot(pluginCatalogStore.commands.value, "sidebar-footer"));
-const topbarCommands = computed(() => webCommandsInSlot(pluginCatalogStore.commands.value, "topbar-primary"));
+const topbarCommands = computed(() => webCommandsInSlot(pluginCatalogStore.commands.value, "topbar-primary").filter(command => command.handlerId !== "web.add-route" || route.path.startsWith("/routes")));
 const managerConnected = computed(() => !store.managerError);
 const activePageSaveAction = computed(() => pageSaveAction.value);
-const hasUnsavedChanges = computed(() => store.dirty || activePageSaveAction.value?.dirty.value === true);
+const hasUnsavedChanges = computed(() => store.dirty || roles.dirty || activePageSaveAction.value?.dirty.value === true);
 const pageTitle = computed(() => t(String(route.meta.title || "RibiWebGUI")));
 const routeOptions = computed(() => store.gateways.map(gateway => {
   const runtime = store.runtimeFor(gateway.id);
-  const title = gatewayPersonaDisplayName(gateway, runtime.roleInfo);
+  const title = String(gateway.routeName || gateway.name || gateway.id);
   return { title, value: gateway.id };
 }));
 
@@ -162,6 +167,7 @@ async function savePage(): Promise<void> {
     await activePageSaveAction.value.save();
     return;
   }
+  if (showRoleSwitcher.value) { await roles.save(); return; }
   await store.save();
 }
 
@@ -191,15 +197,62 @@ async function executeCommand(command: WebCommandContribution): Promise<void> {
 
 async function loadGatewayEditorInBackground(): Promise<void> {
   await store.load();
-  if (store.gateways.length === 0) {
+  if (store.gateways.length === 0 && route.path.startsWith("/routes")) {
     const quickSetup = webCommandForHandler(pluginCatalogStore.commands.value, "web.quick-setup");
     if (quickSetup) await executeCommand(quickSetup);
-  } else if (selectedRouteKey.value && !routeKeyFromWebguiHash(`#${route.fullPath}`)) {
+  } else if (!showRoleSwitcher.value && selectedRouteKey.value && !routeKeyFromWebguiHash(`#${route.fullPath}`)) {
     const scopedPath = routeScopedPathForCurrentPage(selectedRouteKey.value, route.path);
     if (scopedPath && scopedPath !== route.path) await router.replace({ path: scopedPath, query: route.query, hash: route.hash });
   }
   void ensurePageDiagnostics();
 }
+
+
+let roleNavigationVersion = 0;
+async function syncRolePage(): Promise<void> {
+  const version = ++roleNavigationVersion;
+  const legacy = route.path.match(/^\/routes\/([^/]+)\/(persona(?:\/document)?|knowledge|plan\/(.+))$/)
+    || route.path.match(/^\/persona\/([^/]+)$/);
+  if (legacy) {
+    await store.load();
+    if (version !== roleNavigationVersion) return;
+    const key = decodeURIComponent(legacy[1]);
+    const original = store.gateways.find(item => item.id === key || configNameFor(item) === key);
+    if (!original?.agentRoleId) { roles.error = original ? "当前路由未绑定角色，请在路由配置中选择。" : "未找到原链接对应的路由。"; return; }
+    const suffix = legacy[2] === "knowledge" ? "knowledge" : legacy[2]?.startsWith("plan/") ? `plan/${legacy[3]}` : legacy[2]?.endsWith("document") ? "document" : "config";
+    await router.replace({ path: `/roles/${encodeURIComponent(original.agentRoleId)}/${suffix}`, query: { ...route.query, ...(original.agentRoleDeviceId ? { source: original.agentRoleDeviceId } : {}) } });
+    return;
+  }
+  if (route.path === "/persona" || route.path === "/knowledge") {
+    await router.replace(route.path === "/knowledge" ? "/roles/knowledge" : "/roles"); return;
+  }
+  if (!isRolePage(route.path)) return;
+  const source = String(route.query.source || "");
+  const id = String(route.params.roleId || "");
+  if (!id) {
+    roles.sourceDeviceId = source;
+    await roles.loadCatalog();
+    if (version !== roleNavigationVersion) return;
+    const first = roles.catalog.find(role => !role.error);
+    if (first) await router.replace({ path: route.path.endsWith("/knowledge") ? `/roles/${encodeURIComponent(first.roleId)}/knowledge` : roleConfigPath(first.roleId), query: source ? { source } : {} });
+    else await roles.select("", source);
+    return;
+  }
+  await roles.select(id, source);
+  if (version !== roleNavigationVersion) return;
+  await roles.loadCatalog();
+}
+watch(() => route.fullPath, () => { void syncRolePage().catch(error => { roles.error = userFacingError(error); }); }, { immediate: true });
+function selectRole(id: string): void {
+  if (!id || id === roles.selectedRoleId || !canLeaveDirtyState()) return;
+  const suffix = route.path.includes("/knowledge") || route.path.includes("/plan/") ? "knowledge" : "config";
+  void router.push({ path: `/roles/${encodeURIComponent(id)}/${suffix}`, query: roleSourceQuery.value });
+}
+const releaseRoleGuard = router.beforeEach((to, from) => {
+  if (!roles.dirty || !isRolePage(from.path)) return true;
+  if (String(to.params.roleId || "") === roles.selectedRoleId && String(to.query.source || "") === roles.sourceDeviceId) return true;
+  return window.confirm("当前角色有未保存修改，确定离开？");
+});
 
 onMounted(() => {
   void loadInterfaceTheme();
@@ -209,6 +262,7 @@ onMounted(() => {
   systemThemeQuery.addEventListener("change", onSystemThemeChanged);
   managerEvents = managerEventSource("/api/events");
   managerEvents.addEventListener("plugin_catalog_changed", () => { void handlePluginCatalogChanged(); });
+  managerEvents.addEventListener("role_catalog_changed", () => { void roles.loadCatalog(); if (!roles.dirty && showRoleSwitcher.value) void roles.load(); });
   managerEvents.addEventListener("desktop_settings_changed", () => { void loadInterfaceTheme(); });
 });
 
@@ -240,6 +294,7 @@ watch(drawer, value => {
 });
 
 onBeforeUnmount(() => {
+  releaseRoleGuard();
   window.removeEventListener("beforeunload", beforeUnload);
   window.removeEventListener(INTERFACE_THEME_CHANGED, onInterfaceThemeChanged);
   systemThemeQuery.removeEventListener("change", onSystemThemeChanged);
@@ -249,7 +304,8 @@ onBeforeUnmount(() => {
 });
 
 async function refresh(): Promise<void> {
-  await Promise.all([store.load(), pluginCatalogStore.refresh()]);
+  await Promise.all([store.load(), roles.loadCatalog(), pluginCatalogStore.refresh()]);
+  if (showRoleSwitcher.value && (!roles.dirty || window.confirm("放弃当前角色未保存修改并刷新？"))) await roles.load();
   await refreshWebPluginModulesSafely();
   const routeId = typeof route.meta.pluginRouteId === "string" ? route.meta.pluginRouteId : "";
   if (routeId && !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) {
@@ -376,12 +432,20 @@ function selectGateway(id: string): void {
           <div class="font-weight-bold">{{ pageTitle }}</div>
         </v-toolbar-title>
         <div id="page-topbar-controls" class="topbar-page-controls" />
+        <v-autocomplete
+          v-if="showRoleSwitcher"
+          class="topbar-route-picker"
+          :model-value="roles.selectedRoleId"
+          :items="roles.catalog.map(role => ({ title: `${role.title}${role.title !== role.roleId ? ` · ${role.roleId}` : ''}${role.error ? ' · 状态异常' : ''}`, value: role.roleId, props: { disabled: !!role.error } }))"
+          aria-label="选择角色" density="compact" hide-details
+          @update:model-value="value => selectRole(String(value || ''))"
+        />
         <v-select
-          v-if="showRouteSwitcher"
+          v-if="showRouteSwitcher && !showRoleSwitcher"
           class="topbar-route-picker"
           :model-value="store.selectedGatewayId"
           :items="routeOptions"
-          aria-label="选择航线"
+          aria-label="选择路由"
           density="compact"
           hide-details
           @update:model-value="value => selectGateway(String(value || ''))"
@@ -434,15 +498,15 @@ function selectGateway(id: string): void {
       <v-alert v-if="store.error" type="error" variant="tonal" class="ma-4">{{ store.error }}</v-alert>
       <v-btn v-if="store.saveState === 'conflict'" class="ma-4" @click="store.reloadSelectedGateway().catch(error => { store.error = String(error); })">{{ t("重新加载当前路线") }}</v-btn>
       <v-alert v-else-if="store.saveMessage" :type="store.saveState === 'saved' ? 'success' : 'info'" variant="tonal" class="ma-4" role="status">{{ t(store.saveMessage) }}</v-alert>
-      <v-alert v-if="store.routeSelectionMissing" type="error" variant="tonal" class="ma-4">
+      <v-alert v-if="store.routeSelectionMissing && !showRoleSwitcher" type="error" variant="tonal" class="ma-4">
         {{ t("未找到当前路由") }}：<span data-no-i18n>{{ store.requestedRouteKey }}</span>
       </v-alert>
-      <router-view v-if="!store.routeSelectionMissing" v-slot="{ Component, route: activeRoute }">
+      <router-view v-if="!store.routeSelectionMissing || showRoleSwitcher" v-slot="{ Component, route: activeRoute }">
         <KeepAlive>
           <component
             :is="Component"
             v-if="activeRoute.meta.keepAlive"
-            :key="`${String(activeRoute.meta.pluginRouteId || activeRoute.name || activeRoute.path)}:${String(activeRoute.params.id || '')}`"
+            :key="`${String(activeRoute.meta.pluginRouteId || activeRoute.name || activeRoute.path)}:${String(activeRoute.params.roleId || activeRoute.params.id || '')}`"
           />
         </KeepAlive>
         <component :is="Component" v-if="!activeRoute.meta.keepAlive" />

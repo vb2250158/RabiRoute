@@ -17,7 +17,7 @@ English | <a href="./README_zh.md">简体中文</a>
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 20 or newer" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="Current version: 0.3.62" src="https://img.shields.io/badge/version-0.3.62-3178c6">
+  <img alt="Current version: 0.3.63" src="https://img.shields.io/badge/version-0.3.63-3178c6">
   <img alt="Status: active development" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
@@ -33,11 +33,11 @@ The Agent answers, writes code, calls tools, and performs the task. RabiRoute de
 
 Experimental vacuum cloud map files can be connected through Mi Home QR login in Xiaomi Setup. See the [map connection guide](docs/vacuum-cloud-map_en.md); version-2 map decoding is available, while live localization and coordinate navigation require separate acceptance.
 
-- **Route chat to an Agent.** QQ groups, direct messages, the persona panel, and other inputs can enter a fixed project and Desktop task through a Route.
-- **Run scheduled Agent work.** Persona rules can trigger an Agent by interval, time window, daily time, or one-time schedule, or run a configured local script.
+- **Route chat to an Agent.** QQ groups, direct messages, the role panel, and other inputs can enter a fixed project and Desktop task through a Route.
+- **Run scheduled Agent work.** Role rules can trigger an Agent by interval, time window, daily time, or one-time schedule, or run a configured local script.
 - **Operate remote computers.** One controller owns memory, skills and workflows; online clients expose terminals, files, windows and screenshots even when their Agent backend is stopped. See [remote computer clients](docs/remote-computer-client_en.md) for experimental scope.
-- **Carry continuous context.** Each persona owns its message history and references to plans, memories, and skills; every Route can limit the recent messages included in a delivery.
-- **Configure each persona's plan workflow.** Plan status keys, labels, descriptions, colors, order, views, approval behavior, and delayed archival come from that persona's configuration; Agents can evolve the catalog without a code release.
+- **Carry continuous context.** Each role owns its message history and references to plans, memories, and skills; every Route can limit the recent messages included in a delivery.
+- **Configure each role's plan workflow.** Plan status keys, labels, descriptions, colors, order, views, approval behavior, and delayed archival come from that role's configuration; Agents can evolve the catalog without a code release.
 - **Control external sends.** Agents reply to QQ, RabiLink, and other channels through one sending API. Targets, quoted messages, sender identity, and receipts are validated and recorded.
 - **Send Windows text and images.** RabiRoute Desktop supports selected-text actions, system screenshots, annotations, copy, pinning, and delivery to an active persona.
 - **Connect speech and mobile devices.** RabiSpeech, RabiLink phone and glasses clients, wearable inputs, and the remote Relay are implemented as experimental integrations.
@@ -78,16 +78,18 @@ The manual trigger performs a real delivery. See [Complete the first Route](docs
 
 ## Current capabilities
 
-The repository version is `0.3.62`. The table lists behavior backed by current code, configuration surfaces, and tests. Features that require accounts, external services, or physical devices still need acceptance in their target environment.
+The repository version is `0.3.63`. The table lists behavior backed by current code, configuration surfaces, and tests. Features that require accounts, external services, or physical devices still need acceptance in their target environment.
+
+Role configuration and plans/memory select roles independently of Routes, including unbound roles. Route configuration owns message endpoints, Agent bindings and explicit role references. Archived roles can be restored or permanently deleted from Settings after reference and running-work checks. See [role-centric configuration](docs/role-centric-architecture_en.md). This source collection does not install or activate a runtime.
 
 | Area | Status | What it provides |
 | --- | --- | --- |
 | Routing core | Verified | Receive messages, persist events, match rules, build Agent context, deliver to a handler, and record replies. |
 | NapCat / OneBot | Verified | Bind one NapCat to each Route, manage quick/password/QR login and security confirmation inside the Route card, receive QQ group/direct messages, preserve media evidence, and send replies through OneBot HTTP. |
-| Schedules and persona automation | Verified | Trigger an Agent from messages or time rules; run configured persona-local scripts. |
+| Schedules and role automation | Verified | Trigger an Agent from messages or time rules; run configured persona-local scripts. |
 | Codex Desktop | Verified | A full task ID selects the existing task, and each delivery supplies its workspace; report success only after the target rollout records the `deliveryId`. Deleted or archived bindings can be replaced under controlled rules. |
-| RibiWebGUI | Verified | Manage Routes, personas, message inputs, Agents, plans, memories, logs, diagnostics, themes, and desktop settings. |
-| Persona plan workflow | Verified | Use persona-configured status keys and presentation metadata as the single source for Manager, WebGUI, and Desktop; add, update, replace, or retire states through guarded APIs while preserving plan history. |
+| RibiWebGUI | Verified | Manage Routes, roles, message inputs, Agents, plans, memories, logs, diagnostics, themes, and desktop settings. |
+| Role plan workflow | Verified | Use persona-configured status keys and presentation metadata as the single source for Manager, WebGUI, and Desktop; add, update, replace, or retire states through guarded APIs while preserving plan history. |
 | Plans, memories, and message processing | Verified | Page through plans and memories, submit plan feedback, assign message-processing work, and preserve state and receipts. |
 | Windows desktop | Core path implemented | Host owns one application generation containing Manager and the tray/task-window surface; use selected-text actions, screenshots, and annotations. Some system interactions still need Windows device acceptance. |
 | Linux Host | Experimental | Minimal source Host: after build it owns Manager, prints the current loopback WebGUI URL, and supports status, open, restart, and quit. No Windows/Qt tray, screenshots, or global hotkeys; real Relay and endurance acceptance remain pending. |
@@ -112,15 +114,15 @@ In the public RabiLink console, select an application and copy its onboarding pr
 
 ### 0.3.23: one connection, default service access
 
-Authenticated devices in the same RabiLink application can use services provided by the PC, including speech, personas, resources, management and knowledge reads/writes. Settings remove duplicate permission switches, MCP secrets and allowlists. Identity, application isolation and service readiness remain checked separately. See [connections](docs/rabilink-peer-tunnel_en.md) and [knowledge](docs/rabilink-knowledge-runtime_en.md).
+Authenticated devices in the same RabiLink application can use services provided by the PC, including speech, roles, resources, management and knowledge reads/writes. Settings remove duplicate permission switches, MCP secrets and allowlists. Identity, application isolation and service readiness remain checked separately. See [connections](docs/rabilink-peer-tunnel_en.md) and [knowledge](docs/rabilink-knowledge-runtime_en.md).
 
 ### 0.3.21: separate PC identities
 
 RabiLink configuration adds **Reset instance ID** to repair identities copied between PCs. Host backs up and resets the instance ID and connection key while preserving saved data, then restarts the application. A local ownership marker rejects future copies to another PC. See [instance identity](docs/user-guide/instance-identity_en.md) for legacy configurations, recovery and connection limits.
 
-### 0.3.19 experimental implementation: remote persona references
+### 0.3.19 experimental implementation: remote role references
 
-Local Routes can select a persona owned by another PC and read its text, message rules and context budgets while keeping their existing message inputs and handling Agent. Version 0.3.19 adds this experimental implementation: both PCs reuse authentication for the same RabiLink application, automatically exchange and pin device public keys, then use LAN, P2P or Relay to access a restricted persona service without per-service manual grants. Since 0.3.22, authenticated devices in the same application can use provided services by default; source PCs need the new capability and pinned keys remain checked. See [remote persona references](docs/remote-persona-reference_en.md) for operation, failure behavior and the pending two-PC acceptance.
+Local Routes can select a role owned by another PC and read its text, message rules and context budgets while keeping their existing message inputs and handling Agent. Version 0.3.19 adds this experimental implementation: both PCs reuse authentication for the same RabiLink application, automatically exchange and pin device public keys, then use LAN, P2P or Relay to access a restricted role service without per-service manual grants. Since 0.3.22, authenticated devices in the same application can use provided services by default; source PCs need the new capability and pinned keys remain checked. See [remote role references](docs/remote-persona-reference_en.md) for operation, failure behavior and the pending two-PC acceptance.
 
 ### 0.3.5: Remote Agent authorization, focused approvals and mobile recording
 
@@ -149,7 +151,7 @@ flowchart LR
     G --> H[Reply · receipt · audit]
 ```
 
-Each Route stores its message input, persona, handler, workspace, and sending rules separately. Message adapters do not build Agent instructions, and Agents do not receive channel credentials or direct ownership of routing state.
+Each Route stores its message input, role, handler, workspace, and sending rules separately. Message adapters do not build Agent instructions, and Agents do not receive channel credentials or direct ownership of routing state.
 
 Manager loads 31 built-in plugin instances in the default Profile through one Plugin Kernel. Built-in and out-of-tree packages share schema/profile v2, the same SDK, dependency graph, permission checks, generation switching, execution-mode boundary, and Web module lifecycle. See [Plugin packages and hot replacement](docs/plugin-bundles_en.md).
 
@@ -172,10 +174,10 @@ data/roles/<RoleId>/persona.md
 data/roles/<RoleId>/personaConfig.json
 ```
 
-- `adapterConfig.json` stores message inputs, handlers, workspaces, Route rules, and persona bindings.
-- `persona.md` stores persona guidance and handler-facing work requirements.
-- `personaConfig.json` stores persona automation, avatar data, speech keywords, and recent-message limits.
-- `data/roles/<RoleId>/conversation/` stores that persona's message history.
+- `adapterConfig.json` stores message inputs, handlers, workspaces, Route rules, and role bindings.
+- `persona.md` stores role guidance and handler-facing work requirements.
+- `personaConfig.json` stores role automation, avatar data, speech keywords, and recent-message limits.
+- `data/roles/<RoleId>/conversation/` stores that role's message history.
 - [`examples/data/`](examples/data/) contains sanitized, copyable samples.
 
 Buildable clients live under [`apps/`](apps/), shared SDKs under [`packages/`](packages/), and reusable Agent guides under [`skills/`](skills/).
@@ -187,7 +189,7 @@ For experimental home device control and speaker announcements, see the [Agent A
 ### First use
 
 - [Complete the first Route](docs/user-guide/first-route_en.md): complete a real Codex Desktop delivery.
-- [RibiWebGUI user guide](docs/user-guide/README_en.md): use the interface, personas, Routes, Agents, and troubleshooting tools.
+- [RibiWebGUI user guide](docs/user-guide/README_en.md): use the interface, roles, Routes, Agents, and troubleshooting tools.
 - [Interface and runtime status](docs/user-guide/interface-and-status_en.md): determine whether Manager, a Route, and message inputs are healthy.
 - [Operations, logs, and troubleshooting](docs/user-guide/operations-and-troubleshooting_en.md): locate a failure by its visible symptom.
 
@@ -195,7 +197,7 @@ For experimental home device control and speaker announcements, see the [Agent A
 
 - [Configuration](docs/configuration_en.md): review local files, directories, and main settings.
 - [LAN Rabi Agent](docs/lan-rabi-agent-bootstrap_en.md): connect Codex/DSH tasks on another computer and configure node permissions.
-- [Remote persona references](docs/remote-persona-reference_en.md): 0.3.19 experimental implementation for using another PC's persona in a local Route.
+- [Remote role references](docs/remote-persona-reference_en.md): 0.3.19 experimental implementation for using another PC's role in a local Route.
 - [RabiSpeech](docs/rabispeech-plugin_en.md): configure local or remote TTS and ASR.
 - [Client applications](apps/README_en.md): build Android, Rokid AIUI, browser bridge, and Rabi Agent clients.
 

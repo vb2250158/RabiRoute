@@ -127,7 +127,7 @@ test("each review loads fresh persona context and missing context never dispatch
   persona = "";
   const failed = await f.service.review("one", session.id, session.revision, "");
   assert.equal(failed.session!.review!.status, "failed");
-  assert.match(failed.session!.review!.error!, /人格上下文为空/);
+  assert.match(failed.session!.review!.error!, /角色上下文为空/);
   assert.equal(f.delivered.length, 2);
 });
 

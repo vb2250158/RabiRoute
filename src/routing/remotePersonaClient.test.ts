@@ -21,7 +21,7 @@ const request = {
 function snapshot(patch: Partial<RemotePersonaSnapshot> = {}): RemotePersonaSnapshot {
   return {
     schemaVersion: 1, deviceId: request.deviceId, roleId: request.roleId, file: request.file,
-    document: "# 远端人格\n只采用远端人格的明确设定。",
+    document: "# 远端角色\n只采用远端角色的明确设定。",
     revision: "a".repeat(64),
     personaConfig: { notificationRules: [{ id: "remote-rule", routeKinds: ["private"], regex: "remote", template: "远端消息模板" }] },
     applicationGenerationId: request.applicationGenerationId, managerInstanceId: request.managerInstanceId,
@@ -123,12 +123,12 @@ test("remote AgentPacket uses inline remote persona and remote knowledge, never 
     const packet = buildAgentPacket({ route: effective, routeKind: "private", record, extraValues: {}, matchedRules: [rule], routeVariables: {}, routeText: record.rawMessage }, rule,
       { roleId: request.roleId, roleDir: localRoleDir, rolePath: poison, routeDataDir: original.dataDir!, personaDataDir: localRoleDir },
       { remotePersona: remote });
-    assert.match(packet.content, /远端人格正文/);
-    assert.match(packet.content, /只采用远端人格的明确设定/);
+    assert.match(packet.content, /远端角色正文/);
+    assert.match(packet.content, /只采用远端角色的明确设定/);
     assert.ok(packet.content.includes(`${remote.knowledgeApiBaseUrl}/api/roles/${request.roleId}/knowledge/search`));
-    assert.match(packet.content, /此远端人格入口只读/);
+    assert.match(packet.content, /此远端角色入口只读/);
     assert.doesNotMatch(packet.content, /\/peer\/http\/pc-b\/manager/);
-    assert.doesNotMatch(packet.content, /WRONG LOCAL PERSONA|请遵循角色文件|角色目录：|计划目录：|记忆目录：|无人格直通模式/);
+    assert.doesNotMatch(packet.content, /WRONG LOCAL PERSONA|请遵循角色文件|角色目录：|计划目录：|记忆目录：|无角色直通模式/);
     assert.equal(packet.templateValues.agentRolePath, undefined);
     assert.equal(packet.templateValues.agentRoleDir, undefined);
     assert.deepEqual(fs.readdirSync(localRoleDir), before);

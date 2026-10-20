@@ -64,6 +64,13 @@ test("physical hook worker reads current role source and storage knowledge witho
     if (knowledge.kind !== "knowledge") throw new Error("Unexpected worker reply");
     assert.ok(knowledge.resolution.knowledge.requiredReadItems.some(item => item.id === "memory-demo"));
     assert.equal(knowledge.resolution.policy.touchViewedAt, true);
+    fs.writeFileSync(path.join(roleDir, "roleMetadata.json"), JSON.stringify({ schemaVersion: 1, revision: 1, archivedAt: timestamp }));
+    await assert.rejects(readSource, /归档|无法读取/);
+    await assert.rejects(() => managerKnowledgePageWorkerPool.run({
+      type: "codex_hook_context_read", input: { kind: "knowledge", trigger: {
+        kind: "user_prompt", source: "codex_hook", roleId: "DemoPersona", roleDir, signalText: "worker recall"
+      } }
+    }), /归档|无法读取/);
   } finally {
     await managerKnowledgePageWorkerPool.stop();
     fs.rmSync(root, { recursive: true, force: true });

@@ -149,7 +149,7 @@ export function listPersonas(context: Pick<PersonaMessagingRouteContext, "rolesR
   const runtimes = context.runtimes();
   const activeRoot = rolesRootKey(context.rolesRoot);
   return context.personaPresentations()
-    .filter(item => item.isPersona && rolesRootKey(item.rolesRoot) === activeRoot)
+    .filter(item => item.isPersona && !item.archivedAt && !item.lifecycleError && rolesRootKey(item.rolesRoot) === activeRoot)
     .map((item) => {
       const personaId = item.roleId;
       const title = item.files.find(file => file.fileName.toLowerCase() === "persona.md")?.title ?? "";

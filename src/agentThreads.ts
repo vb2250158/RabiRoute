@@ -333,7 +333,7 @@ function normalizeReasoningEffort(value: unknown): CodexReasoningEffort | undefi
 }
 
 const agentThreadSourceLabels: Record<AgentThreadSourceType, string> = {
-  primary_persona: "主人格 Agent",
+  primary_persona: "主角色 Agent",
   message_processing: "消息处理 Agent",
   plan_secretary: "计划秘书 Agent",
   plan_agent: "计划执行 Agent",

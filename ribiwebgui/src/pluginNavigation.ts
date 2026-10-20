@@ -123,7 +123,8 @@ function parseNavigationContribution(value: unknown, sequence: number): Navigati
 
 export function buildWebNavigation(
   contributions: readonly unknown[] | null,
-  selectedRouteId: string
+  selectedRouteId: string,
+  selectedRoleId = ""
 ): WebNavigationGroups {
   const pageCatalog = resolveWebPageCatalog(contributions, contributions === null ? "loading" : "ready");
   const seenPaths = new Set<string>();
@@ -135,7 +136,7 @@ export function buildWebNavigation(
     .flatMap((item): WebNavigationItem[] => {
       let to = "";
       try {
-        to = resolveRegisteredWebPagePath(item.routeId, selectedRouteId.trim());
+        to = resolveRegisteredWebPagePath(item.routeId, selectedRouteId.trim(), selectedRoleId.trim());
       } catch {
         return [];
       }

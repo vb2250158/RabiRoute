@@ -150,7 +150,7 @@ export function identityContextLines(context: IdentityRelationContext | undefine
   return [
     `当前账号：${context.endpoint.platform} / ${context.endpoint.endpointIdentityNamespace} / ${context.endpoint.senderStableId}`,
     context.endpoint.displayName ? `消息显示名：${context.endpoint.displayName}` : "",
-    context.endpoint.isSelf ? "该账号被标记为当前人格自身账号；不要把回显当成新的外部发言。" : "",
+    context.endpoint.isSelf ? "该账号被标记为当前角色自身账号；不要把回显当成新的外部发言。" : "",
     participant ? `已确认参与者：${participant.displayName || participant.id}（${participant.kind}）` : "",
     ...possible,
     context.possibleParticipants.length > 1

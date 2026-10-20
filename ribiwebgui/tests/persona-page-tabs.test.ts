@@ -19,7 +19,7 @@ function pageSection(value: string, nextValue?: string): string {
 
 test("persona configuration splits dense content into accessible page tabs", () => {
   assert.match(source, /v-model="activePersonaPageTab"/);
-  assert.match(source, /:aria-label="t\('人格配置分区'\)"/);
+  assert.match(source, /:aria-label="t\('角色配置分区'\)"/);
   assert.match(source, /<v-tab value="profile"[^>]*>基础资料<\/v-tab>/);
   assert.match(source, /<v-tab value="expression"[^>]*:disabled="!hasPersona"[^>]*>表达与语音<\/v-tab>/);
   assert.match(source, /<v-tab value="avatar"[^>]*:disabled="!hasPersona"[^>]*>虚拟形象<\/v-tab>/);
@@ -31,10 +31,13 @@ test("persona configuration splits dense content into accessible page tabs", () 
 });
 
 test("each persona page tab owns one coherent group of existing cards", () => {
-  assert.match(pageSection("profile", "expression"), /人格配置[\s\S]*persona\.md 摘要/);
-  assert.match(pageSection("expression", "avatar"), /语言风格风控[\s\S]*人格语音[\s\S]*语音唤醒/);
+  assert.match(pageSection("profile", "expression"), /角色配置[\s\S]*persona\.md 摘要/);
+  assert.match(pageSection("expression", "avatar"), /语言风格风控[\s\S]*角色语音[\s\S]*语音唤醒/);
   assert.match(pageSection("avatar", "identity"), /PersonaDesktopPetPanel/);
   assert.match(pageSection("identity", "context"), /<PersonaIdentityRelationsCard[\s\S]*声纹识别工具/);
-  assert.match(pageSection("context", "automation"), /最近消息上下文[\s\S]*路由变量/);
-  assert.match(pageSection("automation"), /默认消息规则[\s\S]*人格自动化[\s\S]*可用模板变量/);
+  assert.match(pageSection("context", "automation"), /最近消息上下文/);
+  assert.doesNotMatch(pageSection("context", "automation"), /路由变量/);
+  const routePage = fs.readFileSync(new URL("../src/pages/RouteConfigPage.vue", import.meta.url), "utf8");
+  assert.match(routePage, /<RouteVariablesEditor/);
+  assert.match(pageSection("automation"), /默认消息规则[\s\S]*角色自动化[\s\S]*可用模板变量/);
 });

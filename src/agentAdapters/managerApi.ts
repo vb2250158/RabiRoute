@@ -369,7 +369,7 @@ export async function scanDshAgentAdapter(
         ...(dshAnyHealthy ? [] : ["DSH apiproxy 不可用；请启动 DSH 并确认服务地址。"]),
         ...(dshSessions.length === 0 && !dshSessionWarning ? ["未发现 DSH 会话；保存配置时可按名称和工作目录创建。"] : []),
         "RabiRoute 可以发现、创建、重命名、绑定 DSH 会话，并通过 session.prompt（mode=queue）投递。",
-        "DSH 支持主人格、计划秘书、消息处理和独立记忆整理会话；请在当前实例核对任务可用性和实际投递结果。"
+        "DSH 支持主角色、计划秘书、消息处理和独立记忆整理会话；请在当前实例核对任务可用性和实际投递结果。"
       ]
     } },
     cwdOptions: dshProjects.map((project) => project.path)

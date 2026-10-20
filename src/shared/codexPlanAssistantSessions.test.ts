@@ -131,7 +131,7 @@ test("plan assistant initialization keeps the secretary control-only and preserv
   assert.match(prompt, /投递到 threadId=.*并取得回执/);
   assert.match(prompt, /本轮执行一项并更新计划与记忆/);
   assert.match(prompt, /消费业务结果、更新计划与记忆并续投/);
-  assert.match(prompt, /仅把决定、批准、授权、缺少输入或最终复核升级给主人格/);
+  assert.match(prompt, /仅把决定、批准、授权、缺少输入或最终复核升级给主角色/);
   assert.match(prompt, /Idempotency-Key/);
   assert.match(prompt, /If-Match/);
   assert.match(prompt, /强 ETag/);

@@ -19,7 +19,7 @@ export type AgentDeliveryTarget = { kind: "recipient"; recipientId: string } | A
 /** Initial configuration only. Runtime selection always reads the saved rule. */
 export function defaultAgentRecipients(): AgentRecipientDefinition[] {
   return [
-    { id: "primary", name: "主人格", executor: "primary" },
+    { id: "primary", name: "主角色", executor: "primary" },
     { id: "plan-secretary", name: "计划秘书", executor: "plan_secretary" },
     { id: "message-processing", name: "消息处理 Agent", executor: "message_pool" },
     { id: "memory-consolidation", name: "记忆整理 Agent", executor: "memory_consolidation" }

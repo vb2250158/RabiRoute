@@ -206,10 +206,10 @@ const selectedSessionName = computed(() => {
   return "";
 });
 const roleOptions = computed(() => [
-  { title: "不配置人格", subtitle: "", value: "", avatarUrl: "" },
+  { title: "不配置角色", subtitle: "", value: "", avatarUrl: "" },
   ...((runtime.value.roleInfo?.options || []).map(role => ({
     title: personaOptionDisplayName(role),
-    subtitle: personaOptionDisplayName(role) !== role.value ? `人格 ID · ${role.value}` : "",
+    subtitle: personaOptionDisplayName(role) !== role.value ? `角色 ID · ${role.value}` : "",
     value: role.value,
     avatarUrl: role.avatarUrl || ""
   })))
@@ -772,8 +772,8 @@ const steps = computed(() => [
   },
   {
     value: 3,
-    title: "人格与保存",
-    note: `${form.agentRoleId || "不配置人格"}${form.agentModel ? ` · ${form.agentModel}` : " · 默认模型"}`,
+    title: "角色与保存",
+    note: `${form.agentRoleId || "不配置角色"}${form.agentModel ? ` · ${form.agentModel}` : " · 默认模型"}`,
     done: personaReady.value,
     icon: "mdi-numeric-3"
   }
@@ -920,7 +920,7 @@ async function apply() {
         </v-avatar>
         <div class="min-w-0">
           <div class="section-title">快速配置 RabiRoute</div>
-          <div class="section-note">按消息入口、Agent 绑定、人格确认三步完成首次配置。</div>
+          <div class="section-note">按消息入口、Agent 绑定、角色确认三步完成首次配置。</div>
         </div>
         <v-spacer />
         <v-chip color="secondary" variant="tonal" size="small">
@@ -1067,10 +1067,10 @@ async function apply() {
                   </template>
                   <template v-if="form.adapters.includes('heartbeat')">
                     <v-alert v-if="quickMessageAgentModeEnabled" type="success" variant="tonal" density="compact" class="full-span">
-                      Codex 消息处理 Agent 模式已开启。heartbeat 会立即交给独立消息处理 Agent，不会因为主人格会话正在工作而跳过，也不进入聊天消息合并等待。
+                      Codex 消息处理 Agent 模式已开启。heartbeat 会立即交给独立消息处理 Agent，不会因为主角色会话正在工作而跳过，也不进入聊天消息合并等待。
                     </v-alert>
                     <v-alert v-else type="info" variant="tonal" density="compact" class="full-span">
-                      定时计划在“人格配置 / 消息模板规则”的 heartbeat 规则里维护。下面的忙时策略只影响 heartbeat，普通群聊、私聊和其他消息仍按正常路由直接投递。
+                      定时计划在“角色配置 / 消息模板规则”的 heartbeat 规则里维护。下面的忙时策略只影响 heartbeat，普通群聊、私聊和其他消息仍按正常路由直接投递。
                     </v-alert>
                     <v-switch
                       v-if="!quickMessageAgentModeEnabled"
@@ -1184,7 +1184,7 @@ async function apply() {
                     Marvis 当前是人工接力模式：RabiRoute 会打开应用并复制 prompt，不会绑定会话线程。
                   </v-alert>
                   <v-alert v-if="selectedAgent === 'dsh'" type="info" variant="tonal" density="compact" class="mb-3">
-                    DSH 会话是主人格投递目标：通过 DSH apiproxy <code>session.prompt</code>（mode=queue）注入消息。DSH 会话在 DeepSeek Harness Web GUI 中创建和管理；RabiRoute 不创建、不重命名、不归档 DSH 会话。仍为实验性：尚未自动执行真实消息注入烟测。
+                    DSH 会话是主角色投递目标：通过 DSH apiproxy <code>session.prompt</code>（mode=queue）注入消息。DSH 会话在 DeepSeek Harness Web GUI 中创建和管理；RabiRoute 不创建、不重命名、不归档 DSH 会话。仍为实验性：尚未自动执行真实消息注入烟测。
                   </v-alert>
 
                   <div class="catalog-param-grid">
@@ -1239,7 +1239,7 @@ async function apply() {
 
                   <template v-if="selectedAgent === 'dsh'">
                     <v-alert type="info" variant="tonal" density="compact" class="mb-2">
-                      DSH 会话是主人格投递目标；通过 DSH apiproxy <code>session.prompt</code>（mode=queue）注入消息。
+                      DSH 会话是主角色投递目标；通过 DSH apiproxy <code>session.prompt</code>（mode=queue）注入消息。
                       DSH 会话在 DeepSeek Harness Web GUI 中创建和管理；RabiRoute 不创建、不重命名、不归档 DSH 会话。
                       仍为实验性：尚未自动执行真实消息注入烟测。
                     </v-alert>
@@ -1571,8 +1571,8 @@ async function apply() {
               <v-window-item :value="3">
                 <div class="section-title-row">
                   <div>
-                    <div class="section-title">人格可选与配置确认</div>
-                    <div class="section-note">不配置人格时，只按消息入口默认模板把来源和回传 API 投递给 Agent。</div>
+                    <div class="section-title">角色可选与配置确认</div>
+                    <div class="section-note">不配置角色时，只按消息入口默认模板把来源和回传 API 投递给 Agent。</div>
                   </div>
                 </div>
                 <v-combobox
@@ -1581,8 +1581,8 @@ async function apply() {
                   item-title="title"
                   item-value="value"
                   :return-object="false"
-                  label="默认人格 ID"
-                  placeholder="留空，不配置人格"
+                  label="默认角色 ID"
+                  placeholder="留空，不配置角色"
                   clearable
                   class="mb-4"
                 >
@@ -1611,7 +1611,7 @@ async function apply() {
                   <div class="status-row"><span>Agent</span><b>{{ quickAgentChoices.find(agent => agent.type === selectedAgent)?.title || selectedAgent }}</b></div>
                   <div class="status-row"><span>{{ agentPrimaryLabel() }}</span><b>{{ currentProject() || "未填写" }}</b></div>
                   <div class="status-row"><span>{{ agentSessionLabel() }}</span><b>{{ agentSessionSummary() }}</b></div>
-                  <div class="status-row"><span>人格</span><b>{{ form.agentRoleId || "不配置人格" }}</b></div>
+                  <div class="status-row"><span>角色</span><b>{{ form.agentRoleId || "不配置角色" }}</b></div>
                   <div class="status-row"><span>模型</span><b>{{ form.agentModel || "默认模型" }}</b></div>
                 </div>
                 <v-alert v-if="!canSave" class="mt-4" type="warning" variant="tonal">

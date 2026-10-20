@@ -149,7 +149,7 @@ function fixture(options: {
     id: "memory-hook",
     title: "Hook 只做触发和注入",
     focus: "Hook 只做触发和注入",
-    content: "人格、计划和记忆由 Rabi PC 管理。",
+    content: "角色、计划和记忆由 Rabi PC 管理。",
     createdAt: timestamp,
     updatedAt: timestamp,
     keywords: ["触发器和注入器"]
@@ -605,7 +605,7 @@ test("binding and base context are owned by Rabi Manager", (t) => {
     managerBaseUrl: "http://127.0.0.1:8790"
   });
   assert.equal(result.binding?.roleId, "YeYu");
-  assert.match(result.additionalContext, /人格、计划、记忆、技能、召回、viewedAt、归档与整理均由 Rabi PC 管理/);
+  assert.match(result.additionalContext, /角色、计划、记忆、技能、召回、viewedAt、归档与整理均由 Rabi PC 管理/);
   assert.match(result.additionalContext, /温柔、清楚/);
   assert.doesNotMatch(result.additionalContext, /plan-hook/);
   assert.ok(fs.existsSync(storePath));
@@ -647,7 +647,7 @@ test("legacy context injection mode restores full indexes", (t) => {
 test("focused context is materially smaller than legacy context for the same role", (t) => {
   const { root, roleDir, service } = fixture();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  fs.writeFileSync(path.join(roleDir, "persona.md"), `# 夜雨\n\n${"人格核心与边界。".repeat(700)}`, "utf8");
+  fs.writeFileSync(path.join(roleDir, "persona.md"), `# 夜雨\n\n${"角色核心与边界。".repeat(700)}`, "utf8");
 
   const focused = service.handleContext({
     sessionId: "session-size-focused",
@@ -681,7 +681,7 @@ test("prompt recall uses roleKnowledgeSnapshot and refreshes memory viewedAt", (
   });
   assert.match(result.additionalContext, /memory-hook/);
   assert.match(result.additionalContext, /GET \/api\/roles\/YeYu\/memory\/recent\/memory-hook/);
-  assert.doesNotMatch(result.additionalContext, /\[人格工作集\]/);
+  assert.doesNotMatch(result.additionalContext, /\[角色工作集\]/);
   const memory = listRecentMemories(roleDir).find((item) => item.id === "memory-hook");
   assert.ok(memory);
   assert.equal(typeof memory.viewedAt, "string");
@@ -848,7 +848,7 @@ test("paused plans do not deliver bound task completion reminders", async (t) =>
     eventName: "Stop",
     turnId: "turn-paused",
     cwd: root,
-    lastAssistantMessage: "暂停期间不应唤醒人格任务。"
+    lastAssistantMessage: "暂停期间不应唤醒角色任务。"
   });
 
   assert.equal(result.planTaskCompletion?.status, "ignored");

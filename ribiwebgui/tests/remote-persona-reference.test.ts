@@ -262,7 +262,7 @@ test("remote persona views gate all local persona editors and preserve route-onl
   const page = fs.readFileSync(new URL("../src/pages/PersonaTemplatePage.vue", import.meta.url), "utf8");
   const document = fs.readFileSync(new URL("../src/pages/PersonaDocumentPage.vue", import.meta.url), "utf8");
   const store = fs.readFileSync(new URL("../src/stores/gatewayStore.ts", import.meta.url), "utf8");
-  assert.match(page, /label="人格来源 PC"/);
+  assert.match(page, /label="角色来源 PC"/);
   assert.match(page, /<v-window v-if="!isRemotePersona"/);
   assert.match(page, /v-if="hasPersona && !isRemotePersona"[^\n]+openConfigFile/);
   assert.match(page, /removePersonaOwnedGatewayConfig/);

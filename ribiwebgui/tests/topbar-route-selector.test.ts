@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { showsRouteSwitcher } from "../src/routeScopedNavigation";
+import { isRolePage, roleConfigPath } from "../src/roleScopedNavigation";
 
 test("route selector appears only on adapters, persona and knowledge pages", () => {
   for (const route of ["/routes", "/routes/main", "/routes/main/adapters", "/persona", "/persona/main", "/routes/main/persona", "/routes/main/persona/document", "/knowledge", "/routes/main/knowledge"]) {
@@ -13,7 +14,17 @@ test("route selector appears only on adapters, persona and knowledge pages", () 
   }
 });
 
-test("one conditional selector follows the title in the top bar and reuses gateway selection", () => {
+test("role pages have independent identities without a Route binding", () => {
+  for (const pathname of ["/roles", "/roles/Example", "/roles/Example/document", "/roles/Example/knowledge"]) {
+    assert.equal(isRolePage(pathname), true, pathname);
+  }
+  for (const pathname of ["/routes", "/routes/main/adapters", "/settings"]) {
+    assert.equal(isRolePage(pathname), false, pathname);
+  }
+  assert.equal(roleConfigPath("Example role"), "/roles/Example%20role/config");
+});
+
+test("role and Route selectors are exclusive and use their own stores", () => {
   const root = path.resolve(import.meta.dirname, "..");
   const app = fs.readFileSync(path.join(root, "src/App.vue"), "utf8");
   const styles = fs.readFileSync(path.join(root, "src/styles.css"), "utf8");
@@ -21,7 +32,12 @@ test("one conditional selector follows the title in the top bar and reuses gatew
   const topbar = app.slice(app.indexOf("<v-app-bar "), app.indexOf("</v-app-bar>"));
   assert.doesNotMatch(sidebar, /<v-select|route-picker/);
   assert.equal((app.match(/<v-select\b/g) || []).length, 1);
-  assert.match(topbar, /<v-toolbar-title[\s\S]*?<\/v-toolbar-title>[\s\S]*?<v-select[\s\S]*?v-if="showRouteSwitcher"/);
+  assert.match(topbar, /<v-toolbar-title[\s\S]*?<\/v-toolbar-title>[\s\S]*?<v-autocomplete[\s\S]*?v-if="showRoleSwitcher"/);
+  assert.match(topbar, /<v-select[\s\S]*?v-if="showRouteSwitcher && !showRoleSwitcher"/);
+  assert.match(topbar, /:model-value="roles.selectedRoleId"/);
+  assert.match(topbar, /:items="roles.catalog.map/);
+  assert.match(topbar, /disabled: !!role.error/);
+  assert.match(topbar, /@update:model-value="value => selectRole\(String\(value \|\| ''\)\)"/);
   assert.match(app, /computed\(\(\) => showsRouteSwitcher\(route.path\)\)/);
   assert.match(topbar, /:model-value="store.selectedGatewayId"/);
   assert.match(topbar, /:items="routeOptions"/);

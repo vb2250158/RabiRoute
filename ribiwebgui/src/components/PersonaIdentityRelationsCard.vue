@@ -370,7 +370,7 @@ function channelLabel(channel: string): string {
   return ({
     qq: "QQ", weixin: "微信", wecom: "企业微信", feishu: "飞书", voice: "声纹",
     rabilink: "RabiLink", wearable: "穿戴设备", webhook: "Webhook", fennenote: "FenneNote",
-    xiaoai: "小爱同学", rolepanel: "人格面板", remoteagent: "远程 Agent", heartbeat: "心跳",
+    xiaoai: "小爱同学", rolepanel: "角色面板", remoteagent: "远程 Agent", heartbeat: "心跳",
     other: "其他消息端"
   } as Record<string, string>)[channel] || channel;
 }
@@ -758,7 +758,7 @@ async function persistParticipant(): Promise<boolean> {
       status: participantForm.value.status,
       evidenceRefs: appendEvidence(participantForm.value.evidenceRefs, participantForm.value.evidenceNote)
     });
-    notice.value = "身份已写入当前人格。";
+    notice.value = "身份已写入当前角色。";
     await refresh();
     return true;
   } catch (caught) {
@@ -801,7 +801,7 @@ async function persistAccount(): Promise<boolean> {
         evidenceRefs: appendEvidence(link.evidenceRefs, link.evidenceNote)
       }))
     });
-    notice.value = "消息端账号映射已写入当前人格。";
+    notice.value = "消息端账号映射已写入当前角色。";
     await refresh();
     return true;
   } catch (caught) {
@@ -839,7 +839,7 @@ async function persistRelation(): Promise<boolean> {
       },
       evidenceRefs: appendEvidence(relationForm.value.evidenceRefs, relationForm.value.evidenceNote)
     });
-    notice.value = "关系已写入当前人格。";
+    notice.value = "关系已写入当前角色。";
     await refresh();
     return true;
   } catch (caught) {
@@ -1047,13 +1047,13 @@ watch(unidentifiedChannels, channels => {
   <v-dialog v-model="situationDialog" max-width="900">
     <v-card class="app-card identity-support-dialog">
       <v-card-title class="identity-dialog-title">
-        <div><strong>情景记录</strong><span>用于核对人格怎样理解已投递消息，不会自动创建计划、任务或项目记忆。</span></div>
+        <div><strong>情景记录</strong><span>用于核对角色怎样理解已投递消息，不会自动创建计划、任务或项目记忆。</span></div>
         <v-btn icon="mdi-close" variant="text" @click="situationDialog = false" />
       </v-card-title>
       <v-card-text>
         <div class="d-flex justify-end mb-3"><v-btn size="small" variant="text" prepend-icon="mdi-refresh" :loading="situationsLoading" @click="refreshSituations">刷新记录</v-btn></div>
         <v-progress-linear v-if="situationsLoading" indeterminate color="secondary" class="mb-3" />
-        <div v-if="situationsLoaded && situations.length === 0" class="empty-state compact-empty"><div><strong>还没有可回看的情景</strong><span>人格收到可定位的消息后，这里会显示不含聊天正文的判断记录。</span></div></div>
+        <div v-if="situationsLoaded && situations.length === 0" class="empty-state compact-empty"><div><strong>还没有可回看的情景</strong><span>角色收到可定位的消息后，这里会显示不含聊天正文的判断记录。</span></div></div>
         <v-expansion-panels v-else variant="accordion">
           <v-expansion-panel v-for="item in situations" :key="item.id">
             <v-expansion-panel-title>
@@ -1195,7 +1195,7 @@ watch(unidentifiedChannels, channels => {
                 <div class="d-flex ga-2 align-center flex-wrap">
                   <strong data-no-i18n>{{ voice.displayName || '声纹账号' }}</strong>
                   <v-chip v-if="voice.conflicted" size="x-small" color="warning" variant="tonal">有冲突</v-chip>
-                  <v-chip v-else-if="voice.isUser === true" size="x-small" color="success" variant="tonal">当前人格</v-chip>
+                  <v-chip v-else-if="voice.isUser === true" size="x-small" color="success" variant="tonal">当前角色</v-chip>
                   <v-chip v-else-if="voice.isUser === false" size="x-small" variant="tonal">其他人</v-chip>
                 </div>
                 <span data-no-i18n>{{ compactIdentifier(voice.voiceprintId) }}<template v-if="voice.sourceHostName"> · {{ voice.sourceHostName }}</template></span>
@@ -1226,7 +1226,7 @@ watch(unidentifiedChannels, channels => {
             <v-alert type="info" variant="tonal" density="compact" class="mb-3">共用账号可以保留多个“可能关联”，但不能同时确认成多个唯一人物。每条关联的核对说明分别保存，不会复制给其他候选。</v-alert>
             <div class="form-grid">
               <v-text-field v-model="accountForm.displayName" label="消息显示名（可选）" />
-              <v-switch v-model="accountForm.isSelf" label="这是当前人格自身账号" color="success" inset hide-details />
+              <v-switch v-model="accountForm.isSelf" label="这是当前角色自身账号" color="success" inset hide-details />
             </div>
             <details class="identity-technical-details" :open="!accountEditing">
               <summary>账号身份键</summary>
@@ -1358,5 +1358,5 @@ watch(unidentifiedChannels, channels => {
 
   <v-dialog v-model="participantDialog" max-width="640"><v-card class="app-card"><v-card-title>{{ participantEditing ? '编辑身份' : '新增身份' }}</v-card-title><v-card-text><div class="form-grid"><v-text-field v-model="participantForm.participantId" label="身份 ID" :readonly="participantEditing" hint="留空时自动生成；已有 ID 不能改名。" persistent-hint /><v-select v-model="participantForm.participantKind" :items="participantKindOptions" label="类型" /><v-text-field v-model="participantForm.displayName" label="身份名字" /><v-select v-model="participantForm.status" :items="statusOptions" label="状态" /><v-text-field v-model="participantForm.aliasesText" class="full-span" label="别名" hint="用逗号分隔。" persistent-hint /><v-textarea v-model="participantForm.evidenceNote" class="full-span" label="本次核对说明（可选）" rows="2" hint="只写简短可核对依据，不要粘贴私人聊天正文。" persistent-hint /></div></v-card-text><v-card-actions><v-spacer /><v-btn variant="text" @click="participantDialog = false">取消</v-btn><v-btn color="secondary" :loading="saving" @click="saveParticipant">保存</v-btn></v-card-actions></v-card></v-dialog>
 
-  <v-dialog v-model="accountDialog" max-width="760"><v-card class="app-card"><v-card-title>{{ accountEditing ? '编辑账号关联' : '关联消息端账号' }}</v-card-title><v-card-text><v-alert type="warning" variant="tonal" density="compact" class="mb-3">平台、消息端命名空间和稳定发送者 ID 是身份键。它们不能用昵称、Route 或群号替代。</v-alert><v-alert type="info" variant="tonal" density="compact" class="mb-3">共用账号可以同时添加多个“可能关联”。每条关联分别保存核对说明；说话习惯一致性只能辅助判断当前使用者，不能把账号保存成多个“已确认”映射。</v-alert><div class="form-grid"><v-text-field v-model="accountForm.platform" label="平台" :readonly="accountEditing" placeholder="napcat / feishu / wecom" /><v-text-field v-model="accountForm.endpointIdentityNamespace" label="消息端命名空间" :readonly="accountEditing" placeholder="bot:12345" /><v-text-field v-model="accountForm.senderStableId" label="稳定发送者 ID" :readonly="accountEditing" /><v-text-field v-model="accountForm.displayName" label="消息显示名（可选）" /><v-switch v-model="accountForm.isSelf" label="这是当前人格自身账号" color="success" inset hide-details /></div><div class="section-title-row compact-row mt-5"><div><div class="section-title small-title">身份关联</div><div class="section-note">确认账号属于谁，不等于确认项目归属或授权。</div></div><v-btn size="small" variant="tonal" prepend-icon="mdi-plus" @click="addAccountLink">添加关联</v-btn></div><div v-for="(link, index) in accountForm.participantLinks" :key="index" class="rule-card mb-2"><div class="form-grid"><v-select v-model="link.participantId" :items="participantOptions" label="身份" /><v-select v-model="link.status" :items="statusOptions" label="关联状态" /><v-text-field v-model.number="link.confidence" type="number" min="0" max="1" step="0.05" label="置信度（可选）" /><v-btn class="align-self-center" size="small" variant="text" color="error" @click="removeAccountLink(index)">移除</v-btn><v-textarea v-model="link.evidenceNote" class="full-span" label="这条关联的核对说明（可选）" rows="2" /></div></div></v-card-text><v-card-actions><v-spacer /><v-btn variant="text" @click="accountDialog = false">取消</v-btn><v-btn color="secondary" :loading="saving" @click="saveAccount">保存</v-btn></v-card-actions></v-card></v-dialog>
+  <v-dialog v-model="accountDialog" max-width="760"><v-card class="app-card"><v-card-title>{{ accountEditing ? '编辑账号关联' : '关联消息端账号' }}</v-card-title><v-card-text><v-alert type="warning" variant="tonal" density="compact" class="mb-3">平台、消息端命名空间和稳定发送者 ID 是身份键。它们不能用昵称、Route 或群号替代。</v-alert><v-alert type="info" variant="tonal" density="compact" class="mb-3">共用账号可以同时添加多个“可能关联”。每条关联分别保存核对说明；说话习惯一致性只能辅助判断当前使用者，不能把账号保存成多个“已确认”映射。</v-alert><div class="form-grid"><v-text-field v-model="accountForm.platform" label="平台" :readonly="accountEditing" placeholder="napcat / feishu / wecom" /><v-text-field v-model="accountForm.endpointIdentityNamespace" label="消息端命名空间" :readonly="accountEditing" placeholder="bot:12345" /><v-text-field v-model="accountForm.senderStableId" label="稳定发送者 ID" :readonly="accountEditing" /><v-text-field v-model="accountForm.displayName" label="消息显示名（可选）" /><v-switch v-model="accountForm.isSelf" label="这是当前角色自身账号" color="success" inset hide-details /></div><div class="section-title-row compact-row mt-5"><div><div class="section-title small-title">身份关联</div><div class="section-note">确认账号属于谁，不等于确认项目归属或授权。</div></div><v-btn size="small" variant="tonal" prepend-icon="mdi-plus" @click="addAccountLink">添加关联</v-btn></div><div v-for="(link, index) in accountForm.participantLinks" :key="index" class="rule-card mb-2"><div class="form-grid"><v-select v-model="link.participantId" :items="participantOptions" label="身份" /><v-select v-model="link.status" :items="statusOptions" label="关联状态" /><v-text-field v-model.number="link.confidence" type="number" min="0" max="1" step="0.05" label="置信度（可选）" /><v-btn class="align-self-center" size="small" variant="text" color="error" @click="removeAccountLink(index)">移除</v-btn><v-textarea v-model="link.evidenceNote" class="full-span" label="这条关联的核对说明（可选）" rows="2" /></div></div></v-card-text><v-card-actions><v-spacer /><v-btn variant="text" @click="accountDialog = false">取消</v-btn><v-btn color="secondary" :loading="saving" @click="saveAccount">保存</v-btn></v-card-actions></v-card></v-dialog>
 </template>

@@ -41,7 +41,8 @@ test("sidebar renders only catalog navigation backed by activated pages", () => 
 
 test("sidebar brand shows only the version and route picker has no count or explanatory label", () => {
   assert.match(appSource, /<div class="section-note">v\{\{ store\.meta\.version \}\}<\/div>/);
-  assert.match(appSource, /aria-label="选择航线"/);
+  assert.match(appSource, /aria-label="选择角色"/);
+  assert.match(appSource, /aria-label="选择路由"/);
   assert.doesNotMatch(appSource, /星海消息分诊台/);
   assert.doesNotMatch(appSource, /<span class="section-note">当前航线<\/span>/);
   assert.doesNotMatch(appSource, /<v-chip[^>]*>\{\{ store\.gateways\.length \}\}<\/v-chip>/);

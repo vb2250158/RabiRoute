@@ -1,6 +1,6 @@
 import type { PersonaPlanWorkflow } from "./personaPlanWorkflow.js";
 
-/** 生命周期固定；人格工作流只拥有标记。旧字段仅作兼容投影。 */
+/** 生命周期固定；角色工作流只拥有标记。旧字段仅作兼容投影。 */
 export const PLAN_ACTIVATION_STATUSES = ["进行中", "已完成", "已归档"] as const;
 export type PlanActivationStatus = typeof PLAN_ACTIVATION_STATUSES[number];
 type StateInput = {

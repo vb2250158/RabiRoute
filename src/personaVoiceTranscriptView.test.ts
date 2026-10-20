@@ -13,7 +13,7 @@ test("persona voice transcript view joins explicit user relationships without re
     sourceHostId: "host-one",
     voiceprintId: "cluster-user",
     displayName: "老板",
-    relationship: "当前人格的用户",
+    relationship: "当前角色的用户",
     isUser: true,
     aliases: []
   });
@@ -29,7 +29,7 @@ test("persona voice transcript view joins explicit user relationships without re
     sourceHostId: "host-one",
     voiceprintId: "host-profile-user",
     displayName: "主机候选资料",
-    relationship: "不能决定人格关系",
+    relationship: "不能决定角色关系",
     isUser: false,
     aliases: []
   });
@@ -105,5 +105,5 @@ test("persona voice transcript view joins explicit user relationships without re
   ]);
 
   const raw = fs.readFileSync(path.join(roleDir, "conversation", "current.jsonl"), "utf8");
-  assert.doesNotMatch(raw, /老板|当前人格的用户|"isUser"/);
+  assert.doesNotMatch(raw, /老板|当前角色的用户|"isUser"/);
 });

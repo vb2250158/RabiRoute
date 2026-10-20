@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import RoleBindingEditor from "../components/RoleBindingEditor.vue";
+import RouteVariablesEditor from "../components/RouteVariablesEditor.vue";
 import { userFacingError } from "../userFacingError";
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -287,7 +289,7 @@ async function refreshLanAgentNodes(): Promise<void> {
       }),
       fetch("/api/device-agents", { cache: "no-store", headers }).then(async response => {
         const body = await response.json();
-        if (!response.ok || body.code !== 0) throw new Error(body.message || "设备 Agent 未配置：请在设备设置中绑定人格和所属电脑后刷新。");
+        if (!response.ok || body.code !== 0) throw new Error(body.message || "设备 Agent 未配置：请在设备设置中绑定角色和所属电脑后刷新。");
         const instance = deviceAgentInstanceFromCatalog(body.data);
         return instance ? [instance] : [];
       })
@@ -515,14 +517,14 @@ const adapterGroups: Array<{ title: string; note: string; choices: Array<{ type:
     title: "智能家居",
     note: "来自 Home Assistant 的米家设备状态与摄像头事件。",
     choices: [
-      { type: "xiaomiHome", title: "米家 / Xiaomi Home", note: "把米家状态和摄像头事件投递到当前人格", icon: "mdi-home-automation" }
+      { type: "xiaomiHome", title: "米家 / Xiaomi Home", note: "把米家状态和摄像头事件投递到当前角色", icon: "mdi-home-automation" }
     ]
   },
   {
     title: "移动设备",
     note: "来自手机端、手环或眼镜的记录与事件。",
     choices: [
-      { type: "rabilink", title: "移动端（全天记录）", note: "接收手机端全天记录与语音事件，并与当前人格绑定", icon: "mdi-cellphone-clock" }
+      { type: "rabilink", title: "移动端（全天记录）", note: "接收手机端全天记录与语音事件，并与当前角色绑定", icon: "mdi-cellphone-clock" }
     ]
   },
   {
@@ -3708,7 +3710,7 @@ async function openManagedAgentSession(agentAdapter: "codex" | "dsh"): Promise<v
     });
     managedAgentSessionAction.value = {
       loading: false,
-      message: agentAdapter === "dsh" ? "已在 DSH 中定位主人格会话。" : "已在 Codex Desktop 中定位主人格任务。",
+      message: agentAdapter === "dsh" ? "已在 DSH 中定位主角色会话。" : "已在 Codex Desktop 中定位主角色任务。",
       error: ""
     };
   } catch (error) {
@@ -3800,15 +3802,15 @@ async function initializeManagedAgentSession(agentAdapter: "codex" | "dsh"): Pro
         });
         const body = await response.json().catch(() => ({}));
         if (!response.ok || body.code !== 0) {
-          throw new Error(body.message || "人格初始化消息投递失败。");
+          throw new Error(body.message || "角色初始化消息投递失败。");
         }
       }
     });
     managedAgentSessionAction.value = {
       loading: false,
       message: agentAdapter === "dsh"
-        ? "已保存名称 + 会话 ID，并通过 DSH owner 投递人格初始化消息。"
-        : "已保存名称 + 线程 ID，并通过 Desktop owner 投递人格初始化消息。",
+        ? "已保存名称 + 会话 ID，并通过 DSH owner 投递角色初始化消息。"
+        : "已保存名称 + 线程 ID，并通过 Desktop owner 投递角色初始化消息。",
       error: ""
     };
     await store.load();
@@ -3893,7 +3895,7 @@ async function initializePlanAssistants(): Promise<void> {
   };
   try {
     if (!String(gateway.value.agentRoleId || "").trim()) {
-      throw new Error("请先为当前 Route 绑定人格，再初始化计划协助会话。");
+      throw new Error("请先为当前 Route 绑定角色，再初始化计划协助会话。");
     }
     if (!target) throw new Error("请先选择主控 Agent。");
     assertSelection();
@@ -3906,7 +3908,7 @@ async function initializePlanAssistants(): Promise<void> {
       ? { agentAdapter: target.provider, sessionId: remote.agent.sessionId || "", sessionName: remote.agent.name, workspace: remote.agent.workspace || "", dshBaseUrl: remote.agent.dshBaseUrl }
       : managedAgentSessionContext(target.provider);
     if (rawSource && rawSource.agentAdapter !== "codex" && rawSource.agentAdapter !== "dsh") {
-      throw new Error(`计划协助会话当前仅支持 Codex 与 DSH 主人格，${managedAgentLabel(rawSource.agentAdapter)} 尚未适配。`);
+      throw new Error(`计划协助会话当前仅支持 Codex 与 DSH 主角色，${managedAgentLabel(rawSource.agentAdapter)} 尚未适配。`);
     }
     const source = rawSource
       ? { ...rawSource, agentAdapter: rawSource.agentAdapter === "dsh" ? "dsh" as const : "codex" as const }
@@ -4149,7 +4151,7 @@ watch(
   <div class="page-shell">
     <div class="page-header">
       <div>
-        <h1 class="page-title">消息适配器</h1>
+        <h1 class="page-title">路由配置</h1>
         <div class="page-subtitle">配置消息端和 Agent 端。</div>
       </div>
       <div class="page-actions" v-if="gateway">
@@ -4170,6 +4172,8 @@ watch(
     <v-alert v-if="!gateway" type="info" variant="tonal">暂无路由配置，请先新增或完成快速配置。</v-alert>
 
     <template v-if="gateway">
+      <RoleBindingEditor />
+      <RouteVariablesEditor />
       <div class="status-row mb-4" style="gap:8px">
         <span class="route-config-muted-label">配置名</span>
         <v-text-field
@@ -4962,7 +4966,7 @@ watch(
                         :model-value="hotDeliveryEnabled(gateway.speechPushMode)"
                         color="primary"
                         label="热投递"
-                        hint="开启（hot）：每段 ASR 立即投递。关闭（keyword）：未命中关键词时只记录，命中当前人格关键词时才投递。"
+                        hint="开启（hot）：每段 ASR 立即投递。关闭（keyword）：未命中关键词时只记录，命中当前角色关键词时才投递。"
                         persistent-hint
                         @update:model-value="setSpeechHotDelivery"
                       />
@@ -4973,7 +4977,7 @@ watch(
                         variant="tonal"
                         density="compact"
                       >
-                        <div>当前人格没有语音唤醒关键词。关闭热投递后，转写仍会记录，但不会唤醒 Agent。</div>
+                        <div>当前角色没有语音唤醒关键词。关闭热投递后，转写仍会记录，但不会唤醒 Agent。</div>
                         <v-btn
                           class="mt-2"
                           size="small"
@@ -4981,23 +4985,23 @@ watch(
                           prepend-icon="mdi-account-cog-outline"
                           :to="personaConfigRoute"
                         >
-                          配置人格关键词
+                          配置角色关键词
                         </v-btn>
                       </v-alert>
                     </div>
                     <div class="full-span persona-speech-summary">
                       <div>
                         <PersonaAvatar :role-id="gateway.agentRoleId || ''" :avatar-url="personaAvatarUrl" :size="42" />
-                        <span>人格</span>
+                        <span>角色</span>
                         <b>{{ gateway.agentRoleId || "未选择" }}</b>
                       </div>
                       <div>
                         <span>TTS 模型</span>
-                        <b>{{ speechPersonaConfig?.defaultModel || "由人格 voice-profile 配置" }}</b>
+                        <b>{{ speechPersonaConfig?.defaultModel || "由角色 voice-profile 配置" }}</b>
                       </div>
                       <div>
                         <span>语言</span>
-                        <b>{{ speechPersonaConfig?.language || "由人格 voice-profile 配置" }}</b>
+                        <b>{{ speechPersonaConfig?.language || "由角色 voice-profile 配置" }}</b>
                       </div>
                       <div>
                         <span>声音风格</span>
@@ -5005,7 +5009,7 @@ watch(
                       </div>
                     </div>
                     <v-alert class="full-span" type="info" variant="tonal" density="compact">
-                      当前 Route 只负责订阅主机 ASR 广播、热投递/人格关键词策略和是否播放回复。ASR 模型、麦克风、VAD 与切句参数属于整台电脑，请到“语音服务”统一设置；TTS 模型、声线、语言、语速和发声说明归当前人格的 <code>voice/voice-profile.json</code> 管理。
+                      当前 Route 只负责订阅主机 ASR 广播、热投递/角色关键词策略和是否播放回复。ASR 模型、麦克风、VAD 与切句参数属于整台电脑，请到“语音服务”统一设置；TTS 模型、声线、语言、语速和发声说明归当前角色的 <code>voice/voice-profile.json</code> 管理。
                     </v-alert>
                     <v-switch
                       color="primary"
@@ -5014,15 +5018,15 @@ watch(
                       @update:model-value="setSpeechAutoPlay"
                     />
                     <v-alert class="full-span" type="warning" variant="tonal" density="compact">
-                      主机只做一次 ASR，再把同一份文字广播给订阅 Route；不会为每个人格重复占用麦克风或重复跑识别模型。
+                      主机只做一次 ASR，再把同一份文字广播给订阅 Route；不会为每个角色重复占用麦克风或重复跑识别模型。
                     </v-alert>
                   </div>
                   <div v-else-if="choice.type === 'heartbeat'" class="catalog-param-grid">
                     <v-alert v-if="managedMessageAgentModeEnabled" class="full-span" type="success" variant="tonal" density="compact">
-                      Codex 消息处理 Agent已开启。heartbeat 会立即交给独立消息处理 Agent，不会因为主人格会话正在工作而跳过，也不进入聊天消息合并等待。
+                      Codex 消息处理 Agent已开启。heartbeat 会立即交给独立消息处理 Agent，不会因为主角色会话正在工作而跳过，也不进入聊天消息合并等待。
                     </v-alert>
                     <v-alert v-else class="full-span" type="info" variant="tonal" density="compact">
-                      定时计划在“人格配置 / 消息模板规则”的 heartbeat 规则里维护。下面的忙时策略只影响 heartbeat，普通群聊、私聊和其他消息仍按正常路由直接投递。
+                      定时计划在“角色配置 / 消息模板规则”的 heartbeat 规则里维护。下面的忙时策略只影响 heartbeat，普通群聊、私聊和其他消息仍按正常路由直接投递。
                     </v-alert>
                     <v-switch
                       v-if="!managedMessageAgentModeEnabled"
@@ -5546,7 +5550,7 @@ watch(
                   </div>
                   <div v-if="supportsManagedTaskFeature(agent.type, 'hooks')" class="mt-3">
                     <v-btn variant="tonal" prepend-icon="mdi-update" :loading="hookUpdate.loading" @click="updateHooksToAgent(agent.type)">更新 Hook 到 Agent</v-btn>
-                    <div class="section-note mt-2">首次配置或更新时安装事件埋点。日常开关在“人格 → 自动化 → Agent Hook”管理。</div>
+                    <div class="section-note mt-2">首次配置或更新时安装事件埋点。日常开关在“角色 → 自动化 → Agent Hook”管理。</div>
                     <v-alert v-if="hookUpdate.error" type="error" variant="tonal" density="compact">{{ hookUpdate.error }}</v-alert>
                     <v-alert v-else-if="hookUpdate.message" type="success" variant="tonal" density="compact">{{ hookUpdate.message }}</v-alert>
                   </div>
@@ -5577,7 +5581,7 @@ watch(
                   <div class="section-title-row compact-row">
                     <div>
                       <div class="section-title small-title">消息处理 Agent 模式</div>
-                      <div class="section-note">这里配置消息处理 Agent 的模型和运行参数。消息投给谁由人格自动化规则决定。</div>
+                      <div class="section-note">这里配置消息处理 Agent 的模型和运行参数。消息投给谁由角色自动化规则决定。</div>
                     </div>
 
                   </div>
@@ -5650,7 +5654,7 @@ watch(
                       item-title="title"
                       item-value="value"
                       :return-object="false"
-                      label="主人格模型"
+                      label="主角色模型"
                       hint="Desktop 可用时读取当前账号的模型目录；读取失败时仍可手动输入。留空则沿用目标任务自己的模型。"
                       persistent-hint
                       clearable
@@ -5668,8 +5672,8 @@ watch(
                     <v-select
                       v-model="gateway.agentReasoningEffort"
                       :items="codexReasoningEffortItems"
-                      label="主人格推理强度"
-                      hint="与主人格模型一起应用到 Desktop 新轮次；留空时沿用 Desktop 当前设置。"
+                      label="主角色推理强度"
+                      hint="与主角色模型一起应用到 Desktop 新轮次；留空时沿用 Desktop 当前设置。"
                       persistent-hint
                       clearable
                       data-no-i18n
@@ -5758,7 +5762,7 @@ watch(
                     item-title="title"
                     item-value="value"
                     :disabled="grokBotScan.state.loading || !agentScanFor('grokBot')?.auth?.loggedIn"
-                    label="主人格 Bot"
+                    label="主角色 Bot"
                     hint="使用所选 Bot 的默认主会话。"
                     persistent-hint
                     clearable
@@ -5928,9 +5932,9 @@ watch(
                       item-title="title"
                       item-value="value"
                       :return-object="false"
-                      label="主人格模型"
+                      label="主角色模型"
                       placeholder="provider/model"
-                      hint="DSH 可用时读取模型目录；读取失败时可手动输入 provider/model。配置会在主人格下一次投递前应用到绑定会话。"
+                      hint="DSH 可用时读取模型目录；读取失败时可手动输入 provider/model。配置会在主角色下一次投递前应用到绑定会话。"
                       persistent-hint
                       clearable
                       data-no-i18n
@@ -5947,7 +5951,7 @@ watch(
                     <v-combobox
                       v-model="gateway.dshReasoningEffort"
                       :items="dshReasoningEffortItems"
-                      label="主人格推理强度"
+                      label="主角色推理强度"
                       hint="优先显示所选 DSH 模型支持的值；目录不可用时可以手动输入。留空则沿用模型或 DSH 当前默认值。"
                       persistent-hint
                       clearable
@@ -6314,7 +6318,7 @@ watch(
                     <div class="section-title-row compact-row">
                       <div>
                         <div class="section-title small-title">独立记忆整理 Agent</div>
-                        <div class="section-note">这里配置记忆整理 Agent 的模型；消息去向在人格自动化中选择。</div>
+                        <div class="section-note">这里配置记忆整理 Agent 的模型；消息去向在角色自动化中选择。</div>
                       </div>
 
                     </div>
@@ -6427,7 +6431,7 @@ watch(
             </div>
             <v-expand-transition>
               <div v-if="remoteAgentParamOpen[target.id]" class="catalog-param-panel">
-                <v-alert v-if="target.provider === 'deviceAgent'" type="warning" variant="tonal">实验设备 Agent：人格在设备设置中绑定，模型和语音由设备宿主提供。设备未完成加载时消息保留原投递身份等待，不会改投电脑模型。真机唤醒与执行需另行验收。</v-alert>
+                <v-alert v-if="target.provider === 'deviceAgent'" type="warning" variant="tonal">实验设备 Agent：角色在设备设置中绑定，模型和语音由设备宿主提供。设备未完成加载时消息保留原投递身份等待，不会改投电脑模型。真机唤醒与执行需另行验收。</v-alert>
                 <InstanceAgentSettings v-else-if="target.instance && target.agent" :key="target.id" :instance="target.instance" :agent="target.agent" @saved="refreshLanAgentNodes" />
                 <v-alert v-else type="warning" variant="tonal">此远端 Agent 暂不可用，配置仍然保留，不会改投本机。请刷新实例列表。</v-alert>
                 <v-btn class="mt-2" size="small" variant="text" prepend-icon="mdi-refresh" :loading="lanAgentLoading" @click="refreshLanAgentNodes">刷新实例列表</v-btn>

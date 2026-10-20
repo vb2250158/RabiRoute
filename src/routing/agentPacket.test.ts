@@ -308,7 +308,7 @@ test("AgentPacket keeps an explicit NapCat send target when a QQ route defaults 
 
   const sendRequest = JSON.parse(String(packet.templateValues.sendRequestJson));
   assert.deepEqual(sendRequest.sender, {
-    agentType: "<当前 Agent 类型；主人格填 primary_persona，其它 Agent 填实际角色>",
+    agentType: "<当前 Agent 类型；主角色填 primary_persona，其它 Agent 填实际角色>",
     sessionId: "<当前 Agent 的完整会话 ID>"
   });
   assert.match(packet.message, /所有 Agent 使用同一投递合同/);
@@ -1141,7 +1141,7 @@ test("AgentPacket exposes processing host and persona-owned voice identity file 
     voiceprintId: "unknown-cluster-7",
     participantId: "participant-owner",
     displayName: "老板",
-    relationship: "当前人格的用户",
+    relationship: "当前角色的用户",
     isUser: true,
     aliases: ["老板"]
   });
@@ -1198,7 +1198,7 @@ test("AgentPacket exposes processing host and persona-owned voice identity file 
   assert.match(packet.message, /声纹 ID：unknown-cluster-7/);
   assert.match(packet.message, /voice[\\/]voice-identities\.jsonl/);
   assert.match(packet.message, /不判断这个人是谁，也不判断谁是用户/);
-  assert.match(packet.message, /unknown-cluster-7：身份=participant-owner；称呼=老板；关系=当前人格的用户；isUser=true/);
+  assert.match(packet.message, /unknown-cluster-7：身份=participant-owner；称呼=老板；关系=当前角色的用户；isUser=true/);
   assert.doesNotMatch(packet.message, /host-profile-user|主机资料里的用户/);
   const replyContext = JSON.parse(String(packet.templateValues.replyContextJson));
   assert.equal(replyContext.personaVoiceIdentities[0].identity.displayName, "老板");
@@ -1334,7 +1334,7 @@ test("AgentPacket injects persona-owned identity state for every voiceprint in a
 
   assert.match(packet.message, /本段声纹：cluster-known, cluster-guest/);
   assert.match(packet.message, /cluster-known：称呼=同事甲；关系=项目同事；isUser=false/);
-  assert.match(packet.message, /cluster-guest：当前人格尚未确认/);
+  assert.match(packet.message, /cluster-guest：当前角色尚未确认/);
   assert.doesNotMatch(packet.message, /host-profile-known/);
   const replyContext = JSON.parse(String(packet.templateValues.replyContextJson));
   assert.deepEqual(replyContext.personaVoiceIdentities.map((item: { voiceprintId: string }) => item.voiceprintId), ["cluster-known", "cluster-guest"]);
@@ -1384,15 +1384,15 @@ test("AgentPacket omits retired persona sync instructions and retains intent-gat
     dataDir: roleDir
   });
 
-  const syncPacket = packetFor("我有多台电脑，请把当前人格同步到另一台电脑。");
+  const syncPacket = packetFor("我有多台电脑，请把当前角色同步到另一台电脑。");
   const managerBaseUrl = process.env.GATEWAY_MANAGER_URL ?? "";
   assert.ok(managerBaseUrl);
-  assert.doesNotMatch(syncPacket.message, /\[多电脑人格同步\]/);
+  assert.doesNotMatch(syncPacket.message, /\[多电脑角色同步\]/);
   assert.doesNotMatch(syncPacket.message, /api\/persona-sync\//);
   assert.doesNotMatch(syncPacket.message, /只执行一次查询\/同步，不创建后台轮询/);
 
   const ordinaryPacket = packetFor("请整理一下今天的会议记录。");
-  assert.doesNotMatch(ordinaryPacket.message, /\[多电脑人格同步\]/);
+  assert.doesNotMatch(ordinaryPacket.message, /\[多电脑角色同步\]/);
   assert.doesNotMatch(ordinaryPacket.message, /api\/persona-sync\/peers/);
 
   const voiceReviewPacket = packetFor("今天的录音里哪些是我说的，哪些是别人说的？");

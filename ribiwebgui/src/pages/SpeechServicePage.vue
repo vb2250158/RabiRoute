@@ -353,7 +353,7 @@ function providerName(provider: SpeechProvider): string {
 
 function providerModel(provider: SpeechProvider): string {
   if (provider.model) return provider.model;
-  if (provider.kind === "tts" && provider.id === "local-tts") return "按人格与本地 worker 动态选择";
+  if (provider.kind === "tts" && provider.id === "local-tts") return "按角色与本地 worker 动态选择";
   return "由 provider 决定";
 }
 
@@ -809,7 +809,7 @@ onBeforeUnmount(() => {
       <div>
         <div class="speech-eyebrow">LOCAL SPEECH RUNTIME</div>
         <h1 class="page-title">语音消息端</h1>
-        <div class="page-subtitle">常驻麦克风、声音阈值、本机 ASR、人格 TTS 与整台电脑唯一的排队播放入口。</div>
+        <div class="page-subtitle">常驻麦克风、声音阈值、本机 ASR、角色 TTS 与整台电脑唯一的排队播放入口。</div>
       </div>
       <div class="page-actions">
         <v-btn color="secondary" variant="tonal" prepend-icon="mdi-package-variant-closed" @click="modelManagementDialog = true">模型管理</v-btn>
@@ -865,7 +865,7 @@ onBeforeUnmount(() => {
         <div>
           <div class="stat-label">音频流</div>
           <strong>{{ selectedAudioStreamLabel }}</strong>
-          <p>客户端只提供远程麦克风和喇叭；切句、ASR、Route 投递、人格 TTS 与防回流仍在当前 Rabi 主机执行。</p>
+          <p>客户端只提供远程麦克风和喇叭；切句、ASR、Route 投递、角色 TTS 与防回流仍在当前 Rabi 主机执行。</p>
         </div>
       </div>
       <div class="speech-audio-stream-controls">
@@ -967,13 +967,13 @@ onBeforeUnmount(() => {
               <span>{{ selectedAudioStreamClient ? "等待这台设备产生新的连接、PCM 接收、音频发送或播放回执。" : "选择远端设备后显示该设备的收发事件。" }}</span>
             </div>
             <div v-if="selectedAudioStreamClient?.messageAdapterType === 'rabilink'" class="section-note">
-              RabiLink 手机的麦克风 PCM 在这里记录为“接收”；Agent 人格 TTS 使用独立 Relay 下行与终端播放回执，不会把本机播放误记成远端“发送成功”。
+              RabiLink 手机的麦克风 PCM 在这里记录为“接收”；Agent 角色 TTS 使用独立 Relay 下行与终端播放回执，不会把本机播放误记成远端“发送成功”。
             </div>
             <div class="speech-device-transcripts">
               <div class="speech-device-transcript-head">
                 <div>
                   <strong>公共 ASR 转写与 Route 回执</strong>
-                  <span>从主机通用转写账本按稳定 record ID 解析；它与夜雨人格会话记录分开保存。</span>
+                  <span>从主机通用转写账本按稳定 record ID 解析；它与夜雨角色会话记录分开保存。</span>
                 </div>
                 <v-btn
                   size="small"
@@ -1129,7 +1129,7 @@ onBeforeUnmount(() => {
           </v-chip>
         </div>
         <div class="section-note mt-3">
-          主机 ASR 串流开关独立控制是否持续录音和识别；Route 的语音消息端开关只控制分发订阅。没有 Route 订阅时只保存主机记录；有订阅时，同一段 ASR 会广播给全部 {{ speechSubscriberRoutes.length }} 个已启用 Route，各自再执行热投递或人格关键词判断。
+          主机 ASR 串流开关独立控制是否持续录音和识别；Route 的语音消息端开关只控制分发订阅。没有 Route 订阅时只保存主机记录；有订阅时，同一段 ASR 会广播给全部 {{ speechSubscriberRoutes.length }} 个已启用 Route，各自再执行热投递或角色关键词判断。
           待识别 {{ microphoneStatus?.pending || 0 }} 段 · 丢弃 {{ microphoneStatus?.dropped || 0 }} 段<span v-if="microphoneStatus?.lastSubmitError"> · 广播异常：{{ microphoneStatus.lastSubmitError }}</span>
         </div>
         <v-alert v-if="microphoneStatus?.error" class="mt-4" type="error" variant="tonal" density="compact">{{ microphoneStatus.error }}</v-alert>
@@ -1200,7 +1200,7 @@ onBeforeUnmount(() => {
         <div>
           <div class="speech-eyebrow">{{ activeKind === "tts" ? "TEXT TO SPEECH" : "AUTOMATIC SPEECH RECOGNITION" }}</div>
           <h2>{{ activeKind === "tts" ? "当前 TTS 能力" : "当前 ASR 能力" }}</h2>
-          <p>{{ activeKind === "tts" ? "RabiSpeech 直接在本机人格、声线与 worker 之间路由；不再依赖 OumuQ。" : "模型、加载设备和预热状态来自当前 RabiSpeech 进程，不再依赖 FenneNote。" }}</p>
+          <p>{{ activeKind === "tts" ? "RabiSpeech 直接在本机角色、声线与 worker 之间路由；不再依赖 OumuQ。" : "模型、加载设备和预热状态来自当前 RabiSpeech 进程，不再依赖 FenneNote。" }}</p>
         </div>
         <v-chip color="secondary" variant="tonal">默认：{{ currentDefault }}</v-chip>
       </div>

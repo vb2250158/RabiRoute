@@ -33,7 +33,12 @@ import {
   orderPersonaVoiceConfirmationCandidates,
   personaVoiceprintEvidenceKey
 } from "../persona/personaVoiceConfirmation";
+import { useRoleStore } from "../stores/roleStore";
 import { useGatewayStore } from "../stores/gatewayStore";
+import { MESSAGE_ENDPOINT_TYPES } from "@shared/messageEndpointTypes";
+import { useRouter } from "vue-router";
+import { registerPageSaveAction } from "../pageSaveAction";
+import RoleManagementActions from "../components/RoleManagementActions.vue";
 import { useSpeechStore } from "../stores/speechStore";
 import type { CodexHookSettings, NotificationRule, NotificationScheduleDefinition, PersonaAutomationRuleDefinition } from "../types";
 import {
@@ -70,7 +75,10 @@ import { RemotePersonaReferenceBrowser, personaReferenceIdentity } from "../pers
 import { personaSourceOptions as buildPersonaSourceOptions } from "../persona/personaSourcePresentation";
 import { removePersonaOwnedGatewayConfig } from "@shared/remotePersonaReference";
 
-const store = useGatewayStore();
+const store = useRoleStore();
+const routeStore = useGatewayStore();
+const router = useRouter();
+const releaseRoleSave = registerPageSaveAction({ dirty: computed(() => store.dirty), ready: computed(() => store.ready), saving: computed(() => store.saving), save: () => store.save() });
 const speech = useSpeechStore();
 const { t } = useI18n();
 const ruleDialog = ref(false);
@@ -129,7 +137,7 @@ const remoteRoleOptions = computed(() => {
   const options = remotePersona.personas.map(persona => ({ title: persona.title || persona.name || persona.personaId, value: persona.personaId }));
   const selected = gateway.value?.agentRoleId || "";
   if (selected && !options.some(option => option.value === selected)) options.push({ title: `${selected} · 已保存的引用`, value: selected });
-  return [{ title: "不注入人格", value: "" }, ...options];
+  return [{ title: "不注入角色", value: "" }, ...options];
 });
 const remoteReadState = computed(() => remotePersona.catalogState !== "ready" ? remotePersona.catalogState : remotePersona.referenceState);
 const remoteReadError = computed(() => remotePersona.catalogError || remotePersona.referenceError);
@@ -144,10 +152,10 @@ const personaSecondaryNavItems = computed(() => buildWebNavigation(
 ).personaSecondary.map(item => ({ ...item, title: t(item.title) })));
 const runtime = computed(() => store.selectedRuntime);
 const roleOptions = computed(() => [
-  { title: "不注入人格", subtitle: "", value: "", avatarUrl: "" },
+  { title: "不注入角色", subtitle: "", value: "", avatarUrl: "" },
   ...((runtime.value.roleInfo?.options || []).map(role => ({
     title: personaOptionDisplayName(role),
-    subtitle: personaOptionDisplayName(role) !== role.value ? `人格 ID · ${role.value}` : "",
+    subtitle: personaOptionDisplayName(role) !== role.value ? `角色 ID · ${role.value}` : "",
     value: role.value,
     avatarUrl: role.avatarUrl || ""
   })))
@@ -169,14 +177,13 @@ const personaMarkdownSummary = computed(() => markdownPreviewExcerpt(
   personaMarkdownSource.value,
   PERSONA_SUMMARY_MAX_CHARACTERS
 ));
-const personaDocumentPath = computed(() => routeScopedPersonaDocumentPath(
-  gateway.value ? configNameFor(gateway.value) : ""
-));
+const personaDocumentPath = computed(() => `/roles/${encodeURIComponent(store.selectedRoleId)}/document`);
 const voiceProfile = computed(() => {
   if (isRemotePersona.value) return undefined;
   const roleId = gateway.value?.agentRoleId || "";
   return speech.personas.find(persona => persona.id === roleId);
 });
+const selectedRoleTitle = computed(() => store.catalog.find(role => role.roleId === store.selectedRoleId)?.title || store.selectedRoleId);
 const hasPersona = computed(() => Boolean(gateway.value?.agentRoleId));
 const authoritativeIdentityParticipantIds = computed(() => new Set(identityParticipants.value
   .filter(item => !item.conflicted && (item.status === "confirmed" || item.status === "corrected"))
@@ -226,7 +233,7 @@ const automationDeliveryIncomplete = computed(() => {
   return action?.type === "deliver_agent" && action.target?.kind === "session"
     && (!action.target.agentTargetId || !action.target.sessionId);
 });
-const timerInputEnabled = computed(() => gateway.value ? gatewayAdapterTypes(gateway.value).includes("heartbeat") : false);
+const timerInputEnabled = computed(() => routeStore.gateways.some(route => route.agentRoleId === store.selectedRoleId && (route.agentRoleDeviceId || "") === store.sourceDeviceId && gatewayAdapterTypes(route).includes("heartbeat")));
 const activeRule = computed(() => rules.value[activeRuleIndex.value] || null);
 const variableEntries = computed(() => Object.entries(gateway.value?.routeVariables || {})
   .filter(([key]) => !isSpeechRouteVariableKey(key)));
@@ -241,7 +248,7 @@ const voiceProfilePath = computed(() => {
   return `${roleDir}${separator}voice${separator}voice-profile.json`;
 });
 const routeKindQuery = ref("");
-const routeKindDefinitions = computed(() => routeKindDefinitionsForGateway(gateway.value || undefined));
+const routeKindDefinitions = computed(() => routeKindDefinitionsForGateway(gateway.value ? { ...gateway.value, messageAdapters: [...MESSAGE_ENDPOINT_TYPES] } : undefined));
 const selectedRouteKindCount = computed(() => activeRule.value?.routeKinds?.length || 0);
 const activeRuleDiagnostics = computed(() => activeRule.value ? ruleDiagnostics(activeRule.value) : []);
 const activeRuleNotes = computed(() => activeRule.value ? ruleNotes(activeRule.value) : []);
@@ -809,10 +816,10 @@ function automationDiagnostics(rule: PersonaAutomationRuleDefinition): string[] 
     if (schedule.type === "interval" && Number(schedule.intervalSeconds || 0) <= 0) issues.push("间隔必须大于 0 秒。");
     if (schedule.type === "daily_time" && !schedule.timeOfDay) issues.push("还没有设置每天执行时间。");
     if (schedule.type === "once_at" && !schedule.onceAt) issues.push("还没有设置执行日期和时间。");
-    if (!timerInputEnabled.value) issues.push("当前 Route 尚未启用定时任务入口。");
+    if (!timerInputEnabled.value) issues.push("关联路由尚未启用定时任务入口。");
   }
   if (rule.action.type === "run_script") {
-    if (!rule.action.scriptPath?.trim()) issues.push("还没有选择人格 scripts 目录中的脚本。");
+    if (!rule.action.scriptPath?.trim()) issues.push("还没有选择角色 scripts 目录中的脚本。");
   }
   return issues;
 }
@@ -928,7 +935,7 @@ function automationCardTooltip(rule: PersonaAutomationRuleDefinition): string {
 
 function enableTimerInput(): void {
   if (!gateway.value || timerInputEnabled.value) return;
-  store.updateAdapters([...gatewayAdapterTypes(gateway.value), "heartbeat"]);
+  void router.push("/routes");
 }
 
 
@@ -943,30 +950,12 @@ function setScriptArguments(value: unknown): void {
 }
 
 function setRole(value: string): void {
-  if (!gateway.value) return;
-  if (isRemotePersona.value) clearPersonaProjection();
-  gateway.value.agentRoleId = value;
-  if (!value && !isRemotePersona.value) {
-    gateway.value.automationRules = [];
-    gateway.value.notificationRules = [];
-  }
-  store.touch();
+  if (store.dirty && !window.confirm("当前角色有未保存修改，确定切换？")) return;
+  void router.push({ path: `/roles/${encodeURIComponent(value)}/config`, query: store.sourceDeviceId ? { source: store.sourceDeviceId } : {} });
 }
-
-function clearPersonaProjection(): void {
-  if (!gateway.value) return;
-  const index = store.gateways.findIndex(item => item.id === gateway.value?.id);
-  if (index >= 0) store.gateways[index] = removePersonaOwnedGatewayConfig(gateway.value);
-}
-
 function setPersonaSource(value: string): void {
-  if (!gateway.value || value === (gateway.value.agentRoleDeviceId || "")) return;
-  clearPersonaProjection();
-  gateway.value.agentRoleDeviceId = value || undefined;
-  gateway.value.agentRoleId = "";
-  gateway.value.agentRoleFile = "persona.md";
-  activePersonaPageTab.value = "profile";
-  store.touch();
+  if (store.dirty && !window.confirm("当前角色有未保存修改，确定切换来源？")) return;
+  void router.push({ path: "/roles", query: value ? { source: value } : {} });
 }
 
 async function refreshRemotePersona(): Promise<void> {
@@ -991,7 +980,7 @@ async function uploadAvatar(event: Event): Promise<void> {
   avatarError.value = "";
   try {
     await personaAvatarClient.upload(gateway.value.agentRoleId, file);
-    await Promise.all([store.load({ replaceDirtyConfig: !store.dirty }), speech.refreshPersonas()]);
+    await Promise.all([store.loadCatalog(), speech.refreshPersonas()]);
   } catch (error) {
     avatarError.value = userFacingError(error);
   } finally {
@@ -1005,7 +994,7 @@ async function removeAvatar(): Promise<void> {
   avatarError.value = "";
   try {
     await personaAvatarClient.remove(gateway.value.agentRoleId);
-    await Promise.all([store.load({ replaceDirtyConfig: !store.dirty }), speech.refreshPersonas()]);
+    await Promise.all([store.loadCatalog(), speech.refreshPersonas()]);
   } catch (error) {
     avatarError.value = userFacingError(error);
   } finally {
@@ -1262,7 +1251,7 @@ async function setVoiceIdentity(
     if (isUser !== undefined) patch.isUser = isUser;
     if (participantId !== undefined) patch.participantId = participantId;
     const result = await personaVoiceIdentityClient.update(roleId, patch);
-    voiceIdentityNotice.value = result.appended ? "语音消息端账号归类已更新。" : "当前人格已经是这个判断。";
+    voiceIdentityNotice.value = result.appended ? "语音消息端账号归类已更新。" : "当前角色已经是这个判断。";
     if (participantId) delete voiceParticipantSelections.value[key];
     if (voiceConfirmation.value.candidateKeys.includes(key)) cancelVoiceConfirmation();
     await refreshVoiceIdentityReview();
@@ -1340,10 +1329,7 @@ function startPersonaEvents(): void {
   managerEvents.addEventListener("peer_changed", () => { void refreshRemotePersona(); });
 }
 
-function updateVariableKey(oldKey: string, value: string, event: Event): void {
-  const target = event.target as HTMLInputElement | null;
-  store.updateRouteVariable(oldKey, target?.value || oldKey, value);
-}
+
 
 watch(() => gateway.value ? personaReferenceIdentity(gateway.value) : "", () => {
   const roleId = gateway.value?.agentRoleId || "";
@@ -1374,7 +1360,6 @@ watch(() => speech.recordsVersion, () => {
 });
 
 watch(() => gateway.value?.agentRoleDeviceId || "", async deviceId => {
-  activePersonaPageTab.value = "profile";
   await remotePersona.selectSource(deviceId);
   if (deviceId && deviceId === gateway.value?.agentRoleDeviceId && remotePersona.catalogState === "ready") {
     await remotePersona.loadReference(deviceId, gateway.value?.agentRoleId || "", gateway.value?.agentRoleFile || "persona.md");
@@ -1401,6 +1386,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  releaseRoleSave();
   remotePersona.invalidate();
   releaseSpeech?.();
   releaseSpeech = null;
@@ -1412,31 +1398,33 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="page-shell">
+  <fieldset class="page-shell" :disabled="store.archived" style="border: 0; padding: 0; min-width: 0">
     <div class="page-header">
       <div>
-        <h1 class="page-title">人格配置</h1>
-        <div class="page-subtitle">人格可以留空；留空时只使用消息入口默认包装和回传 API。</div>
+        <h1 class="page-title">角色配置</h1>
+
       </div>
-      <div class="page-actions" v-if="gateway">
+      <div class="page-actions">
+        <RoleManagementActions />
         <template v-if="hasPersona && !isRemotePersona">
           <v-btn v-for="item in personaSecondaryNavItems" :key="item.key" :to="item.to" :prepend-icon="item.icon" color="secondary" variant="tonal">{{ item.title }}</v-btn>
         </template>
-        <v-btn v-if="hasPersona && !isRemotePersona" prepend-icon="mdi-account-edit-outline" variant="tonal" @click="store.openConfigFile('role', gateway.id, gateway.agentRoleId || '')">打开人格配置</v-btn>
-        <v-btn v-if="hasPersona && !isRemotePersona" prepend-icon="mdi-file-code-outline" variant="tonal" @click="store.openConfigFile('role-message-config', gateway.id, gateway.agentRoleId || '')">打开人格自动化配置</v-btn>
+        <v-btn v-if="hasPersona && !isRemotePersona" prepend-icon="mdi-account-edit-outline" variant="tonal" @click="store.openConfigFile('role', '', store.selectedRoleId)">打开角色配置</v-btn>
+        <v-btn v-if="hasPersona && !isRemotePersona" prepend-icon="mdi-file-code-outline" variant="tonal" @click="store.openConfigFile('role-message-config', '', store.selectedRoleId)">打开角色自动化配置</v-btn>
       </div>
     </div>
 
-    <v-alert v-if="!gateway" type="info" variant="tonal">暂无路由配置，请先新增或完成快速配置。</v-alert>
+    <v-alert v-if="store.error" type="error" variant="tonal">{{ store.error }}</v-alert>
+    <v-alert v-if="store.archived" type="warning" variant="tonal">角色已归档，配置只读，新任务已暂停。</v-alert>
+    <v-alert v-if="!gateway && !store.loading && !store.error" type="info" variant="tonal">请选择或新建角色。</v-alert>
 
-    <template v-if="gateway">
       <v-card class="app-card glass-card section-card persona-source-card">
         <div class="d-flex align-center ga-3 flex-wrap">
           <v-select
-            :model-value="gateway.agentRoleDeviceId || ''"
+            :model-value="store.sourceDeviceId"
             :items="personaSourceOptions"
-            label="人格来源 PC"
-            :hint="t('本机人格在本机项中选择；远端列表仅列出其他 PC。')"
+            label="角色来源 PC"
+            :hint="t('按来源 PC 查看角色。')"
             persistent-hint
             :loading="remotePersona.devicesLoading"
             @update:model-value="value => setPersonaSource(String(value || ''))"
@@ -1447,14 +1435,16 @@ onBeforeUnmount(() => {
           <v-btn variant="tonal" prepend-icon="mdi-refresh" :loading="remotePersona.devicesLoading" @click="refreshRemotePersona">刷新远端 PC</v-btn>
         </div>
         <v-alert v-if="remotePersona.devicesError" class="mt-3" type="error" variant="tonal">远端 PC 发现失败：{{ remotePersona.devicesError }}</v-alert>
-        <div class="section-note mt-3">本机路由可以使用远端人格配置；人格和记录保存在来源 PC，消息端和处理 Agent 保持这条路由的配置。</div>
+        <div class="section-note mt-3"></div>
       </v-card>
+    <template v-if="gateway">
+
       <div class="summary-grid">
         <div class="summary-tile persona-summary-tile">
           <PersonaAvatar :role-id="gateway.agentRoleId || ''" :avatar-url="selectedRole?.avatarUrl" :size="42" />
           <div>
-            <span>当前人格</span>
-            <b data-no-i18n>{{ gateway.agentRoleId || "不注入人格" }}</b>
+            <span>当前角色</span>
+            <b data-no-i18n>{{ selectedRoleTitle }}</b>
           </div>
         </div>
         <div class="summary-tile">
@@ -1463,11 +1453,11 @@ onBeforeUnmount(() => {
         </div>
         <div class="summary-tile">
           <span>定时任务</span>
-          <b>{{ isRemotePersona ? "由远端人格配置决定" : hasPersona ? `${scheduledAutomations.length} 条任务` : "未启用" }}</b>
+          <b>{{ isRemotePersona ? "由远端角色配置决定" : hasPersona ? `${scheduledAutomations.length} 条任务` : "未启用" }}</b>
         </div>
         <div class="summary-tile">
-          <span>{{ isRemotePersona ? "人格来源" : hasPersona ? "角色目录" : "运行模式" }}</span>
-          <b :data-no-i18n="hasPersona ? '' : undefined">{{ isRemotePersona ? personaSourceName : hasPersona ? roleDirLabel : "无人格直通" }}</b>
+          <span>{{ isRemotePersona ? "角色来源" : hasPersona ? "角色目录" : "运行模式" }}</span>
+          <b :data-no-i18n="hasPersona ? '' : undefined">{{ isRemotePersona ? personaSourceName : hasPersona ? roleDirLabel : "无角色直通" }}</b>
         </div>
       </div>
 
@@ -1477,7 +1467,7 @@ onBeforeUnmount(() => {
           class="persona-page-tabs"
           color="secondary"
           show-arrows
-          :aria-label="t('人格配置分区')"
+          :aria-label="t('角色配置分区')"
         >
           <v-tab value="profile" prepend-icon="mdi-account-card-outline">基础资料</v-tab>
           <v-tab value="expression" prepend-icon="mdi-account-voice" :disabled="!hasPersona">表达与语音</v-tab>
@@ -1492,34 +1482,34 @@ onBeforeUnmount(() => {
       </v-card>
 
       <div v-if="isRemotePersona" class="persona-tab-panel">
-        <v-alert v-if="remoteReadState === 'offline'" type="warning" variant="tonal">来源 PC 暂时无法连接。已保存的远端人格引用会保留，消息不会改用本机同名人格。</v-alert>
-        <v-alert v-else-if="remoteReadState === 'unsupported'" type="warning" variant="tonal">远端 PC 需要更新，当前版本无法读取人格配置。</v-alert>
-        <v-alert v-else-if="remoteReadState === 'unauthorized'" type="warning" variant="tonal">RabiLink 鉴权失败，无法读取远端人格。请检查 RabiLink 的连接和登录状态。</v-alert>
-        <v-alert v-else-if="remoteReadError" type="error" variant="tonal">远端人格读取失败：{{ remoteReadError }}</v-alert>
+        <v-alert v-if="remoteReadState === 'offline'" type="warning" variant="tonal">来源 PC 暂时无法连接。已保存的远端角色引用会保留，消息不会改用本机同名角色。</v-alert>
+        <v-alert v-else-if="remoteReadState === 'unsupported'" type="warning" variant="tonal">远端 PC 需要更新，当前版本无法读取角色配置。</v-alert>
+        <v-alert v-else-if="remoteReadState === 'unauthorized'" type="warning" variant="tonal">RabiLink 鉴权失败，无法读取远端角色。请检查 RabiLink 的连接和登录状态。</v-alert>
+        <v-alert v-else-if="remoteReadError" type="error" variant="tonal">远端角色读取失败：{{ remoteReadError }}</v-alert>
         <div class="two-column">
           <v-card class="app-card glass-card section-card">
-            <div class="section-title">远端人格引用</div>
-            <div class="section-note">只保存来源 PC、人格 ID 和文件名；远端配置在读取时使用。</div>
+            <div class="section-title">远端角色引用</div>
+            <div class="section-note">角色资料由来源 PC 保存。</div>
             <div class="form-grid mt-3">
-              <v-select :model-value="gateway.agentRoleId || ''" :items="remoteRoleOptions" label="指向远端人格"
+              <v-select :model-value="gateway.agentRoleId || ''" :items="remoteRoleOptions" label="查看远端角色"
                 :loading="remotePersona.catalogState === 'loading'" :disabled="remotePersona.catalogState !== 'ready'"
                 @update:model-value="value => setRole(String(value || ''))" />
-              <v-text-field v-if="hasPersona" v-model="gateway.agentRoleFile" label="人格文件名" placeholder="persona.md" @update:model-value="store.touch" />
+              <v-text-field v-if="hasPersona" v-model="gateway.agentRoleFile" label="角色文件名" placeholder="persona.md" @update:model-value="store.touch" />
             </div>
-            <v-alert v-if="remotePersona.catalogState === 'ready' && !remotePersona.personas.length" type="info" variant="tonal">来源 PC 没有可选人格。</v-alert>
+            <v-alert v-if="remotePersona.catalogState === 'ready' && !remotePersona.personas.length" type="info" variant="tonal">来源 PC 没有可选角色。</v-alert>
             <div class="status-row"><span>来源 PC</span><b data-no-i18n>{{ personaSourceName }}</b></div>
-            <div class="status-row"><span>人格 ID</span><b data-no-i18n>{{ gateway.agentRoleId || "未选择" }}</b></div>
-            <div class="section-note mt-3">远端人格配置为只读。头像、语言风格、身份、自动化和知识的修改应在来源 PC 完成。</div>
+            <div class="status-row"><span>角色 ID</span><b data-no-i18n>{{ gateway.agentRoleId || "未选择" }}</b></div>
+            <div class="section-note mt-3">远端角色配置为只读。头像、语言风格、身份、自动化和知识的修改应在来源 PC 完成。</div>
           </v-card>
           <v-card v-if="hasPersona" class="app-card glass-card section-card persona-summary-card">
             <div class="section-title-row">
               <div><div class="section-title">persona.md 摘要</div><div class="section-note" data-no-i18n>{{ personaSourceName }} · {{ gateway.agentRoleId }}</div></div>
               <v-btn :to="personaDocumentPath" color="secondary" variant="tonal" prepend-icon="mdi-file-document-outline">查看完整正文</v-btn>
             </div>
-            <div v-if="remotePersona.referenceState === 'loading'" class="persona-summary-loading" aria-live="polite"><v-progress-circular indeterminate color="secondary" size="24" /><span>正在读取远端人格…</span></div>
-            <div v-else-if="remotePersona.reference" class="persona-summary-preview" data-no-i18n>{{ personaMarkdownSummary || "人格正文为空。" }}</div>
+            <div v-if="remotePersona.referenceState === 'loading'" class="persona-summary-loading" aria-live="polite"><v-progress-circular indeterminate color="secondary" size="24" /><span>正在读取远端角色…</span></div>
+            <div v-else-if="remotePersona.reference" class="persona-summary-preview" data-no-i18n>{{ personaMarkdownSummary || "角色正文为空。" }}</div>
             <div v-else class="section-note">远端配置尚未读取成功。</div>
-            <details v-if="remotePersona.reference" class="mt-4"><summary>查看远端人格配置（只读）</summary><pre class="mono-box" data-no-i18n>{{ remoteConfigSummary }}</pre></details>
+            <details v-if="remotePersona.reference" class="mt-4"><summary>查看远端角色配置（只读）</summary><pre class="mono-box" data-no-i18n>{{ remoteConfigSummary }}</pre></details>
           </v-card>
         </div>
       </div>
@@ -1547,37 +1537,16 @@ onBeforeUnmount(() => {
         <v-card class="app-card glass-card section-card">
           <div class="section-title-row">
             <div>
-              <div class="section-title">人格配置</div>
-              <div class="section-note">当前路由指向 {{ gateway.agentRoleId || "无人格直通模式" }}。</div>
+              <div class="section-title">角色配置</div>
+              <div class="section-note" data-no-i18n>{{ gateway.agentRoleId }}</div>
             </div>
-          </div>
-          <div class="form-grid">
-            <v-select
-              :model-value="gateway.agentRoleId || ''"
-              :items="roleOptions"
-              label="指向人格"
-              @update:model-value="value => setRole(String(value || ''))"
-            >
-              <template #item="{ props: itemProps, item }">
-                <v-list-item v-bind="itemProps" :subtitle="item.raw.subtitle">
-                  <template #prepend><PersonaAvatar :role-id="String(item.raw.value || '')" :avatar-url="item.raw.avatarUrl" :size="32" /></template>
-                </v-list-item>
-              </template>
-              <template #selection="{ item }">
-                <div class="d-flex align-center ga-2">
-                  <PersonaAvatar :role-id="String(item.raw.value || '')" :avatar-url="item.raw.avatarUrl" :size="26" />
-                  <span>{{ item.raw.title }}</span>
-                </div>
-              </template>
-            </v-select>
-            <v-text-field v-if="hasPersona" v-model="gateway.agentRoleFile" label="人格文件名" placeholder="persona.md" @update:model-value="store.touch" />
           </div>
           <template v-if="hasPersona">
             <div class="persona-identity-row mt-3">
               <PersonaAvatar :role-id="gateway.agentRoleId || ''" :avatar-url="selectedRole?.avatarUrl" :size="76" rounded="xl" />
               <div class="persona-identity-copy">
-                <strong data-no-i18n>{{ gateway.agentRoleId }}</strong>
-                <span>头像会用于人格选择、总览、语音和本地角色面板；未设置时显示人格首字。</span>
+                <strong data-no-i18n>{{ selectedRoleTitle }}</strong>
+                <span>头像会用于角色选择、总览、语音和本地角色面板；未设置时显示角色首字。</span>
                 <div class="d-flex ga-2 flex-wrap mt-2">
                   <v-btn size="small" color="secondary" variant="tonal" prepend-icon="mdi-image-edit-outline" :loading="avatarSaving" @click="chooseAvatar">
                     {{ selectedRole?.avatarConfigured ? "更换头像" : "设置头像" }}
@@ -1589,10 +1558,10 @@ onBeforeUnmount(() => {
             </div>
             <v-alert v-if="avatarError" class="mt-3" type="error" variant="tonal" density="compact">{{ avatarError }}</v-alert>
             <div class="status-row mt-3"><span>角色目录</span><b data-no-i18n>{{ roleDirLabel }}</b></div>
-            <div class="status-row"><span>人格路径</span><b data-no-i18n>{{ selectedRole?.rolePath || runtime.roleInfo?.selectedRolePath || "-" }}</b></div>
+            <div class="status-row"><span>角色路径</span><b data-no-i18n>{{ selectedRole?.rolePath || runtime.roleInfo?.selectedRolePath || "-" }}</b></div>
           </template>
           <v-alert v-else class="mt-3" type="info" variant="tonal">
-            这条路由不会注入人格、计划或记忆；RabiRoute 只把消息来源、原文和回复 API 包装后投递给 Agent。
+            这条路由不会注入角色、计划或记忆；RabiRoute 只把消息来源、原文和回复 API 包装后投递给 Agent。
           </v-alert>
         </v-card>
 
@@ -1600,7 +1569,7 @@ onBeforeUnmount(() => {
           <div class="section-title-row">
             <div>
               <div class="section-title">persona.md 摘要</div>
-              <div class="section-note" :data-no-i18n="selectedRole?.rolePath || runtime.roleInfo?.selectedRolePath ? '' : undefined">{{ selectedRole?.rolePath || runtime.roleInfo?.selectedRolePath || "未读取到人格文件" }}</div>
+              <div class="section-note" :data-no-i18n="selectedRole?.rolePath || runtime.roleInfo?.selectedRolePath ? '' : undefined">{{ selectedRole?.rolePath || runtime.roleInfo?.selectedRolePath || "未读取到角色文件" }}</div>
             </div>
             <v-btn
               :to="personaDocumentPath"
@@ -1650,7 +1619,7 @@ onBeforeUnmount(() => {
           <div class="section-title-row">
             <div>
               <div class="section-title">语言风格风控</div>
-              <div class="section-note">人格外发消息默认按目标 Skill 校验。</div>
+              <div class="section-note">角色外发消息默认按目标 Skill 校验。</div>
             </div>
           </div>
           <v-text-field
@@ -1670,9 +1639,9 @@ onBeforeUnmount(() => {
         <v-card class="app-card glass-card section-card">
           <div class="section-title-row">
             <div>
-              <div class="section-title">人格语音</div>
+              <div class="section-title">角色语音</div>
               <div class="section-note">
-                TTS 模型、声线、语言、语速和发声说明统一由当前人格的 <code>voice/voice-profile.json</code> 管理。
+                TTS 模型、声线、语言、语速和发声说明统一由当前角色的 <code>voice/voice-profile.json</code> 管理。
               </div>
             </div>
             <div class="d-flex ga-2 flex-wrap">
@@ -1689,7 +1658,7 @@ onBeforeUnmount(() => {
                 size="small"
                 variant="tonal"
                 prepend-icon="mdi-account-edit-outline"
-                @click="store.openConfigFile('role', gateway.id, gateway.agentRoleId || '')"
+                @click="store.openConfigFile('role', '', store.selectedRoleId)"
               >
                 打开 persona.md
               </v-btn>
@@ -1703,7 +1672,7 @@ onBeforeUnmount(() => {
                 复制 voice-profile 路径
               </v-btn>
               <v-btn size="small" variant="text" prepend-icon="mdi-account-voice" to="/speech">
-                测试人格 TTS
+                测试角色 TTS
               </v-btn>
             </div>
           </div>
@@ -1716,7 +1685,7 @@ onBeforeUnmount(() => {
           <div class="persona-speech-summary">
             <div>
               <span>声线状态</span>
-              <b>{{ voiceProfile ? (voiceProfile.voiceReady ? "已配置人格声线" : "使用模型默认声线") : "尚未读取" }}</b>
+              <b>{{ voiceProfile ? (voiceProfile.voiceReady ? "已配置角色声线" : "使用模型默认声线") : "尚未读取" }}</b>
             </div>
             <div>
               <span>TTS 模型</span>
@@ -1749,7 +1718,7 @@ onBeforeUnmount(() => {
             data-no-i18n
           />
           <v-alert class="mt-3" type="info" variant="tonal" density="compact">
-            <code>voice-profile.json</code> 是人格 TTS 的唯一配置入口。WebGUI 只读取安全摘要，不显示真实 voice ID 或 API key；复制路径后可直接编辑模型、声线绑定、语言、语速和发声说明。
+            <code>voice-profile.json</code> 是角色 TTS 的唯一配置入口。WebGUI 只读取安全摘要，不显示真实 voice ID 或 API key；复制路径后可直接编辑模型、声线绑定、语言、语速和发声说明。
           </v-alert>
         </v-card>
 
@@ -1757,7 +1726,7 @@ onBeforeUnmount(() => {
           <div class="section-title-row">
             <div>
               <div class="section-title">语音唤醒</div>
-              <div class="section-note">关键词归人格所有，所有绑定该人格的语音 Route 共用。</div>
+              <div class="section-note">关键词归角色所有，所有绑定该角色的语音 Route 共用。</div>
             </div>
             <v-chip
               :color="gateway.speechPushMode === 'keyword' ? 'success' : 'secondary'"
@@ -1787,7 +1756,7 @@ onBeforeUnmount(() => {
             variant="tonal"
             density="compact"
           >
-            当前关键词为空：转写会继续记录，但不会唤醒 Agent。建议至少加入人格名和常用称呼。
+            当前关键词为空：转写会继续记录，但不会唤醒 Agent。建议至少加入角色名和常用称呼。
           </v-alert>
         </v-card>
       </div>
@@ -1903,7 +1872,7 @@ onBeforeUnmount(() => {
                 </div>
               </div>
             </v-alert>
-            <div class="section-note mt-3">页面只读取统计、声纹缩写和人格关系，不读取或展示转写正文。</div>
+            <div class="section-note mt-3">页面只读取统计、声纹缩写和角色关系，不读取或展示转写正文。</div>
           </v-card-text>
         </v-card>
       </v-dialog>
@@ -1918,7 +1887,7 @@ onBeforeUnmount(() => {
         <div class="section-title-row">
           <div>
             <div class="section-title">最近消息上下文</div>
-            <div class="section-note">分别控制每个消息端自动注入给当前人格的最近消息数量。</div>
+            <div class="section-note">分别控制每个消息端自动注入给当前角色的最近消息数量。</div>
           </div>
           <v-chip color="secondary" variant="tonal">
             默认 {{ DEFAULT_RECENT_MESSAGE_LIMIT }} · 上限 {{ MAX_RECENT_MESSAGE_LIMIT }}
@@ -1943,30 +1912,7 @@ onBeforeUnmount(() => {
         </div>
       </v-card>
 
-      <v-card class="app-card glass-card section-card">
-        <div class="section-title-row">
-          <div>
-            <div class="section-title">路由变量</div>
-            <div class="section-note">变量会在规则匹配前按字面量替换，用于昵称、关键词或项目别名。</div>
-          </div>
-          <v-btn color="secondary" variant="tonal" prepend-icon="mdi-plus" @click="store.addRouteVariable">新增变量</v-btn>
-        </div>
-        <div v-if="variableEntries.length === 0" class="empty-state">
-          <div>
-            <strong>暂无自定义路由变量</strong>
-            <span>需要给群名、项目名或关键词做别名时，再新增变量。</span>
-          </div>
-        </div>
-        <div v-else class="form-grid">
-          <template v-for="[key, value] in variableEntries" :key="key">
-            <v-text-field :model-value="key" label="变量名" @change="updateVariableKey(key, value, $event)" />
-            <div class="d-flex ga-2 variable-value-row">
-              <v-text-field class="flex-grow-1" :model-value="value" label="变量值" @update:model-value="next => store.updateRouteVariable(key, key, String(next || ''))" />
-              <v-btn icon="mdi-delete" color="error" variant="text" @click="store.removeRouteVariable(key)" />
-            </div>
-          </template>
-        </div>
-      </v-card>
+
 
           </div>
         </v-window-item>
@@ -1978,7 +1924,7 @@ onBeforeUnmount(() => {
         <div class="section-title-row">
           <div>
             <div class="section-title">默认消息规则</div>
-            <div class="section-note">无人格模式按已启用消息入口生成默认命中规则。</div>
+            <div class="section-note">无角色模式按已启用消息入口生成默认命中规则。</div>
           </div>
           <v-chip color="secondary" variant="tonal">入口默认</v-chip>
         </div>
@@ -1993,7 +1939,7 @@ onBeforeUnmount(() => {
       <v-card v-if="hasPersona" class="app-card glass-card section-card automation-workspace">
         <div class="section-title-row automation-workspace-head">
           <div>
-            <div class="section-title">人格自动化</div>
+            <div class="section-title">角色自动化</div>
             <div class="section-note">先选择什么时候触发，再选择通知 Agent 或运行脚本。</div>
           </div>
           <v-chip color="secondary" variant="tonal">{{ automations.length }} 条规则</v-chip>
@@ -2582,7 +2528,7 @@ onBeforeUnmount(() => {
         </v-card-actions>
       </v-card>
     </v-dialog>
-  </div>
+  </fieldset>
 </template>
 
 <style scoped>

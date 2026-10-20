@@ -418,10 +418,6 @@ export class ManagerConfigRepository {
     autoAssignGatewayPorts(normalized.gateways, this.managerPort);
     validateGatewayPortConflicts(normalized.gateways);
     const activeConfigNames = new Set<string>();
-    const groupedByRole = new Map<string, Pick<
-      GatewayDefinition,
-      "automationRules" | "notificationRules" | "recentMessageLimit" | "recentMessageLimits" | "speechTriggerKeywords" | "languageStyle" | "codexHooks"
-    >>();
     for (let i = 0; i < normalized.gateways.length; i += 1) {
       const definition = normalized.gateways[i];
       const raw = config.gateways[i];
@@ -438,23 +434,8 @@ export class ManagerConfigRepository {
       const configPath = this.adapterConfigPath(configName);
       fs.mkdirSync(path.dirname(configPath), { recursive: true });
       fs.writeFileSync(configPath, JSON.stringify(this.adapterConfigItem(definition), null, 2), "utf8");
-      const roleId = sanitizeRoleId(definition.agentRoleId) || routeRuntimeParts(definition.id).roleId;
-      if (roleId && !definition.agentRoleDeviceId) {
-        const previous = groupedByRole.get(roleId);
-        groupedByRole.set(roleId, {
-          recentMessageLimit: previous?.recentMessageLimit ?? definition.recentMessageLimit,
-          recentMessageLimits: previous?.recentMessageLimits ?? definition.recentMessageLimits,
-          speechTriggerKeywords: previous?.speechTriggerKeywords ?? definition.speechTriggerKeywords,
-          languageStyle: previous?.languageStyle ?? definition.languageStyle,
-          codexHooks: previous?.codexHooks ?? definition.codexHooks,
-          automationRules: mergePersonaAutomationRules(previous?.automationRules, definition.automationRules),
-          notificationRules: mergeNotificationRules(previous?.notificationRules, definition.notificationRules)
-        });
-      }
     }
-    for (const [roleId, fragment] of groupedByRole.entries()) {
-      this.writePersonaConfig(roleId, fragment);
-    }
+    // Role-owned data is committed only through the independent role configuration owner.
     if (scope) {
       const previousName = routeRuntimeParts(scope.previousId).configName || sanitizeConfigName(scope.previousId);
       if (previousName && previousName !== scope.configName) {

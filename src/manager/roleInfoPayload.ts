@@ -67,7 +67,7 @@ export function roleInfoPayload(
   const { agentRoleDeviceId } = normalizeRemotePersonaReference(definition);
   const activeRoot = rootKey(rolesDir);
   const roleOptions = (options.personaPresentations ?? [])
-    .filter(item => item.isPersona && rootKey(item.rolesRoot) === activeRoot)
+    .filter(item => item.isPersona && !item.archivedAt && !item.lifecycleError && rootKey(item.rolesRoot) === activeRoot)
     .map(item => {
       const file = preferredFile(item, roleFileName);
       const rolePath = roleFilePath(rolesDir, item.roleId, file.fileName);

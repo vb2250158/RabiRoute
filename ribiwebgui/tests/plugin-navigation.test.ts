@@ -100,7 +100,7 @@ test("Web navigation resolves activated page routes and registered slots", () =>
   const groups = buildWebNavigation([
     ...pair({ id: "overview", owner: builtinOwner("core"), routeId: "route.overview", label: "控制台", icon: "mdi-view-dashboard-outline", slot: "utility", order: 40 }),
     ...pair({ id: "speech", owner: builtinOwner("speech"), routeId: "route.speech", label: "语音服务", icon: "mdi-waveform", slot: "utility", order: 50 }),
-    ...pair({ id: "persona-sync", owner: builtinOwner("persona"), routeId: "route.persona-sync", label: "人格同步", icon: "mdi-folder-sync-outline", slot: "persona-secondary", order: 40 }),
+    ...pair({ id: "persona-sync", owner: builtinOwner("persona"), routeId: "route.persona-sync", label: "角色同步", icon: "mdi-folder-sync-outline", slot: "persona-secondary", order: 40 }),
     ...pair({ id: "settings", owner: builtinOwner("core"), routeId: "global.settings", label: "设置", icon: "mdi-cog-outline", slot: "utility", order: 80 }),
     ...pair({ id: "docs", owner: builtinOwner("core"), routeId: "global.docs", label: "手册", icon: "mdi-book-open-page-variant-outline", slot: "footer", order: 90 })
   ], selected);

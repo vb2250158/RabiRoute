@@ -254,12 +254,12 @@ test("schema v3 migration preserves customized information-needed descriptions",
   const configPath = path.join(roleDir, "personaConfig.json");
   const current = cloneDefault();
   const informationNeeded = current.statuses.find((status) => status.key === current.roles.informationNeeded)!;
-  informationNeeded.description = "由人格自定义的中文说明。";
+  informationNeeded.description = "由角色自定义的中文说明。";
   informationNeeded.descriptionEn = "Persona-specific English description.";
   fs.writeFileSync(configPath, `${JSON.stringify({ planWorkflow: { ...current, schemaVersion: 3, roles: Object.fromEntries(Object.entries(current.roles).filter(([role]) => role !== "approved")) } }, null, 2)}\n`, "utf8");
 
   const migrated = ensurePersonaPlanWorkflow(roleDir);
-  assert.equal(planStatusDefinition(migrated.workflow, "待补充信息")?.description, "由人格自定义的中文说明。");
+  assert.equal(planStatusDefinition(migrated.workflow, "待补充信息")?.description, "由角色自定义的中文说明。");
   assert.equal(planStatusDefinition(migrated.workflow, "待补充信息")?.descriptionEn, "Persona-specific English description.");
 });
 

@@ -114,7 +114,7 @@ function gatewayRuntimeColor(gateway: any): string {
             <PersonaAvatar :role-id="gw.agentRoleId || ''" :avatar-url="avatarUrlForGateway(gw.id, gw.agentRoleId)" :size="42" />
             <div class="min-w-0">
               <div class="route-card-title">{{ store.configNameFor(gw) }}</div>
-              <div class="route-card-subtitle">人格 {{ gw.agentRoleId || "未选择" }}</div>
+              <div class="route-card-subtitle">角色 {{ gw.agentRoleId || "未选择" }}</div>
               <div v-if="gw.agentRoleDeviceId" class="route-card-subtitle"><span>远端 PC</span> · <span data-no-i18n>{{ gw.agentRoleDeviceId }}</span></div>
             </div>
           </div>

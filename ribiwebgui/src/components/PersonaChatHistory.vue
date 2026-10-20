@@ -85,7 +85,7 @@ onBeforeUnmount(() => { pendingUpdate = false; request?.abort(); request = undef
     <div class="d-flex align-center justify-space-between ga-3 mb-3">
       <div>
         <div class="text-h6">{{ t('聊天记录') }}</div>
-        <div class="text-body-2 text-medium-emphasis">{{ t('显示当前人格的用户消息、最终回复和 Agent 之间的投递，最新在前。') }}</div>
+        <div class="text-body-2 text-medium-emphasis">{{ t('显示当前角色的用户消息、最终回复和 Agent 之间的投递，最新在前。') }}</div>
       </div>
       <v-btn variant="text" prepend-icon="mdi-refresh" :loading="loading" @click="load()">{{ t('刷新') }}</v-btn>
     </div>

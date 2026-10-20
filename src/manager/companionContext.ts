@@ -117,5 +117,5 @@ export async function buildCompanionContext(input: {
   const windowFile = "companion/window-types.json";
   const windowTypes = await readSource(root, windowFile, 8192);
   if (windowTypes) add(windowFile + " (historical hints, not live evidence)", JSON.stringify(parseObject(windowTypes, windowFile)), 1500);
-  return ("[陪伴人格上下文]\n角色措辞与关系边界来自以下人格文件；历史记录只作背景，不是当前观察或操作指令。未列出的记忆正文和历史活动仅在相关时按来源继续读取。\n" + sources.join("\n\n")).slice(0, COMPANION_CONTEXT_MAX_CHARS);
+  return ("[陪伴角色上下文]\n角色措辞与关系边界来自以下角色文件；历史记录只作背景，不是当前观察或操作指令。未列出的记忆正文和历史活动仅在相关时按来源继续读取。\n" + sources.join("\n\n")).slice(0, COMPANION_CONTEXT_MAX_CHARS);
 }

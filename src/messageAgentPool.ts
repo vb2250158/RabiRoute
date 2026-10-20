@@ -561,7 +561,7 @@ function workerHandoffPrompt(
         "按游标增量比对群消息、计划、问题映射和回执；证据不足时再查历史。",
         "项目事实缺失、projectFactAssessment 缺失或 criticalFactDisposition 缺失时优先处理。",
         "只做只读比对、遗漏识别、汇总和分诊。新证据交原计划 Agent；计划维护交秘书。",
-        "需要决定、跨计划冲突或已有可发送正文时才交给主人格，并附消息、planId、证据和正文。",
+        "需要决定、跨计划冲突或已有可发送正文时才交给主角色，并附消息、planId、证据和正文。",
         "没有遗漏或新进展时写：处理结果：仅更新控制面，无需外部通知。"
       ]
     : [];
@@ -572,8 +572,8 @@ function workerHandoffPrompt(
     `消息组 ID：${group.groupId}`,
     requirementId ? `消息处理需求 ID：${requirementId}` : "",
     `工作目录：${worker.workspace}`,
-    `当前主人格任务：${options.sourceThreadName}`,
-    `当前主人格任务 ID：${options.sourceThreadId}`,
+    `当前主角色任务：${options.sourceThreadName}`,
+    `当前主角色任务 ID：${options.sourceThreadId}`,
     ...remotePersonaReferenceLines(options),
     `向其它 Agent 投递时填写 messageSource={"type":"agent","agentAdapter":"${workerAgentAdapter(worker)}","sessionId":"${worker.threadId}","sessionName":"当前消息处理任务名称"}、sourceThreadId=${worker.threadId}、sourceAgentType=message_processing 和 responsePolicy；要求回复时填写 responseInstruction。`,
     `对方通过 POST ${threadsApi} 回复本任务，填写 inReplyToRequestId、result、nextAction 和 responsePolicy。`,
@@ -583,8 +583,8 @@ function workerHandoffPrompt(
     ...criticalFactInstructions,
     "",
     "[本轮可见性与结束条件]",
-    "当前任务输出只供内部查看。外部消息必须取得渠道回执；待决定事项必须实际交给主人格。",
-    `交给主人格时 POST ${threadsApi}，目标 threadId=${options.sourceThreadId}，messageSource={"type":"agent","agentAdapter":"${workerAgentAdapter(worker)}","sessionId":"${worker.threadId}","sessionName":"当前消息处理任务名称"}，sourceThreadId=${worker.threadId}，sourceAgentType=message_processing，responsePolicy=required${requirementId ? `，并带 messageProcessing.requirementId=${requirementId}` : ""}。只保留必要上下文，要求回传发送回执或决定。`,
+    "当前任务输出只供内部查看。外部消息必须取得渠道回执；待决定事项必须实际交给主角色。",
+    `交给主角色时 POST ${threadsApi}，目标 threadId=${options.sourceThreadId}，messageSource={"type":"agent","agentAdapter":"${workerAgentAdapter(worker)}","sessionId":"${worker.threadId}","sessionName":"当前消息处理任务名称"}，sourceThreadId=${worker.threadId}，sourceAgentType=message_processing，responsePolicy=required${requirementId ? `，并带 messageProcessing.requirementId=${requirementId}` : ""}。只保留必要上下文，要求回传发送回执或决定。`,
     "无需外发时写“处理结果：无需对外回复”，并注明结束语、重复、自身消息或他人已完整回答。",
     "Agent 返回新结果后重新判断是否外发。"
   ].join("\n");
@@ -592,10 +592,10 @@ function workerHandoffPrompt(
 
 function remotePersonaReferenceLines(options: MessageAgentPoolOptions): string[] {
   return options.roleDeviceId ? [
-    "[远端人格引用]",
-    `人格所属电脑：${options.roleDeviceId}`,
-    `人格 ID：${options.roleId}`,
-    "按每次消息 AgentPacket 的人格正文和远端知识入口使用该人格。人格配置、计划、记忆与技能仍由远端 PC 保存；不要读取或绑定本机同名人格。"
+    "[远端角色引用]",
+    `角色所属电脑：${options.roleDeviceId}`,
+    `角色 ID：${options.roleId}`,
+    "按每次消息 AgentPacket 的角色正文和远端知识入口使用该角色。角色配置、计划、记忆与技能仍由远端 PC 保存；不要读取或绑定本机同名角色。"
   ] : [];
 }
 
@@ -604,11 +604,11 @@ export function messageAgentInitializationPrompt(options: MessageAgentPoolOption
   return [
     ...personaBinding,
     "[消息处理 Agent 初始化]",
-    `主人格任务：${options.sourceThreadName}`,
-    `主人格任务 ID：${options.sourceThreadId}`,
+    `主角色任务：${options.sourceThreadName}`,
+    `主角色任务 ID：${options.sourceThreadId}`,
     `工作目录：${options.workspace}`,
     "",
-    "你是消息处理 Agent：处理普通对话；计划增量交原计划 Agent；新计划或计划维护交秘书；关键决定、跨计划冲突和无法判断事项交主人格。",
+    "你是消息处理 Agent：处理普通对话；计划增量交原计划 Agent；新计划或计划维护交秘书；关键决定、跨计划冲突和无法判断事项交主角色。",
     ...proactiveCommunicationPolicyLines("internal"),
     "明确 @、回复和私聊默认需要回应；计划操作与外部回复分开判断。",
     "Heartbeat 只做增量比对和汇总。不实施计划业务，不写 taskBinding。",

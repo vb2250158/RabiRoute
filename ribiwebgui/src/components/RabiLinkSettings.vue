@@ -144,7 +144,7 @@ onBeforeUnmount(() => { disposed = true; identityRequest?.abort(); reset.dispose
     <v-dialog :model-value="reset.dialogOpen" max-width="560" @update:model-value="value => { if (!value) reset.cancel(); }">
       <v-card class="pa-4">
         <v-card-title class="px-0">重置实例 ID？</v-card-title>
-        <v-card-text class="px-0">此操作会生成新的实例 ID 和连接密钥，保留实例名称、人格、记录及连接配置。旧连接可能需要重新建立。</v-card-text>
+        <v-card-text class="px-0">此操作会生成新的实例 ID 和连接密钥，保留实例名称、角色、记录及连接配置。旧连接可能需要重新建立。</v-card-text>
         <v-card-actions class="px-0">
           <v-spacer />
           <v-btn variant="text" @click="reset.cancel()">取消</v-btn>

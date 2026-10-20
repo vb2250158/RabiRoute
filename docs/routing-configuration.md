@@ -8,9 +8,9 @@
 
 > 状态：现行指南。已按 `personaConfig.json` 读取逻辑、route kind、pipeline 和模板值核对。
 
-路由配置决定消息怎样进入、使用哪个人格和处理端；人格自动化决定何时触发，以及通知 Agent 还是运行脚本。
+路由配置决定消息怎样进入、使用哪个角色和处理端；角色自动化决定何时触发，以及通知 Agent 还是运行脚本。
 
-通过 `agentRoleDeviceId` 选择远端 PC 时，`agentRoleId` 指向该 PC 的人格；为空或未设置仍使用本机人格。两端复用同一 RabiLink 应用认证与自动公钥握手，只通过受限 `persona` 服务读取；远端规则在投递时读取，不存成本机人格配置。操作、手工限权与失败边界见[本机路由使用远端人格](remote-persona-reference.md)（实验实现）。
+通过 `agentRoleDeviceId` 选择远端 PC 时，`agentRoleId` 指向该 PC 的角色；为空或未设置仍使用本机角色。两端复用同一 RabiLink 应用认证与自动公钥握手，只通过受限 `persona` 服务读取；远端规则在投递时读取，不存成本机角色配置。操作、手工限权与失败边界见[本机路由使用远端角色](remote-persona-reference.md)（实验实现）。
 
 ## 配置放在哪里
 
@@ -18,7 +18,7 @@ RabiRoute 支持两种常用方式。
 
 ### 角色目录里的 personaConfig.json
 
-消息路由配置跟随路由人格，放在角色目录：
+角色自动化、上下文额度和 Hook 配置由角色独立拥有，放在角色目录；路由的消息端、Agent 和角色引用仍放在 `data/route/<configName>/adapterConfig.json`，保存路由不再覆盖角色配置：
 
 ```text
 data/roles/<RoleId>/personaConfig.json
@@ -32,9 +32,9 @@ data/roles/QAReviewer/personaConfig.json
 data/roles/DevAssistant/personaConfig.json
 ```
 
-Manager 会扫描 `data/roles/*/personaConfig.json`。当前格式以文件根级的 `automationRules`、`speechTriggerKeywords` 和 `recentMessageLimits` 为真源，不再要求在人格文件里另建 `configs` 嵌套。旧 `notificationRules` 会兼容读取并转换。
+Manager 会扫描 `data/roles/*/personaConfig.json`。当前格式以文件根级的 `automationRules`、`speechTriggerKeywords` 和 `recentMessageLimits` 为真源，不再要求在角色文件里另建 `configs` 嵌套。旧 `notificationRules` 会兼容读取并转换。
 
-路由入口参数来自 `data/route/<配置名>/adapterConfig.json`。manager 用其中的 `agentRoleId` 找到对应人格；多条 Route 绑定同一人格时，复用同一套人格规则、语音关键词和分消息端上下文额度。默认规则在初始化或显式迁移时生成。已保存的自动化规则是投递真源，读取不会补回已删除项。目标引用与升级步骤见[自动化 Agent 投递](automation-agent-delivery.md)。
+路由入口参数来自 `data/route/<配置名>/adapterConfig.json`。manager 用其中的 `agentRoleId` 找到对应角色；多条 Route 绑定同一角色时，复用同一套角色规则、语音关键词和分消息端上下文额度。默认规则在初始化或显式迁移时生成。已保存的自动化规则是投递真源，读取不会补回已删除项。目标引用与升级步骤见[自动化 Agent 投递](automation-agent-delivery.md)。
 
 ## personaConfig.json 结构
 
@@ -130,7 +130,7 @@ Manager 会扫描 `data/roles/*/personaConfig.json`。当前格式以文件根�
 - `private`：私聊消息。
 - `heartbeat`：定时触发消息。
 - `manual_trigger`：手动触发事件，例如托盘菜单主动触发某条任务/规则。它不是消息 adapter 类型，也不会伪装成 heartbeat；是否投递仍由规则的 `enabled` 和 `routeKinds` 勾选决定。
-- `role_panel_message`：Manager 内置的人格消息。它同时承载本地角色面板和经过身份校验的跨人格投递，不是可配置网络 listener。两种入口共用同一投递服务：处理端接收后才写 `sent`，失败写 `failed`；规则在初始化时生成，之后由人格自动化保存的配置决定是否投递。
+- `role_panel_message`：Manager 内置的角色消息。它同时承载本地角色面板和经过身份校验的跨角色投递，不是可配置网络 listener。两种入口共用同一投递服务：处理端接收后才写 `sent`，失败写 `failed`；规则在初始化时生成，之后由角色自动化保存的配置决定是否投递。
 - `plan_feedback`：Manager 在计划审批意见落盘后生成的独立系统事件。它由明确的 `roleId / gatewayId / planId` 定位，不依赖可编辑消息规则，不写角色面板 timeline 或统一会话账本，也不注入最近消息。
 - `voice_transcript`：Webhook / 语音转写文本。
 - `rabilink`：RabiLink 显式消息或本地兼容入口事件。AIUI observation 的主链通常先 record-first 写统一账本，不会让每条 observation 都直接成为该 route kind 的 Agent 任务。
@@ -139,10 +139,10 @@ Manager 会扫描 `data/roles/*/personaConfig.json`。当前格式以文件根�
 ## 普通投递、定时任务与语音的例外
 
 - 普通消息端事件一旦命中规则，默认直接投递：当前 Desktop turn 活跃时 `steer`，空闲时 `start`。
-- 定时触发固定不注入历史消息，也不进入聊天消息的等待合并。通知 Agent 时仍使用 heartbeat 兼容事件；启用 Codex 消息处理 Agent 后会立即交给独立消息处理任务，未启用时才使用 `heartbeatSkipWhenAgentBusy`。运行脚本时不进入 Agent 投递链，使用所属人格 scripts 目录的配置。
+- 定时触发固定不注入历史消息，也不进入聊天消息的等待合并。通知 Agent 时仍使用 heartbeat 兼容事件；启用 Codex 消息处理 Agent 后会立即交给独立消息处理任务，未启用时才使用 `heartbeatSkipWhenAgentBusy`。运行脚本时不进入 Agent 投递链，使用所属角色 scripts 目录的配置。
 - `plan_feedback` 是 Manager 已明确绑定计划和 Route 后产生的系统事件，固定投递专用内置规则；它不读取或写入聊天历史，最近消息模板变量始终为空。
-- 语音有 Route 级 `speechPushMode`：`hot` 每段 ASR 完成即投递；`keyword` 仍记录所有 ASR，仅命中人格 `speechTriggerKeywords` 时投递。空关键词不回退 `hot`。
-- `recentMessageLimits` 也归人格，普通消息端分别设置 `0–200`，默认 `12`；只控制自动注入，不控制记录。Heartbeat 与 `plan_feedback` 不提供可调额度，始终不注入历史。
+- 语音有 Route 级 `speechPushMode`：`hot` 每段 ASR 完成即投递；`keyword` 仍记录所有 ASR，仅命中角色 `speechTriggerKeywords` 时投递。空关键词不回退 `hot`。
+- `recentMessageLimits` 也归角色，普通消息端分别设置 `0–200`，默认 `12`；只控制自动注入，不控制记录。Heartbeat 与 `plan_feedback` 不提供可调额度，始终不注入历史。
 
 ## Pipeline 预设 / 通道预设
 
@@ -170,10 +170,10 @@ Manager 会扫描 `data/roles/*/personaConfig.json`。当前格式以文件根�
 - `qq_chat`：QQ 输入和 QQ 输出意图，适合普通聊天文本。
 - `wecom_chat`：企业微信输入和企业微信输出意图，适合企业微信群聊文本/Markdown 回复。
 - `weixin_chat`：个人微信文本输入与来源会话文本回复；不能主动选择任意联系人，也不支持媒体输出。
-- `voice_chat`：RabiSpeech 语音输入和人格 TTS 意图，适合短句口语化回复。模型、声线、语言、语速和发声说明以人格 `voice/voice-profile.json` 为唯一真源。
+- `voice_chat`：RabiSpeech 语音输入和角色 TTS 意图，适合短句口语化回复。模型、声线、语言、语速和发声说明以角色 `voice/voice-profile.json` 为唯一真源。
 - `webhook_task`：Webhook 输入和文件/Markdown 输出意图，适合任务触发。
 
-模板可以读取 `{outputPipeline}`、`{promptOutputMode}`、`{ttsProvider}`、`{ttsVoice}`、`{preventFeedbackLoop}` 和 `{replyToSource}`。现行语音主链由 `AgentPacket` 注入 `character-tts-dialogue` 发送要求，以及带 `channel=speech` 和当前 `sessionId` 的明确请求模板；Agent 通过发送 API 交回口语短句，Outbox 再调用 RabiSpeech。人格模板不需要手写 FenneNote/OumuQ 调用，也不能用来源上下文代替发送目标。
+模板可以读取 `{outputPipeline}`、`{promptOutputMode}`、`{ttsProvider}`、`{ttsVoice}`、`{preventFeedbackLoop}` 和 `{replyToSource}`。现行语音主链由 `AgentPacket` 注入 `character-tts-dialogue` 发送要求，以及带 `channel=speech` 和当前 `sessionId` 的明确请求模板；Agent 通过发送 API 交回口语短句，Outbox 再调用 RabiSpeech。角色模板不需要手写 FenneNote/OumuQ 调用，也不能用来源上下文代替发送目标。
 
 一条消息触发规则可以匹配多个 route kind；同一条事件可以命中多条已启用规则。通知 Agent 的规则会逐条投递；运行脚本的规则会分别执行并记录结果：
 
@@ -231,11 +231,11 @@ Manager 会扫描 `data/roles/*/personaConfig.json`。当前格式以文件根�
 请按 persona.md 中的角色身份判断是否需要回应、记录、追问或行动。
 ```
 
-成长型人格可以加一段：
+成长型角色可以加一段：
 
 ```text
 [成长]
-处理完成后，如果发现本角色的表达、知识、判断标准或常用 skill 可以改进，可以更新 {agentRoleDir} 下的人格文件。
+处理完成后，如果发现本角色的表达、知识、判断标准或常用 skill 可以改进，可以更新 {agentRoleDir} 下的角色文件。
 更新前先把将被修改的旧文件复制到 {agentRoleDir}/old/，备份文件名加当前日期时间。
 ```
 
