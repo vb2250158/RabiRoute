@@ -2,13 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { randomUUID } from "node:crypto";
 import type { RecentMemoryItem } from "../roleKnowledge.js";
 import { CompanionActivity, recordCompanionInteraction, saveCompanionSummary } from "./companionActivity.js";
 import { buildCompanionContext, COMPANION_CONTEXT_MAX_CHARS } from "./companionContext.js";
 
 async function fixture(context: import("node:test").TestContext) {
-  const roleDirectory = await fs.mkdtemp(path.resolve(".cache/companion-context-"));
+  const roleDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "companion-context-"));
   context.after(() => fs.rm(roleDirectory, { recursive: true, force: true }));
   const write = async (file: string, text: string) => {
     await fs.mkdir(path.dirname(path.join(roleDirectory, file)), { recursive: true });
@@ -88,7 +89,7 @@ test("templates cannot traverse or follow a junction outside the persona directo
   const fixtureData = await fixture(context);
   await fixtureData.write("personaConfig.json", JSON.stringify({ companion: { promptFile: "../outside.md" } }));
   await assert.rejects(fixtureData.build(), /stay inside/);
-  const outside = await fs.mkdtemp(path.resolve(".cache/companion-outside-"));
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), "companion-outside-"));
   context.after(() => fs.rm(outside, { recursive: true, force: true }));
   await fs.writeFile(path.join(outside, "prompt.md"), "Not owned by this persona");
   const link = path.join(fixtureData.roleDirectory, "outside");

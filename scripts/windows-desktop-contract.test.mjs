@@ -685,7 +685,7 @@ try {
 
 test("legacy migration stops a real root Manager and watcher without matching path suffixes", {
   skip: process.platform !== "win32",
-  timeout: 30_000,
+  timeout: 90_000,
 }, async () => {
   const installRoot = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), "rabi route legacy contract-"));
   const nodeExe = path.join(installRoot, "node.exe");
@@ -762,7 +762,7 @@ test("legacy migration stops a real root Manager and watcher without matching pa
       migrationScript,
       "-InstallRoot",
       installRoot,
-    ], { encoding: "utf8", timeout: 20_000, windowsHide: true });
+    ], { encoding: "utf8", timeout: 60_000, windowsHide: true });
 
     assert.equal(migration.status, 0, migration.stderr || migration.stdout);
     await Promise.all([

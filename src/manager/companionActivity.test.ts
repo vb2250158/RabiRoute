@@ -148,7 +148,7 @@ test("a mode switch or stop during persona loading cannot deliver the previous r
 });
 
 test("opt-in interaction checkpoints and final summaries survive reload without observation data", async t => {
-  const root = await fs.mkdtemp(path.resolve(".cache/companion-state-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "companion-state-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const f = fixture(t, { record: session => recordCompanionInteraction(root, session), save: session => saveCompanionSummary(root, session) });
   const session = (await f.service.start("one", { ...start, saveSummary: true, voice: false })).session!;

@@ -6,6 +6,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.62 - 2026-10-20
+
+- Make companionship regression fixtures work from a clean checkout by using the system temporary directory for persona, interaction-state and outside-root fixtures, without a pre-existing `.cache` directory.
+- Allow 60 seconds for the Windows legacy-process migration fixture and 90 seconds for its test so bounded CIM queries can complete. Exact process ownership, similar-path exclusions and NapCat protection remain asserted; runtime behavior and user configuration are unchanged.
+
 ## 0.3.61 - 2026-10-20
 
 - Integrate remote connector 0.2.5 platform enrollment and recovery changes. The enrollment view requires Windows, Mac or Linux selection and installs only the computer client without an installation-time default Agent binding; Mac instructions use a current-user LaunchAgent.
