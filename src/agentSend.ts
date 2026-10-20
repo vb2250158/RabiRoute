@@ -117,8 +117,8 @@ export const AGENT_SEND_CHANNEL_HELP: readonly AgentSendChannelHelp[] = freezeCh
   { channel: "rabilink", description: "RabiLink 设备消息。", params: { proactive: "是否主动发送", sourceMessageId: "非主动发送时的来源消息 ID", targetDeviceIds: "设备 ID 数组", targetDeviceKinds: "设备类型数组", source: "来源标识（可选）", presentation: "呈现方式字符串数组（可选）", priority: "优先级（可选）" }, example: { channel: "rabilink", params: { proactive: true, targetDeviceIds: ["device-id"] }, payload: { type: "text", text: "消息正文" } } },
   { channel: "speech", description: "语音消息。", params: { sessionId: "语音会话 ID（可选）" }, example: { channel: "speech", params: { sessionId: "session-id" }, payload: { type: "text", text: "消息正文" } } },
   { channel: "fennenote", description: "FenneNote 语音消息或播放。", params: { sessionId: "会话 ID", mode: "message|playback" }, example: { channel: "fennenote", params: { sessionId: "session-id", mode: "message" }, payload: { type: "text", text: "消息正文" } } },
-  { channel: "role_panel", description: "人格面板消息。", params: { roleId: "人格 ID", messageId: "消息 ID（可选）" }, example: { channel: "role_panel", params: { roleId: "role-id" }, payload: { type: "text", text: "消息正文" } } },
-  { channel: "plan_feedback", description: "计划 guidance 或 approval 反馈。", params: { roleId: "人格 ID", planId: "计划 ID", kind: "guidance|approval", stepId: "步骤 ID（可选）", feedbackId: "反馈 ID（可选）" }, example: { channel: "plan_feedback", params: { roleId: "role-id", planId: "plan-id", kind: "guidance" }, payload: { type: "text", text: "反馈正文" } } }
+  { channel: "role_panel", description: "角色面板消息。", params: { roleId: "角色 ID", messageId: "消息 ID（可选）" }, example: { channel: "role_panel", params: { roleId: "role-id" }, payload: { type: "text", text: "消息正文" } } },
+  { channel: "plan_feedback", description: "计划 guidance 或 approval 反馈。", params: { roleId: "角色 ID", planId: "计划 ID", kind: "guidance|approval", stepId: "步骤 ID（可选）", feedbackId: "反馈 ID（可选）" }, example: { channel: "plan_feedback", params: { roleId: "role-id", planId: "plan-id", kind: "guidance" }, payload: { type: "text", text: "反馈正文" } } }
 ]);
 
 // A partial field allowlist, not a JSON Schema: value and conditional validation stays below.

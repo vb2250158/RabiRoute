@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { beginRoleWork } from "../roleLifecycle.js";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { config, rolePathsForRoute, type NotificationRule, type RouteProfile } from "../config.js";
@@ -169,7 +170,7 @@ export function resolvePersonaScript(
   if (route.agentRoleDeviceId) throw new Error("Remote persona scripts must execute on their owning PC.");
   const relativeInput = String(configuredPath || "").trim().replace(/\\/g, "/").replace(/^\.\//, "");
   if (!relativeInput || path.isAbsolute(relativeInput) || relativeInput.split("/").includes("..")) {
-    throw new Error("脚本路径必须是人格 scripts 目录内的相对路径。");
+    throw new Error("脚本路径必须是角色 scripts 目录内的相对路径。");
   }
   const relativeScript = relativeInput.toLowerCase().startsWith("scripts/")
     ? relativeInput.slice("scripts/".length)
@@ -178,13 +179,13 @@ export function resolvePersonaScript(
   const scriptsDir = path.resolve(roleDir, "scripts");
   const candidate = path.resolve(scriptsDir, relativeScript);
   if (!isInside(scriptsDir, candidate) || !fs.existsSync(candidate) || !fs.statSync(candidate).isFile()) {
-    throw new Error("脚本不存在，或不在人格 scripts 目录内。");
+    throw new Error("脚本不存在，或不在角色 scripts 目录内。");
   }
   const realRoleDir = fs.realpathSync(roleDir);
   const realScriptPath = fs.realpathSync(candidate);
   const realRelative = path.relative(realRoleDir, realScriptPath);
   if (realRelative.startsWith("..") || path.isAbsolute(realRelative) || realRelative.split(path.sep)[0]?.toLowerCase() !== "scripts") {
-    throw new Error("脚本链接指向了人格 scripts 目录之外，已停止执行。");
+    throw new Error("脚本链接指向了角色 scripts 目录之外，已停止执行。");
   }
 
   const extension = path.extname(realScriptPath).toLowerCase();
@@ -242,7 +243,9 @@ export async function executeScriptAutomation(task: ScriptAutomationTask): Promi
   if (runningRuleIds.has(runningKey)) return { status: "skipped", reason: "already_running" };
   runningRuleIds.add(runningKey);
   const startedAt = Date.now();
+  let releaseRoleWork: (() => Promise<void>) | undefined;
   try {
+    releaseRoleWork = await beginRoleWork(rolePathsForRoute(task.route).roleDir);
     const launch = resolvePersonaScript(task.route, task.rule.action.scriptPath || "");
     const timeoutSeconds = Math.min(3600, Math.max(5, Number(task.rule.action.timeoutSeconds || 300)));
     const args = [...launch.argsPrefix, ...(task.rule.action.arguments ?? [])];
@@ -300,6 +303,7 @@ export async function executeScriptAutomation(task: ScriptAutomationTask): Promi
       durationMs: Date.now() - startedAt
     };
   } finally {
+    await releaseRoleWork?.();
     runningRuleIds.delete(runningKey);
   }
 }

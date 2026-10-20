@@ -299,5 +299,5 @@ test("the UI has explicit confirmation, Host support and bilingual reset guidanc
   assert.match(source, /@click="reset\.stopWaiting\(\)"/);
   assert.match(source, /旧连接可能需要重新建立/);
   assert.doesNotMatch(source, /store\.load|replaceDirtyConfig/);
-  for (const message of ["重置实例 ID", "停止等待", "此操作会生成新的实例 ID 和连接密钥，保留实例名称、人格、记录及连接配置。旧连接可能需要重新建立。", "实例 ID 重置结果仍待确认。页面连接可能已切换，请从托盘重新打开 RabiLink 配置查看结果。", "当前 Host 不支持从页面重置实例 ID。", "重置未完成，请检查 Host 日志与备份。", "重置失败，已恢复原身份。"]) assert.ok(englishCatalog[message]);
+  for (const message of ["重置实例 ID", "停止等待", "此操作会生成新的实例 ID 和连接密钥，保留实例名称、角色、记录及连接配置。旧连接可能需要重新建立。", "实例 ID 重置结果仍待确认。页面连接可能已切换，请从托盘重新打开 RabiLink 配置查看结果。", "当前 Host 不支持从页面重置实例 ID。", "重置未完成，请检查 Host 日志与备份。", "重置失败，已恢复原身份。"]) assert.ok(englishCatalog[message]);
 });

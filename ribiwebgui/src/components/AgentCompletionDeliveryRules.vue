@@ -137,7 +137,7 @@ async function scanProjects() {
               @update:model-value="value => condition(rule, conditionIndex, { path: String(value || '') })" />
             <v-btn variant="text" size="small" :loading="loading" @click="scanProjects">读取项目目录</v-btn>
           </template>
-          <p v-else-if="item.type === 'bound_plan'" class="section-note">仅投递绑定当前人格计划的任务，消息中包含计划名。</p>
+          <p v-else-if="item.type === 'bound_plan'" class="section-note">仅投递绑定当前角色计划的任务，消息中包含计划名。</p>
           <template v-else-if="item.type === 'include_sessions' || item.type === 'exclude_sessions'">
             <v-autocomplete :model-value="(item.sessions ?? []).map(session => session.id)" :items="sessionOptions(item)"
               :label="item.type === 'include_sessions' ? '限定的聊天会话' : '排除的聊天会话'" multiple chips closable-chips hide-details class="mt-2"
@@ -164,7 +164,7 @@ async function scanProjects() {
               @update:model-value="value => params(rule, { targetId: value.trim() })" />
           </template>
         </div>
-        <p v-if="rule.destination.channel === 'speech'" class="section-note mt-3">任务完成后，使用所选消息路线的人格声线、语音合成与自动播放设置播报结果。启用规则并保存后生效。</p>
+        <p v-if="rule.destination.channel === 'speech'" class="section-note mt-3">任务完成后，使用所选消息路线的角色声线、语音合成与自动播放设置播报结果。启用规则并保存后生效。</p>
       </div>
       </div>
       <p v-for="message in agentHookRuleErrors(rule)" :key="message" class="section-note text-warning">{{ message }}</p>
@@ -173,7 +173,7 @@ async function scanProjects() {
       <v-btn variant="tonal" prepend-icon="mdi-plus" @click="emit('update:modelValue', [...modelValue, createAgentCompletionRule()])">添加投递规则</v-btn>
       <v-btn variant="tonal" prepend-icon="mdi-account-voice" @click="emit('update:modelValue', [...modelValue, createTtsCompletionRule(gatewayId)])">添加 TTS 播报</v-btn>
     </div>
-    <p class="section-note mt-2">规则随人格配置保存，发送结果可在消息路线的发送日志中查看。</p>
+    <p class="section-note mt-2">规则随角色配置保存，发送结果可在消息路线的发送日志中查看。</p>
   </section>
 </template>
 

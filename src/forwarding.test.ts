@@ -397,7 +397,7 @@ test("a grouped packet is delivered to a dynamically resolved Luna Message Agent
       primaryAgentAdapter: "codex",
       messageProcessingAgents: { codex: { enabled: true, model: "gpt-5.6-luna", reasoningEffort: "medium" } },
       codexThreadId: "019f0000-0000-7000-8000-000000000001",
-      codexThreadName: "主人格",
+      codexThreadName: "主角色",
       codexCwd: root,
       dataDir: path.join(root, "data"),
       memoryDataDir: path.join(root, "memory"),
@@ -532,7 +532,7 @@ test("a grouped reply to an Agent-sent QQ message is routed with the referenced 
     await withForwardingConfig({
       agentAdapters: ["codex"], primaryAgentAdapter: "codex",
       messageProcessingAgents: { codex: { enabled: true, model: "gpt-5.6-luna", reasoningEffort: "medium" } },
-      codexThreadId: "019f0000-0000-7000-8000-000000000001", codexThreadName: "主人格", codexCwd: root,
+      codexThreadId: "019f0000-0000-7000-8000-000000000001", codexThreadName: "主角色", codexCwd: root,
       dataDir, memoryDataDir: path.join(root, "memory"), routeProfiles: [route]
     }, async () => {
       const result = await forwardMessageAndWait("group_message", record, {}, { recordInbound: false, messageGroup });
@@ -612,7 +612,7 @@ test(`${provider} heartbeat Message Agent delivery reports its actual provider`,
       dshCwd: root,
       heartbeatSkipWhenAgentBusy: true,
       codexThreadId: "019f0000-0000-7000-8000-000000000001",
-      codexThreadName: "主人格",
+      codexThreadName: "主角色",
       codexCwd: root,
       dataDir: path.join(root, "data"),
       memoryDataDir: path.join(root, "memory"),
@@ -690,7 +690,7 @@ test("replayed platform messages reuse the canonical requirement without a secon
     await withForwardingConfig({
       agentAdapters: ["codex"], primaryAgentAdapter: "codex",
       messageProcessingAgents: { codex: { enabled: true, model: "gpt-5.6-luna", reasoningEffort: "medium" } },
-      codexThreadId: "019f0000-0000-7000-8000-000000000001", codexThreadName: "主人格", codexCwd: root,
+      codexThreadId: "019f0000-0000-7000-8000-000000000001", codexThreadName: "主角色", codexCwd: root,
       dataDir: path.join(root, "data"), memoryDataDir: path.join(root, "memory"), routeProfiles: [route]
     }, async () => {
       const result = await forwardMessageAndWait("group_message", record, {}, { recordInbound: false, messageGroup });
@@ -749,7 +749,7 @@ test("live chat messages are recorded immediately, batched once, then sent to on
         napcat: { inputEnabled: true, outputEnabled: true, messageGrouping: { enabled: true, settleSeconds: 1, incompleteSettleSeconds: 1, maxWaitSeconds: 1 } }
       },
       codexThreadId: "019f0000-0000-7000-8000-000000000001",
-      codexThreadName: "主人格",
+      codexThreadName: "主角色",
       codexCwd: root,
       dataDir: path.join(root, "data"),
       memoryDataDir: path.join(root, "memory"),

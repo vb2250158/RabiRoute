@@ -26,11 +26,11 @@ export function planMemoryApiHint(roleId: unknown): string[] {
   const base = roleApiBase(roleId);
   return [
     "可用 API 提示：",
-    "- 查询可联系人格：GET /api/personas?addressable=true；向其它人格投递：POST /api/personas/{personaId}/messages。请求必须带唯一 deliveryId，sourceRouteId 使用当前 replyContext.runtimeRouteId，sourceCapability 原样使用 replyContext.personaMessagingCapability；目标有多个已启用 Route 时必须明确提供 targetRouteId。回复时沿用 personaConversationId、把当前 messageId 写入 inReplyToMessageId，并将 personaMessageHopCount 加 1；不得超过 personaMessageMaxHops",
+    "- 查询可联系角色：GET /api/personas?addressable=true；向其它角色投递：POST /api/personas/{personaId}/messages。请求必须带唯一 deliveryId，sourceRouteId 使用当前 replyContext.runtimeRouteId，sourceCapability 原样使用 replyContext.personaMessagingCapability；目标有多个已启用 Route 时必须明确提供 targetRouteId。回复时沿用 personaConversationId、把当前 messageId 写入 inReplyToMessageId，并将 personaMessageHopCount 加 1；不得超过 personaMessageMaxHops",
     `- 查看/更新计划：GET ${base}/plans、GET ${base}/plans/{planId}、POST ${base}/plans、PATCH ${base}/plans/{planId}`,
-    `- 查看/维护当前人格计划状态：GET ${base}/plan-statuses；新增、修改、移除状态分别使用 POST、PATCH /{statusKey}、DELETE /{statusKey}，写入必须带 If-Match 和 Idempotency-Key`,
+    `- 查看/维护当前角色计划状态：GET ${base}/plan-statuses；新增、修改、移除状态分别使用 POST、PATCH /{statusKey}、DELETE /{statusKey}，写入必须带 If-Match 和 Idempotency-Key`,
       "- 待审批计划如有实际效果图、演示视频、设计稿、报告或其它相关文件，应通过计划 POST/PATCH 的 attachments 一并提交：本机文件使用 path，内存内容使用 name/mimeType/contentBase64；不要只把文件路径写进标题、focus 或审批说明",
-    "- plan.status 只保存当前人格 planWorkflow.statuses 中启用状态的 key；label、说明、颜色、排序、视图和行为全部来自该配置，不能把界面文字当作固定枚举，也不能从步骤文字派生另一套状态",
+    "- plan.status 只保存当前角色 planWorkflow.statuses 中启用状态的 key；label、说明、颜色、排序、视图和行为全部来自该配置，不能把界面文字当作固定枚举，也不能从步骤文字派生另一套状态",
     "- archiveStatus 与 status 独立，只能写未归档或已归档；只有配置为 archiveEligible 的终态可以归档。已归档计划不参与关键词召回，只能按明确 planId 或归档视图读取",
     "- 调查、待补充信息、审批、执行、打包、QA、讨论、暂停、完成和关闭分别使用 planWorkflow.roles 中对应角色所指的状态 key；写计划前先读取状态目录，不猜 key",
     "- 用户要求暂停计划时，PATCH 顶层 status 为 roles.paused 指向的 key；恢复时按实际阶段选择 roles.analysis 或 roles.execution",
@@ -53,7 +53,7 @@ function focusedApiHint(roleId: unknown, interfaceDocPath: string): string[] {
   const base = roleApiBase(roleId);
   return [
     `按需读取：${base}/plans、${base}/memory、${base}/skills；长历史不自动加载。`,
-    `操作说明：${interfaceDocPath}。涉及计划、记忆写入、跨人格投递或远端任务前，必须读取对应章节；无法读取时停止该操作。`,
+    `操作说明：${interfaceDocPath}。涉及计划、记忆写入、跨角色投递或远端任务前，必须读取对应章节；无法读取时停止该操作。`,
     "写入必须遵守当前任务授权、动态 Manager 身份核验、Idempotency-Key、适用的强 ETag / If-Match 和写后回读合同；不得猜测状态 key、发送目标或重试参数。"
   ];
 }

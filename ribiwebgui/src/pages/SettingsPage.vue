@@ -1,4 +1,9 @@
 <script setup lang="ts">
+import { useRoleStore } from "../stores/roleStore";
+import ArchivedRoles from "../components/ArchivedRoles.vue";
+import { useRoute } from "vue-router";
+const currentSettingsRoute = useRoute();
+const settingsRoleStore = useRoleStore();
 import ResourceCacheSettings from "../components/ResourceCacheSettings.vue";
 import { userFacingError } from "../userFacingError";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -229,11 +234,13 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="page-shell">
+  <ArchivedRoles v-if="currentSettingsRoute.path === '/settings/archived-roles'" />
+  <div v-else class="page-shell">
     <div class="page-header">
       <div>
         <div class="eyebrow">RABIROUTE</div>
         <h1 class="page-title">设置</h1>
+          <v-btn :to="{ path: '/settings/archived-roles', query: settingsRoleStore.sourceDeviceId ? { source: settingsRoleStore.sourceDeviceId } : {} }" prepend-icon="mdi-archive-outline" variant="tonal" class="mt-3">已归档角色</v-btn>
         <div class="page-subtitle">管理界面、目录和局域网访问。RabiLink 连接与实例身份请前往 RabiLink 配置。</div>
       </div>
     </div>

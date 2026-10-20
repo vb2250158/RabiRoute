@@ -27,7 +27,7 @@ export function decidePlanFollowup(input: {
   if (previous && (previous.turnId === input.turnId || previous.fingerprint === fingerprint
     || input.now - previous.at < settings.cooldownSeconds * 1000)) return null;
   return {
-    reason: `人格自动化追问 · ${plan.title} · ${status.label}\n${rule.prompt}\n仅在当前授权内推进；外部依赖没有变化且无独立工作时，可记录阻塞并结束本轮。`,
+    reason: `角色自动化追问 · ${plan.title} · ${status.label}\n${rule.prompt}\n仅在当前授权内推进；外部依赖没有变化且无独立工作时，可记录阻塞并结束本轮。`,
     receipt: { fingerprint, turnId: input.turnId, at: input.now }
   };
 }

@@ -126,7 +126,7 @@ onBeforeUnmount(() => unregisterSaveAction?.());
     <div class="section-title-row">
       <div>
         <div class="section-title">事件、设备控制与录像基础设置</div>
-        <div class="section-note">配置底层连接开关与媒体参数；具体摄像头的业务触发规则请前往「人格配置 → 自动化」添加。</div>
+        <div class="section-note">配置底层连接开关与媒体参数；具体摄像头的业务触发规则请前往「角色配置 → 自动化」添加。</div>
       </div>
       <v-chip v-if="snapshot" size="small" variant="tonal" :color="snapshot.source === 'runtime' ? 'success' : 'info'">
         {{ snapshot.source === "runtime" ? "本机设置" : "Profile 默认值" }}
@@ -201,7 +201,7 @@ onBeforeUnmount(() => unregisterSaveAction?.());
           <v-expansion-panel-text>
             <div class="xiaomi-form-grid">
               <v-select v-model="draft.eventDeliveryMode" label="事件投递范围" :items="[{ title: '重要事件', value: 'significant' }, { title: '全部状态变化', value: 'all' }]" />
-              <v-text-field v-model="draft.agentRoleId" label="事件接收人格" />
+              <v-text-field v-model="draft.agentRoleId" label="事件接收角色" />
               <v-text-field v-model.number="draft.requestTimeoutMs" type="number" min="250" max="30000" label="Home Assistant 请求超时（毫秒）" />
               <v-text-field v-model="draft.ffmpegPath" label="ffmpeg 路径" />
               <v-text-field v-model="draft.ffprobePath" label="ffprobe 路径" />

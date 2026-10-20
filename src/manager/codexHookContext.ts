@@ -609,7 +609,7 @@ export class CodexHookContextService {
       return {
         action,
         binding: null,
-        additionalContext: "[Rabi]\nRabi PC 已解除当前 Agent 会话的人格绑定。后续不得继续沿用此前注入的人格、计划、记忆或角色技能。"
+        additionalContext: "[Rabi]\nRabi PC 已解除当前 Agent 会话的角色绑定。后续不得继续沿用此前注入的角色、计划、记忆或角色技能。"
       };
     }
 
@@ -624,8 +624,8 @@ export class CodexHookContextService {
         action,
         binding,
         additionalContext: binding
-          ? `[Rabi 绑定状态]\n当前会话人格：${binding.roleId}\n绑定由 Rabi PC Manager 管理。`
-          : "[Rabi 绑定状态]\n当前会话没有绑定 Rabi 人格。"
+          ? `[Rabi 绑定状态]\n当前会话角色：${binding.roleId}\n绑定由 Rabi PC Manager 管理。`
+          : "[Rabi 绑定状态]\n当前会话没有绑定 Rabi 角色。"
       };
     }
 
@@ -634,7 +634,7 @@ export class CodexHookContextService {
         return {
           action,
           binding: null,
-          additionalContext: "[Rabi]\n当前会话没有绑定 Rabi 人格，无法刷新。"
+          additionalContext: "[Rabi]\n当前会话没有绑定 Rabi 角色，无法刷新。"
         };
       }
       roleSource = yield* this.readRoleContext(binding.roleId);
@@ -723,14 +723,14 @@ export class CodexHookContextService {
       }
     }
     if (!dedicated && includeBase) {
-      blocks.push(section("Rabi 会话人格", [
-        "当前 Codex 会话已由 Rabi PC Manager 显式绑定人格。绑定只对当前 session_id 生效。",
+      blocks.push(section("Rabi 会话角色", [
+        "当前 Codex 会话已由 Rabi PC Manager 显式绑定角色。绑定只对当前 session_id 生效。",
         `角色 ID：${role.roleId}`,
-        "人格、计划、记忆、技能、召回、viewedAt、归档与整理均由 Rabi PC 管理；Codex Hook 只是触发器和注入器。"
+        "角色、计划、记忆、技能、召回、viewedAt、归档与整理均由 Rabi PC 管理；Codex Hook 只是触发器和注入器。"
       ]));
-      blocks.push(section(focusedContext ? "人格核心指令" : "人格工作集", [
+      blocks.push(section(focusedContext ? "角色核心指令" : "角色工作集", [
         focusedContext
-          ? `这是精简人格工作集；完整真源位于 ${path.join(role.roleDir, "persona.md")}，只有当前任务明确涉及更深边界时才按需读取。`
+          ? `这是精简角色工作集；完整真源位于 ${path.join(role.roleDir, "persona.md")}，只有当前任务明确涉及更深边界时才按需读取。`
           : "",
         excerpt(
           persona,
@@ -741,7 +741,7 @@ export class CodexHookContextService {
       if (!focusedContext && growth) blocks.push(section("成长规则摘要", excerpt(growth, 350)));
       if (!focusedContext && skills) blocks.push(section("角色技能摘要", excerpt(skills, 350)));
       if (focusedContext && (growth || skills)) {
-        blocks.push(section("人格扩展按需读取", [
+        blocks.push(section("角色扩展按需读取", [
           growth ? `成长规则：${path.join(role.roleDir, "growth.md")}` : "",
           skills ? `技能索引：${path.join(role.roleDir, "skills.md")}` : ""
         ]));
@@ -779,7 +779,7 @@ export class CodexHookContextService {
         `触发点：${request.eventName}`,
         request.toolName ? `工具：${request.toolName}` : "",
         `Rabi Manager API 基址：${managerBaseUrl}`,
-        "本次只注入本轮新命中的增量；人格、计划、记忆、技能及 viewedAt 仍由同一 Rabi PC Manager 管理。"
+        "本次只注入本轮新命中的增量；角色、计划、记忆、技能及 viewedAt 仍由同一 Rabi PC Manager 管理。"
       ]));
       if (!focusedContext) blocks.push(section("推理期命中召回", [
         "命中技能：",

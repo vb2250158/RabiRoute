@@ -163,7 +163,7 @@ test("enabled plan secretary receives the business result directly without wakin
   assert.equal(secretaryHandoffs.length, 1);
   assert.equal(secretaryHandoffs[0]?.sourceSessionId, "source-session");
   assert.match(secretaryHandoffs[0]?.prompt || "", /结果已直达计划秘书/);
-  assert.match(secretaryHandoffs[0]?.prompt || "", /仅把决定、批准、授权、缺少输入或计划最终复核升级给主人格/);
+  assert.match(secretaryHandoffs[0]?.prompt || "", /仅把决定、批准、授权、缺少输入或计划最终复核升级给主角色/);
   assert.equal(events[0]?.data.recipient, "secretary");
   assert.equal(events[0]?.data.secretaryThreadId, selected.definition.codexPlanAssistantSessions[0]?.threadId);
 });
@@ -185,7 +185,7 @@ test("plan task completion reminder keeps the secretary control-only and continu
   assert.match(text, /可推进计划均有人管理/);
   assert.match(text, /空闲业务任务已续投/);
   assert.match(text, /运行中的任务未重复投递/);
-  assert.match(text, /仅把决定、批准、授权、缺少输入或计划最终复核升级给主人格/);
+  assert.match(text, /仅把决定、批准、授权、缺少输入或计划最终复核升级给主角色/);
 });
 
 test("plan task completion fails closed for missing or conflicting route bindings", async (t) => {

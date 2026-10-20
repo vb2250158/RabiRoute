@@ -46,7 +46,7 @@ export function gatewayPersonaDisplayName(
     roleId,
     gateway.configName,
     gateway.id,
-    "未命名人格"
+    "未命名角色"
   );
 }
 

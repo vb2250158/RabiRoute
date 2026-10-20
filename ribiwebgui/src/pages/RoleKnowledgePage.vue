@@ -6,6 +6,7 @@ import { embeddedPlanHost, visiblePlanAgentRoles } from "../embeddedPlanContext"
 import { userFacingError } from "../userFacingError";
 import { computed, markRaw, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from "vue";
 import { useRoute } from "vue-router";
+import { useRoleStore } from "../stores/roleStore";
 import {
   PLAN_FEEDBACK_ATTACHMENT_MAX_BYTES,
   PLAN_FEEDBACK_ATTACHMENTS_MAX_BYTES,
@@ -46,31 +47,7 @@ import {
   previousKnowledgeRenderWindow,
   shouldAutoLoadNextKnowledgeBatch
 } from "../knowledgePagination";
-import {
-  loadPlanFeedbackWithRevision,
-  loadPlanHistory,
-  loadPlanAgentStatuses,
-  loadPendingMemoryConsolidationRunCount,
-  loadRoleMemoryPage,
-  loadRoleKnowledgeFileCounts,
-  cachedFocusedRolePlan,
-  loadFocusedRolePlan,
-  loadRolePlan,
-  loadRolePlanPage,
-  loadRolePlanPreview,
-  openPlanAgentTask,
-  openPlanHistoryAgent,
-  submitPlanFeedback,
-  ManagerRequestError,
-  type PlanAgentBindingStatus,
-  type PlanAgentRole,
-  type PlanAgentSessionStatus,
-  type PlanAgentStatus,
-  type RoleMemoryKind,
-  type RoleMemoryPageCounts,
-  type RolePlanPageCounts,
-  type RolePlanPageFilter
-} from "../roleKnowledgeClient";
+import { createRoleKnowledgeClient, ManagerRequestError, type PlanAgentBindingStatus, type PlanAgentRole, type PlanAgentSessionStatus, type PlanAgentStatus, type RoleMemoryKind, type RoleMemoryPageCounts, type RolePlanPageCounts, type RolePlanPageFilter } from "../roleKnowledgeClient";
 import { approvalPanelExpanded, approvalQuestionSignature, matchingApprovalFeedback, localizedPlanError, planFeedbackSubmissionErrorMessage } from "../approvalFeedbackUi";
 import { planFeedbackMutationLedger } from "../planFeedbackMutationLedger";
 import { formatPlanDirectorySortLabel, formatPlanDirectorySortLabelTitle, formatPlanVideoDuration, planCardStyle, planDescriptionForDisplay, planDirectorySortPalette, planStatusDescriptionForDisplay, planStatusLabelForDisplay, planStatusStyle, plansForKnowledgeView, planTitleForDirectory } from "../planPresentationStyles";
@@ -81,6 +58,28 @@ import type { RoleMemory, RolePlan, RolePlanApprovalContract, RolePlanFeedback, 
 
 const store = useGatewayStore();
 const route = useRoute();
+const roleKnowledgeClients = new Map<string, ReturnType<typeof createRoleKnowledgeClient>>();
+function scopedRoleKnowledge() {
+ const source = String(route.query.source || "");
+ let client = roleKnowledgeClients.get(source);
+ if (!client) { client = createRoleKnowledgeClient(source); if (roleKnowledgeClients.size >= 4) roleKnowledgeClients.delete(roleKnowledgeClients.keys().next().value!); roleKnowledgeClients.set(source, client); }
+ return client;
+}
+const loadPlanFeedbackWithRevision = (...args: Parameters<ReturnType<typeof createRoleKnowledgeClient>["loadPlanFeedbackWithRevision"]>) => scopedRoleKnowledge().loadPlanFeedbackWithRevision(...args);
+const loadPlanHistory = (...args: Parameters<ReturnType<typeof createRoleKnowledgeClient>["loadPlanHistory"]>) => scopedRoleKnowledge().loadPlanHistory(...args);
+const loadPlanAgentStatuses = (...args: Parameters<ReturnType<typeof createRoleKnowledgeClient>["loadPlanAgentStatuses"]>) => scopedRoleKnowledge().loadPlanAgentStatuses(...args);
+const loadPendingMemoryConsolidationRunCount = (...args: Parameters<ReturnType<typeof createRoleKnowledgeClient>["loadPendingMemoryConsolidationRunCount"]>) => scopedRoleKnowledge().loadPendingMemoryConsolidationRunCount(...args);
+const loadRoleMemoryPage = (...args: Parameters<ReturnType<typeof createRoleKnowledgeClient>["loadRoleMemoryPage"]>) => scopedRoleKnowledge().loadRoleMemoryPage(...args);
+const loadRoleKnowledgeFileCounts = (...args: Parameters<ReturnType<typeof createRoleKnowledgeClient>["loadRoleKnowledgeFileCounts"]>) => scopedRoleKnowledge().loadRoleKnowledgeFileCounts(...args);
+const cachedFocusedRolePlan = (...args: Parameters<ReturnType<typeof createRoleKnowledgeClient>["cachedFocusedRolePlan"]>) => scopedRoleKnowledge().cachedFocusedRolePlan(...args);
+const loadFocusedRolePlan = (...args: Parameters<ReturnType<typeof createRoleKnowledgeClient>["loadFocusedRolePlan"]>) => scopedRoleKnowledge().loadFocusedRolePlan(...args);
+const loadRolePlan = (...args: Parameters<ReturnType<typeof createRoleKnowledgeClient>["loadRolePlan"]>) => scopedRoleKnowledge().loadRolePlan(...args);
+const loadRolePlanPage = (...args: Parameters<ReturnType<typeof createRoleKnowledgeClient>["loadRolePlanPage"]>) => scopedRoleKnowledge().loadRolePlanPage(...args);
+const loadRolePlanPreview = (...args: Parameters<ReturnType<typeof createRoleKnowledgeClient>["loadRolePlanPreview"]>) => scopedRoleKnowledge().loadRolePlanPreview(...args);
+const openPlanAgentTask = (...args: Parameters<ReturnType<typeof createRoleKnowledgeClient>["openPlanAgentTask"]>) => scopedRoleKnowledge().openPlanAgentTask(...args);
+const openPlanHistoryAgent = (...args: Parameters<ReturnType<typeof createRoleKnowledgeClient>["openPlanHistoryAgent"]>) => scopedRoleKnowledge().openPlanHistoryAgent(...args);
+const submitPlanFeedback = (...args: Parameters<ReturnType<typeof createRoleKnowledgeClient>["submitPlanFeedback"]>) => scopedRoleKnowledge().submitPlanFeedback(...args);
+
 const { isEnglish, t } = useI18n();
 const skillsOpen = ref(false);
 const plans = ref<RolePlan[]>([]);
@@ -316,8 +315,9 @@ let planAgentStatusGeneration = 0;
 let cachedKnowledgeScrollY = 0;
 let planListDialogContentRequest: Promise<void> | null = null;
 
-const routeSummary = computed(() => store.routeSummaryForKey(String(route.params.id || "")) || store.selectedRouteSummary);
-const roleId = computed(() => String(store.selectedGateway?.agentRoleId || routeSummary.value?.agentRoleId || "").trim());
+const routeSummary = computed(() => roles.detail?.routes[0] ? store.routeSummaryForKey(roles.detail.routes[0].id) : null);
+const roles = useRoleStore();
+const roleId = computed(() => String(route.params.roleId || "").trim());
 
 /**
  * Single-plan focus, addressed as `/routes/:id/plan/:planId`.
@@ -331,13 +331,13 @@ const roleId = computed(() => String(store.selectedGateway?.agentRoleId || route
 const focusedPlanId = computed(() => String((route.params as Record<string, string | string[]>).planId || "").trim());
 const embeddedPlanView = computed(() => Boolean(focusedPlanId.value) && window.self !== window.top);
 const planHost = computed(() => embeddedPlanHost(embeddedPlanView.value, route.query.embedAgent, route.query.embedSession));
-watch(roleId, () => {
+watch(() => roleId.value ? `${route.query.source || ""}:${roleId.value}` : "", () => {
   feedbackRoleEpoch++;
   feedbackFocusOpen.value = false;
   for (const id of Object.keys(approvalDrafts)) delete approvalDrafts[id];
   for (const id of Object.keys(questionDrafts)) delete questionDrafts[id];
 });
-const gatewayId = computed(() => String(store.selectedGateway?.id || routeSummary.value?.id || "").trim());
+const gatewayId = computed(() => roles.detail?.routes.length === 1 ? roles.detail.routes[0].id : "");
 const dateFormatter = computed(() => new Intl.DateTimeFormat(isEnglish.value ? "en" : "zh-CN", {
   month: "short",
   day: "2-digit",
@@ -1451,7 +1451,7 @@ watch([hasMorePlans, hasMoreMemory, hasMoreRenderedPlansBefore, hasMoreRenderedP
 });
 
 watch(
-  [roleId, () => store.routeBootstrapLoading],
+  [() => roleId.value ? `${route.query.source || ""}:${roleId.value}` : "", () => store.routeBootstrapLoading],
   (current, previous) => {
     const [nextRoleId, managerLoading] = current;
     const previousRoleId = previous?.[0];
@@ -3153,7 +3153,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
       <v-alert v-if="roleId && showsMemoryList && memoryError" type="error" variant="tonal" class="ma-5">
         {{ t("记忆加载失败") }}：{{ memoryError }}
       </v-alert>
-      <v-alert v-if="!roleId" type="warning" variant="tonal" class="ma-5">当前 Route 尚未绑定人格。</v-alert>
+      <v-alert v-if="!roleId" type="warning" variant="tonal" class="ma-5">当前 Route 尚未绑定角色。</v-alert>
 
       <v-btn v-if="feedbackFocusOpen && feedbackFocusPlan && !planFullDetailsLoaded[feedbackFocusPlan.id] && !planFullDetailsLoading[feedbackFocusPlan.id]" variant="text" @click="retryPlanDetails(feedbackFocusPlan)">{{ t('重试加载') }}</v-btn>
       <div class="knowledge-focus-body">
@@ -4054,7 +4054,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
         >
           <v-icon size="32">mdi-book-open-blank-variant-outline</v-icon>
           <b>没有匹配的记忆</b>
-          <span>当前视图只展示 Manager 返回的只读人格记忆。</span>
+          <span>当前视图只展示 Manager 返回的只读角色记忆。</span>
         </div>
       </div>
       </v-card>

@@ -82,7 +82,7 @@ export const rabiLinkAiuiDocPages: RabiLinkAiuiDocPage[] = [
     summary: "三条路线可复用 RabiLink Relay 和 RabiRoute 公共服务。原生灵珠路线复用平台托管对话；AIUI 默认由乐奇配置的宿主模型执行，页面拥有 HUD、ASR/TTS 与工具请求；App 路线提供 Android 生命周期和系统集成。AIUI 的路由唤醒与工具结果续推理尚未验证，不能标为完整 Agent。",
     bullets: [
       "原生灵珠智能体路线适合最快验证对话、工具调用和 Relay 连通性；它复用官方入口，但 UI、会话节奏和设备能力主要由平台决定。",
-      "AIUI 路线通过 AIX 页面提供宿主模型、HUD 与原生 ASR/TTS；手机可设置人格及其来源电脑。绑定不限制接口权限，旧远端观察仅在显式兼容模式启用。",
+      "AIUI 路线通过 AIX 页面提供宿主模型、HUD 与原生 ASR/TTS；手机可设置角色及其来源电脑。绑定不限制接口权限，旧远端观察仅在显式兼容模式启用。",
       "App 路线适合深度设备能力、原生生命周期和长期常驻采集研究；它需要 APK、签名、权限、SDK 兼容和真机安装维护，不能因为是原生 App 就自动承诺 24 小时后台录音。",
       "自由度从原生灵珠智能体、AIUI 到原生 App 逐级提高，但平台代管能力逐级减少，发布、权限、生命周期和真机维护责任也逐级转移到项目自身。",
       "三条路线可以并存：原生灵珠作为轻量入口和兼容路径，AIUI 承担当前产品化 HUD，App 作为需要系统权限或更强设备控制时的深化路线。",
@@ -125,8 +125,8 @@ export const rabiLinkAiuiDocPages: RabiLinkAiuiDocPage[] = [
           label: "能力归属边界",
           values: [
             "灵珠平台拥有唤醒、ASR/TTS、对话 UI 和工具调度；项目主要拥有 OpenAPI 工具与后端处理。",
-            "乐奇提供模型与原生语音；AIUI 页面执行对话、HUD 和前台状态机；RabiPC 提供人格、公共接口、记录与路由。",
-            "App 拥有 UI、语音接线、设备 SDK 和 Android 生命周期；PC 继续拥有 Agent、人格、记忆、配置与动作门。"
+            "乐奇提供模型与原生语音；AIUI 页面执行对话、HUD 和前台状态机；RabiPC 提供角色、公共接口、记录与路由。",
+            "App 拥有 UI、语音接线、设备 SDK 和 Android 生命周期；PC 继续拥有 Agent、角色、记忆、配置与动作门。"
           ]
         },
         {
@@ -197,7 +197,7 @@ export const rabiLinkAiuiDocPages: RabiLinkAiuiDocPage[] = [
     },
     diagram: {
       title: "三条眼镜路线，共用一套后端",
-      caption: "先选择眼镜交互宿主。AIUI 默认由宿主模型执行，Relay 连接人格来源 RabiPC 的公共接口与记录；完整路由唤醒和工具续推理仍待验证。",
+      caption: "先选择眼镜交互宿主。AIUI 默认由宿主模型执行，Relay 连接角色来源 RabiPC 的公共接口与记录；完整路由唤醒和工具续推理仍待验证。",
       lanes: [
         {
           label: "原生灵珠智能体路线",
@@ -205,7 +205,7 @@ export const rabiLinkAiuiDocPages: RabiLinkAiuiDocPage[] = [
             { title: "灵珠平台拥有", detail: "唤醒 / ASR / TTS / 对话 UI / 工具调度", icon: "mdi-account-voice", kind: "agent" },
             { title: "项目拥有 OpenAPI 工具", detail: "协议参数与 Relay 接线", icon: "mdi-api", kind: "service" },
             { title: "RabiLink Relay", detail: "应用隔离的双向邮箱", icon: "mdi-cloud-sync-outline", kind: "service" },
-            { title: "PC 端拥有", detail: "Agent / 人格 / 记忆 / 配置 / 账本 / 动作门", icon: "mdi-desktop-tower-monitor", kind: "result" }
+            { title: "PC 端拥有", detail: "Agent / 角色 / 记忆 / 配置 / 账本 / 动作门", icon: "mdi-desktop-tower-monitor", kind: "result" }
           ]
         },
         {
@@ -214,7 +214,7 @@ export const rabiLinkAiuiDocPages: RabiLinkAiuiDocPage[] = [
             { title: "灵珠平台拥有", detail: "模型配置 / 原生语音 / 页面宿主", icon: "mdi-account-voice", kind: "agent" },
             { title: "AIUI 页面拥有", detail: "模型请求 / HUD / ASR / TTS / 引导队列", icon: "mdi-glasses", kind: "mode" },
             { title: "RabiLink Relay", detail: "观察与主动消息独立推进", icon: "mdi-cloud-sync-outline", kind: "service" },
-            { title: "PC 端拥有", detail: "人格 / 公共接口 / 记忆 / 配置 / 记录 / 路由", icon: "mdi-desktop-tower-monitor", kind: "result" }
+            { title: "PC 端拥有", detail: "角色 / 公共接口 / 记忆 / 配置 / 记录 / 路由", icon: "mdi-desktop-tower-monitor", kind: "result" }
           ]
         },
         {
@@ -223,7 +223,7 @@ export const rabiLinkAiuiDocPages: RabiLinkAiuiDocPage[] = [
             { title: "Android App 拥有", detail: "UI / 语音接线 / 本地状态", icon: "mdi-android", kind: "input" },
             { title: "App 生命周期拥有", detail: "设备 SDK / 权限 / Activity / Service", icon: "mdi-devices", kind: "mode" },
             { title: "RabiLink Relay", detail: "复用同一设备消息契约", icon: "mdi-cloud-sync-outline", kind: "service" },
-            { title: "PC 端拥有", detail: "Agent / 人格 / 记忆 / 配置 / 账本 / 动作门", icon: "mdi-desktop-tower-monitor", kind: "result" }
+            { title: "PC 端拥有", detail: "Agent / 角色 / 记忆 / 配置 / 账本 / 动作门", icon: "mdi-desktop-tower-monitor", kind: "result" }
           ]
         }
       ]

@@ -694,7 +694,7 @@ test("a sent critical message remains open until the project fact record is veri
   store.submitOutcome("req-critical-send", {
     decision: "handoff",
     targetAgentType: "primary_persona",
-    reason: "先由主人格确认当前口径。"
+    reason: "先由主角色确认当前口径。"
   });
   store.recordReply("req-critical-send", { ok: true, status: "sent", sentMessageId: "qq-critical" }, "delivery-critical");
   assert.equal(store.get("req-critical-send")?.status, "fact_assessment_pending");

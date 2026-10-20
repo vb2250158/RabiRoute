@@ -214,7 +214,7 @@ test("pauses legacy active jobs that cannot select a durable persona", async () 
   try {
     const status = await fetch(`${app.baseUrl}/api/bilibili-history/jobs/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa`).then(response => response.json());
     assert.equal(status.job.status, "paused");
-    assert.match(status.job.lastError, /roleId|人格/);
+    assert.match(status.job.lastError, /roleId|角色/);
   } finally {
     await app.close();
     fs.rmSync(app.dir, { recursive: true, force: true });

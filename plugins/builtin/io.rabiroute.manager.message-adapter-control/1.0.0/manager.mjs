@@ -10,7 +10,7 @@ export const activate = definePlugin({
                 "value": {
                     "surface": "web.pages",
                     "label": {
-                        "fallback": "消息适配器"
+                        "fallback": "路由配置"
                     },
                     "routeId": "route.adapters",
                     "rendererId": "builtin.web-page.adapters.v1",
@@ -18,7 +18,7 @@ export const activate = definePlugin({
                     "hosts": [
                         "web"
                     ],
-                    "order": 20
+                    "order": 40
                 }
             },
             {
@@ -27,7 +27,7 @@ export const activate = definePlugin({
                 "value": {
                     "surface": "web.navigation",
                     "label": {
-                        "fallback": "消息适配器"
+                        "fallback": "路由配置"
                     },
                     "routeId": "route.adapters",
                     "icon": "mdi-puzzle-outline",
@@ -35,7 +35,7 @@ export const activate = definePlugin({
                     "hosts": [
                         "web"
                     ],
-                    "order": 20
+                    "order": 40
                 }
             }
         ])

@@ -33,7 +33,7 @@ function primaryPersonaWorker(
     return {
       agentAdapter: "dsh",
       threadId: sessionId,
-      threadName: definition.dshSessionName?.trim() || "DSH 主人格",
+      threadName: definition.dshSessionName?.trim() || "DSH 主角色",
       workspace
     };
   }
@@ -44,7 +44,7 @@ function primaryPersonaWorker(
     return {
       agentAdapter: "workbuddy",
       threadId: sessionId,
-      threadName: definition.workbuddySessionName?.trim() || "WorkBuddy 主人格",
+      threadName: definition.workbuddySessionName?.trim() || "WorkBuddy 主角色",
       workspace
     };
   }
@@ -55,7 +55,7 @@ function primaryPersonaWorker(
   return {
     agentAdapter: "codex",
     threadId,
-    threadName: definition.codexThreadName?.trim() || "Codex 主人格",
+    threadName: definition.codexThreadName?.trim() || "Codex 主角色",
     workspace
   };
 }

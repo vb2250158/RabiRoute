@@ -12,7 +12,7 @@ type Worker = NonNullable<MessageProcessingRequirement["worker"]>;
 
 const messageWorker: Worker = {
   threadId: "message-thread",
-  threadName: "人格 协助处理消息1",
+  threadName: "角色 协助处理消息1",
   workspace: "C:/workspace"
 };
 
@@ -24,7 +24,7 @@ function gateway(overrides: Partial<GatewayDefinition> = {}): GatewayDefinition 
     agentAdapters: ["codex"],
     primaryAgentAdapter: "codex",
     codexThreadId: "primary-thread",
-    codexThreadName: "主人格",
+    codexThreadName: "主角色",
     codexCwd: "C:/workspace",
     messageProcessingAgents: {},
     ...overrides
@@ -37,7 +37,7 @@ test("unconfigured message processing routes follow-up work to the primary perso
     worker: {
       agentAdapter: "codex",
       threadId: "primary-thread",
-      threadName: "主人格",
+      threadName: "主角色",
       workspace: "C:/workspace"
     }
   });
@@ -77,7 +77,7 @@ test("a DSH primary never reuses a persisted Codex message-processing worker", (
     agentAdapters: ["codex", "dsh"],
     primaryAgentAdapter: "dsh",
     dshSessionId: "session-b9a5c9bf-8e96-4fad-9035-9c6d3d25b682",
-    dshSessionName: "DSH 主人格",
+    dshSessionName: "DSH 主角色",
     dshCwd: "C:/workspace",
     messageProcessingAgents: {
       codex: {
@@ -91,7 +91,7 @@ test("a DSH primary never reuses a persisted Codex message-processing worker", (
     worker: {
       agentAdapter: "dsh",
       threadId: "session-b9a5c9bf-8e96-4fad-9035-9c6d3d25b682",
-      threadName: "DSH 主人格",
+      threadName: "DSH 主角色",
       workspace: "C:/workspace"
     }
   });
@@ -117,7 +117,7 @@ test("a delivered archived-task replacement keeps the role and adopts the new ta
     threadId: "replacement-thread",
     thread: {
       id: "replacement-thread",
-      title: "主人格",
+      title: "主角色",
       cwd: "C:/workspace"
     }
   }), {
@@ -127,7 +127,7 @@ test("a delivered archived-task replacement keeps the role and adopts the new ta
       worker: {
         agentAdapter: "codex",
         threadId: "replacement-thread",
-        threadName: "主人格",
+        threadName: "主角色",
         workspace: "C:/workspace"
       }
     }

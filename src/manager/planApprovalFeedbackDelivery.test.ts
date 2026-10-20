@@ -77,7 +77,7 @@ test("HTTP 202 without a delivery receipt stays pending and never announces succ
 
 const secretary: PlanApprovalFeedbackSecretaryTarget = {
   threadId: "019f0000-0000-7000-8000-000000000091",
-  threadName: "主人格 协助处理计划1",
+  threadName: "主角色 协助处理计划1",
   workspace: "C:\\Work\\ExampleProject",
   model: "gpt-5.6-terra"
 };
@@ -109,7 +109,7 @@ test("enabled plan secretary receives the control notice while the bound task re
   assert.equal(taskRequests.length, 1);
   assert.match(taskRequests[0]?.prompt || "", /秘书同步跟进控制面/);
   assert.deepEqual(secretaryRequests.map((request) => request.kind), ["auto_delivered_notice"]);
-  assert.match(secretaryRequests[0]?.text || "", /需要决定、授权、输入或最终复核时通知主人格/);
+  assert.match(secretaryRequests[0]?.text || "", /需要决定、授权、输入或最终复核时通知主角色/);
   assert.equal(personaRequests.length, 0);
 });
 
@@ -160,7 +160,7 @@ test("approval is delivered to the bound Codex task and persona only receives an
   assert.equal(personaRequests.length, 1);
   assert.equal(personaRequests[0]?.kind, "auto_delivered_notice");
   assert.match(personaRequests[0]?.text || "", /系统已自动投递到绑定业务会话/);
-  assert.match(personaRequests[0]?.text || "", /人格 Agent 只需复核后续结果/);
+  assert.match(personaRequests[0]?.text || "", /角色 Agent 只需复核后续结果/);
 });
 
 test("approval falls back to the persona when the plan has no complete task binding", async () => {

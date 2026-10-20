@@ -24,7 +24,7 @@ test("persona voice identities are scoped by processing host and remain merge-fr
     relationship: "我的用户",
     isUser: true,
     aliases: ["老板", "你"],
-    notes: "由当前人格根据对话确认"
+    notes: "由当前角色根据对话确认"
   });
   const otherHost = updatePersonaVoiceIdentity(roleDir, {
     sourceHostId: "host-b",
@@ -42,7 +42,7 @@ test("persona voice identities are scoped by processing host and remain merge-fr
     relationship: "我的用户",
     isUser: true,
     aliases: ["老板", "你"],
-    notes: "由当前人格根据对话确认"
+    notes: "由当前角色根据对话确认"
   });
 
   assert.equal(first.appended, true);
@@ -167,7 +167,7 @@ test("persona voice identities preserve concurrent PC branches until the persona
     voiceprintId: "cluster-user",
     displayName: "老板",
     participantId: "participant-owner",
-    relationship: "当前人格的用户",
+    relationship: "当前角色的用户",
     isUser: true,
     aliases: ["老板"]
   });
@@ -212,7 +212,7 @@ test("persona voice identities preserve concurrent PC branches until the persona
     voiceprintId: "cluster-user",
     displayName: "老板",
     participantId: "participant-owner",
-    relationship: "当前人格的用户",
+    relationship: "当前角色的用户",
     isUser: true,
     aliases: ["老板"]
   });

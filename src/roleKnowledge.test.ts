@@ -2758,7 +2758,7 @@ test("plans persist the responsible secretary separately from the business task 
     secretaryBinding: {
       agentType: "codex",
       sessionId: "session-plan-secretary",
-      sessionTitle: "主人格 协助处理计划1",
+      sessionTitle: "主角色 协助处理计划1",
       workspace: "C:\\workspace\\route",
       assignedAt: "2026-08-06T00:00:00.000Z"
     },

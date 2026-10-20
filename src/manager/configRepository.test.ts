@@ -107,7 +107,10 @@ test("persona Hook migration preserves settings across Agent changes and removes
       ...normalizeCodexHookSettings({ sessionContextEnabled: true }), planFollowup: { ...followup, enabled: false }
     } };
     config.gateways[0].agentAdapters = ["copilotCli"];
+    const beforeRoleSave = fs.readFileSync(personaPath, "utf8");
     repo.writeConfig(config);
+    assert.equal(fs.readFileSync(personaPath, "utf8"), beforeRoleSave, "Route saves never overwrite role Hook settings");
+    repo.writePersonaConfig("Rabi", { codexHooks: config.gateways[0].codexHooks });
     const saved = repo.readConfig().gateways[0];
     assert.equal(saved.codexHooks?.sessionContextEnabled, false);
     assert.equal(saved.codexHooks?.onlyPrimaryPersonaCanSendMessages, false);
@@ -193,7 +196,10 @@ test("repository migrates the legacy persona limit and writes split Route/person
     heartbeat: 2
   };
   config.gateways[0].speechTriggerKeywords = [" 星海 ", "星海", "XinghaiBuilder"];
+  const originalRoleBytes = fs.readFileSync(personaPath, "utf8");
   repo.writeConfig(config);
+  assert.equal(fs.readFileSync(personaPath, "utf8"), originalRoleBytes, "Route saves preserve role configuration");
+  repo.writePersonaConfig("Rabi", config.gateways[0]);
   const adapter = JSON.parse(fs.readFileSync(adapterPath, "utf8")) as GatewayDefinition;
   const persona = JSON.parse(fs.readFileSync(personaPath, "utf8")) as GatewayDefinition;
   assert.equal(adapter.recentMessageLimit, undefined);

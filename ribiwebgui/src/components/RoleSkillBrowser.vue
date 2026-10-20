@@ -15,15 +15,15 @@ const label = (zh: string, en: string) => isEnglish.value ? en : zh;
   <v-card class="role-skill-browser">
     <v-card-title class="skill-heading">{{ label('角色 Skill 目录', 'Persona Skill catalog') }}</v-card-title>
     <v-card-text>
-      <v-alert type="info" variant="tonal" class="mb-4">{{ label('这里展示人格保存的技能资料，仅供查看；不代表 Agent 已加载。此处不安装、启停或修改技能。', 'These are skill resources saved for the persona, not proof that the Agent has loaded them. This view does not install, enable, disable or edit skills.') }}</v-alert>
+      <v-alert type="info" variant="tonal" class="mb-4">{{ label('这里展示角色保存的技能资料，仅供查看；不代表 Agent 已加载。此处不安装、启停或修改技能。', 'These are skill resources saved for the persona, not proof that the Agent has loaded them. This view does not install, enable, disable or edit skills.') }}</v-alert>
       <div class="skill-heading mb-3">
         <span>{{ state.roleId }}</span>
         <v-btn variant="text" prepend-icon="mdi-refresh" :disabled="!roleId" :loading="state.loading" @click="browser.load(roleId)">{{ label('刷新目录', 'Refresh catalog') }}</v-btn>
       </div>
-      <v-alert v-if="!roleId" type="warning" variant="tonal">{{ label('当前路线尚未绑定人格。', 'This route has no bound persona.') }}</v-alert>
+      <v-alert v-if="!roleId" type="warning" variant="tonal">{{ label('当前路线尚未绑定角色。', 'This route has no bound persona.') }}</v-alert>
       <v-progress-linear v-else-if="state.loading" indeterminate :aria-label="label('正在读取技能目录', 'Loading skills')" />
       <v-alert v-else-if="state.error" type="error" variant="tonal" role="alert">{{ label('目录读取失败，请检查连接与访问权限后刷新。', 'Could not load the catalog. Check connection and access, then refresh.') }}</v-alert>
-      <p v-else-if="!state.items.length">{{ label('此人格暂无可读取的技能。', 'No readable skills for this persona.') }}</p>
+      <p v-else-if="!state.items.length">{{ label('此角色暂无可读取的技能。', 'No readable skills for this persona.') }}</p>
       <v-list v-else aria-label="Skills">
         <v-list-item v-for="item in state.items" :key="item.id" :title="item.title || item.id" :subtitle="item.summary" class="skill-item" @click="browser.select(item.id)">
           <template #append><v-icon icon="mdi-chevron-right" /></template>

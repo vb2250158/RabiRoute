@@ -1,7 +1,7 @@
 /**
  * DSH (DeepSeek Harness) session bridge — the DSH-side counterpart of the
  * Codex Desktop bridge. A route can bind its primary persona
- * (主人格) to a local DSH session; incoming RabiRoute deliveries are then
+ * (主角色) to a local DSH session; incoming RabiRoute deliveries are then
  * injected into that live session through the DSH apiproxy HTTP API
  * (`POST /api/session/prompt`, `POST /api/session/list`).
  *

@@ -29,5 +29,5 @@ export function isPersonaMessageReplyContext(value: unknown): value is PersonaMe
 
 export function personaMessageSenderName(value: unknown): string {
   if (!isPersonaMessageReplyContext(value)) return "本地用户";
-  return String(value.sourcePersonaName || value.sourcePersonaId || "其它人格");
+  return String(value.sourcePersonaName || value.sourcePersonaId || "其它角色");
 }

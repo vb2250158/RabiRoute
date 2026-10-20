@@ -106,7 +106,7 @@ async function importDesktopPetPack(): Promise<void> {
 }
 
 async function save(): Promise<void> {
-  if (!ready.value || saving.value) throw new Error("人格虚拟形象尚未加载完成。");
+  if (!ready.value || saving.value) throw new Error("角色虚拟形象尚未加载完成。");
   saving.value = true;
   try {
     if (store.dirty) await store.save();
@@ -151,7 +151,7 @@ onBeforeUnmount(() => {
         <div>
           <div class="section-title">桌宠</div>
           <div class="section-note">
-            动作素材保存在 <span data-no-i18n>{{ personaId }}</span> 人格目录；任务结束时只响应这个人格。
+            动作素材保存在 <span data-no-i18n>{{ personaId }}</span> 角色目录；任务结束时只响应这个角色。
           </div>
         </div>
         <v-switch
@@ -180,7 +180,7 @@ onBeforeUnmount(() => {
           item-title="name"
           item-value="id"
           clearable
-          no-data-text="当前人格还没有动作素材"
+          no-data-text="当前角色还没有动作素材"
           :disabled="!loaded"
         />
         <div v-if="selectedPack" class="virtual-avatar-pack-summary mb-4">

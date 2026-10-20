@@ -245,7 +245,7 @@ export class CompanionActivity {
     try {
       if (userText.trim()) await this.recordInteraction(s);
       const personaContext = await this.ports.context(clone(s));
-      if (!personaContext.trim()) throw new Error("陪伴人格上下文为空，请配置人格陪伴提示词");
+      if (!personaContext.trim()) throw new Error("陪伴角色上下文为空，请配置角色陪伴提示词");
       if (this.session !== s || s.revision !== revision || this.reviews.get(r.id) !== r || s.status !== "active" || this.now() > r.expiresAt) {
         throw new CompanionError("陪伴场景已改变或观察已过期", 409);
       }

@@ -113,10 +113,6 @@ export type RoleMemoryPage = {
   counts: RoleMemoryPageCounts;
 };
 
-export const ROLE_PLAN_PAGE_SIZE = 8;
-export const ROLE_PLAN_BACKGROUND_PAGE_SIZE = 100;
-export const ROLE_MEMORY_BACKGROUND_PAGE_SIZE = 100;
-
 export type RolePlanPageFilter = {
   view?: "current" | "plans" | "archived";
   query?: string;
@@ -168,14 +164,24 @@ export type PlanFeedbackMutationResult = {
   idempotencyKey: string;
 };
 
-export const ROLE_KNOWLEDGE_REQUEST_TIMEOUT_MS = 12_000;
-const managerResourceEtags = new Map<string, string>();
-let activeManagerLifecycleKey = "";
-
 type ManagerLifecycleIdentity = {
   applicationGenerationId: string;
   managerInstanceId: string;
 };
+
+type FocusedPlanSnapshot = { roleId: string; planId: string; revision: string; plan: RolePlan };
+import { remotePersonaServicePath } from "./persona/remotePersonaReference";
+
+export function createRoleKnowledgeClient(sourceDeviceId = "") {
+
+
+const ROLE_PLAN_PAGE_SIZE = 8;
+const ROLE_PLAN_BACKGROUND_PAGE_SIZE = 100;
+const ROLE_MEMORY_BACKGROUND_PAGE_SIZE = 100;
+
+const ROLE_KNOWLEDGE_REQUEST_TIMEOUT_MS = 12_000;
+const managerResourceEtags = new Map<string, string>();
+let activeManagerLifecycleKey = "";
 
 function managerLifecycleKey(identity: ManagerLifecycleIdentity): string {
   return `${identity.applicationGenerationId}\u0000${identity.managerInstanceId}`;
@@ -195,7 +201,7 @@ async function readManagerLifecycleIdentity(): Promise<ManagerLifecycleIdentity>
   return { applicationGenerationId, managerInstanceId };
 }
 
-export async function synchronizeRoleKnowledgeLifecycle(): Promise<string> {
+async function synchronizeRoleKnowledgeLifecycle(): Promise<string> {
   try {
     const nextKey = managerLifecycleKey(await readManagerLifecycleIdentity());
     if (activeManagerLifecycleKey !== nextKey) managerResourceEtags.clear();
@@ -226,7 +232,7 @@ async function boundedManagerFetch(path: string, init: RequestInit = {}): Promis
   else inheritedSignal?.addEventListener("abort", abortInheritedRequest, { once: true });
   const timeout = globalThis.setTimeout(() => controller.abort(), ROLE_KNOWLEDGE_REQUEST_TIMEOUT_MS);
   try {
-    return await fetch(path, { ...init, signal: controller.signal });
+    return await fetch(sourceDeviceId ? remotePersonaServicePath(sourceDeviceId, path) : path, { ...init, signal: controller.signal });
   } catch (error) {
     if (controller.signal.aborted && !inheritedSignal?.aborted) {
       throw new ManagerRequestError(`Manager request timed out after ${ROLE_KNOWLEDGE_REQUEST_TIMEOUT_MS}ms.`, 0);
@@ -261,7 +267,7 @@ async function managerData<T>(path: string, init: RequestInit = {}): Promise<T> 
   return (await managerResource<T>(path, init)).data;
 }
 
-export function normalizeRolePlanFromManager(plan: RolePlan): RolePlan {
+function normalizeRolePlanFromManager(plan: RolePlan): RolePlan {
   const attachments = Array.isArray(plan.attachments) ? plan.attachments : [];
   const steps = Array.isArray(plan.steps) ? plan.steps : [];
   const normalizedCounts = {
@@ -333,11 +339,11 @@ export function normalizeRolePlanFromManager(plan: RolePlan): RolePlan {
   };
 }
 
-export async function loadRoleKnowledgeFileCounts(roleId: string, signal?: AbortSignal): Promise<RoleKnowledgeFileCounts> {
+async function loadRoleKnowledgeFileCounts(roleId: string, signal?: AbortSignal): Promise<RoleKnowledgeFileCounts> {
   return managerData<RoleKnowledgeFileCounts>(`/api/roles/${encodeURIComponent(roleId)}/counts`, { cache: "no-store", signal });
 }
 
-export async function loadRoleKnowledge(roleId: string): Promise<{ plans: RolePlan[]; memory: RoleMemoryPayload }> {
+async function loadRoleKnowledge(roleId: string): Promise<{ plans: RolePlan[]; memory: RoleMemoryPayload }> {
   const encodedRoleId = encodeURIComponent(roleId);
   const [plans, memory] = await Promise.all([
     managerData<RolePlan[]>(`/api/roles/${encodedRoleId}/plans`),
@@ -346,7 +352,7 @@ export async function loadRoleKnowledge(roleId: string): Promise<{ plans: RolePl
   return { plans: plans.map(normalizeRolePlanFromManager), memory };
 }
 
-export async function loadPlanHistory(roleId: string, planId: string): Promise<RolePlanHistoryRecord[]> {
+async function loadPlanHistory(roleId: string, planId: string): Promise<RolePlanHistoryRecord[]> {
   const data = await managerData<{ records?: RolePlanHistoryRecord[] }>(
     `/api/roles/${encodeURIComponent(roleId)}/plans/${encodeURIComponent(planId)}/history`
   );
@@ -366,7 +372,7 @@ function normalizedPlanApproval(data: RolePlan["approval"] & { records?: RolePla
   };
 }
 
-export async function loadPlanFeedbackWithRevision(
+async function loadPlanFeedbackWithRevision(
   roleId: string,
   planId: string
 ): Promise<{ approval: RolePlan["approval"]; etag: string }> {
@@ -385,11 +391,11 @@ export async function loadPlanFeedbackWithRevision(
   return { approval: normalizedPlanApproval(resource.data), etag: resource.etag };
 }
 
-export async function loadPlanFeedback(roleId: string, planId: string): Promise<RolePlan["approval"]> {
+async function loadPlanFeedback(roleId: string, planId: string): Promise<RolePlan["approval"]> {
   return (await loadPlanFeedbackWithRevision(roleId, planId)).approval;
 }
 
-export function cachedPlanFeedbackRevision(roleId: string, planId: string): string {
+function cachedPlanFeedbackRevision(roleId: string, planId: string): string {
   if (!activeManagerLifecycleKey) return "";
   return managerResourceEtags.get(managerResourceEtagKey(activeManagerLifecycleKey, planFeedbackPath(roleId, planId))) || "";
 }
@@ -420,7 +426,7 @@ function normalizedPlanStatusFacet(
   };
 }
 
-export async function loadRolePlanPage(
+async function loadRolePlanPage(
   roleId: string,
   cursor = "",
   limit = ROLE_PLAN_PAGE_SIZE,
@@ -453,13 +459,13 @@ export async function loadRolePlanPage(
   };
 }
 
-export async function loadRolePlanPreview(roleId: string, planId: string): Promise<RolePlan> {
+async function loadRolePlanPreview(roleId: string, planId: string): Promise<RolePlan> {
   return normalizeRolePlanFromManager(await managerData<RolePlan>(
     `/api/roles/${encodeURIComponent(roleId)}/plans/${encodeURIComponent(planId)}?detail=preview`
   ));
 }
 
-export async function loadRolePlan(roleId: string, planId: string, signal?: AbortSignal): Promise<RolePlan> {
+async function loadRolePlan(roleId: string, planId: string, signal?: AbortSignal): Promise<RolePlan> {
   const plan = normalizeRolePlanFromManager(await managerData<RolePlan>(
     `/api/roles/${encodeURIComponent(roleId)}/plans/${encodeURIComponent(planId)}`, { signal }
   ));
@@ -471,9 +477,7 @@ export async function loadRolePlan(roleId: string, planId: string, signal?: Abor
     detailLevel: "full"
   };
 }
-
-type FocusedPlanSnapshot = { roleId: string; planId: string; revision: string; plan: RolePlan };
-const FOCUSED_PLAN_CACHE_KEY = "rabi:focused-plans:v1";
+const FOCUSED_PLAN_CACHE_KEY = "rabi:focused-plans:v1" + (sourceDeviceId ? `:${sourceDeviceId}` : "");
 const FOCUSED_PLAN_CACHE_LIMIT = 8;
 
 function focusedPlanSnapshots(): FocusedPlanSnapshot[] {
@@ -489,7 +493,7 @@ function focusedPlanSnapshots(): FocusedPlanSnapshot[] {
 }
 
 /** The last full snapshot is displayed immediately while Manager checks its view revision. */
-export function cachedFocusedRolePlan(roleId: string, planId: string): FocusedPlanSnapshot | undefined {
+function cachedFocusedRolePlan(roleId: string, planId: string): FocusedPlanSnapshot | undefined {
   return focusedPlanSnapshots().find(record => record.roleId === roleId && record.planId === planId);
 }
 
@@ -508,7 +512,7 @@ function saveFocusedRolePlan(snapshot: FocusedPlanSnapshot): void {
 }
 
 /** A 304 preserves the displayed snapshot; only a changed plan transfers its full body. */
-export async function loadFocusedRolePlan(
+async function loadFocusedRolePlan(
   roleId: string, planId: string, cached = cachedFocusedRolePlan(roleId, planId), signal?: AbortSignal
 ): Promise<{ plan: RolePlan; changed: boolean }> {
   const path = `/api/roles/${encodeURIComponent(roleId)}/plans/${encodeURIComponent(planId)}`;
@@ -546,7 +550,7 @@ function planAgentStatusChunks(planIds: string[]): string[][] {
   return chunks;
 }
 
-export async function loadPlanAgentStatuses(
+async function loadPlanAgentStatuses(
   roleId: string,
   planIds: string[],
   timeoutMs = 3_000
@@ -591,7 +595,7 @@ export async function loadPlanAgentStatuses(
   };
 }
 
-export async function openPlanHistoryAgent(roleId: string, planId: string, historyId: string): Promise<{ opened: true }> {
+async function openPlanHistoryAgent(roleId: string, planId: string, historyId: string): Promise<{ opened: true }> {
   return managerData(`/api/roles/${encodeURIComponent(roleId)}/plan-agents/${encodeURIComponent(planId)}/open`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -599,7 +603,7 @@ export async function openPlanHistoryAgent(roleId: string, planId: string, histo
   });
 }
 
-export async function openPlanAgentTask(
+async function openPlanAgentTask(
   roleId: string,
   planId: string,
   role: PlanAgentRole
@@ -614,11 +618,11 @@ export async function openPlanAgentTask(
   );
 }
 
-export async function loadRoleMemory(roleId: string): Promise<RoleMemoryPayload> {
+async function loadRoleMemory(roleId: string): Promise<RoleMemoryPayload> {
   return managerData<RoleMemoryPayload>(`/api/roles/${encodeURIComponent(roleId)}/memory`);
 }
 
-export async function loadRoleMemoryCounts(roleId: string): Promise<RoleMemoryPageCounts> {
+async function loadRoleMemoryCounts(roleId: string): Promise<RoleMemoryPageCounts> {
   const data = await managerData<RoleMemoryPageCounts | RoleMemoryPayload>(
     `/api/roles/${encodeURIComponent(roleId)}/memory?counts=1`
   );
@@ -642,7 +646,7 @@ export async function loadRoleMemoryCounts(roleId: string): Promise<RoleMemoryPa
   };
 }
 
-export async function loadPendingMemoryConsolidationRunCount(roleId: string): Promise<number> {
+async function loadPendingMemoryConsolidationRunCount(roleId: string): Promise<number> {
   const runs = await managerData<unknown>(
     `/api/roles/${encodeURIComponent(roleId)}/memory/consolidation-runs`,
     { cache: "no-store" }
@@ -656,7 +660,7 @@ export async function loadPendingMemoryConsolidationRunCount(roleId: string): Pr
   )).length;
 }
 
-export async function loadRoleMemoryPage(
+async function loadRoleMemoryPage(
   roleId: string,
   kind: RoleMemoryKind,
   cursor = "",
@@ -699,7 +703,7 @@ export async function loadRoleMemoryPage(
   };
 }
 
-export async function submitPlanFeedback(input: {
+async function submitPlanFeedback(input: {
   roleId: string;
   planId: string;
   gatewayId?: string;
@@ -780,3 +784,7 @@ export async function submitPlanFeedback(input: {
     idempotencyKey: receiptIdempotencyKey
   };
 }
+return { ROLE_PLAN_PAGE_SIZE, ROLE_PLAN_BACKGROUND_PAGE_SIZE, ROLE_MEMORY_BACKGROUND_PAGE_SIZE, ROLE_KNOWLEDGE_REQUEST_TIMEOUT_MS, synchronizeRoleKnowledgeLifecycle, normalizeRolePlanFromManager, loadRoleKnowledgeFileCounts, loadRoleKnowledge, loadPlanHistory, loadPlanFeedbackWithRevision, loadPlanFeedback, cachedPlanFeedbackRevision, loadRolePlanPage, loadRolePlanPreview, loadRolePlan, cachedFocusedRolePlan, loadFocusedRolePlan, loadPlanAgentStatuses, openPlanHistoryAgent, openPlanAgentTask, loadRoleMemory, loadRoleMemoryCounts, loadPendingMemoryConsolidationRunCount, loadRoleMemoryPage, submitPlanFeedback };
+}
+
+export const { ROLE_PLAN_PAGE_SIZE, ROLE_PLAN_BACKGROUND_PAGE_SIZE, ROLE_MEMORY_BACKGROUND_PAGE_SIZE, ROLE_KNOWLEDGE_REQUEST_TIMEOUT_MS, synchronizeRoleKnowledgeLifecycle, normalizeRolePlanFromManager, loadRoleKnowledgeFileCounts, loadRoleKnowledge, loadPlanHistory, loadPlanFeedbackWithRevision, loadPlanFeedback, cachedPlanFeedbackRevision, loadRolePlanPage, loadRolePlanPreview, loadRolePlan, cachedFocusedRolePlan, loadFocusedRolePlan, loadPlanAgentStatuses, openPlanHistoryAgent, openPlanAgentTask, loadRoleMemory, loadRoleMemoryCounts, loadPendingMemoryConsolidationRunCount, loadRoleMemoryPage, submitPlanFeedback } = createRoleKnowledgeClient();

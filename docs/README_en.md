@@ -19,7 +19,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Inspect devices and test actions](user-guide/home-devices_en.md) — Inspect device cards, capabilities and states, then test advertised actions.
 - [Workspace plan query](workspace-plan-query_en.md) — Paginated search scoped to host sessions and workspace.
 
-- [Persona all-day recording](persona-all-day-recording_en.md) — **New implementation**. Review computer and selected phone events by date, with explicit capture sources, pause state and coverage gaps.
+- [Role all-day recording](persona-all-day-recording_en.md) — **New implementation**. Review computer and selected phone events by date, with explicit capture sources, pause state and coverage gaps.
 
 - [RibiWebGUI User Guide](user-guide/README_en.md) — **Current guide**. Start here on your first use to complete a real delivery, read status, change rules, and recover from common failures.
 - [Getting Started](getting-started_en.md) — **Current guide**. Install RabiRoute, start Manager, and confirm that the console opens.
@@ -40,10 +40,10 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Troubleshooting](troubleshooting_en.md) — NapCat, encoding, Codex Desktop task ownership, models, and approval boundaries.
 - [Windows launcher and packaging](windows-launcher-and-packaging_en.md) — Windows installation, startup, and packaging.
 - [Linux Host](linux-host_en.md) — **New implementation**. Build and open WebGUI on Linux, discover the current address, stop safely, and understand RabiLink setup and pending acceptance.
-- [PC identities and instance ID reset](user-guide/instance-identity_en.md) — Repair a copied identity so separate PCs appear independently as persona sources.
+- [PC identities and instance ID reset](user-guide/instance-identity_en.md) — Repair a copied identity so separate PCs appear independently as role sources.
 - [Unattended NapCat](napcat-unattended_en.md) — QQ login state, quick login, Manager recovery, and supervision boundaries.
 
-## Developer: routing, personas, and Agent interfaces
+## Developer: routing, roles, and Agent interfaces
 
 - [Home device and speaker Agent API](home-device-agent-api_en.md) — Query every imported entity, discover and invoke its buttons/settings/device actions, bind speech and query durable receipts.
 - [Vacuum cloud map connection](vacuum-cloud-map_en.md) — QR login, raw files and version-2 decoding; live localization and navigation require separate acceptance.
@@ -52,12 +52,12 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Plan and memory summary search](knowledge-search_en.md)
 - [Automation Agent delivery](automation-agent-delivery_en.md) — Recipient references, session selection, migration and retries.
 - [Routing configuration](routing-configuration_en.md) — **Current guide** for `personaConfig.json`, route kinds, regex, pipelines, and template variables.
-- [Routing and personas](routing-and-personas_en.md) — **Current guide** for route/role boundaries and persona decision templates.
-- [Use a remote persona from a local Route](remote-persona-reference_en.md) — **Experimental in 0.3.19**. Select a source PC and persona in the same RabiLink application, use an automatic handshake for read-only access, and retain local message inputs and the handling Agent. Real two-PC delivery remains pending acceptance.
+- [Routing and roles](routing-and-personas_en.md) — **Current guide** for route/role boundaries and role decision templates.
+- [Use a remote role from a local Route](remote-persona-reference_en.md) — **Experimental in 0.3.19**. Select a source PC and role in the same RabiLink application, use an automatic handshake for read-only access, and retain local message inputs and the handling Agent. Real two-PC delivery remains pending acceptance.
 - [Agent context injection](agent-context-injection_en.md) — **Current guide** for the persona-scoped bidirectional ledger, per-endpoint/conversation recent-message budgets, archival boundaries, persona-directory and cross-persona credentials, paths, and reply context inside `AgentPacket`.
 - [Desktop-pet motion API](desktop-pet-agent-motion_en.md) — Move the pet and read arrival, interruption and uncertain receipts.
-- [Desktop pet bubbles and speech](desktop-pet-bubbles_en.md) — Show spoken persona text and customize the paw skin, font, colors and lifetime.
-- [Rabi Agent interfaces](rabi-agent-interfaces_en.md) — **Current contract** for handler replies, persona discovery, idempotent one-way cross-persona delivery, receipts, thread bridge, plans, memory, Remote Agent, and role skills.
+- [Desktop pet bubbles and speech](desktop-pet-bubbles_en.md) — Show spoken role text and customize the paw skin, font, colors and lifetime.
+- [Rabi Agent interfaces](rabi-agent-interfaces_en.md) — **Current contract** for handler replies, role discovery, idempotent one-way cross-persona delivery, receipts, thread bridge, plans, memory, Remote Agent, and role skills.
 - [Plans and memory](plan-and-memory-model_en.md) — **Current guide** for Role Knowledge sources, recall, explicit consolidation, and side effects.
 - [Unified dynamic record lifecycle](dynamic-record-lifecycle_en.md) — **Current guide** for archival, memory consolidation, physical sharding, retention, and the 24/72-hour dynamic windows.
 - [Pipeline presets](pipeline-presets_en.md) — Agent-session defaults, explicit external targets, and Outbox statuses; FenneNote output is archival compatibility only.
@@ -68,8 +68,8 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Delegating a glasses connection to the phone](device-peer-connection_en.md) — **Experimental**. Verify device credentials, independent keys, and a short connection lease so forwarded requests retain the glasses identity.
 - [Exact Agent delivery and formal replies](agent-endpoint-delivery_en.md) — **Experimental**. Verify source and target owners, original delivery receipts, and required replies; handle timeouts and revoked identities.
 - [Codex Desktop Agent Integration and Acceptance Contract](codex-desktop-agent-acceptance_en.md) — **Current fact** for stable IDs, side-effect-free scanning, automatic initialization, the Desktop owner boundary, and metadata bootstrap gates.
-- [Rabi Codex Context plugin](rabi-codex-context-plugin_en.md) — **Unified Manager version** where hooks only forward real Codex session events and inject Rabi PC-owned persona, plan, memory, and skill context.
-- [Persona data synchronization retirement](persona-data-sync_en.md) — **Retired**. Automatic/manual synchronization and synchronization APIs are no longer provided. Use existing RabiLink remote persona, Agent, and data access without replication; historical data is retained.
+- [Rabi Codex Context plugin](rabi-codex-context-plugin_en.md) — **Unified Manager version** where hooks only forward real Codex session events and inject Rabi PC-owned role, plan, memory, and skill context.
+- [Role data synchronization retirement](persona-data-sync_en.md) — **Retired**. Automatic/manual synchronization and synchronization APIs are no longer provided. Use existing RabiLink remote role, Agent, and data access without replication; historical data is retained.
 
 
 ## Maintainer: architecture, builds, and diagnostics
@@ -103,7 +103,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Feishu endpoint integration](feishu-integration_en.md) — enterprise-app event callbacks, signature/encryption checks, durable deduplication, and source-chat text replies.
 - [Video generation plugin](video-generation-plugin_en.md) — Choose models on this or a connected computer, submit generation jobs, and save, preview or download work in the current workspace.
 - [Voice interaction workstation](voice-interaction-workstation_en.md) — historical wiring; FenneNote/OumuQ are retired in favor of RabiPC + RabiSpeech.
-- [RabiSpeech local TTS / ASR service](rabispeech-plugin_en.md) — direct APIs, hot/persona-keyword delivery, persona voice and language, bidirectional ASR/TTS records, opaque voiceprint/cluster evidence, RabiPC, and RabiLink relay. The selected-text menu's reading sub-feature can enqueue host TTS.
+- [RabiSpeech local TTS / ASR service](rabispeech-plugin_en.md) — direct APIs, hot/persona-keyword delivery, role voice and language, bidirectional ASR/TTS records, opaque voiceprint/cluster evidence, RabiPC, and RabiLink relay. The selected-text menu's reading sub-feature can enqueue host TTS.
 - [Call TTS and ASR remotely](user-guide/speech-api_en.md) — application token, target PC, copyable commands, acceptance, and error recovery.
 - [Rabi Voice Client](../desktop/rabi-voice-client/README_en.md) — use a meeting-room Windows PC as a LAN microphone and speaker while segmentation and models stay on the RabiSpeech host.
 - [Local speech model downloads](local-speech-model-downloads_en.md) — use Model Management for on-demand weights and review each TTS/ASR model's source, isolated runtime, and validation requirements.
@@ -129,7 +129,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [PC knowledge bridge configuration](rabilink-knowledge-runtime_en.md) — Existing Manager knowledge APIs, application authentication and readiness checks.
 - [Knowledge write receipt lookup](rabilink-knowledge-operation-receipts_en.md) — Query persisted receipts with the original operation key and actual device credentials; unknown outcomes are never replayed.
 - [New AIUI Agent acceptance](aiui-agent-acceptance_en.md) — Maintenance: verify builds, runtime, hardware wake, and voice interaction against the new contract; track pending criteria.
-- [AIUI generic API transport](../apps/rabilink-aiui/docs/generic-api-transport_en.md) — Public APIs, target computers, persona ownership and verified transport scope.
+- [AIUI generic API transport](../apps/rabilink-aiui/docs/generic-api-transport_en.md) — Public APIs, target computers, role ownership and verified transport scope.
 - [RabiLink AIUI residency boundaries](rabilink-aiui-residency-plan_en.md)
 - [RabiLink proactive-intelligence requirements](rabilink-active-intelligence-requirements_en.md) — target contract and implementation tracker for user state, scenario recognition, plan/memory closure after group-message recall, and intervention decisions.
 - [RabiLink native app design](rabilink-glasses-app-design_en.md)
@@ -139,10 +139,12 @@ This directory contains current guides, experimental integrations, designs, rese
 
 ## Designs and history
 
+- [Role-centric configuration architecture](role-centric-architecture_en.md) — Independent role selection and configuration, Plans and memory, Route bindings, archive/restore and guarded permanent deletion. Source collection and isolated validation; no installation in this change.
+
 - [RabiLink unified all-day recording design](rabilink-all-day-recording_en.md) — **Design / implementation in progress, not accepted end to end**. One coordination owner for phone, glasses and watches; independent mode/pause, notifications, durable recording/transcription, privacy boundaries, lossless migration and acceptance contracts.
 - [Proactive-intelligence system design overview](../主动智能设计思路_en.md) — **Planned**. Covers user modeling, scenarios, proactive action, memory, and device responsibilities. See Current Capabilities for implementation status.
 - [Conversational message collection, message groups, and four-Agent collaboration](group-message-batching-and-triage-plan_en.md) — **Experimental**. Natural-language traffic may be recorded immediately, settled into batches, and sent to dynamic Codex Message Agents by a combined ranking of the quoted message's Agent session, prior message group, conversation, speaker, and endpoint familiarity. Live group/DM and complete four-Agent acceptance remain pending.
-- [Persona route workbench plan](persona-route-workbench-plan_en.md) — **Partially implemented**. Speech-keyword and per-endpoint context controls are live; side-effect-free RouteDecision/AgentPacket preview is not implemented.
+- [Role route workbench plan](persona-route-workbench-plan_en.md) — **Partially implemented**. Speech-keyword and per-endpoint context controls are live; side-effect-free RouteDecision/AgentPacket preview is not implemented.
 - [WorkBuddy as an Agent endpoint](workbuddy-agent-adapter-plan_en.md) — **Implemented, with one manual credential step**. Wiring WorkBuddy tasks in as a handler: the session process descriptor, task source of truth, local gateway API, delivery body shape and same-id redelivery are all verified by measurement; the gateway credential is recorded once in a local ignored file, and maturity stays `experimental`.
 - [Windows tray task-window plan](rabiroute-windows-tray-task-window-plan_en.md) — design record; use `desktop/tray-task-window/` and the packaging guide for the actual implementation.
 - [UE/UX audit and refactor](rabiroute-ue-ux-audit-and-refactor_en.md) — phase audit.
@@ -167,4 +169,4 @@ Archived material is under [`archive/`](../archive/README_en.md). Buildable clie
 1. Check code, schemas, APIs, WebGUI, and tests before updating the Chinese fact source.
 2. Maintain the English version manually only after behavior is accurate; do not batch-translate stale documents.
 3. Design documents must be labeled Planned or Historical instead of appearing in the current-capability list.
-4. Runtime-semantic Markdown (`AGENTS.md`, `SKILL.md`, personas, prompts, memories, and plans) must not be translated mechanically.
+4. Runtime-semantic Markdown (`AGENTS.md`, `SKILL.md`, roles, prompts, memories, and plans) must not be translated mechanically.

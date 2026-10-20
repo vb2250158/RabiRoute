@@ -51,6 +51,7 @@ test("route-control is built and synchronized as an independent Web entry", () =
   const app = fs.readFileSync(new URL("../src/App.vue", import.meta.url), "utf8");
   assert.match(vite, /managerRouteControlPlugin:[^\n]*builtin\/route-control\.ts/);
   assert.match(sync, /\["src\/bundles\/builtin\/route-control\.ts", "io.rabiroute.manager.route-control"\]/);
-  assert.match(app, /topbarCommands = computed\(\(\) => webCommandsInSlot\(pluginCatalogStore.commands.value, "topbar-primary"\)\)/);
+  assert.match(app, /topbarCommands = computed\(\(\) => webCommandsInSlot\(pluginCatalogStore.commands.value, "topbar-primary"\)\.filter/);
+  assert.match(app, /command.handlerId !== "web.add-route" \|\| route.path.startsWith\("\/routes"\)/);
   assert.match(app, /v-for="command in topbarCommands"/);
 });

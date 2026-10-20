@@ -8,7 +8,7 @@ English | <a href="./routing-configuration.md">简体中文</a>
 
 > Status: current guide. Checked against `personaConfig.json` loading, route kinds, pipelines, and current template values.
 
-When `agentRoleDeviceId` selects a remote PC, `agentRoleId` references that PC's persona. Empty or absent retains local selection. Both PCs reuse authentication for the same RabiLink application and an automatic public-key handshake for reads through the restricted `persona` service. Remote rules are read for delivery rather than persisted as local persona configuration. See [Use a remote persona from a local Route](remote-persona-reference_en.md) for selection, manual restrictions and failure boundaries (experimental).
+When `agentRoleDeviceId` selects a remote PC, `agentRoleId` references that PC's persona. Empty or absent retains local selection. Both PCs reuse authentication for the same RabiLink application and an automatic public-key handshake for reads through the restricted `persona` service. Remote rules are read for delivery rather than persisted as local role configuration. See [Use a remote role from a local Route](remote-persona-reference_en.md) for selection, manual restrictions and failure boundaries (experimental).
 
 ## File locations
 
@@ -18,13 +18,13 @@ Operational route configuration:
 data/route/<configName>/adapterConfig.json
 ```
 
-Reusable role rules:
+Role automation, context limits and Hooks are owned independently by the role; saving a Route does not overwrite them:
 
 ```text
 data/roles/<RoleId>/personaConfig.json
 ```
 
-The route points to the role with `agentRoleId`. The current persona file keeps root-level `automationRules`, `speechTriggerKeywords`, and `recentMessageLimits`; it does not require a nested `configs` collection. Legacy `notificationRules` remain readable and migrate into automation rules. Several Routes may reuse the same persona-owned policy. Saved rules are authoritative; reads do not restore deleted rules. See [Automation Agent delivery](automation-agent-delivery_en.md) for targets and upgrades.
+The route points to the role with `agentRoleId`. The current role file keeps root-level `automationRules`, `speechTriggerKeywords`, and `recentMessageLimits`; it does not require a nested `configs` collection. Legacy `notificationRules` remain readable and migrate into automation rules. Several Routes may reuse the same persona-owned policy. Saved rules are authoritative; reads do not restore deleted rules. See [Automation Agent delivery](automation-agent-delivery_en.md) for targets and upgrades.
 
 ## `personaConfig.json`
 
@@ -67,7 +67,7 @@ A representative shape:
 }
 ```
 
-Each rule combines one trigger (`message` or `schedule`) and one action (`deliver_agent` or `run_script`). Rules stay inside the active Route profile and cannot select an arbitrary persona. Script actions reuse connection authentication and remain inside the bound persona's `scripts/` directory.
+Each rule combines one trigger (`message` or `schedule`) and one action (`deliver_agent` or `run_script`). Rules stay inside the active Route profile and cannot select an arbitrary persona. Script actions reuse connection authentication and remain inside the bound role's `scripts/` directory.
 
 ## Route kinds
 
@@ -90,22 +90,22 @@ weixin_message
 wearable_health_alert
 ```
 
-`role_panel_message` is Manager's built-in persona-message kind. It serves both local role-panel input and authenticated cross-persona delivery; it is not a configurable network listener. Both entry points use one delivery service, which records `sent` only after handler acceptance and records `failed` on rejection. The rule is generated on initialization; saved persona automation determines subsequent delivery.
+`role_panel_message` is Manager's built-in persona-message kind. It serves both local role-panel input and authenticated cross-persona delivery; it is not a configurable network listener. Both entry points use one delivery service, which records `sent` only after handler acceptance and records `failed` on rejection. The rule is generated on initialization; saved role automation determines subsequent delivery.
 
 Use the narrowest kind that represents the source event. `group_message` is normally combined with `regex`; explicit mentions/replies use their dedicated kinds.
 
 ## Ordinary delivery, scheduled tasks, and endpoint-specific exceptions
 
 - Once an ordinary endpoint message matches a rule, it is delivered directly: `steer` the active Desktop turn or `start` an idle task.
-- Scheduled triggers never inject message history and do not enter conversational settling. Agent actions use the heartbeat compatibility event: with Codex Message Agent mode enabled they go immediately to an independent Message Agent, otherwise `heartbeatSkipWhenAgentBusy` may skip them while the fixed task is active. Script actions bypass Agent delivery and execute configured scripts from the owning persona’s scripts directory.
+- Scheduled triggers never inject message history and do not enter conversational settling. Agent actions use the heartbeat compatibility event: with Codex Message Agent mode enabled they go immediately to an independent Message Agent, otherwise `heartbeatSkipWhenAgentBusy` may skip them while the fixed task is active. Script actions bypass Agent delivery and execute configured scripts from the owning role’s scripts directory.
 - `plan_feedback` is a Manager system event emitted only after the plan and Route are explicitly bound. It uses a dedicated built-in rule, neither reads nor writes chat history, and always exposes empty recent-message template values.
-- Speech owns Route `speechPushMode`: `hot` delivers every completed ASR segment, while `keyword` records all segments and delivers only after a persona `speechTriggerKeywords` match. An empty list never falls back to hot.
+- Speech owns Route `speechPushMode`: `hot` delivers every completed ASR segment, while `keyword` records all segments and delivers only after a role `speechTriggerKeywords` match. An empty list never falls back to hot.
 - `weixin_message` is the experimental personal-Weixin OpenClaw/iLink source. Text exposes `weixinSessionId`, `weixinUserId`, and `weixinMessageType`; media is record-only, and replies require the source session's context token.
-- Persona `recentMessageLimits` independently configures ordinary endpoint budgets from `0` to `200`, with a schema default of `12`. Zero disables automatic injection only. Heartbeat and `plan_feedback` have no adjustable budget and always omit history.
+- Role `recentMessageLimits` independently configures ordinary endpoint budgets from `0` to `200`, with a schema default of `12`. Zero disables automatic injection only. Heartbeat and `plan_feedback` have no adjustable budget and always omit history.
 
 ## Pipelines
 
-`pipelinePreset` and an optional inline `pipeline` belong to `adapterConfig.json`, not the persona rule. They determine the source/output adapters, reply-to-source behavior, prompt-output mode, feedback-loop guard, and optional TTS settings.
+`pipelinePreset` and an optional inline `pipeline` belong to `adapterConfig.json`, not the role rule. They determine the source/output adapters, reply-to-source behavior, prompt-output mode, feedback-loop guard, and optional TTS settings.
 
 The default compatibility pipeline retains output in the Agent session unless the reply carries a source context or explicit external target. See [Pipeline Presets](pipeline-presets_en.md).
 

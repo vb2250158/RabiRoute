@@ -12,7 +12,7 @@ export function personaSourceOptions(
   const name = meta.rabiName?.trim() || meta.computerName?.trim() || "";
   const local = {
     title: name ? `${translate("本机")} · ${name}` : translate("本机"),
-    subtitle: `${rabiPcVersionLabel(meta.version, translate)} · ${translate("使用本机人格")}`,
+    subtitle: `${rabiPcVersionLabel(meta.version, translate)} · ${translate("使用本机角色")}`,
     value: "",
     props: { disabled: false }
   };

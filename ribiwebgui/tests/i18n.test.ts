@@ -7,7 +7,7 @@ import * as ts from "typescript";
 import { translateText } from "../src/i18n/index";
 
 test("translates exact interface copy and preserves surrounding whitespace", () => {
-  assert.equal(translateText("人格配置", "en"), "Persona configuration");
+  assert.equal(translateText("角色配置", "en"), "Role settings");
   assert.equal(translateText("设置", "en"), "Settings");
   assert.equal(translateText("语音服务", "en"), "Speech service");
   assert.equal(translateText("划词朗读", "en"), "Read selected text aloud");
@@ -48,7 +48,7 @@ test("translates dynamic counts and adapter summaries", () => {
   );
 });
 
-test("translates speech delivery and persona configuration copy", () => {
+test("translates speech delivery and role configuration copy", () => {
   assert.equal(translateText("基础资料", "en"), "Profile");
   assert.equal(translateText("表达与语音", "en"), "Expression & voice");
   assert.equal(translateText("虚拟形象", "en"), "Virtual avatar");
@@ -59,8 +59,8 @@ test("translates speech delivery and persona configuration copy", () => {
   assert.equal(translateText("自动化", "en"), "Automation");
   assert.equal(translateText("热投递", "en"), "Hot delivery");
   assert.equal(
-    translateText("开启（hot）：每段 ASR 立即投递。关闭（keyword）：未命中关键词时只记录，命中当前人格关键词时才投递。", "en"),
-    "On (hot): deliver every ASR segment immediately. Off (keyword): record without waking when no keyword matches, and deliver only when a current-persona keyword matches."
+    translateText("开启（hot）：每段 ASR 立即投递。关闭（keyword）：未命中关键词时只记录，命中当前角色关键词时才投递。", "en"),
+    "On (hot): deliver every ASR segment immediately. Off (keyword): record without waking when no keyword matches, and deliver only when a current-role keyword matches."
   );
   assert.equal(translateText("语音唤醒关键词", "en"), "Speech wake-up keywords");
   assert.equal(translateText("最近消息上下文", "en"), "Recent message context");
@@ -71,8 +71,8 @@ test("translates speech delivery and persona configuration copy", () => {
   assert.equal(translateText("标记下一段", "en"), "Mark the next recording");
   assert.equal(translateText("已找到 2 个本次候选", "en"), "2 candidates found for this attempt");
   assert.equal(
-    translateText("当前关键词为空：转写会继续记录，但不会唤醒 Agent。建议至少加入人格名和常用称呼。", "en"),
-    "The keyword list is empty: transcripts will still be recorded, but the Agent will not wake. Add at least the persona name and common forms of address."
+    translateText("当前关键词为空：转写会继续记录，但不会唤醒 Agent。建议至少加入角色名和常用称呼。", "en"),
+    "The keyword list is empty: transcripts will still be recorded, but the Agent will not wake. Add at least the role name and common forms of address."
   );
   assert.equal(
     translateText("Speaker 1 / Speaker 2 只是当前会话里的分段标签，不是生物声纹身份。", "en"),
@@ -136,8 +136,8 @@ test("translates Quick setup copy across all three steps", () => {
     ["远端 Agent 是下游 Agent 设备入口；远端设备只运行独立 bridge，无人值守等待 RabiGUI 扫描。保存后在“消息适配器”页扫描局域网，选择设备并输入密码连接。", "Remote Agent is an input for downstream Agent devices. The remote device runs only the standalone bridge and waits unattended for RabiGUI discovery. After saving, scan the LAN on Message adapters, select the device, and enter its password."],
     ["快速配置只绑定一个 Agent；先确定处理端和项目目录，再选择会话。", "Quick setup binds one Agent. Choose the handler and project directory first, then select a task."],
     ["Codex/ChatGPT Desktop 是真实消息的唯一 owner。RabiRoute 读取 Desktop 可见任务目录并通过 Desktop IPC 投递；Codex CLI 是独立 Runtime，不作为 Desktop 投递的备用路径。", "Codex/ChatGPT Desktop is the sole owner of real messages. RabiRoute reads Desktop-visible tasks and delivers through Desktop IPC. Codex CLI is a separate runtime and is not a fallback for Desktop delivery."],
-    ["人格可选与配置确认", "Optional persona and configuration review"],
-    ["不配置人格时，只按消息入口默认模板把来源和回传 API 投递给 Agent。", "Without a persona, the default input template sends only the source and send API to the Agent."],
+    ["角色可选与配置确认", "Optional role and configuration review"],
+    ["不配置角色时，只按消息入口默认模板把来源和回传 API 投递给 Agent。", "Without a role, the default input template sends only the source and send API to the Agent."],
     ["会话名 + 最后会话时间", "Task name + last activity"],
     ["选择已有会话，或输入新会话名", "Select an existing task or enter a new task name"]
   ]);
@@ -145,7 +145,7 @@ test("translates Quick setup copy across all three steps", () => {
   for (const [source, expected] of copy) {
     assert.equal(translateText(source, "en"), expected, source);
   }
-  assert.equal(translateText("人格 ID · XinghaiBuilder", "en"), "Persona ID · XinghaiBuilder");
+  assert.equal(translateText("角色 ID · XinghaiBuilder", "en"), "Role ID · XinghaiBuilder");
   assert.equal(translateText("自动：RabiRoute", "en"), "Automatic: RabiRoute");
   assert.equal(translateText("已复制 RabiLink 回调地址", "en"), "RabiLink callback URL copied");
 });
@@ -279,8 +279,8 @@ test("translates rule metadata while preserving configured names and regex", () 
   assert.equal(translateText("Rabi 看板娘呼唤", "en"), "Rabi 看板娘呼唤");
 });
 
-test("translates persona automation labels and generated summaries", () => {
-  assert.equal(translateText("人格自动化", "en"), "Persona automation");
+test("translates role automation labels and generated summaries", () => {
+  assert.equal(translateText("角色自动化", "en"), "Role automation");
   assert.equal(translateText("使用基础消息内容，不附加额外说明", "en"), "Use the base message without additional guidance");
   assert.equal(translateText("每 900 秒，09:00–18:00", "en"), "Every 900 seconds, 09:00–18:00");
   assert.equal(translateText("运行 tools/check.cmd", "en"), "Run tools/check.cmd");
@@ -308,5 +308,5 @@ test("translates dynamic diagnostic copy without changing runtime values", () =>
 
 test("leaves unknown user data and Chinese locale text unchanged", () => {
   assert.equal(translateText("QQ 消息监听", "en"), "QQ 消息监听");
-  assert.equal(translateText("人格配置", "zh-CN"), "人格配置");
+  assert.equal(translateText("角色配置", "zh-CN"), "角色配置");
 });

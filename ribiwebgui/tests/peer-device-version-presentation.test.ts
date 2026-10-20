@@ -41,7 +41,7 @@ test("persona source options identify the local PC while preserving local and re
   const options = personaSourceOptions(meta, devices, "peer-offline");
   assert.equal(options[0].title, "本机 · Example PC");
   assert.equal(options[0].value, "", "Choosing the labelled local PC keeps the local reference key");
-  assert.equal(options[0].subtitle, "RabiPC v0.3.19 · 使用本机人格");
+  assert.equal(options[0].subtitle, "RabiPC v0.3.19 · 使用本机角色");
   assert.equal(options[1].value, "peer-a");
   assert.equal(options[1].subtitle, "RabiPC v0.3.18 · 在线 · 将自动连接");
   assert.equal(options[1].props.disabled, false);
@@ -50,7 +50,7 @@ test("persona source options identify the local PC while preserving local and re
   assert.equal(options[3].props.disabled, false, "The saved offline owner remains selectable");
   const refreshed = personaSourceOptions({ ...meta, rabiName: "Renamed PC", version: "0.3.20" }, devices, "");
   assert.equal(refreshed[0].title, "本机 · Renamed PC");
-  assert.equal(refreshed[0].subtitle, "RabiPC v0.3.20 · 使用本机人格");
+  assert.equal(refreshed[0].subtitle, "RabiPC v0.3.20 · 使用本机角色");
   assert.equal(refreshed[1].subtitle, options[1].subtitle);
   assert.equal(refreshed[3].props.disabled, true);
 });
@@ -70,5 +70,5 @@ test("both pages consume the version presentation without turning the local PC i
   assert.match(home, /v-if="device\.isLocal"/);
   assert.match(home, /rabiLinkDeviceVersionLabel\(device, t\)/);
   assert.match(persona, /buildPersonaSourceOptions\(store\.meta, remotePersona\.devices/);
-  assert.match(persona, /本机人格在本机项中选择；远端列表仅列出其他 PC。/);
+  assert.match(persona, /label="角色来源 PC"/);
 });

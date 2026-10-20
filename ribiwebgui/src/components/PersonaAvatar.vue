@@ -34,9 +34,9 @@ watch(() => props.avatarUrl, () => {
     :size="size"
     :rounded="rounded"
     color="secondary"
-    :aria-label="roleId ? `${roleId} 人格头像` : '人格头像'"
+    :aria-label="roleId ? `${roleId} 角色头像` : '角色头像'"
   >
-    <v-img v-if="showImage" :src="authenticatedAvatarUrl" :alt="roleId ? `${roleId} 人格头像` : '人格头像'" cover @error="failed = true" />
+    <v-img v-if="showImage" :src="authenticatedAvatarUrl" :alt="roleId ? `${roleId} 角色头像` : '角色头像'" cover @error="failed = true" />
     <span v-else-if="roleId" class="persona-avatar__fallback" :style="fallbackStyle" aria-hidden="true">{{ initial }}</span>
     <v-icon v-else aria-hidden="true">mdi-account-off-outline</v-icon>
   </v-avatar>

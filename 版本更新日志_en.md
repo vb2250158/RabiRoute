@@ -6,6 +6,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.63 - 2026-10-20
+
+- Collect the Elysia role-centric source: independent role catalog and configuration saves, selectable unbound roles, and navigation ordered Role configuration, Plans and memory, Route configuration.
+- Add archive, restore and permanent deletion guarded by references and admitted work, with revisions, idempotent receipts and original-request recovery. Preserve persona.md, personaConfig.json and machine identifiers.
+- Audit atomic role-file publication without configuration contents, and reject mutation methods on read-only reference queries so they cannot accidentally restore archived roles.
+- Preserve main's unified message-type navigation, scheduled tasks, direct editor creation and remote enrollment. Exclude unrelated companion observation and brief-message changes mixed into the old workspace.
+- Source collection, builds and isolated tests only: no installation, activation or Host restart. Production-page and physical-device acceptance require separate authorization.
+
 ## 0.3.62 - 2026-10-20
 
 - Make companionship regression fixtures work from a clean checkout by using the system temporary directory for persona, interaction-state and outside-root fixtures, without a pre-existing `.cache` directory.

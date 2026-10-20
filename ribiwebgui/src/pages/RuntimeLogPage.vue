@@ -324,7 +324,7 @@ async function deleteCurrentGateway(): Promise<void> {
         <div v-else class="empty-state">
           <div>
             <strong>暂无可手动触发的规则</strong>
-            <span>请先在人格模板里新增 manual_trigger 或 heartbeat 规则。</span>
+            <span>请先在角色模板里新增 manual_trigger 或 heartbeat 规则。</span>
           </div>
         </div>
       </v-card>

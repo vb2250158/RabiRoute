@@ -19,7 +19,7 @@
 - [查看设备并测试动作](user-guide/home-devices.md) — 查看设备卡片、能力和状态，并测试已接通的设备动作。
 - [工作区计划查询](workspace-plan-query.md) — 按宿主会话与工作区过滤的分页搜索接口。
 
-- [人格全天记录](persona-all-day-recording.md) — **新增实现**。按日期查看电脑与已选择手机的时间轴和事件，明确采集来源、暂停状态和记录缺口。
+- [角色全天记录](persona-all-day-recording.md) — **新增实现**。按日期查看电脑与已选择手机的时间轴和事件，明确采集来源、暂停状态和记录缺口。
 
 - [RibiWebGUI 使用手册](user-guide/README.md) — **现行指南**。第一次使用时从这里开始，完成一条真实投递，并学会看状态、改规则和处理常见失败。
 - [快速上手](getting-started.md) — **现行指南**。完成安装，启动 Manager，并确认浏览器能打开控制台。
@@ -40,10 +40,10 @@
 - [排障](troubleshooting.md) — NapCat、编码、Codex Desktop 任务归属、模型与审批边界。
 - [Windows 启动与打包](windows-launcher-and-packaging.md) — Windows 安装、启动和打包方式。
 - [Linux Host](linux-host.md) — **新增实现**。在 Linux 构建并打开 WebGUI，查询当前地址、安全停止应用，并了解 RabiLink 配置与待验收边界。
-- [区分电脑与重置实例 ID](user-guide/instance-identity.md) — 修复复制配置后两台电脑共用身份，让远端电脑能独立出现在人格来源中。
+- [区分电脑与重置实例 ID](user-guide/instance-identity.md) — 修复复制配置后两台电脑共用身份，让远端电脑能独立出现在角色来源中。
 - [NapCat 无值守](napcat-unattended.md) — QQ 登录状态、快速登录、Manager 恢复和守护边界。
 
-## 接入开发：路由、人格与 Agent 接口
+## 接入开发：路由、角色与 Agent 接口
 
 - [家庭设备与音箱 Agent 接口](home-device-agent-api.md) — 查询全部已接入实体、发现并调用其按钮／设置／设备动作、绑定文字播报并查询幂等回执。
 - [扫地机云地图连接](vacuum-cloud-map.md) — 米家扫码、原始文件及 version-2 解码合同；实时定位和导航仍待验收。
@@ -52,12 +52,12 @@
 - [计划与记忆摘要搜索](knowledge-search.md)
 - [自动化 Agent 投递](automation-agent-delivery.md) — 接收者引用、指定会话、迁移和重试。
 - [路由配置](routing-configuration.md) — **现行指南**。`personaConfig.json`、route kind、regex、schedule、pipeline 和模板变量。
-- [路由与人格](routing-and-personas.md) — **现行指南**。route 与 role 的边界、人格包和消息模板判断框架。
-- [本机路由使用远端人格](remote-persona-reference.md) — **0.3.19 实验实现**。选择同一 RabiLink 应用中的来源 PC 和人格，自动握手并只读资料，沿用本机消息端与处理 Agent；真实双 PC 投递仍待验收。
-- [Agent 上下文注入](agent-context-injection.md) — **现行指南**。人格级统一双向账本、分消息端/会话的最近消息额度、归档边界，以及 `AgentPacket` 中的人格目录、跨人格投递凭据、路径和回复上下文。
+- [路由与角色](routing-and-personas.md) — **现行指南**。route 与 role 的边界、角色包和消息模板判断框架。
+- [本机路由使用远端角色](remote-persona-reference.md) — **0.3.19 实验实现**。选择同一 RabiLink 应用中的来源 PC 和角色，自动握手并只读资料，沿用本机消息端与处理 Agent；真实双 PC 投递仍待验收。
+- [Agent 上下文注入](agent-context-injection.md) — **现行指南**。角色级统一双向账本、分消息端/会话的最近消息额度、归档边界，以及 `AgentPacket` 中的角色目录、跨角色投递凭据、路径和回复上下文。
 - [桌宠移动接口](desktop-pet-agent-motion.md) — 移动桌宠并查询实际抵达、打断与不确定回执。
 - [桌宠气泡与语音](desktop-pet-bubbles.md) — 显示角色说话文字，自定义猫爪气泡、字体、配色与停留时间。
-- [Rabi Agent 接口](rabi-agent-interfaces.md) — **当前合同**。处理端如何回复、查询可联系人格、进行带幂等回执的单向跨人格投递，以及使用 thread bridge、计划、记忆、Remote Agent 和多实例 API。
+- [Rabi Agent 接口](rabi-agent-interfaces.md) — **当前合同**。处理端如何回复、查询可联系角色、进行带幂等回执的单向跨角色投递，以及使用 thread bridge、计划、记忆、Remote Agent 和多实例 API。
 - [计划和记忆机制](plan-and-memory-model.md) — **现行指南**。Role Knowledge 的文件真源、召回和整理副作用。
 - [动态整理记录统一规范](dynamic-record-lifecycle.md) — **现行指南**。统一归档、记忆沉淀、物理分卷、保留策略和 24/72 小时动态窗口的边界与验收。
 - [Pipeline presets](pipeline-presets.md) — Agent 会话、明确外部目标和 Outbox 状态；其中 FenneNote 输出章节仅为归档兼容说明。
@@ -68,8 +68,8 @@
 - [手机代眼镜建立连接](device-peer-connection.md) — **实验实现**。核验设备凭据、独立密钥与短期连接授权，让手机转发时保留眼镜身份。
 - [Agent 精确投递与正式回复](agent-endpoint-delivery.md) — **实验实现**。核验来源与目标 owner、原消息回执和必回复记录，处理超时及身份撤销。
 - [Codex Desktop Agent 接入与验收合同](codex-desktop-agent-acceptance.md) — **当前事实**。稳定 ID、按需扫描、自动初始化、Desktop 唯一 owner 和元数据 bootstrap 安全门。
-- [Rabi Codex Context 插件](rabi-codex-context-plugin.md) — **统一 Manager 版本**。Hook 只转发真实 Codex session 事件并注入 Rabi PC 返回的统一人格、计划、记忆与技能上下文。
-- [人格数据同步退役说明](persona-data-sync.md) — **已退役**。不再提供自动/手动同步或同步 API；改用现有 RabiLink 远端人格、Agent 与数据访问，不复制数据，保留历史资料。
+- [Rabi Codex Context 插件](rabi-codex-context-plugin.md) — **统一 Manager 版本**。Hook 只转发真实 Codex session 事件并注入 Rabi PC 返回的统一角色、计划、记忆与技能上下文。
+- [角色数据同步退役说明](persona-data-sync.md) — **已退役**。不再提供自动/手动同步或同步 API；改用现有 RabiLink 远端角色、Agent 与数据访问，不复制数据，保留历史资料。
 
 ## 维护开发：架构、构建与诊断
 
@@ -88,7 +88,7 @@
 - [路径与目录规范](path-and-directory-conventions.md) — **当前维护规范**。区分软件目录、公开示例、本机运行数据和日志，并规定 API 中相对路径与业务 ID 的写法。
 - [项目技能的分发与漂移检测](project-skill-distribution.md) — **现行维护规范**。RabiRoute 拥有的技能安装到项目 `.agents/skills/` 后的本地化副本与基线记录，以及 Agent 用来报告上游漂移、移植、再记基线的只读命令。
 - [PR 安全门禁](maintainer-security-gates.md) — **现行维护指南**。秘钥扫描、生产依赖审计、CodeQL、最小权限和合并保护要求。
-- [Manager 运行稳定性与故障证据](manager-runtime-resilience.md) — **现行指南**。崩溃日志、单实例、人格索引非致命持久化、watchdog 退避恢复与浸泡验收。
+- [Manager 运行稳定性与故障证据](manager-runtime-resilience.md) — **现行指南**。崩溃日志、单实例、角色索引非致命持久化、watchdog 退避恢复与浸泡验收。
 
 ## 实验集成
 
@@ -102,7 +102,7 @@
 - [飞书独立消息端接入](feishu-integration.md) — 飞书应用事件订阅、签名/加密回调、持久去重与来源 chat 回发。
 - [视频生成插件](video-generation-plugin.md) — 选择本机或已连接电脑的模型，提交生成任务，并在当前工作台保存、预览和下载作品。
 - [语音交互工作站](voice-interaction-workstation.md) — 历史工作站接线记录；FenneNote/OumuQ 已停止维护，现行入口是 RabiPC + RabiSpeech。
-- [RabiSpeech 本机 TTS / ASR 服务](rabispeech-plugin.md) — 本机直接 API、热投递/人格关键词唤醒、人格声线与语言、双向 ASR/TTS 记录、不透明声纹/聚类证据和 RabiLink 中转。滑词菜单的朗读子功能会把选中文字送进本机 TTS 队列。
+- [RabiSpeech 本机 TTS / ASR 服务](rabispeech-plugin.md) — 本机直接 API、热投递/角色关键词唤醒、角色声线与语言、双向 ASR/TTS 记录、不透明声纹/聚类证据和 RabiLink 中转。滑词菜单的朗读子功能会把选中文字送进本机 TTS 队列。
 - [远端调用 TTS 与 ASR](user-guide/speech-api.md) — 应用 token、目标 PC、可复制命令、验收与错误恢复。
 - [Rabi 语音客户端](../desktop/rabi-voice-client/README.md) — 把会议室 Windows 电脑作为局域网远程麦克风和喇叭，切句与模型仍留在 RabiSpeech 主机。
 - [本地语音模型下载说明](local-speech-model-downloads.md) — 使用模型管理页按需下载，并查看每个 TTS/ASR 模型的来源、隔离环境与验证要求。
@@ -128,7 +128,7 @@
 - [PC 知识桥运行配置](rabilink-knowledge-runtime.md) — 复用 Manager 知识接口、应用鉴权与就绪确认。
 - [知识写入回执查询](rabilink-knowledge-operation-receipts.md) — 按真实设备凭据查询原操作键的持久回执，未知结果不重放。
 - [新版 AIUI Agent 验收](aiui-agent-acceptance.md) — 开发维护：按新版合同核验构建、运行、硬件唤醒和语音交互，查看待完成项。
-- [AIUI 通用接口与连接](../apps/rabilink-aiui/docs/generic-api-transport.md) — 任意公开接口、目标电脑、人格归属和传输验证范围。
+- [AIUI 通用接口与连接](../apps/rabilink-aiui/docs/generic-api-transport.md) — 任意公开接口、目标电脑、角色归属和传输验证范围。
 - [RabiLink AIUI 常驻边界](rabilink-aiui-residency-plan.md) — 已实现链路与常驻能力限制混合文档，阅读时区分代码事实和计划。
 - [RabiLink 主动智能需求](rabilink-active-intelligence-requirements.md) — 用户状态、情景识别、群消息命中计划/记忆后的处理闭环和主动介入的目标合同与实施追踪，不等同于全部完成。
 - [RabiLink 原生应用设计](rabilink-glasses-app-design.md) — 手机/眼镜体验设计。
@@ -138,10 +138,11 @@
 
 ## 设计与历史
 
+- [以角色为主的配置架构](role-centric-architecture.md) — 独立角色选择、角色配置 / 计划与记忆 / 路由配置导航、归档与彻底删除，以及数据归属、迁移和验收条件。本变更仅收集源码与隔离验证，不安装。
 - [RabiLink 全天记录统一设计](rabilink-all-day-recording.md) — **设计 / 实施中，尚未整体验收**。手机、眼镜、手表唯一协调 owner，模式与暂停分离、通知、可靠记录/转写、隐私边界、无损迁移和验收合同。
 - [主动智能系统设计总纲](../主动智能设计思路.md) — **设计中**。描述持续感知、用户性格与偏好、心理状态、情景识别、主动行动、记忆和设备分工；当前实现范围以“当前能力与成熟度”为准。
 - [对话消息收集、消息组与四类 Agent 协作](group-message-batching-and-triage-plan.md)（[HTML 架构预览](group-message-batching-and-triage-plan.html)）— **实验支持**。自然语言消息可先立即记录并等待合并，再综合引用消息对应的 Agent 会话、原消息组、会话、说话人和消息端熟悉度，交给动态 Codex 消息处理 Agent；真实群聊/私聊和四类 Agent 完整联调仍待验收。
-- [人格路由工作台计划](persona-route-workbench-plan.md) — **部分实现**。语音关键词和分端上下文控件已实现；Dry-run RouteDecision / AgentPacket 预览尚未实现。
+- [角色路由工作台计划](persona-route-workbench-plan.md) — **部分实现**。语音关键词和分端上下文控件已实现；Dry-run RouteDecision / AgentPacket 预览尚未实现。
 - [WorkBuddy 作为 Agent 端接入方案](workbuddy-agent-adapter-plan.md) — **已实现，凭据需手工一步**。把 WorkBuddy 任务接成处理端：会话进程描述文件、任务真源、本地网关 API、投递报文格式与同 ID 复投均已实测通过；网关凭据需在本地忽略文件一次性录入，成熟度仍为 `experimental`。
 - [Windows 托盘任务窗口计划](rabiroute-windows-tray-task-window-plan.md) — 设计记录；实际实现以 `desktop/tray-task-window/` 和打包文档为准。
 - [UE/UX 审计与重构](rabiroute-ue-ux-audit-and-refactor.md) — 阶段性审计。

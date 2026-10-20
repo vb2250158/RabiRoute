@@ -16,7 +16,7 @@ const recipients = computed(() => normalizeAgentRecipients(props.gateway.agentRe
 const choices = computed(() => [...recipients.value.map(item => {
   const primary = resolvePrimaryAgentTarget(props.gateway);
   const feature = item.executor === "message_pool" ? "messageProcessingAgent" : item.executor === "memory_consolidation" ? "memoryConsolidationAgent" : item.executor === "plan_secretary" ? "planAssistantSessions" : undefined;
-  const reason = !primary ? t("未配置主人格 Agent")
+  const reason = !primary ? t("未配置主角色 Agent")
     : feature && !agentAdapterSupportsManagedTaskFeature(primary.provider, feature) ? t("当前 Agent 不支持此接收者")
     : item.executor === "plan_secretary" && !props.gateway.codexPlanAssistantSessions?.length ? t("未配置计划秘书会话") : "";
   return { title: t(item.name), value: item.id, description: reason, props: { disabled: Boolean(reason) } };
@@ -157,7 +157,7 @@ const recipientHint = computed(() => {
   return t(recipient.executor === "plan_secretary" ? "发送给这条消息关联计划的秘书。"
     : recipient.executor === "message_pool" ? "由消息处理池分配会话。"
     : recipient.executor === "memory_consolidation" ? "发送给已配置的记忆整理 Agent。"
-    : "使用 Agent 设置中的主人格会话。修改绑定后，这条规则会自动跟随。");
+    : "使用 Agent 设置中的主角色会话。修改绑定后，这条规则会自动跟随。");
 });
 function searchSessions(value: string) {
   query.value = value || "";

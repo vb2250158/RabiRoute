@@ -22,9 +22,9 @@ watch([() => props.gateway.agentRoleId, options], ([role, available], previous) 
 const settings = computed(() => (selected.value && props.modelValue?.byAgent?.[selected.value])
   || props.modelValue || agentHookSettingsFor(undefined));
 const fields = [
-  { key: "sessionContextEnabled", title: "会话上下文", note: "开始会话或提交消息时附带当前人格、计划和记忆。", events: "SessionStart / UserPromptSubmit" },
+  { key: "sessionContextEnabled", title: "会话上下文", note: "开始会话或提交消息时附带当前角色、计划和记忆。", events: "SessionStart / UserPromptSubmit" },
   { key: "reasoningContextEnabled", title: "工具调用时刷新上下文", note: "工具调用前后补充本轮新命中的计划、记忆与技能。", events: "PreToolUse / PostToolUse" },
-  { key: "planTaskCompletionEnabled", title: "计划任务完成通知", note: "绑定计划的任务结束后，通知该人格的消息路线。", events: "Stop" },
+  { key: "planTaskCompletionEnabled", title: "计划任务完成通知", note: "绑定计划的任务结束后，通知该角色的消息路线。", events: "Stop" },
   { key: "agentCommunicationEnforcementEnabled", title: "通过 Rabi 投递 Agent 消息", note: "要求托管任务通过 Rabi 联系其他 Agent；需要回复时跟踪正式回传。", events: "PreToolUse / Stop" }
 ] as const;
 const selectedTitle = computed(() => options.value.find(item => item.value === selected.value)?.title || "");
@@ -56,7 +56,7 @@ function update(patch: Partial<Omit<CodexHookSettings, "byAgent">>) {
 <template>
   <section class="persona-hooks">
     <v-alert v-if="!options.length" type="info" variant="tonal" density="compact">
-      当前人格尚未添加支持钩子的 Agent 端。
+      当前角色尚未添加支持钩子的 Agent 端。
       <router-link :to="routeScopedAdaptersPath(gateway.configName || gateway.id)">前往 Agent 端设置</router-link>
     </v-alert>
     <template v-else>

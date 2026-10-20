@@ -142,7 +142,7 @@ test("saving a DSH route resolves or creates once and persists the complete sess
     name: "Rabi DSH",
     agentAdapters: ["dsh"],
     dshSessionId: "",
-    dshSessionName: "Rabi DSH 主人格",
+    dshSessionName: "Rabi DSH 主角色",
     dshCwd: process.cwd(),
     dshBaseUrl: "http://127.0.0.1:33080"
   };
@@ -167,12 +167,12 @@ test("saving a DSH route resolves or creates once and persists the complete sess
     action: "resolve",
     agentAdapter: "dsh",
     threadId: undefined,
-    title: "Rabi DSH 主人格",
+    title: "Rabi DSH 主角色",
     cwd: process.cwd(),
     createIfMissing: true,
     dshBaseUrl: "http://127.0.0.1:33080"
   }]);
   assert.equal(gateway.dshSessionId, "session-00000000-0000-4000-8000-000000000041");
-  assert.equal(gateway.dshSessionName, "Rabi DSH 主人格");
+  assert.equal(gateway.dshSessionName, "Rabi DSH 主角色");
   assert.equal(gateway.dshCwd, process.cwd());
 });

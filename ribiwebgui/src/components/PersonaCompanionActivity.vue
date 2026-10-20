@@ -239,10 +239,10 @@ onBeforeUnmount(() => {
     </div>
     <div v-if="!active" class="companion-options">
       <v-checkbox v-model="autoReview" label="随内容变化主动回应" hide-details />
-      <v-checkbox v-model="voice" label="使用人格语音" hide-details />
+      <v-checkbox v-model="voice" label="使用角色语音" hide-details />
       <v-checkbox v-model="saveSummary" label="结束时保存进度与本次讨论" hide-details />
     </div>
-    <p class="section-note">陪伴模式跟随前台窗口，可自动识别，也可选择观看、游戏、工作或安静陪伴。工作时保持安静，需要帮助时再开口。当前画面会交给本人格的 Agent；语音按钮只在按下后录入你的话。</p>
+    <p class="section-note">陪伴模式跟随前台窗口，可自动识别，也可选择观看、游戏、工作或安静陪伴。工作时保持安静，需要帮助时再开口。当前画面会交给本角色的 Agent；语音按钮只在按下后录入你的话。</p>
     <div class="companion-controls">
       <v-btn color="primary" :loading="busy" @click="shareWindow">开启陪伴模式</v-btn>
       <v-btn :disabled="busy" @click="fileInput?.click()">打开本地视频</v-btn>

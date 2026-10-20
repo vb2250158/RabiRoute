@@ -29,7 +29,7 @@ export function systemEventRuleForRouteKind(
       id: extraValues.automationRuleId.trim(),
       name: typeof extraValues.automationRuleName === "string" && extraValues.automationRuleName.trim()
         ? extraValues.automationRuleName.trim()
-        : "人格定时任务",
+        : "角色定时任务",
       enabled: true,
       routeKinds: ["heartbeat"],
       template: typeof extraValues.automationTemplate === "string" ? extraValues.automationTemplate : ""

@@ -73,8 +73,8 @@ test("scoped upsert changes only one route file, supports rename, and exposes du
     const saved = executeRouteCatalogTransaction(mutation);
     assert.deepEqual(saved.gateways.map(row => row.id), ["a", "renamed"]);
     assert.equal(fs.readFileSync(aPath, "utf8"), before, "unrelated adapter file is untouched");
-    assert.equal(saved.gateways.find(row => row.id === "renamed")?.recentMessageLimits?.napcat, 25);
-    assert.equal(saved.gateways.find(row => row.id === "a")?.recentMessageLimits?.napcat, 25, "shared persona has one authoritative value");
+    assert.equal(saved.gateways.find(row => row.id === "renamed")?.recentMessageLimits?.napcat, 12, "Route edits cannot change role-owned limits");
+    assert.equal(saved.gateways.find(row => row.id === "a")?.recentMessageLimits?.napcat, 12, "shared role configuration stays unchanged by Route edits");
     const replay = executeRouteCatalogTransaction(mutation);
     assert.equal(replay.routeConfigHash, saved.routeConfigHash);
     const recovered = executeRouteCatalogTransaction(transaction(rootDir, "resolve", "resolve", { kind: "capture", resolveOperationId: "scoped" }));
@@ -119,7 +119,7 @@ test("child transaction recaptures after each mutation and enforces the expected
   try {
     const personaDir = path.join(rootDir, "data", "roles", "DaiMao");
     fs.mkdirSync(personaDir, { recursive: true });
-    fs.writeFileSync(path.join(personaDir, "persona.md"), "# 呆猫人格提示词\n", "utf8");
+    fs.writeFileSync(path.join(personaDir, "persona.md"), "# 呆猫角色提示词\n", "utf8");
     fs.writeFileSync(path.join(personaDir, "avatar.png"), Buffer.from([1, 2, 3]));
     fs.writeFileSync(path.join(personaDir, "personaConfig.json"), JSON.stringify({ avatar: "avatar.png" }));
     fs.mkdirSync(path.join(personaDir, "voice"));
@@ -156,7 +156,7 @@ test("child transaction recaptures after each mutation and enforces the expected
       { roleId: "Rabi", isPersona: false, displayName: "Rabi", avatarConfigured: false }
     ]);
     assert.match(first.personas[0].avatarVersion ?? "", /^\d+-3$/);
-    assert.equal(first.personas[0].files[0].content, "# 呆猫人格提示词\n");
+    assert.equal(first.personas[0].files[0].content, "# 呆猫角色提示词\n");
     assert.deepEqual(first.personas[0].speech, {
       voiceReady: true,
       defaultModel: "local-tts",
