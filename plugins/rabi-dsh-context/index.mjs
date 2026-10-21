@@ -9,7 +9,7 @@ function textContent(message) {
 function contextMessage(text) {
   // Mark injected context as plugin-originated so it is not submitted again.
   return { id: randomUUID(), role: 'user', content: [{ type: 'text', text }],
-    source: { kind: 'plugin', plugin: 'rabi-dsh-context', form: 'notice', summary: 'Rabi 角色上下文' } };
+    source: { kind: 'rabi-dsh-context', form: 'notice', summary: 'Rabi 角色上下文' } };
 }
 
 /** Thin lifecycle adapter: all decisions and context remain owned by Manager. */
@@ -17,7 +17,7 @@ export function apply(ctx, config = {}, request = requestHook) {
   const starts = new Map();
   const finals = new Map();
   const turns = new Map();
-  const status = { version: '0.1.0', lastError: '' };
+  const status = { version: '0.1.2', lastError: '' };
   const invoke = async (agent, eventName, fields = {}) => {
     // Every lifecycle decision is delegated to Manager; this adapter only
     // translates DSH event fields and keeps the host usable on failures.
@@ -50,7 +50,7 @@ export function apply(ctx, config = {}, request = requestHook) {
       starts.delete(agent.id);
       if (data.additionalContext) contexts.push(data.additionalContext);
     }
-    const prompt = messages.filter(message => message.source?.plugin !== 'rabi-dsh-context').map(textContent).filter(Boolean).join('\n');
+    const prompt = messages.filter(message => message.source?.kind !== 'rabi-dsh-context').map(textContent).filter(Boolean).join('\n');
     if (prompt) {
       const data = await invoke(agent, 'UserPromptSubmit', { prompt, turnId: String(turn) });
       if (data.additionalContext) contexts.push(data.additionalContext);

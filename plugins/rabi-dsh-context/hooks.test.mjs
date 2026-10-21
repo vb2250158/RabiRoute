@@ -18,7 +18,12 @@ test('DSH forwards lifecycle identity and obeys Manager decisions without local 
   const messages = [{ content: [{ type: 'text', text: 'hello' }] }];
   const decision = await handlers.get('agent/pre-step')({ agent, messages, turn: 3 }, async () => ({ kind: 'enter', messages }));
   assert.equal(decision.messages.length, 2);
+  assert.deepEqual(decision.messages[1].source, { kind: 'rabi-dsh-context', form: 'notice', summary: 'Rabi 角色上下文' });
   assert.deepEqual(requests.slice(0, 2).map(item => item.eventName), ['SessionStart', 'UserPromptSubmit']);
+  const requestCount = requests.length;
+  const retainedContext = [decision.messages[1]];
+  await handlers.get('agent/pre-step')({ agent, messages: retainedContext, turn: 3 }, async () => ({ kind: 'enter', messages: retainedContext }));
+  assert.equal(requests.length, requestCount);
   let executed = false;
   const denied = await handlers.get('tools/pre-execute')({ agent, name: 'pwsh', arguments: {}, callId: 'call-1' }, async () => { executed = true; });
   assert.equal(denied.kind, 'deny');

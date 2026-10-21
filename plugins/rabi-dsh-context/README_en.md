@@ -11,3 +11,5 @@ Follow the [shared Agent integration requirements](../../docs/agent-adapter-stan
 This event plugin can coexist with DSH messaging tools. Restrictions imposed by an older messaging plugin remain controlled by that plugin.
 
 Plugin list names and descriptions follow the DSH Chinese or English language setting.
+
+Injected messages use the producer source `source.kind=rabi-dsh-context` for DSH V4 sessions. Subsequent user-prompt submissions exclude context from that same source to avoid sending the plugin's own content back to Manager.

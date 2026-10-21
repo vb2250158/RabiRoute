@@ -6,6 +6,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.65 - 2026-10-21
+
+- Update rabi-dsh-context to 0.1.2. Injected messages use a producer-owned source.kind, fixing failed turns when DSH V4 sessions reject the generic plugin source. Text injected by the plugin is excluded from subsequent user-prompt submissions to Manager. Lifecycle decisions and connection behavior remain unchanged.
+- Add regression assertions for the message source and self-context filtering, and update both plugin READMEs.
+
 ## 0.3.64 - 2026-10-20
 
 - Integrate pending main-checkout mobile recording and messaging UI, continuous desktop companion frames and playback-audio observations, and brief message delivery. Preserve upstream independent role configuration, unified message-rule navigation and remote enrollment fixes.
