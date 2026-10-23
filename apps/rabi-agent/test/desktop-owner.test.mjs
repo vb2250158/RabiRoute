@@ -4,8 +4,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { __test } from "../rabi-agent.mjs";
 
+const packageRoot = fileURLToPath(new URL("..", import.meta.url));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
 async function waitFor(check, timeout = 15000) {
@@ -14,7 +16,7 @@ async function waitFor(check, timeout = 15000) {
   throw new Error("Desktop fixture timed out.");
 }
 function launch(executable, args, options = {}) {
-  const child = spawn(executable, args, { windowsHide: true, stdio: ["pipe", "pipe", "pipe"], ...options });
+  const child = spawn(executable, args, { cwd: packageRoot, windowsHide: true, stdio: ["pipe", "pipe", "pipe"], ...options });
   let output = ""; let errors = "";
   child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
   child.stdout.on("data", value => { output += value; });
@@ -42,7 +44,7 @@ test("public runtime snapshots exclude credentials and message content; reconnec
 });
 
 test("a child mode without the main-program IPC cannot start an independent connector", async () => {
-  const child = launch(process.execPath, [path.resolve("apps/rabi-agent/rabi-agent.mjs"), "--run"], {
+  const child = launch(process.execPath, [path.join(packageRoot, "rabi-agent.mjs"), "--run"], {
     env: { ...process.env, RABI_AGENT_SUPERVISED: "1", RABI_AGENT_UPDATE_CANDIDATE: "0" }
   });
   assert.equal(await child.closed, 1);
@@ -50,7 +52,7 @@ test("a child mode without the main-program IPC cannot start an independent conn
 });
 
 test("native tray renders owner snapshots and exits when its owner pipe closes", { skip: process.platform !== "win32" }, async t => {
-  const script = path.resolve("apps/rabi-agent/desktop/tray.ps1");
+  const script = path.join(packageRoot, "desktop", "tray.ps1");
   const ui = launch("powershell.exe", ["-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-File", script]);
   t.after(() => { if (alive(ui.child.pid)) ui.child.kill(); });
   await waitFor(() => ui.output().includes('"type":"ready"'));
@@ -75,7 +77,8 @@ setInterval(()=>{},1000);
 `);
   if (process.platform === "win32") {
     fs.mkdirSync(path.join(root, "desktop"));
-    fs.copyFileSync(path.resolve("apps/rabi-agent/desktop/tray.ps1"), path.join(root, "desktop", "tray.ps1"));
+    fs.copyFileSync(path.join(packageRoot, "desktop", "tray.ps1"), path.join(root, "desktop", "tray.ps1"));
+    fs.copyFileSync(path.join(packageRoot, "desktop", "rabi-agent.ico"), path.join(root, "desktop", "rabi-agent.ico"));
   }
   __test.writeCurrentRelease(config, entry, "a".repeat(64));
   const pointerBytes = fs.readFileSync(path.join(root, "current-release.json"));
@@ -149,10 +152,23 @@ test("startup settings use the main owner and preserve foreign startup files", {
 test("native menu actions submit commands and checked state only changes after owner readback", { skip: process.platform !== "win32" }, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-tray-menu-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const source = fs.readFileSync(path.resolve("apps/rabi-agent/desktop/tray.ps1"), "utf8");
+  const source = fs.readFileSync(path.join(packageRoot, "desktop", "tray.ps1"), "utf8");
+  fs.copyFileSync(path.join(packageRoot, "desktop", "rabi-agent.ico"), path.join(root, "rabi-agent.ico"));
   const harness = source.replace("[RabiAgentPresentation]::Run()", `
 $ui = New-Object RabiAgentPresentation
 $flags = [System.Reflection.BindingFlags]'Instance,NonPublic'
+$tray = $ui.GetType().GetField('tray',$flags).GetValue($ui)
+$window = $ui.GetType().GetField('window',$flags).GetValue($ui)
+$expected = New-Object System.Drawing.Icon([RabiAgentPresentation]::IconPath)
+$expectedSmall = New-Object System.Drawing.Icon($expected, [System.Windows.Forms.SystemInformation]::SmallIconSize)
+function IconDigest($icon) {
+  $stream = New-Object IO.MemoryStream
+  try { $icon.Save($stream); return [Convert]::ToBase64String($stream.ToArray()) } finally { $stream.Dispose() }
+}
+$trayMatches = (IconDigest $tray.Icon) -eq (IconDigest $expectedSmall)
+$windowMatches = (IconDigest $window.Icon) -eq (IconDigest $expected)
+[Console]::WriteLine('{"type":"branded-icons","tray":'+$trayMatches.ToString().ToLower()+',"window":'+$windowMatches.ToString().ToLower()+'}')
+$expectedSmall.Dispose(); $expected.Dispose()
 $data = New-Object 'System.Collections.Generic.Dictionary[string,object]'
 $data.Add('summary','已连接主机'); $data.Add('running',$true); $data.Add('busy',$false); $data.Add('startup',$true)
 $parameters = New-Object object[] 1
@@ -168,6 +184,7 @@ $ui.GetType().GetMethod('ExitThreadCore',$flags).Invoke($ui,@()) | Out-Null
   const ui = launch("powershell.exe", ["-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-File", script]);
   assert.equal(await ui.closed, 0, ui.errors());
   const events = ui.output().trim().split("\n").map(JSON.parse);
+  assert.deepEqual(events.find(event => event.type === "branded-icons"), { type: "branded-icons", tray: true, window: true });
   assert.deepEqual(events.filter(event => event.type === "command").map(event => event.action), ["pause", "reconnect", "startup", "exit"]);
   assert.equal(events.find(event => event.action === "startup").enabled, false);
   assert.equal(events.find(event => event.type === "checked-after-click").value, true);

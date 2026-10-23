@@ -16,6 +16,9 @@ function writeAgent(root: string): void {
   fs.writeFileSync(path.join(root, "rabi-agent.mjs"), "export const version = '0.9.1';\n");
   fs.writeFileSync(path.join(root, "lib", "worker.mjs"), "export const worker = true;\n");
   fs.writeFileSync(path.join(root, "ignored.txt"), "ignored\n");
+  fs.mkdirSync(path.join(root, "desktop"));
+  fs.copyFileSync(new URL("../../apps/rabi-agent/desktop/rabi-agent.ico", import.meta.url), path.join(root, "desktop", "rabi-agent.ico"));
+  fs.writeFileSync(path.join(root, "desktop", "unpublished.ico"), "not a release asset");
 }
 
 test("LAN Agent release manifest signs the published Node resources", () => {
@@ -35,7 +38,8 @@ test("LAN Agent release manifest signs the published Node resources", () => {
     fs.writeFileSync(path.join(agentRoot, "lib", "worker.mjs"), "export const worker = true;\n");
     assert.equal(manifest.platform, "node");
     assert.equal(manifest.minNodeVersion, "22.13.0");
-    assert.deepEqual(manifest.files.map(file => file.path), ["lib/worker.mjs", "package.json", "rabi-agent.mjs"]);
+    assert.deepEqual(manifest.files.map(file => file.path), ["desktop/rabi-agent.ico", "lib/worker.mjs", "package.json", "rabi-agent.mjs"]);
+    assert.deepEqual(store.readAsset("0.9.1", "node", "desktop/rabi-agent.ico"), fs.readFileSync(path.join(agentRoot, "desktop", "rabi-agent.ico")));
     assert.match(manifest.publicKeySha256, /^[a-f0-9]{64}$/);
     assert.equal(verifyLanAgentReleaseManifest(manifest, manifest.publicKeySha256), true);
     const entry = manifest.files.find(file => file.path === "rabi-agent.mjs");

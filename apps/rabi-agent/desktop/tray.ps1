@@ -14,7 +14,10 @@ using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
 public sealed class RabiAgentPresentation : ApplicationContext {
+    public static string IconPath { get; set; }
     readonly JavaScriptSerializer json = new JavaScriptSerializer();
+    readonly Icon windowIcon;
+    readonly Icon trayIcon;
     readonly NotifyIcon tray = new NotifyIcon();
     readonly Form window = new Form();
     readonly TextBox details = new TextBox();
@@ -29,6 +32,9 @@ public sealed class RabiAgentPresentation : ApplicationContext {
     bool ownerAlive = true;
 
     public RabiAgentPresentation() {
+        windowIcon = new Icon(IconPath);
+        trayIcon = new Icon(windowIcon, SystemInformation.SmallIconSize);
+        window.Icon = windowIcon;
         window.Text = "Rabi Agent · 状态与日志";
         window.Size = new Size(640, 480);
         window.StartPosition = FormStartPosition.CenterScreen;
@@ -51,7 +57,7 @@ public sealed class RabiAgentPresentation : ApplicationContext {
         manager.Click += (s,e) => Send("open-manager");
         startup.Click += (s,e) => Send("startup", !startup.Checked);
         exit.Click += (s,e) => Send("exit");
-        tray.Icon = SystemIcons.Application; tray.Text = "Rabi Agent · 正在启动";
+        tray.Icon = trayIcon; tray.Text = "Rabi Agent · 正在启动";
         tray.ContextMenuStrip = menu; tray.Visible = true;
         tray.DoubleClick += (s,e) => { window.Show(); window.Activate(); };
         // Create the dispatch handle before the reader can publish a snapshot.
@@ -92,7 +98,8 @@ public sealed class RabiAgentPresentation : ApplicationContext {
         Emit(new { type = "rendered", summary = state.Text, startup = startup.Checked, running, visible = tray.Visible });
     }
     protected override void ExitThreadCore() {
-        ownerAlive = false; tray.Visible = false; tray.Dispose(); window.Dispose(); base.ExitThreadCore();
+        ownerAlive = false; tray.Visible = false; tray.Dispose(); window.Dispose();
+        trayIcon.Dispose(); windowIcon.Dispose(); base.ExitThreadCore();
     }
     [STAThread] public static void Run() { Application.EnableVisualStyles(); Application.Run(new RabiAgentPresentation()); }
 }
@@ -104,4 +111,5 @@ if (Test-Path -LiteralPath $nativeAssembly) {
 } else {
     Add-Type -ReferencedAssemblies System.Windows.Forms,System.Drawing,System.Web.Extensions -TypeDefinition $nativeSource
 }
+[RabiAgentPresentation]::IconPath = Join-Path $PSScriptRoot 'rabi-agent.ico'
 [RabiAgentPresentation]::Run()

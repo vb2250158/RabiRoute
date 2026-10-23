@@ -8,7 +8,7 @@
 
 ## 远端 Agent 主程序与托盘
 
-`apps/rabi-agent/rabi-agent.mjs` 中的稳定启动器是远端唯一主程序，持有单实例租约、连接器/更新候选子程序、Windows 托盘子程序及启动设置写入权。首次接入直接在本进程进入该 owner，不保留另一层常驻 bootstrap。`lib/desktop-presentation.mjs` 的表现桥序列化进稳定启动器，启动 `desktop/tray.ps1` 子程序；窗口在该托盘子程序内创建。托盘只经 stdin/stdout 消费脱敏快照和提交受支持命令，不读配置或联系 Manager。连接器通过 IPC 发布真实状态；不以轮询或扫描宿主获取变化。停止主程序等待全部所属子程序退出后释放租约；主程序意外结束时连接器的 IPC disconnect 和托盘的管道 EOF 结束子程序。单次 CLI 客户端经既有身份核验通道请求同一 owner，不拥有运行状态。签名发布清单纳入唯一托盘脚本；旧节点下次正常启动采用新 owner，不重建节点或任务身份。Windows 实现和本机隔离验证见 [Rabi Agent](../apps/rabi-agent/README.md)。
+`apps/rabi-agent/rabi-agent.mjs` 中的稳定启动器是远端唯一主程序，持有单实例租约、连接器/更新候选子程序、Windows 托盘子程序及启动设置写入权。首次接入直接在本进程进入该 owner，不保留另一层常驻 bootstrap。`lib/desktop-presentation.mjs` 的表现桥序列化进稳定启动器，启动 `desktop/tray.ps1` 子程序；窗口在该托盘子程序内创建。托盘只经 stdin/stdout 消费脱敏快照和提交受支持命令，不读配置或联系 Manager。连接器通过 IPC 发布真实状态；不以轮询或扫描宿主获取变化。停止主程序等待全部所属子程序退出后释放租约；主程序意外结束时连接器的 IPC disconnect 和托盘的管道 EOF 结束子程序。单次 CLI 客户端经既有身份核验通道请求同一 owner，不拥有运行状态。签名发布清单纳入托盘脚本及其图标；旧节点下次正常启动采用新 owner，不重建节点或任务身份。Windows 实现和本机隔离验证见 [Rabi Agent](../apps/rabi-agent/README.md)。
 
 Linux 源码 Host 由 `scripts/linux-host.mjs` 和 `scripts/lib/linux-host-runtime.mjs` 拥有：复用 Manager 的 READY/健康身份合同，以内核 `flock` 保证同用户单实例，使用仅回环的当前进程控制接口。`src/linuxHostParent.ts` 在父 Host 的 IPC 断开后请求 Manager 正常退出。界面复用 WebGUI，不替代 Windows 托盘或 Qt 功能；运行和容器边界见 [Linux Host](linux-host.md)。
 

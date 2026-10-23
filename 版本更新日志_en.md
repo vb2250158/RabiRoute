@@ -6,6 +6,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.67 - 2026-10-24
+
+- Load the bundled icon in the remote Windows Agent tray and status window, size it for the system tray and dispose owned icon resources on exit.
+- Include only the exact tray ICO in signed release assets, retaining exclusion of other ICO files; cover actual WinForms icons and signed asset readback, with bilingual documentation.
+
 ## 0.3.66 - 2026-10-24
 
 - Update follow-redirects, Hono and Vite to 1.16.1, 4.13.11 and 6.4.4 respectively, fixing known locked-dependency issues without adding dependencies from the API migration.

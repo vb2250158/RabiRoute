@@ -46,6 +46,8 @@ Local native-shell, HTTP/WebSocket/SSE and input-receipt validation is covered. 
 
 ## Windows tray (0.2.1, experimental)
 
+The tray and status window use the Rabi icon included in the signed release package.
+
 Login startup and manual launch enter the same main program. The stable launcher is the sole lifecycle owner; the connector and tray are its children. The status window belongs to the tray child. Duplicate launches do not create another connector; normal exit or abrupt main-program death releases the children.
 
 - Double-click the icon for connection status, version, bound tasks, recent delivery results and up to 120 process-local state records. Agent runtime state remains unverified until real delivery; no recurring host/session scans occur.
