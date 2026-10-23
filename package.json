@@ -1,6 +1,6 @@
 {
   "name": "rabiroute",
-  "version": "0.3.65",
+  "version": "0.3.66",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -87,7 +87,7 @@
     "marked": "^15.0.12",
     "pinia": "^2.3.1",
     "tsx": "^4.19.2",
-    "vite": "^6.4.3",
+    "vite": "^6.4.4",
     "vue": "^3.5.35",
     "vue-router": "^4.6.4",
     "vue-tsc": "^2.2.12",

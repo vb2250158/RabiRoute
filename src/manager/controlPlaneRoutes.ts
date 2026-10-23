@@ -9934,7 +9934,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     authenticateNode: token => lanAgentAuthority.authenticate(token),
     registerAgentCatalog: (token, agents) => lanAgentAuthority.registerAgentCatalog(token, agents),
     isAgentEnabled: (nodeId, agentId) => lanAgentAuthority.isAgentEnabled(nodeId, agentId),
-    currentRelease: () => lanAgentReleaseStore.publication()
+    currentRelease: nodeId => lanAgentReleaseStore.publication(nodeId)
   });
   instanceAgentSessions = binding => {
     const agent = lanAgentRegistry.getInstanceAgent(binding.instanceId, binding.agentId);

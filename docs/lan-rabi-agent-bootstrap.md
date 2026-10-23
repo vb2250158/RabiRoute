@@ -215,3 +215,7 @@ node rabi-agent.mjs --api POST /api/agent/send --agent <agentId> --body-stdin
 ## 能力范围
 
 当前实现统一了实例身份、目录、Agent 管理界面与远端操作传输；实例内可以进入其绑定路由的共用完整设置。高级任务的实例分派、状态隔离与 Hook 归属已有代码和本机契约测试，真实远端宿主中的计划回传、消息处理看板和完整工作流仍须逐项验收。节点在线和本机协议夹具通过不代表真实双机或所有高级能力对等验收完成。
+
+维护者可以由本机可信发布 owner 调用 `LanAgentReleaseStore.importRelease(frozenAgentRoot)`，将已冻结并审查的目录复制为不可变签名快照；HTTP 不接受发布目录或任意代码。`assignRelease(nodeId, releaseDigest, expectedReleaseDigest)` 持久保存稳定节点的版本选择并校验当前摘要；`releaseDigest=null` 返回共同版本。候选使用原签名身份，导入失败或 CAS 冲突不改变节点选择。数据位于私有 state root 的 `data/lan-agent-releases/`，不修改原共同 Agent 根。
+
+现有 `POST /api/lan-agent/nodes/:nodeId/update` 可在不传 `version` 时提交 `releaseDigest` 与必需的 `expectedReleaseDigest`，只为该已连接节点选择既有签名快照，再发原更新通知；冲突返回 409。签名清单、重连通知和不带快照参数的资源读取按可信凭据中的 nodeId 选择；未分配节点和普通应用连接使用共同版本；初始 bootstrap ticket 仍读取共同版本，已有有效 nodeCredential 的连接器按原 nodeId 选择，无需业务 Agent header 或 profile。已签名下载 URL 的 `release` 参数固定不可变快照，分配变化不混入新文件。分配不是接口权限；其他鉴权连接仍可使用全部公开接口。选择已提交但通知失败时响应标记 `uncertain`，先核对该节点的清单，不能当作指针未变重复操作。macOS arm64 已完成真实签名资产、单节点分配、原启动器升级、默认 Desktop IPC 与会话扫描验收；其他平台和实际业务投递仍须分别验收。GET nodes 返回的 releaseDigest 是该节点当前期望发布摘要；实际采用须核对安装指针、worker 或对应的正式证明。

@@ -182,7 +182,7 @@ export class LanAgentRegistry {
     authenticateNode?: (token: string) => { nodeId: string } | null;
     isAgentEnabled?: (nodeId: string, agentId: string) => boolean;
     registerAgentCatalog?: (token: string, agents: readonly InstanceAgent[]) => void;
-    currentRelease?: () => Readonly<{ version: string; releaseDigest: string }>;
+    currentRelease?: (nodeId: string) => Readonly<{ version: string; releaseDigest: string }>;
   }) {
     this.statePath = path.resolve(options.statePath);
     const identityPath = path.join(path.dirname(this.statePath), "agent-instance-id.json");
@@ -472,7 +472,7 @@ export class LanAgentRegistry {
       clearTimeout(connection.authenticationTimer);
       this.persist();
       let release: Readonly<{ version: string; releaseDigest: string }> | undefined;
-      try { release = this.options.currentRelease?.(); } catch { /* Keep the connection available if release publication is unavailable. */ }
+      try { release = this.options.currentRelease?.(hello.nodeId); } catch { /* Keep the connection available if release publication is unavailable. */ }
       this.send(connection.socket, { type: "connected", nodeId: hello.nodeId, managerTime: nowIso(), ...(release ? { release } : {}) });
       this.deliveryEvents.emit("change");
       return;

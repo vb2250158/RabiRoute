@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { listenManagerEndpoint } from "../managerEndpointPolicy.js";
 import { LanAgentNodeNameConflictError, type LanAgentRegistry } from "./lanAgentRegistry.js";
-import type { LanAgentReleaseStore } from "./lanAgentReleaseStore.js";
+import { LanAgentReleaseStore, verifyLanAgentReleaseManifest } from "./lanAgentReleaseStore.js";
 import { handleLanAgentApi } from "./lanAgentRoutes.js";
 import { webguiRequestToken, webguiTokenMatches } from "./webguiLanAccess.js";
 import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
@@ -50,7 +50,8 @@ async function startServer(verifiedConnection = false) {
     assignTask: () => { throw new Error("not used"); }
   } as unknown as LanAgentRegistry;
   const releases = {
-    manifest: () => ({ version: "0.1.0", publicKeySha256: "a".repeat(64) })
+    manifest: () => ({ version: "0.1.0", publicKeySha256: "a".repeat(64) }),
+    nodeReleaseDigests: (nodeIds: readonly string[]) => new Map(nodeIds.map(nodeId => [nodeId, "a".repeat(64)]))
   } as unknown as LanAgentReleaseStore;
   const server = http.createServer((request, response) => {
     if (verifiedConnection) markAuthenticatedConnectionRequest(request);
@@ -114,7 +115,7 @@ test("LAN Agent management accepts the explicit WebGUI token", async () => {
       headers: { "x-rabiroute-webgui-token": PLACEHOLDER_REQUEST_VALUE }
     });
     assert.equal(nodes.status, 200);
-    assert.deepEqual((await nodes.json() as { nodes?: unknown }).nodes, [{ nodeId: "node-a", connected: true }]);
+    assert.deepEqual((await nodes.json() as { nodes?: unknown }).nodes, [{ nodeId: "node-a", connected: true, releaseDigest: "a".repeat(64) }]);
 
     const update = await fetch(`${app.baseUrl}/api/lan-agent/nodes/node-a/update`, {
       method: "POST",
@@ -244,4 +245,152 @@ test("release endpoints admit enabled Agents but reject disabled and revoked lea
   authority.revokeNode("node-fixture");
   for (const request of revoked) assert.equal(fixture.handle(request).status, 403);
   assert.equal(fixture.reads(), 2);
+});
+
+test("native release selection uses one signed owner, stable snapshot URLs and the existing admission contract", { timeout: 15000 }, async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-native-node-release-test-"));
+  const commonRoot = path.join(root, "common"), candidateRoot = path.join(root, "candidate");
+  for (const directory of [commonRoot, candidateRoot]) {
+    fs.mkdirSync(path.join(directory, "lib"), { recursive: true });
+    fs.writeFileSync(path.join(directory, "package.json"), JSON.stringify({ version: "0.9.1" }));
+    fs.writeFileSync(path.join(directory, "rabi-agent.mjs"), "export const fixture = true;\n");
+    fs.writeFileSync(path.join(directory, "lib", "worker.mjs"), directory === commonRoot ? "export const fix = false;\n" : "export const fix = true;\n");
+  }
+  const releases = new LanAgentReleaseStore({ rootDir: root, agentRoot: commonRoot });
+  releases.manifest(); // Provision the fixture key before comparing the ordinary persisted-key path.
+  const commonManifest = releases.manifest(), commonPublication = releases.publication();
+  const selected = releases.importRelease(candidateRoot);
+  assert.equal(selected.version, commonPublication.version);
+  assert.notEqual(selected.releaseDigest, commonPublication.releaseDigest);
+  const authority = new LanAgentAuthority({ statePath: path.join(root, "authority.json") });
+  const enroll = (nodeId: string) => authority.enroll(authority.issueBootstrapTicket().ticket, nodeId).token;
+  const alpha = enroll("fixture-alpha"), beta = enroll("fixture-beta");
+  const unregistered = enroll("fixture-unregistered");
+  // HEAD records the source Agent catalog before issuing its original request lease; newer authority owners do not require it.
+  for (const token of [alpha, beta]) authority.registerAgentCatalog?.(token, [{ agentId: "fixture-worker", provider: "custom-provider" }]);
+  const notifications: Array<{ nodeId: string; version: string }> = [];
+  let failNotification = false;
+  let accessEnabled = true;
+  // Controlled native notification boundary; no remote Agent socket or business operation exists.
+  const registry = {
+    listNodes: () => [{ nodeId: "fixture-alpha", connected: true }, { nodeId: "fixture-beta", connected: true }],
+    listTasks: () => [], listInstances: () => [],
+    requestUpdate(nodeId: string, version: string) {
+      if (failNotification) throw new Error("Fixture notification unavailable");
+      notifications.push({ nodeId, version });
+      return { nodeId, targetVersion: version, updateState: "requested" };
+    }
+  } as unknown as LanAgentRegistry;
+  const server = http.createServer((request, response) => {
+    try {
+      const access = evaluateLanAgentRequest(request, authority, accessEnabled);
+      if (access.kind === "denied") { jsonResponse(response, access.status, { code: -1, error: access.error }); return; }
+      if (access.kind === "agent") markAuthenticatedConnectionRequest(request, () => { assertTrustedLanAgentPrincipal(request); });
+      if (!handleLanAgentApi(request, new URL(request.url ?? "/", "http://localhost"), response, {
+        readJsonBody, jsonResponse, authority, enabled: () => accessEnabled, registry, releases,
+        isManagementRequestAuthorized: () => false,
+        isReleaseRequestAuthorized: candidate => {
+          const token = String(candidate.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+          return Boolean(authority.authenticate(token)) || authority.validateBootstrapTicket(token);
+        }
+      })) response.writeHead(404).end();
+    } catch (error) { jsonResponse(response, 500, { code: -1, message: error instanceof Error ? error.message : String(error) }); }
+  });
+  t.after(async () => {
+    server.closeAllConnections();
+    if (server.listening) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", () => { server.off("error", reject); resolve(); }); });
+  const address = server.address(); assert.ok(address && typeof address !== "string");
+  const base = `http://127.0.0.1:${address.port}`;
+  const headers = (token: string): Record<string, string> => ({ authorization: `Bearer ${token}`,
+    ...(token === alpha || token === beta ? { "x-rabiroute-agent-id": "fixture-worker" } : {}) });
+  const readManifest = async (token: string, query = "") => {
+    const response = await fetch(base + "/api/lan-agent/releases/manifest" + query, { headers: headers(token) });
+    assert.equal(response.status, 200);
+    return (await response.json() as { release: ReturnType<LanAgentReleaseStore["manifest"]> }).release;
+  };
+  const update = async (body: Record<string, unknown>, token = beta) => {
+    const response = await fetch(base + "/api/lan-agent/nodes/fixture-alpha/update", {
+      method: "POST", headers: { ...headers(token), "content-type": "application/json" }, body: JSON.stringify(body)
+    });
+    return { status: response.status, body: await response.json() as { uncertain?: boolean } };
+  };
+  assert.equal((await fetch(base + "/api/lan-agent/nodes")).status, 401);
+  assert.equal((await fetch(base + "/api/lan-agent/releases/manifest", { headers: { "x-rabiroute-authenticated": "true" } })).status, 401);
+  assert.equal((await fetch(base + "/api/lan-agent/nodes/fixture-alpha/update", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ version: "0.9.1" })
+  })).status, 401);
+  assert.equal(notifications.length, 0);
+  const unregisteredManifest = await fetch(base + "/api/lan-agent/releases/manifest", { headers: { authorization: `Bearer ${unregistered}` } });
+  assert.equal(unregisteredManifest.status, 200);
+  assert.deepEqual((await unregisteredManifest.json() as { release: ReturnType<LanAgentReleaseStore["manifest"]> }).release, commonManifest);
+  assert.deepEqual(await readManifest(alpha), commonManifest);
+  assert.equal((await update({ releaseDigest: selected.releaseDigest, expectedReleaseDigest: commonPublication.releaseDigest })).status, 202);
+  const assigned = await readManifest(alpha);
+  assert.equal(verifyLanAgentReleaseManifest(assigned, commonManifest.publicKeySha256), true);
+  assert.deepEqual(await readManifest(beta, "?nodeId=fixture-alpha"), commonManifest);
+  assert.deepEqual(await readManifest(authority.issueBootstrapTicket().ticket), commonManifest);
+  const listed = await fetch(base + "/api/lan-agent/nodes", { headers: headers(beta) }); assert.equal(listed.status, 200);
+  const nodes = (await listed.json() as { nodes: Array<{ nodeId: string; releaseDigest: string }> }).nodes;
+  assert.equal(nodes.find(node => node.nodeId === "fixture-alpha")?.releaseDigest, selected.releaseDigest);
+  assert.equal(nodes.find(node => node.nodeId === "fixture-beta")?.releaseDigest, commonPublication.releaseDigest);
+  const asset = assigned.files.find(file => file.path === "lib/worker.mjs"); assert.ok(asset);
+  assert.ok(new URL(asset.downloadUrl, base).searchParams.has("release"));
+  const bytes = fs.readFileSync(path.join(candidateRoot, asset.path));
+  // The official SDK sends only Bearer nodeCredential: it has no Agent profile/header.
+  // Do not manufacture a trusted principal in the fixture; the real release ingress must establish it.
+  const bareManifestResponse = await fetch(base + "/api/lan-agent/releases/manifest", { headers: { authorization: `Bearer ${alpha}` } });
+  const bareManifestBody = await bareManifestResponse.json() as { release?: ReturnType<LanAgentReleaseStore["manifest"]> };
+  const bareAssetResponse = await fetch(base + asset.downloadUrl, { headers: { authorization: `Bearer ${alpha}` } });
+  const bareAssetBytes = Buffer.from(await bareAssetResponse.arrayBuffer());
+  assert.deepEqual({ manifestStatus: bareManifestResponse.status,
+    selectedManifest: JSON.stringify(bareManifestBody.release) === JSON.stringify(assigned),
+    pinnedAssetStatus: bareAssetResponse.status, pinnedAssetBytes: bareAssetBytes.equals(bytes) },
+    { manifestStatus: 200, selectedManifest: true, pinnedAssetStatus: 200, pinnedAssetBytes: true });
+  const { __test: sdk } = await import(new URL("../../apps/rabi-agent/rabi-agent.mjs", import.meta.url).href);
+  const sdkConfig = { managerUrl: base, nodeCredential: alpha };
+  for (const file of assigned.files) {
+    const response = await sdk.authorizedFetch(sdkConfig, file.downloadUrl);
+    assert.equal(response.status, 200);
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), fs.readFileSync(path.join(candidateRoot, file.path)), file.path);
+  }
+  const bareBeta = await fetch(base + "/api/lan-agent/releases/manifest", { headers: { authorization: `Bearer ${beta}` } });
+  assert.equal(bareBeta.status, 200);
+  assert.deepEqual((await bareBeta.json() as { release: ReturnType<LanAgentReleaseStore["manifest"]> }).release, commonManifest);
+  const commonAsset = commonManifest.files.find(file => file.path === asset.path); assert.ok(commonAsset);
+  const bareBetaAsset = await fetch(base + commonAsset.downloadUrl, { headers: { authorization: `Bearer ${beta}` } });
+  assert.equal(bareBetaAsset.status, 200); assert.deepEqual(Buffer.from(await bareBetaAsset.arrayBuffer()), fs.readFileSync(path.join(commonRoot, asset.path)));
+
+  const download = await fetch(base + asset.downloadUrl, { headers: headers(alpha) });
+  assert.equal(download.status, 200); assert.deepEqual(Buffer.from(await download.arrayBuffer()), bytes);
+  assert.equal((await update({ releaseDigest: null, expectedReleaseDigest: commonPublication.releaseDigest })).status, 409);
+  assert.equal(releases.publication("fixture-alpha").releaseDigest, selected.releaseDigest);
+  assert.equal(notifications.length, 1);
+  assert.equal((await update({ version: "0.9.1" })).status, 202);
+  assert.equal(releases.publication("fixture-alpha").releaseDigest, selected.releaseDigest);
+  assert.deepEqual(notifications, [{ nodeId: "fixture-alpha", version: "0.9.1" }, { nodeId: "fixture-alpha", version: "0.9.1" }]);
+  failNotification = true;
+  const uncertain = await update({ releaseDigest: null, expectedReleaseDigest: selected.releaseDigest });
+  assert.equal(uncertain.status, 400); assert.equal(uncertain.body.uncertain, true);
+  assert.deepEqual(releases.publication("fixture-alpha"), commonPublication);
+  const stable = await fetch(base + asset.downloadUrl, { headers: headers(alpha) });
+  assert.equal(stable.status, 200); assert.deepEqual(Buffer.from(await stable.arrayBuffer()), bytes);
+  const bareStable = await fetch(base + asset.downloadUrl, { headers: { authorization: `Bearer ${alpha}` } });
+  assert.equal(bareStable.status, 200); assert.deepEqual(Buffer.from(await bareStable.arrayBuffer()), bytes);
+  for (const query of ["?release=invalid", "?release=" + "a".repeat(64) + "&release=" + "a".repeat(64), "?token=fixture"]) {
+    const invalidSnapshotUrl: URL = new URL(asset.downloadUrl, base); invalidSnapshotUrl.search = query;
+    assert.equal((await fetch(invalidSnapshotUrl, { headers: { authorization: `Bearer ${alpha}` } })).status, 401);
+  }
+  accessEnabled = false;
+  assert.equal((await fetch(base + asset.downloadUrl, { headers: { authorization: `Bearer ${beta}` } })).status, 401);
+  accessEnabled = true;
+  assert.deepEqual(releases.manifest(), commonManifest);
+  const readback = await fetch(base + "/api/lan-agent/nodes", { headers: headers(beta) }); assert.equal(readback.status, 200);
+  assert.equal((await readback.json() as { nodes: Array<{ nodeId: string; releaseDigest: string }> }).nodes.find(node => node.nodeId === "fixture-alpha")?.releaseDigest, commonPublication.releaseDigest);
+  authority.revokeNode("fixture-alpha");
+  assert.equal((await fetch(base + asset.downloadUrl, { headers: headers(alpha) })).status, 403);
+  assert.ok([401, 403].includes((await fetch(base + asset.downloadUrl, { headers: { authorization: `Bearer ${alpha}` } })).status));
+  assert.deepEqual(await readManifest(beta), commonManifest);
 });

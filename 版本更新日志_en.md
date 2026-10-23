@@ -6,6 +6,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.66 - 2026-10-24
+
+- Update follow-redirects, Hono and Vite to 1.16.1, 4.13.11 and 6.4.4 respectively, fixing known locked-dependency issues without adding dependencies from the API migration.
+- Fix default Codex Desktop IPC discovery on macOS/Linux: prefer explicit paths, then CODEX_HOME (default ~/.codex), retaining legacy temporary sockets and the Windows named pipe.
+- Add immutable signed release selection by stable node ID, compare-and-set digests and readback of uncertain post-commit outcomes for authenticated remote nodes. Unassigned nodes retain the common manifest and version-only updates stay compatible.
+- Verify node-pty before POSIX startup and update handoff; restore only a missing owner execute bit on the packaged spawn-helper, preserving its bytes and retaining the previous connector on failure. Resolve npm from the running Node installation.
+- Wire the maintenance into existing native routes and installer flow, with signature, CAS, failed-update retention and IPC protocol regression tests and bilingual documentation.
+
 ## 0.3.65 - 2026-10-21
 
 - Update rabi-dsh-context to 0.1.2. Injected messages use a producer-owned source.kind, fixing failed turns when DSH V4 sessions reject the generic plugin source. Text injected by the plugin is excluded from subsequent user-prompt submissions to Manager. Lifecycle decisions and connection behavior remain unchanged.

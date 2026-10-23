@@ -14,15 +14,21 @@ function nonEmpty(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function defaultPipePaths() {
+export function codexDesktopIpcPaths({ platform = process.platform, env = process.env,
+  homeDir = os.homedir(), tempDir = os.tmpdir(), uid = process.getuid?.() ?? "user" } = {}) {
+  const codexHome = nonEmpty(env.CODEX_HOME) || path.join(homeDir, ".codex");
   return [...new Set([
-    process.env.CODEX_DESKTOP_IPC_PATH?.trim(),
-    process.platform === "win32" ? "\\\\.\\pipe\\codex-ipc" : path.join(os.tmpdir(), "codex-ipc", `ipc-${process.getuid?.() ?? "user"}.sock`)
+    nonEmpty(env.CODEX_DESKTOP_IPC_PATH),
+    ...(platform === "win32" ? ["\\\\.\\pipe\\codex-ipc"] : [
+      path.join(codexHome, "ipc", "ipc.sock"),
+      // Older Desktop versions own the per-user temporary socket instead.
+      path.join(tempDir, "codex-ipc", `ipc-${uid}.sock`)
+    ])
   ].filter(Boolean))];
 }
 
 export class CodexDesktopIpcClient {
-  constructor({ pipePaths = defaultPipePaths(), requestTimeoutMs = 30_000, onBroadcast } = {}) {
+  constructor({ pipePaths = codexDesktopIpcPaths(), requestTimeoutMs = 30_000, onBroadcast } = {}) {
     this.pipePaths = pipePaths;
     this.requestTimeoutMs = requestTimeoutMs;
     this.onBroadcast = onBroadcast;

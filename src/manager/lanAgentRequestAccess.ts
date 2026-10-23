@@ -25,7 +25,7 @@ export function assertTrustedLanAgentPrincipal(request: IncomingMessage): LanAge
 }
 
 export type LanAgentRequestAccess =
-  | { kind: "unrelated" }
+  | { kind: "unrelated"; releaseNodeId?: string }
   | { kind: "denied"; status: 401 | 403; error: string }
   | { kind: "agent"; nodeId: string; agentId: string };
 
@@ -68,9 +68,14 @@ export function evaluateLanAgentRequest(request: IncomingMessage, authority: Lan
     || (typeof legacyHeader === "string" && isLanAgentCredentialToken(legacyHeader))
     || [...url.searchParams.values()].some(isLanAgentCredentialToken);
   if (!candidate) return { kind: "unrelated" };
+  const releaseQuery = !url.search || (url.pathname !== "/api/lan-agent/releases/manifest"
+    && url.searchParams.size === 1 && /^[a-f0-9]{64}$/.test(url.searchParams.get("release") ?? ""));
   if (enabled && request.method === "GET" && target.startsWith("/api/lan-agent/releases/") && !/[\\\\%]/.test(target) && !target.split("/").includes("..")
-    && agentHeader === undefined && legacyHeader === undefined && !url.search
-    && authority.authenticate(bearer)) return { kind: "unrelated" };
+    && agentHeader === undefined && legacyHeader === undefined && releaseQuery) {
+    const identity = authority.authenticate(bearer);
+    // Release bootstrap authenticates the node without requiring a business Agent profile.
+    if (identity) return { kind: "unrelated", releaseNodeId: identity.nodeId };
+  }
   if (enabled && request.method === "GET" && ["/api/lan-agent/self", "/meta"].includes(target)
     && agentHeader === undefined && legacyHeader === undefined && authority.authenticate(bearer)) return { kind: "unrelated" };
   if (!enabled || typeof agentHeader !== "string" || !agentHeader || !isLanAgentCredentialToken(bearer)

@@ -8,6 +8,10 @@
 
 本文是 RabiRoute 接入 Codex/ChatGPT Desktop 的交付门禁。目标不是“后台能跑 Codex”，而是：Rabi 投递的消息进入用户正在使用的 Desktop 任务，由该任务的 owner 执行，并在同一任务中实时可见。
 
+## POSIX IPC 地址发现
+
+本机桥和远端连接器沿用同一 Desktop 协议。macOS/Linux 优先连接显式 `CODEX_DESKTOP_IPC_PATH`，随后尝试 `$CODEX_HOME/ipc/ipc.sock`（默认 `~/.codex/ipc/ipc.sock`），最后尝试旧版 Desktop 的临时目录 `codex-ipc/ipc-<uid>.sock`。Windows 继续使用既有命名管道。旧路径只用于旧版 Desktop 兼容，移除对应版本支持时删除；不扫描目录、不创建别名或修改宿主环境。路径可连接后仍须完成原 IPC initialize 和任务 owner 验证。
+
 ## 不可妥协的用户合同
 
 1. 已绑定 ID 存在且任务未归档时，按当前 workspace 直接投递到该任务，不创建新任务；任务保存的默认 cwd、Desktop 标题或 SQLite `title` 变化不影响绑定。保存 ID 指向已归档任务时，不再定位或复用其它同名任务；真实投递或保存提交点幂等创建新任务，更新绑定后投递到新任务。

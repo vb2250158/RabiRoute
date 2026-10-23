@@ -1,7 +1,8 @@
-import { createHash, createPublicKey, generateKeyPairSync, sign, verify } from "node:crypto";
+import { createHash, createPublicKey, generateKeyPairSync, randomUUID, sign, verify } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
+import { atomicWriteFileSync, withFileLockSync } from "../shared/filePersistence.js";
 
 export type LanAgentReleaseFile = {
   path: string;
@@ -26,6 +27,10 @@ type SigningKeyRecord = {
 };
 
 type ReleaseManifestPayload = Pick<LanAgentReleaseManifest, "version" | "platform" | "minNodeVersion" | "files">;
+export class LanAgentReleaseSelectionConflictError extends Error {
+  constructor() { super("Node release selection conflict; read the current publication before retrying."); }
+}
+const releaseHash = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 
 function sha256(buffer: Buffer): string {
   return createHash("sha256").update(buffer).digest("hex");
@@ -62,6 +67,10 @@ function manifestPayload(manifest: ReleaseManifestPayload): string {
       downloadUrl: file.downloadUrl
     }))
   });
+}
+
+export function lanAgentReleaseManifestDigest(manifest: LanAgentReleaseManifest): string {
+  return sha256(Buffer.from(manifestPayload(manifest)));
 }
 
 function readJson(filePath: string): Record<string, unknown> {
@@ -153,7 +162,9 @@ export class LanAgentReleaseStore {
     this.signingKeyPath = path.resolve(options.signingKeyPath ?? path.join(this.rootDir, "data", "lan-agent-release-signing-key.json"));
   }
 
-  manifest(): LanAgentReleaseManifest {
+  manifest(nodeId?: string): LanAgentReleaseManifest {
+    const selected = nodeId ? this.selectedReleaseDigest(nodeId) : undefined;
+    if (selected) return this.archivedRelease(selected).manifest;
     const packageJsonPath = path.join(this.agentRoot, "package.json");
     if (!fs.existsSync(packageJsonPath)) {
       throw new Error(`Rabi Agent package metadata is missing: ${packageJsonPath}`);
@@ -189,20 +200,119 @@ export class LanAgentReleaseStore {
     };
   }
 
-  publication(): Readonly<{ version: string; releaseDigest: string }> {
-    const manifest = this.manifest();
-    return Object.freeze({ version: manifest.version, releaseDigest: sha256(Buffer.from(manifestPayload(manifest))) });
+  publication(nodeId?: string): Readonly<{ version: string; releaseDigest: string }> {
+    const manifest = this.manifest(nodeId);
+    return Object.freeze({ version: manifest.version, releaseDigest: lanAgentReleaseManifestDigest(manifest) });
   }
 
-  readAsset(version: string, platform: string, assetPath: string): Buffer {
-    const manifest = this.manifest();
+  selectedReleaseDigest(nodeId: string): string | undefined {
+    const selections = this.selections();
+    return Object.hasOwn(selections, nodeId) ? selections[nodeId] : undefined;
+  }
+
+  nodeReleaseDigests(nodeIds: readonly string[], commonManifest: LanAgentReleaseManifest): ReadonlyMap<string, string> {
+    const selections = this.selections(), commonDigest = lanAgentReleaseManifestDigest(commonManifest);
+    return new Map(nodeIds.map(nodeId => [nodeId, Object.hasOwn(selections, nodeId) ? selections[nodeId]! : commonDigest]));
+  }
+
+  readAsset(version: string, platform: string, assetPath: string, nodeId?: string, snapshot?: string): Buffer {
+    // A signed snapshot URL remains stable across a later node assignment change.
+    const selected = nodeId ? this.selectedReleaseDigest(nodeId) : undefined;
+    const archived = snapshot ? this.archivedSnapshot(snapshot) : selected ? this.archivedRelease(selected) : undefined;
+    const manifest = archived?.manifest ?? this.manifest();
     if (version !== manifest.version) throw new Error(`Rabi Agent release version is not available: ${version}`);
     if (platform !== manifest.platform) throw new Error(`Rabi Agent release platform is not available: ${platform}`);
     const normalizedPath = normalizeAssetPath(assetPath);
-    if (!manifest.files.some(file => file.path === normalizedPath)) {
+    const entry = manifest.files.find(file => file.path === normalizedPath);
+    if (!entry) {
       throw new Error(`Rabi Agent release asset is not available: ${normalizedPath}`);
     }
-    return fs.readFileSync(this.resolveAssetPath(normalizedPath));
+    const archiveRoot = archived?.root;
+    const bytes = fs.readFileSync(archiveRoot ? path.join(archiveRoot, "assets", ...normalizedPath.split("/")) : this.resolveAssetPath(normalizedPath));
+    if (bytes.length !== entry.size || sha256(bytes) !== entry.sha256) throw new Error("LAN Agent release asset integrity mismatch.");
+    return bytes;
+  }
+
+  /** Local trusted publication owner only. HTTP never accepts a source directory. */
+  importRelease(agentRoot: string): Readonly<{ version: string; releaseDigest: string }> {
+    const source = path.resolve(agentRoot);
+    const staging = path.join(this.archiveRoot(), `.prepare-${randomUUID()}`);
+    fs.mkdirSync(path.join(staging, "assets"), { recursive: true });
+    try {
+      for (const asset of collectReleaseAssetPaths(source)) {
+        const destination = path.join(staging, "assets", ...asset.split("/"));
+        fs.mkdirSync(path.dirname(destination), { recursive: true });
+        fs.copyFileSync(path.join(source, ...asset.split("/")), destination);
+      }
+      const frozen = new LanAgentReleaseStore({ rootDir: this.rootDir, agentRoot: path.join(staging, "assets"), signingKeyPath: this.signingKeyPath });
+      const original = frozen.manifest();
+      const snapshot = sha256(Buffer.from(manifestPayload(original)));
+      const unsigned: ReleaseManifestPayload = { ...original, files: original.files.map(file => ({ ...file, downloadUrl: `${file.downloadUrl}?release=${snapshot}` })) };
+      const keys = readSigningKeys(this.signingKeyPath);
+      const manifest: LanAgentReleaseManifest = { ...unsigned, publicKey: keys.publicKey, publicKeySha256: lanAgentReleasePublicKeySha256(keys.publicKey),
+        signature: sign(null, Buffer.from(manifestPayload(unsigned)), keys.privateKey).toString("base64") };
+      const releaseDigest = sha256(Buffer.from(manifestPayload(manifest)));
+      fs.writeFileSync(path.join(staging, "manifest.json"), JSON.stringify(manifest), { flag: "wx" });
+      withFileLockSync(path.join(this.archiveRoot(), "publication.lock"), () => {
+        const destination = path.join(this.archiveRoot(), "snapshots", snapshot);
+        fs.mkdirSync(path.dirname(destination), { recursive: true });
+        if (!fs.existsSync(destination)) fs.renameSync(staging, destination);
+        // Validate existing immutable content before publishing a digest reference.
+        const archived = this.archivedSnapshot(snapshot);
+        if (sha256(Buffer.from(manifestPayload(archived.manifest))) !== releaseDigest) throw new Error("LAN Agent archived release digest mismatch.");
+        for (const file of archived.manifest.files) this.readAsset(manifest.version, manifest.platform, file.path, undefined, snapshot);
+        const index = path.join(this.archiveRoot(), "digests", `${releaseDigest}.json`);
+        fs.mkdirSync(path.dirname(index), { recursive: true });
+        atomicWriteFileSync(index, JSON.stringify({ snapshot }));
+      });
+      return Object.freeze({ version: manifest.version, releaseDigest });
+    } finally { fs.rmSync(staging, { recursive: true, force: true }); }
+  }
+
+  /** Version selection, independent of connection permissions. null returns this node to the common release. */
+  assignRelease(nodeId: string, releaseDigest: string | null, expectedReleaseDigest: string): Readonly<{ version: string; releaseDigest: string }> {
+    if (!nodeId || nodeId !== nodeId.trim()) throw new Error("Stable nodeId is required.");
+    if (!releaseHash(expectedReleaseDigest) || releaseDigest !== null && !releaseHash(releaseDigest)) throw new Error("Valid release digests are required.");
+    return withFileLockSync(path.join(this.archiveRoot(), "selection.lock"), () => {
+      const current = this.publication(nodeId);
+      if (current.releaseDigest !== expectedReleaseDigest) throw new LanAgentReleaseSelectionConflictError();
+      const archived = releaseDigest === null ? undefined : this.archivedRelease(releaseDigest);
+      const selected = archived?.manifest ?? this.manifest();
+      if (archived) for (const file of selected.files) this.readAsset(selected.version, selected.platform, file.path, undefined, path.basename(archived.root));
+      const selections = this.selections();
+      if (releaseDigest === null) delete selections[nodeId]; else Object.defineProperty(selections, nodeId, { value: releaseDigest, enumerable: true, configurable: true });
+      atomicWriteFileSync(path.join(this.archiveRoot(), "selections.json"), JSON.stringify(selections));
+      const publication = Object.freeze({ version: selected.version, releaseDigest: sha256(Buffer.from(manifestPayload(selected))) });
+      recordDataMutationAudit({ group: "lan-agent", event: "lan_agent_release_selected", owner: "lan-agent-release", action: "select-node-release",
+        target: { type: "lan-agent-node", id: nodeId }, dataSource: { kind: "file", id: "selections.json" }, outcome: "committed",
+        before: { digest: current.releaseDigest }, after: { digest: publication.releaseDigest } });
+      return publication;
+    });
+  }
+
+  private archiveRoot(): string { return path.join(this.rootDir, "data", "lan-agent-releases"); }
+  private selections(): Record<string, string> {
+    const file = path.join(this.archiveRoot(), "selections.json");
+    if (!fs.existsSync(file)) return Object.create(null) as Record<string, string>;
+    const selections = readJson(file);
+    if (!Object.values(selections).every(releaseHash)) throw new Error("Invalid node release selections.");
+    return selections as Record<string, string>;
+  }
+  private archivedRelease(digest: string): { manifest: LanAgentReleaseManifest; root: string } {
+    if (!releaseHash(digest)) throw new Error("Invalid archived release digest.");
+    const index = readJson(path.join(this.archiveRoot(), "digests", `${digest}.json`));
+    const archived = this.archivedSnapshot(requiredString(index.snapshot, "release snapshot"));
+    if (sha256(Buffer.from(manifestPayload(archived.manifest))) !== digest) throw new Error("LAN Agent archived release digest mismatch.");
+    return archived;
+  }
+  private archivedSnapshot(snapshot: string): { manifest: LanAgentReleaseManifest; root: string } {
+    if (!releaseHash(snapshot)) throw new Error("Invalid release snapshot.");
+    const root = path.join(this.archiveRoot(), "snapshots", snapshot);
+    const manifest = readJson(path.join(root, "manifest.json")) as unknown as LanAgentReleaseManifest;
+    const keys = readSigningKeys(this.signingKeyPath);
+    if (!verifyLanAgentReleaseManifest(manifest, lanAgentReleasePublicKeySha256(keys.publicKey))) throw new Error("LAN Agent archived release signature mismatch.");
+    if (manifest.files.some(file => normalizeAssetPath(file.path) !== file.path || file.downloadUrl !== `/api/lan-agent/releases/${encodeURIComponent(manifest.version)}/node/${file.path.split("/").map(encodeURIComponent).join("/")}?release=${snapshot}`)) throw new Error("Invalid archived release asset URL.");
+    return { manifest, root };
   }
 
   private resolveAssetPath(assetPath: string): string {

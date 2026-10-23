@@ -520,7 +520,11 @@ export class CodexDesktopBridge {
     if (this.options.pipePaths?.length) return this.options.pipePaths;
     return [...new Set([
       process.env.CODEX_DESKTOP_IPC_PATH?.trim(),
-      process.platform === "win32" ? "\\\\.\\pipe\\codex-ipc" : path.join(os.tmpdir(), "codex-ipc", `ipc-${process.getuid?.() ?? "user"}.sock`)
+      ...(process.platform === "win32" ? ["\\\\.\\pipe\\codex-ipc"] : [
+        path.join(process.env.CODEX_HOME?.trim() || path.join(os.homedir(), ".codex"), "ipc", "ipc.sock"),
+        // Older Desktop versions own the per-user temporary socket instead.
+        path.join(os.tmpdir(), "codex-ipc", `ipc-${process.getuid?.() ?? "user"}.sock`)
+      ])
     ].filter(Boolean) as string[])];
   }
 

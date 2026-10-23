@@ -14,6 +14,7 @@ import { createEndpointSession, EndpointAuthenticationError } from "./lib/endpoi
 import { createDesktopPresentation } from "./lib/desktop-presentation.mjs";
 import { TerminalService } from "./lib/terminal-service.mjs";
 import { ComputerService } from "./lib/computer-service.mjs";
+import { installReleaseDependencies, ensureNativeTerminalDependencies } from "./lib/release-dependencies.mjs";
 import { instanceAgents, agentCatalog, configureInstanceAgent, resolveInstanceAgent, registerManagedSession } from "./lib/instance-agents.mjs";
 import { normalizeAllowedWorkspaces, resolveRealDirectory, resolveTaskWorkspace } from "./lib/cwd-policy.mjs";
 
@@ -1323,14 +1324,7 @@ class RabiAgentRuntime {
       return;
     }
     const entrypoint = await installRelease(this.config, release, this.configPath);
-    const npmCli = process.env.npm_execpath || path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
-    if (!fs.existsSync(npmCli)) throw new Error("Node.js npm CLI is missing; update this instance using a fresh installation prompt.");
-    await new Promise((resolve, reject) => {
-      const installer = spawn(process.execPath, [npmCli, "install", "--omit=dev", "--no-audit", "--no-fund"], { cwd: path.dirname(entrypoint), windowsHide: true, stdio: "ignore" });
-      const timer = setTimeout(() => { installer.kill(); reject(new Error("Instance dependency installation timed out.")); }, 120_000);
-      installer.once("error", error => { clearTimeout(timer); reject(error); });
-      installer.once("exit", code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error("Instance dependency installation failed.")); });
-    });
+    await installReleaseDependencies(entrypoint);
     await this.handoffRelease(entrypoint, releaseDigest(release));
   }
 
@@ -1422,6 +1416,7 @@ async function main() {
     await stableLauncher(CONFIG_PATH, { baseDelayMs: 1000, maxDelayMs: 30000, maxRestarts: 5, stableMs: 60000 });
     return;
   }
+  await ensureNativeTerminalDependencies(fileURLToPath(import.meta.url));
   const runtime = new RabiAgentRuntime(loadedConfig, CONFIG_PATH);
   if (UPDATE_CANDIDATE) {
     if (!process.send || !process.connected) throw new Error("Update candidate requires the parent IPC handoff.");

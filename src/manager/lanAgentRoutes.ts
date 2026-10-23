@@ -1,10 +1,10 @@
 import type http from "node:http";
 import { LanAgentNodeNameConflictError, type LanAgentRegistry } from "./lanAgentRegistry.js";
-import type { LanAgentReleaseStore } from "./lanAgentReleaseStore.js";
+import { LanAgentReleaseSelectionConflictError, type LanAgentReleaseStore } from "./lanAgentReleaseStore.js";
 import type { InstanceAgent } from "../shared/agentInstance.js";
 import type { LanAgentAuthority } from "./lanAgentAuthority.js";
 import type { AgentResourceCatalog } from "./agentResourceCatalog.js";
-import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
+import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
 import { listAgentApiOperations } from "./agentApiPolicy.js";
 import { hasAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import { handleLanAgentTerminalApi } from "./lanAgentTerminalRoutes.js";
@@ -233,7 +233,7 @@ export function handleLanAgentApi(
       return true;
     }
     try {
-      context.jsonResponse(response, 200, { code: 0, release: context.releases.manifest() });
+      context.jsonResponse(response, 200, { code: 0, release: context.releases.manifest(nodeAccess.kind === "unrelated" ? nodeAccess.releaseNodeId : assertTrustedLanAgentPrincipal(request)?.nodeId) });
     } catch (error) {
       context.jsonResponse(response, 503, { code: -1, message: errorMessage(error) });
     }
@@ -252,7 +252,7 @@ export function handleLanAgentApi(
       const version = decodeURIComponent(releaseAssetMatch[1] ?? "");
       const platform = decodeURIComponent(releaseAssetMatch[2] ?? "");
       const assetPath = (releaseAssetMatch[3] ?? "").split("/").map(decodeURIComponent).join("/");
-      writeAsset(response, context.releases.readAsset(version, platform, assetPath), assetPath);
+      writeAsset(response, context.releases.readAsset(version, platform, assetPath, nodeAccess.kind === "unrelated" ? nodeAccess.releaseNodeId : assertTrustedLanAgentPrincipal(request)?.nodeId, requestUrl.searchParams.get("release") ?? undefined), assetPath);
     } catch (error) {
       context.jsonResponse(response, 404, { code: -1, message: errorMessage(error) });
     }
@@ -265,9 +265,11 @@ export function handleLanAgentApi(
       return true;
     }
     const release = context.releases.manifest();
+    const currentNodes = context.registry.listNodes();
+    const releaseDigests = context.releases.nodeReleaseDigests(currentNodes.map(node => node.nodeId), release);
     context.jsonResponse(response, 200, {
       code: 0,
-      nodes: context.registry.listNodes(),
+      nodes: currentNodes.map(node => ({ ...node, releaseDigest: releaseDigests.get(node.nodeId) })),
       tasks: context.registry.listTasks(100),
       releaseVersion: release.version,
       releasePublicKeySha256: release.publicKeySha256
@@ -283,12 +285,29 @@ export function handleLanAgentApi(
     }
     const nodeId = decodeURIComponent(nodeMatch[1] ?? "");
     const action = nodeMatch[2] ?? "";
+    const principal = assertTrustedLanAgentPrincipal(request);
+    let releaseSelectionCommitted = false;
+    const guardReleaseSelection = () => {
+      if (assertTrustedLanAgentPrincipal(request) !== principal || !(hasAuthenticatedConnectionRequest(request) || context.isManagementRequestAuthorized(request, requestUrl))) {
+        throw new Error("Connection identity changed; node release selection stopped.");
+      }
+    };
     void context.readJsonBody<Record<string, unknown>>(request)
       .then(async body => {
         if (action === "update") {
+          if (Object.hasOwn(body, "releaseDigest")) {
+            if (!context.registry.listNodes().some(node => node.nodeId === nodeId && node.connected)) throw new Error("Rabi Agent node is not connected.");
+            if ((body.releaseDigest !== null && typeof body.releaseDigest !== "string") || typeof body.expectedReleaseDigest !== "string") throw new Error("releaseDigest and expectedReleaseDigest are required for node release selection.");
+            if (typeof body.version === "string" && body.version.trim()) throw new Error("Use releaseDigest without version when selecting a node release.");
+            guardReleaseSelection();
+            const publication = context.releases.assignRelease(nodeId, body.releaseDigest, body.expectedReleaseDigest);
+            releaseSelectionCommitted = true;
+            guardReleaseSelection();
+            return context.registry.requestUpdate(nodeId, publication.version);
+          }
           const version = typeof body.version === "string" && body.version.trim()
             ? body.version.trim()
-            : context.releases.manifest().version;
+            : context.releases.manifest(nodeId).version;
           return context.registry.requestUpdate(nodeId, version);
         }
         const task = context.registry.assignTask({
@@ -304,7 +323,7 @@ export function handleLanAgentApi(
         return context.registry.waitForTaskAcceptance(task.taskId);
       })
       .then(result => context.jsonResponse(response, 202, { code: 0, result }))
-      .catch(error => context.jsonResponse(response, 400, { code: -1, message: errorMessage(error) }));
+      .catch(error => context.jsonResponse(response, error instanceof LanAgentReleaseSelectionConflictError ? 409 : 400, { code: -1, message: errorMessage(error), ...(releaseSelectionCommitted ? { uncertain: true, releaseSelectionCommitted: true } : {}) }));
     return true;
   }
 

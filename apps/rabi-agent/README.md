@@ -14,11 +14,15 @@ Rabi Agent 是远端电脑客户端。Windows 提供托盘和状态窗口，macO
 
 ## Mac 接入与终端
 
+Codex Desktop IPC 自动按显式 `CODEX_DESKTOP_IPC_PATH`、`$CODEX_HOME/ipc/ipc.sock`（未配置时为 `~/.codex/ipc/ipc.sock`）、旧版临时目录中的 `codex-ipc/ipc-<uid>.sock` 顺序连接。保留旧路径以兼容尚未迁移的 Desktop；以后移除旧版 Desktop 支持时一并删除。连接失败不修改环境、不创建 socket 别名，也不启动或重启 Desktop。
+
 接入弹窗先选择 **Mac（macOS）**，再复制对应提示词；Windows 和 Linux 使用各自的选项。安装时不再关联当前智能体，不设置默认任务。Mac 使用与 CPU 架构匹配的 Node.js 22.13+，安装在 `~/Library/Application Support/RabiAgent`，由当前用户 LaunchAgent 启动；没有 Windows 托盘。
 
 连接器 0.2.4 增加 Zsh/Bash/sh 交互终端，列表仅返回该电脑实际存在的 shell。安装使用 `npm install --omit=dev --include=optional`；终端依赖固定版本 node-pty，原生编译可能需要 Xcode Command Line Tools。文件互传和明确类型/会话 ID 的 Agent 投递复用通用接口。窗口列表、截图及 CMD/PowerShell 当前仍是 Windows 能力。
 
-Mac 原生终端与 Desktop IPC 仍需在线真机验收。`401 LAN_AGENT_CREDENTIAL_REQUIRED` 是节点凭据错误，应保留原 nodeId 和配置，不以创建主控 Agent、新节点或反复重装代替修复。
+POSIX 升级准备会修复 node-pty 预构建 `spawn-helper` 缺失的当前用户执行位，再实际启动一次空终端验证。不会改变辅助程序内容；验证失败继续保留原连接器。
+
+macOS arm64 已验证默认 Desktop IPC 握手、原生空终端和签名快照定向更新；每台电脑的实际业务投递仍须单独验收。`401 LAN_AGENT_CREDENTIAL_REQUIRED` 是节点凭据错误，应保留原 nodeId 和配置，不以创建主控 Agent、新节点或反复重装代替修复。
 
 ## 查询 Agent 与明确投递目标
 

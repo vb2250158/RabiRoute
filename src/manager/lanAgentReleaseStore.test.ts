@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { LanAgentReleaseStore, verifyLanAgentReleaseManifest } from "./lanAgentReleaseStore.js";
+import { LanAgentReleaseStore, LanAgentReleaseSelectionConflictError, verifyLanAgentReleaseManifest } from "./lanAgentReleaseStore.js";
 
 function temporaryDirectory(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -72,5 +72,67 @@ test("installed releases read immutable package assets while keeping the signing
     assert.equal(fs.existsSync(path.join(privateRoot, "data", "lan-agent-release-signing-key.json")), true);
     assert.equal(fs.existsSync(path.join(agentRoot, "data")), false);
     assert.equal(verifyLanAgentReleaseManifest(manifest, manifest.publicKeySha256), true);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("node release selection preserves the common signed bytes, freezes candidates and survives restart", () => {
+  const root = temporaryDirectory("rabi-selected-release-");
+  try {
+    const agentRoot = path.join(root, "common"), candidate = path.join(root, "candidate");
+    writeAgent(agentRoot); writeAgent(candidate);
+    fs.writeFileSync(path.join(candidate, "lib", "worker.mjs"), "export const isolatedFix = true;\n");
+    const store = new LanAgentReleaseStore({ rootDir: root, agentRoot });
+    const original = store.publication(), common = store.manifest();
+    const selected = store.importRelease(candidate);
+    assert.equal(selected.version, original.version); assert.notEqual(selected.releaseDigest, original.releaseDigest);
+    assert.deepEqual(store.manifest(), common); assert.deepEqual(store.publication("node-other"), original);
+    assert.deepEqual(store.assignRelease("node-selected", selected.releaseDigest, original.releaseDigest), selected);
+    const manifest = store.manifest("node-selected");
+    assert.equal(verifyLanAgentReleaseManifest(manifest, common.publicKeySha256), true);
+    assert.deepEqual(store.publication("node-selected"), selected);
+    assert.deepEqual(store.manifest("node-other"), common);
+    // Incoming candidate files are no longer authoritative after import.
+    fs.writeFileSync(path.join(candidate, "lib", "worker.mjs"), "changed after import");
+    assert.equal(store.readAsset(selected.version, "node", "lib/worker.mjs", "node-selected").toString(), "export const isolatedFix = true;\n");
+    const restored = new LanAgentReleaseStore({ rootDir: root, agentRoot });
+    assert.deepEqual(restored.publication("node-selected"), selected);
+    const entry = manifest.files.find(file => file.path === "lib/worker.mjs"); assert.ok(entry);
+    const snapshot = new URL(entry.downloadUrl, "http://localhost").searchParams.get("release"); assert.ok(snapshot);
+    assert.deepEqual(restored.assignRelease("node-selected", null, selected.releaseDigest), original);
+    // An already downloaded signed manifest keeps identifying its original bytes.
+    assert.equal(restored.readAsset(selected.version, "node", entry.path, "node-selected", snapshot).toString(), "export const isolatedFix = true;\n");
+    assert.deepEqual(restored.manifest("node-selected"), common);
+    assert.throws(() => restored.assignRelease("node-selected", selected.releaseDigest, selected.releaseDigest), LanAgentReleaseSelectionConflictError);
+    assert.deepEqual(restored.publication("node-selected"), original);
+    assert.throws(() => restored.assignRelease("node-selected", "f".repeat(64), original.releaseDigest));
+    assert.deepEqual(restored.publication("node-selected"), original);
+    assert.throws(() => restored.readAsset(selected.version, "node", "../secret", undefined, snapshot));
+    assert.throws(() => restored.readAsset(selected.version, "node", entry.path, undefined, "../../outside"));
+    assert.deepEqual(restored.manifest("constructor"), common);
+    assert.deepEqual(restored.importRelease(path.join(root, "common")), restored.importRelease(path.join(root, "common")));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("failed release registration or signing leaves node selections and common publication intact", () => {
+  const root = temporaryDirectory("rabi-selected-release-failure-");
+  try {
+    const agentRoot = path.join(root, "common"), candidate = path.join(root, "candidate"); writeAgent(agentRoot); writeAgent(candidate);
+    const store = new LanAgentReleaseStore({ rootDir: root, agentRoot });
+    const original = store.publication(); const selected = store.importRelease(candidate);
+    store.assignRelease("node-selected", selected.releaseDigest, original.releaseDigest);
+    const pointer = fs.readFileSync(path.join(root, "data/lan-agent-releases/selections.json"));
+    const bad = new LanAgentReleaseStore({ rootDir: root, agentRoot, signingKeyPath: path.join(root, "invalid-key.json") });
+    fs.writeFileSync(path.join(root, "invalid-key.json"), JSON.stringify({ publicKey: "invalid", privateKey: "invalid" }));
+    assert.throws(() => bad.importRelease(candidate));
+    assert.deepEqual(fs.readFileSync(path.join(root, "data/lan-agent-releases/selections.json")), pointer);
+    const entry = store.manifest("node-selected").files[0]!;
+    const snapshot = new URL(entry.downloadUrl, "http://localhost").searchParams.get("release")!;
+    fs.writeFileSync(path.join(root, "data/lan-agent-releases/snapshots", snapshot, "assets", entry.path), "corrupt");
+    assert.throws(() => store.readAsset(selected.version, "node", entry.path, "node-selected"), /integrity/);
+    assert.throws(() => store.assignRelease("node-other", selected.releaseDigest, original.releaseDigest), /integrity/);
+    assert.throws(() => store.importRelease(candidate), /integrity/);
+    assert.deepEqual(fs.readFileSync(path.join(root, "data/lan-agent-releases/selections.json")), pointer);
+    assert.deepEqual(store.publication("node-other"), original);
+    assert.equal(fs.readdirSync(path.join(root, "data/lan-agent-releases")).some(name => name.startsWith(".prepare-")), false);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

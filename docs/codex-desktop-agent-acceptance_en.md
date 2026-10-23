@@ -8,6 +8,10 @@ English | <a href="./codex-desktop-agent-acceptance.md">简体中文</a>
 
 This is the release gate for the Codex/ChatGPT Desktop adapter. Success does not mean that “Codex ran somewhere in the background.” It means that the routed message entered the Desktop task selected by the user, was executed by that task's owner, and became visible in the same task.
 
+## POSIX IPC discovery
+
+The local bridge and remote connector use the same Desktop protocol. On macOS/Linux, try explicit `CODEX_DESKTOP_IPC_PATH`, then `$CODEX_HOME/ipc/ipc.sock` (default `~/.codex/ipc/ipc.sock`), then the older temporary `codex-ipc/ipc-<uid>.sock` path. Windows keeps its named pipe. Retain the temporary path only for older Desktop compatibility and remove it with support for those versions. Do not scan directories, create aliases or alter the host environment. A connection must still complete the existing IPC initialize and task-owner checks.
+
 ## Non-negotiable product contract
 
 1. Deliver to the saved task with the current workspace when the full task ID exists and the owner record is not archived. A different saved default cwd or mutable Desktop/SQLite title does not invalidate that identity. When the saved ID is archived, do not locate or reuse another same-name task. At a real delivery or save commit point, idempotently create a new task, persist the replacement binding, and deliver there.

@@ -16,17 +16,24 @@ type ConnectedClient = {
 
 test("authenticated connect advertises current release content without creating a task", async () => {
   const statePath = temporaryStatePath();
-  const registry = new LanAgentRegistry({ statePath, currentRelease: () => ({ version: "0.1.0", releaseDigest: "a".repeat(64) }) });
+  const observed: string[] = [];
+  const registry = new LanAgentRegistry({ statePath, currentRelease: nodeId => {
+    observed.push(nodeId); return { version: "0.1.0", releaseDigest: (nodeId === "alpha" ? "a" : "b").repeat(64) };
+  } });
   const server = http.createServer();
   registry.attach(server, { enabled: () => true, getToken: () => "fixture" });
   const port = await listen(server);
   let client: ConnectedClient | undefined;
+  let other: ConnectedClient | undefined;
   try {
     client = await connectNode(port, "fixture", "alpha");
     assert.deepEqual((await client.waitFor("connected")).release, { version: "0.1.0", releaseDigest: "a".repeat(64) });
+    other = await connectNode(port, "fixture", "beta");
+    assert.deepEqual((await other.waitFor("connected")).release, { version: "0.1.0", releaseDigest: "b".repeat(64) });
+    assert.deepEqual(observed, ["alpha", "beta"]);
     assert.equal(registry.listTasks().length, 0);
   } finally {
-    client?.socket.close(); registry.close(); await closeServer(server);
+    client?.socket.close(); other?.socket.close(); registry.close(); await closeServer(server);
     fs.rmSync(path.dirname(statePath), { recursive: true, force: true });
   }
 });

@@ -14,11 +14,15 @@ The host computer's Rabi service owns persistent management; a separate controll
 
 ## Mac setup and terminals
 
+Codex Desktop IPC tries explicit `CODEX_DESKTOP_IPC_PATH`, `$CODEX_HOME/ipc/ipc.sock` (default `~/.codex/ipc/ipc.sock`), then the older temporary `codex-ipc/ipc-<uid>.sock` path. The older path remains for Desktop versions using that layout and will leave with support for those versions. A connection failure does not change the environment, create socket aliases, or start or restart Desktop.
+
 Select **Mac (macOS)** in the enrollment dialog before copying its platform-specific prompt. Windows and Linux have their own choices. Installation no longer associates the installing Agent or chooses a default task. Mac requires Node.js 22.13+ matching its CPU architecture, installs under `~/Library/Application Support/RabiAgent`, and uses a current-user LaunchAgent without the Windows tray.
 
 Connector 0.2.4 adds interactive Zsh/Bash/sh terminals and advertises only shells present on that computer. Install with `npm install --omit=dev --include=optional`; the pinned node-pty dependency may need Xcode Command Line Tools for native compilation. File transfer and explicitly addressed Agent delivery reuse the shared APIs. Window queries, screenshots, CMD and PowerShell remain Windows capabilities.
 
-Native Mac terminals and Desktop IPC still require online-device acceptance. `401 LAN_AGENT_CREDENTIAL_REQUIRED` is a node credential failure: retain its nodeId and configuration rather than creating a controlling Agent, another node or repeatedly reinstalling.
+POSIX update preparation restores a missing owner execute bit on node-pty's prebuilt `spawn-helper`, then runs the native empty-terminal check. It preserves helper contents and retains the previous connector when verification fails.
+
+Default Desktop IPC initialization, a native empty terminal and targeted signed-snapshot updates have been verified on macOS arm64. Actual business delivery still requires acceptance on each computer. `401 LAN_AGENT_CREDENTIAL_REQUIRED` is a node credential failure: retain its nodeId and configuration rather than creating a controlling Agent, another node or repeatedly reinstalling.
 
 ## Query Agents and specify the delivery target
 
