@@ -6,6 +6,8 @@
 
 # Windows 桌面启动与完整打包
 
+完整包同时携带远端 Agent 构建生成的 `runtime/`、`dist/agent-hooks/` 和 `dist/native/`。其中原生 DLL 与签名发布清单、托盘脚本共同验证；源码存在或 Manager 健康不能替代这些资源的实际打包校验。
+
 Windows 安装版只有一个应用生命周期入口：`RabiRouteHost.exe`。Manager 是业务与状态 owner，托盘/任务窗口是表现层；二者都是 Host 创建的同代子程序。托盘不是 Manager 的监督器，也不是另一套桌面应用。
 
 ## 无 Git 本机快照的受控文件清单

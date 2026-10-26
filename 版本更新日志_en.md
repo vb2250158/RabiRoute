@@ -6,6 +6,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.68 - 2026-10-26
+
+- Include the remote Agent's precompiled native DLLs in the complete Windows package so packaging retains the assets required by the tray and terminal.
+- Update body-parser, fast-uri, ip-address, Zod, and the qs version required by body-parser to compatible fixes within their existing major versions, addressing denial-of-service and URI handling findings from the current dependency audit while preserving public APIs and connection permissions.
+
 ## 0.3.67 - 2026-10-24
 
 - Load the bundled icon in the remote Windows Agent tray and status window, size it for the system tray and dispose owned icon resources on exit.

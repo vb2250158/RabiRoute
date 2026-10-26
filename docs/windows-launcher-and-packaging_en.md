@@ -6,6 +6,8 @@ English | <a href="./windows-launcher-and-packaging.md">简体中文</a>
 
 # Windows Desktop Launch and Packaging
 
+The complete package includes the remote Agent build outputs in `runtime/`, `dist/agent-hooks/`, and `dist/native/`. Verify the native DLLs together with the signed release manifest and tray script; source availability or Manager health does not replace checking the actual packaged assets.
+
 The Windows package has one application-lifecycle entry: `RabiRouteHost.exe`. Manager owns business state and the tray/task window is presentation; both are same-generation children created by Host. The tray is neither a lifecycle owner nor a second desktop application.
 
 ## Controlled file lists for local snapshots without Git

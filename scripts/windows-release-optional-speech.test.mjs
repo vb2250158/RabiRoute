@@ -81,7 +81,7 @@ test("Windows release explicitly includes required discovery and Agent transport
   );
   assert.match(
     releaseScript,
-    /Copy-RequiredPortableRuntimeFiles\s*\r?\n\s*foreach \(\$relative in @\("apps\\rabi-agent\\runtime", "apps\\rabi-agent\\dist\\agent-hooks"\)\)[\s\S]*?if \(\$IncludeSpeech\)/
+    /Copy-RequiredPortableRuntimeFiles\s*\r?\n\s*foreach \(\$relative in @\("apps\\rabi-agent\\runtime", "apps\\rabi-agent\\dist\\agent-hooks", "apps\\rabi-agent\\dist\\native"\)\)[\s\S]*?if \(\$IncludeSpeech\)/
   );
 });
 

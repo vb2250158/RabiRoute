@@ -426,7 +426,7 @@ foreach ($relative in @(
 }
 
 Copy-RequiredPortableRuntimeFiles
-foreach ($relative in @("apps\rabi-agent\runtime", "apps\rabi-agent\dist\agent-hooks")) {
+foreach ($relative in @("apps\rabi-agent\runtime", "apps\rabi-agent\dist\agent-hooks", "apps\rabi-agent\dist\native")) {
     $source = Join-Path $repo $relative
     if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "Instance Agent runtime was not built: $relative" }
     $destination = Join-Path $payload $relative
