@@ -14,6 +14,8 @@
 
 HA OS 首次需在部署页点击“启动”并确认 Windows 管理员提示，配置按需执行的后台恢复任务。任务只运行管理员保护目录中的固定恢复脚本，绑定当前用户与安装；后续后台恢复通过同目录受保护的 Windows Script Host 启动器，在进程创建时隐藏 PowerShell 控制台，并等待退出、保留退出码，不弹 UAC。升级前创建的旧任务需再点击一次“启动”并确认管理员提示，以更新受保护脚本和任务启动参数；后台恢复不会放宽任务身份校验或自行请求提权。尚未配置任务、管理员确认被取消或任务失败时，部署状态保留明确错误，已有磁盘和虚拟机不删除。令牌失效仍须重新登录，不能靠服务恢复解决。
 
+Windows PowerShell 5.1 通过 `-File` 执行含中文的安装脚本，因此源码与发布包必须保留 `scripts/Install-HomeAssistantOs.ps1` 的 UTF-8 BOM。丢失 BOM 会在调用恢复任务之前发生语法解析错误；重新开启自动启动开关不能修复脚本。用 `node --test scripts/home-assistant-os-installer.test.mjs` 验证实际 Windows PowerShell 解析与恢复入口，更新后分别回读恢复任务结果和 HA HTTP 就绪状态；任务退出成功不代表 HA 已就绪。
+
 1. `GET /api/agent/help` 可发现以下业务接口。`GET /api/agent/xiaomi-home/capabilities` 返回 `schemaVersion=1`、动作及 `argumentsSchema`、当前播报绑定和确认方式。这是动作参数目录，无需再次申请功能许可。
 2. `GET /api/agent/xiaomi-home/devices` 和 `/resources` 默认返回分页摘要，先筛选再读详情。实体不是物理设备数量：一台扫地机可以有多个传感器、按钮和设置。单项 `/resources/<URL 编码 resourceId>` 读取完整实时状态、属性和 `stateVersion`；`/entity-actions?resourceId=<URL 编码 resourceId>` 读取该实体动作和参数，不默认批量读取所有动作。
 3. 向 `POST /api/agent/xiaomi-home/action-requests` 提交下例。必须携带稳定 `Idempotency-Key`，以及从当前 `/meta` 取得的 `x-rabiroute-expected-application-generation-id`、`x-rabiroute-expected-manager-instance-id`。接口不接受任意 HA 服务名或额外字段。

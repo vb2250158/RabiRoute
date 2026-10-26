@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.70 - 2026-10-27
+
+- Restore the Home Assistant OS installer's UTF-8 BOM so Windows PowerShell 5.1 can parse startup and background recovery entry points. Add bilingual troubleshooting guidance and preserve ownership checks for existing VMs, disks and recovery tasks. Verify recovery task completion separately from HA Core readiness.
+
 ## 0.3.69 - 2026-10-26
 
 - Support existing v2 computer credentials while retaining their format, secrets, connection incarnation and explicit disabled state. Preserve connection-wide access and per-invocation Agent/session context without reverting to per-Agent grants; legacy v1 stores remain compatible.
