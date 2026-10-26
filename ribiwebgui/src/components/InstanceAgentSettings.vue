@@ -3,7 +3,7 @@ import { userFacingError } from "../userFacingError";
 import { onMounted, ref, watch } from "vue";
 import type { AgentInstance, InstanceAgent } from "@shared/agentInstance";
 import { managerAccessToken } from "../managerApi";
-type AuthorizationSnapshot = { nodes: Array<{ nodeId: string; enabledAgentIds: string[] }> };
+type AuthorizationSnapshot = { nodes: Array<{ nodeId: string; enabledAgentIds: string[]; connectionManaged?: boolean; enabled?: boolean }> };
 const props = defineProps<{ instance: AgentInstance; agent: InstanceAgent; authorization?: AuthorizationSnapshot }>();
 const emit = defineEmits<{ saved: [] }>();
 const draft = ref({ ...props.agent });
@@ -17,10 +17,12 @@ const projects = ref<string[]>([]);
 const authorizationBusy = ref(false);
 const authorized = ref(false);
 const enrolled = ref(false);
+const connectionManaged = ref(false);
 function applyAuthorization(snapshot?: AuthorizationSnapshot) {
   const node = snapshot?.nodes.find(node => node.nodeId === props.instance.instanceId);
   enrolled.value = Boolean(node);
-  authorized.value = node?.enabledAgentIds.includes(props.agent.agentId) === true;
+  connectionManaged.value = node?.connectionManaged === true;
+  authorized.value = connectionManaged.value ? node?.enabled !== false : node?.enabledAgentIds.includes(props.agent.agentId) === true;
 }
 watch(() => [props.authorization, props.instance.instanceId, props.agent.agentId], () => applyAuthorization(props.authorization), { immediate: true });
 watch(() => props.agent, value => { draft.value = { ...value }; });
@@ -45,7 +47,7 @@ function createAuthorizationKey(): string {
   return Array.from(random.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, "0")).join("");
 }
 async function setAuthorization(enabled: boolean | null) {
-  if (authorizationBusy.value || busy.value || !props.agent.agentId || props.instance.local || typeof enabled !== "boolean") return;
+  if (authorizationBusy.value || busy.value || connectionManaged.value || !props.agent.agentId || props.instance.local || typeof enabled !== "boolean") return;
   const previous = authorized.value;
   // Freeze the displayed, saved binding before any await; never approve draft or newly fetched remote claims.
   const binding = enabled ? {
@@ -141,6 +143,7 @@ async function initializeTask() {
     <v-alert v-if="error" type="error" variant="tonal" class="mb-3">{{ error }}</v-alert>
     <v-alert v-if="notice" type="info" variant="tonal" class="mb-3">{{ notice }}</v-alert>
     <v-switch v-if="instance.local" v-model="draft.enabled" label="是否启用Agent" :disabled="!instance.connected || busy" />
+    <v-alert v-else-if="connectionManaged" type="info" variant="tonal" class="mb-3">{{ authorized ? '此电脑使用连接鉴权，调用时指定 Agent 类型和会话，无需逐 Agent 启用。' : '此电脑连接已停用，保留现有禁用设置。' }}</v-alert>
     <template v-else>
       <v-switch :model-value="authorized" label="是否启用Agent" :loading="authorizationBusy" :disabled="!agent.agentId || !enrolled || busy || authorizationBusy" @update:model-value="setAuthorization" />
       <v-alert v-if="agent.agentId && authorization && !enrolled" type="warning" variant="tonal" class="mb-3">此节点缺少独立凭据，请使用新的接入提示词重新接入，不能迁移旧 WebGUI token。</v-alert>

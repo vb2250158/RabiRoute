@@ -6,6 +6,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.69 - 2026-10-26
+
+- Support existing v2 computer credentials while retaining their format, secrets, connection incarnation and explicit disabled state. Preserve connection-wide access and per-invocation Agent/session context without reverting to per-Agent grants; legacy v1 stores remain compatible.
+- Before stopping the current Host, Setup and local Developer activation check the actual credential store through the candidate's read-only owner. Failure retains the current service without copying or displaying credentials. Hide inapplicable per-Agent grant controls for v2 connections.
+
 ## 0.3.68 - 2026-10-26
 
 - Include the remote Agent's precompiled native DLLs in the complete Windows package so packaging retains the assets required by the tray and terminal.

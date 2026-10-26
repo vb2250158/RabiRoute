@@ -9922,6 +9922,10 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   const lanAgentAuthority = new LanAgentAuthority({ statePath: path.join(rootDir, "data", ".runtime", "lan-agent-authority.json") });
   const agentUploadStore = new AgentUploadStore({ rootDir: path.join(rootDir, "data", ".runtime", "agent-uploads"), maxFileBytes: rabiGlobalConfig.read().agentUploads.maxFileMiB * 1024 * 1024 });
   const assertUploadAuthorized = (source: TrustedLanAgentSource): void => {
+    if (lanAgentAuthority.usesConnectionCredentials()) {
+      if (!lanAgentAuthority.isNodeEnabled(source.nodeId)) throw new Error("Remote computer connection is disabled or revoked.");
+      return;
+    }
     const binding = lanAgentAuthority.getApprovedAgentBinding(source.nodeId, source.agentId);
     if (!lanAgentAuthority.isAgentEnabled(source.nodeId, source.agentId) || binding?.sessionId !== source.sessionId
       || (binding.provider === "codex-desktop" ? "codex" : binding.provider) !== source.provider) {

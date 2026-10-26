@@ -4,7 +4,7 @@ import { parseRoleSkillDownloadRoute } from "./roleKnowledgeRoute.js";
 
 export type LanAgentRoleSkillAccess =
   | { allowed: true }
-  | { allowed: false; status: 401 | 403; error: string };
+  | { allowed: false; status: 400 | 401 | 403; error: string };
 
 /**
  * Authentication belongs to credential-first ingress, including revocation.

@@ -292,7 +292,7 @@ test("corrupt, duplicate, unknown-version and unsafe state fail closed without o
   const { authority, statePath } = fixture(t);
   const credential = enroll(authority);
   const valid = JSON.parse(fs.readFileSync(statePath, "utf8"));
-  for (const text of ["{broken", JSON.stringify({ schemaVersion: 2, nodes: [] }),
+  for (const text of ["{broken", JSON.stringify({ schemaVersion: 3, nodes: [] }),
     JSON.stringify({ schemaVersion: 1, nodes: [valid.nodes[0], valid.nodes[0]] }),
     JSON.stringify({ schemaVersion: 1, nodes: [{ ...valid.nodes[0], enabledAgentIds: ["agent-a", "agent-a"] }] }),
     JSON.stringify({ schemaVersion: 1, nodes: [{ ...valid.nodes[0], enabledAgentIds: [true] }] }),

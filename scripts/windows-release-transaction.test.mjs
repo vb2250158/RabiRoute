@@ -163,6 +163,25 @@ function run(fixture, fault = "", {
   });
 }
 
+test("credential compatibility failure retains the live baseline before Host stop or legacy-task removal", { skip: process.platform !== "win32" }, () => {
+  const fixture = makeFixture();
+  try {
+    const credentialPath = path.join(fixture.install, "data/.runtime/lan-agent-authority.json");
+    const stopMarker = path.join(fixture.root, "unexpected-stop.txt");
+    fs.mkdirSync(path.dirname(credentialPath), { recursive: true });
+    const original = '{"schemaVersion":2,"nodes":[]}\n'; fs.writeFileSync(credentialPath, original);
+    fs.writeFileSync(fixture.helper, 'param([Parameter(ValueFromRemainingArguments=$true)]$Rest)\nif ($Rest -contains "-WorkingRoot") { [IO.File]::WriteAllText($env:RABI_COMPAT_STOP_MARKER, "stopped") }\nexit 0\n');
+    const result = run(fixture, "", { extraEnv: { RABI_COMPAT_STOP_MARKER: stopMarker } });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stdout + result.stderr, /installed data compatibility preflight/i);
+    assert.equal(fs.existsSync(stopMarker), false);
+    assert.equal(fs.readFileSync(path.join(fixture.install, "current.json"), "utf8"), fixture.previousPointer);
+    assert.equal(fs.readFileSync(path.join(fixture.install, "RabiRouteHost.exe"), "utf8"), "old-bootstrap");
+    assert.equal(fs.readFileSync(credentialPath, "utf8"), original);
+    assert.equal(readLegacyTasks(fixture)[0].state, "Running");
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+});
+
 function autostartRestoreFailureWrapper(fixture) {
   const wrapper = path.join(fixture.root, "autostart-restore-failure.ps1");
   fs.writeFileSync(wrapper, `param(

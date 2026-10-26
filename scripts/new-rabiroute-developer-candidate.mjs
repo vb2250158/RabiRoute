@@ -23,7 +23,9 @@ const retiredRelayFiles = Object.freeze(['scripts/rabilink-knowledge-grant.mjs',
 const developerMaintenanceFiles = Object.freeze([
   'scripts/Invoke-RabiRouteDeveloperApply.ps1',
   'scripts/Publish-RabiRouteDeveloperCandidate.ps1',
-  'scripts/Install-HomeAssistantOs.ps1'
+  'scripts/Install-HomeAssistantOs.ps1',
+  'scripts/check-installed-data-compatibility.mjs',
+  'scripts/Install-RabiRouteReleaseTransaction.ps1'
 ]);
 
 function readRelayRuntimeFiles(root) {

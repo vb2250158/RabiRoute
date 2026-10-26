@@ -511,6 +511,11 @@ try {
     $release = Read-Candidate $candidate $ExpectedReleaseId
     if ($FaultPoint -eq "after-stage") { throw "Injected fault after-stage" }
     Invoke-BootstrapSelfTest $release.bootstrap "Candidate bootstrap self-test"
+    if (Test-Path -LiteralPath (Join-Path $install "data\.runtime\lan-agent-authority.json") -PathType Leaf) {
+        $dataPreflight = Join-Path $release.version "scripts\check-installed-data-compatibility.mjs"
+        if (-not (Test-Path -LiteralPath $dataPreflight -PathType Leaf)) { throw "Candidate lacks the installed data compatibility preflight." }
+        Invoke-Checked (Join-Path $release.version "node.exe") @($dataPreflight, $release.version, $install) "Installed data compatibility preflight"
+    }
     Invoke-Autostart -Preflight -SnapshotRoot $autostartSnapshotRoot
     $autostartState = "captured"
     Save-Journal "autostart-snapshot-captured" "not-started" $false

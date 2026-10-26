@@ -221,6 +221,12 @@ try {
         & (Join-Path $CandidateRoot "node.exe") $sourcePatchPreflight $CandidateRoot (Join-Path $InstallRoot "data\.runtime\source-patches")
         if ($LASTEXITCODE -ne 0) { throw "Source patch upgrade preflight failed; the current Host has not been stopped." }
     }
+    if (Test-Path -LiteralPath (Join-Path $InstallRoot "data\.runtime\lan-agent-authority.json") -PathType Leaf) {
+        $dataPreflight = Join-Path $CandidateRoot "scripts\check-installed-data-compatibility.mjs"
+        if (-not (Test-Path -LiteralPath $dataPreflight -PathType Leaf)) { throw "Candidate lacks the installed data compatibility preflight; the current Host has not been stopped." }
+        & (Join-Path $CandidateRoot "node.exe") $dataPreflight $CandidateRoot $InstallRoot
+        if ($LASTEXITCODE -ne 0) { throw "Installed data compatibility preflight failed; the current Host has not been stopped." }
+    }
     Stop-HostGeneration $hostExe $previousStatus
     Assert-CurrentPointerToken $currentPath $previousPointerToken
 
