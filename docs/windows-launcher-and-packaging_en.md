@@ -72,7 +72,7 @@ The entry shares the install/Developer mutex and checks journal/pointer SHA256 b
 
 Background failures are separate from core API readiness: memory-consolidation and other background incidents alone do not degrade `health.state`. `health.backgroundState` and `health.backgroundIncidentCount` retain the failure state, with details in `backgroundLifecycle` and logs. Required capabilities, plan-storage startup and Route readiness checks remain unchanged. Background work backs off independently without blocking unrelated APIs. Uncertain memory delivery persists a pending receipt; subsequent attempts only read the original receipt and never automatically resend an unconfirmed message. Removed schedule targets no longer contribute to current failure summaries.
 
-Each health probe has a five-second deadline; rebuilding still requires three consecutive failures so brief CPU contention can recover. Generation, instance and required-capability checks remain unchanged. This tolerance does not replace diagnosis of long stalls.
+Each health probe has a thirty-second deadline, and rebuilding still requires three consecutive failures. A cold plan-storage `/health` that takes more than a few seconds can finish within that single probe. Generation, instance and required-capability checks remain unchanged. This tolerance does not replace diagnosis of long stalls.
 
 When discovering allowed workspaces for the thread bridge, Manager queries only task IDs, directories and archive flags from the Desktop index, retaining the latest ten-thousand-record scope. It does not load task bodies or the sidebar-name index. Task-name resolution and model settings remain governed by the existing Desktop owner contract; workspace discovery does not replace delivery identity checks.
 

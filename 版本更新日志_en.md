@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.71 - 2026-10-28
+
+- Set the Windows Host Manager `/health` probe deadline to 30 seconds. Cold plan-catalog startup can make that check take more than a few seconds; the probe waits for the current request, and Host rebuilds a generation only after three consecutive failures. Identity checks, required-capability checks, and the shutdown request deadline stay at their existing values.
+
 ## 0.3.70 - 2026-10-27
 
 - Restore the Home Assistant OS installer's UTF-8 BOM so Windows PowerShell 5.1 can parse startup and background recovery entry points. Add bilingual troubleshooting guidance and preserve ownership checks for existing VMs, disks and recovery tasks. Verify recovery task completion separately from HA Core readiness.
