@@ -18,8 +18,6 @@ permissions:
 jobs:
   windows-x64:
     runs-on: windows-2022
-    env:
-      RABIROUTE_RELEASE_OUTPUT: ${{ runner.temp }}/rabiroute-windows-release
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -71,6 +69,13 @@ jobs:
       - name: Check public configuration
         shell: pwsh
         run: npm run check:config
+
+      # runner is not available in jobs.<job_id>.env. steps.run can read it;
+      # GITHUB_ENV then exposes the same path to later shell steps and env context.
+      - name: Set release output directory
+        shell: pwsh
+        run: |
+          "RABIROUTE_RELEASE_OUTPUT=${{ runner.temp }}/rabiroute-windows-release" >> $env:GITHUB_ENV
 
       - name: Build installer and portable package
         shell: pwsh

@@ -17,7 +17,16 @@ const releaseWorkflow = fs.readFileSync(
 );
 
 test("Windows workflow shares the explicit local artifact root and builds before isolated test gates", () => {
-  assert.match(releaseWorkflow, /RABIROUTE_RELEASE_OUTPUT: \$\{\{ runner\.temp \}\}\/rabiroute-windows-release/);
+  assert.doesNotMatch(
+    releaseWorkflow,
+    /\n {4}env:\n {6}RABIROUTE_RELEASE_OUTPUT:\s*\$\{\{\s*runner\./,
+    "runner context is invalid in job-level env and rejects the workflow before any job starts"
+  );
+  const outputAssignment = releaseWorkflow.indexOf(
+    '"RABIROUTE_RELEASE_OUTPUT=${{ runner.temp }}/rabiroute-windows-release" >> $env:GITHUB_ENV'
+  );
+  const packageStep = releaseWorkflow.indexOf("-OutputRoot $env:RABIROUTE_RELEASE_OUTPUT");
+  assert.ok(outputAssignment >= 0 && outputAssignment < packageStep);
   assert.match(releaseWorkflow, /build-windows-release\.ps1[^\r\n]*-OutputRoot \$env:RABIROUTE_RELEASE_OUTPUT/);
   for (const file of ["*.exe", "*.zip", "SHA256SUMS.txt"]) {
     assert.ok(releaseWorkflow.includes("${{ env.RABIROUTE_RELEASE_OUTPUT }}/" + file));
